@@ -61,6 +61,10 @@ export const VideoPlayer: React.FC<VideoPlayerProps> = ({
   // Absolute playback time = streamStartTime + videoElement.currentTime
   const currentAbsoluteTime = streamStartTime + videoElementTime;
 
+  // Stable ref for timers and event listeners to avoid re-renders
+  const timeRef = useRef(currentAbsoluteTime);
+  timeRef.current = currentAbsoluteTime;
+
   // Track selection
   const [selectedAudioIndex, setSelectedAudioIndex] = useState<number>(0);
   const [selectedMainSubId, setSelectedMainSubId] = useState<string | null>(null);
@@ -98,7 +102,7 @@ export const VideoPlayer: React.FC<VideoPlayerProps> = ({
     if (hideControlsTimerRef.current) clearTimeout(hideControlsTimerRef.current);
     hideControlsTimerRef.current = setTimeout(() => {
       setShowControls(false);
-    }, 3000);
+    }, 3500);
   }, []);
 
   // 1. Initial Load: Probe Video & Fetch Season Preferences
@@ -314,11 +318,20 @@ export const VideoPlayer: React.FC<VideoPlayerProps> = ({
     [duration, episode.filePath, selectedAudioIndex]
   );
 
-  // Play / Pause Toggle
+  // Play / Pause Toggle with auto-reconnect if stalled or ended
   const togglePlay = useCallback(() => {
     if (!videoRef.current) return;
+
+    if (videoRef.current.ended || videoRef.current.error) {
+      handleSeek(timeRef.current);
+      return;
+    }
+
     if (videoRef.current.paused) {
-      videoRef.current.play().catch(() => {});
+      videoRef.current.play().catch(() => {
+        // If play failed due to stream stall or closed socket, reload stream seamlessly
+        handleSeek(timeRef.current);
+      });
       setIsPlaying(true);
       showRipple('play', 'Play');
     } else {
@@ -326,7 +339,7 @@ export const VideoPlayer: React.FC<VideoPlayerProps> = ({
       setIsPlaying(false);
       showRipple('pause', 'Pause');
     }
-  }, []);
+  }, [handleSeek]);
 
   // Fullscreen Toggle
   const toggleFullscreen = useCallback(() => {
@@ -343,11 +356,11 @@ export const VideoPlayer: React.FC<VideoPlayerProps> = ({
   // Smart Skip Delta
   const handleSkip = useCallback(
     (deltaSec: number, label: string) => {
-      const nextTime = currentAbsoluteTime + deltaSec;
+      const nextTime = timeRef.current + deltaSec;
       handleSeek(nextTime);
       showRipple(deltaSec > 0 ? 'seek-forward' : 'seek-backward', label);
     },
-    [currentAbsoluteTime, handleSeek]
+    [handleSeek]
   );
 
   // Periodic Save of Playback History (Every 3 seconds)
@@ -359,27 +372,33 @@ export const VideoPlayer: React.FC<VideoPlayerProps> = ({
         folderPath,
         fileName: episode.fileName,
         episodeNumber: episode.episodeNumber,
-        currentTime: currentAbsoluteTime,
+        currentTime: timeRef.current,
         duration,
         lastWatchedAt: Date.now(),
-        completed: currentAbsoluteTime / duration > 0.9,
+        completed: timeRef.current / duration > 0.9,
       };
       window.electronAPI.savePlaybackProgress(progress).catch(() => {});
     }, 3000);
 
     return () => clearInterval(interval);
-  }, [metadata, episode, folderPath, currentAbsoluteTime, duration]);
+  }, [metadata, episode, folderPath, duration]);
 
   // Auto-play Next Episode on end
   const handleEnded = useCallback(() => {
-    if (autoPlayNext) {
-      const curIndex = seasonEpisodes.findIndex((e) => e.filePath === episode.filePath);
-      if (curIndex !== -1 && curIndex < seasonEpisodes.length - 1) {
-        const nextEp = seasonEpisodes[curIndex + 1];
-        onEpisodeChange(nextEp);
+    // Only auto-play next if we actually reached near the end of the full duration (>95%)
+    if (duration > 0 && timeRef.current / duration > 0.95) {
+      if (autoPlayNext) {
+        const curIndex = seasonEpisodes.findIndex((e) => e.filePath === episode.filePath);
+        if (curIndex !== -1 && curIndex < seasonEpisodes.length - 1) {
+          const nextEp = seasonEpisodes[curIndex + 1];
+          onEpisodeChange(nextEp);
+        }
       }
+    } else {
+      // If ended was triggered prematurely (e.g. stream hiccup), auto-reconnect
+      handleSeek(timeRef.current);
     }
-  }, [autoPlayNext, episode.filePath, seasonEpisodes, onEpisodeChange]);
+  }, [autoPlayNext, episode.filePath, seasonEpisodes, onEpisodeChange, duration, handleSeek]);
 
   // Audio track switch
   const handleSelectAudio = useCallback(
@@ -391,10 +410,10 @@ export const VideoPlayer: React.FC<VideoPlayerProps> = ({
       const streamUrl = await window.electronAPI.getStreamUrl(
         episode.filePath,
         audioIdx,
-        currentAbsoluteTime
+        timeRef.current
       );
 
-      setStreamStartTime(currentAbsoluteTime);
+      setStreamStartTime(timeRef.current);
       setVideoElementTime(0);
 
       if (videoRef.current) {
@@ -406,7 +425,6 @@ export const VideoPlayer: React.FC<VideoPlayerProps> = ({
     },
     [
       episode.filePath,
-      currentAbsoluteTime,
       selectedMainSubId,
       selectedTopSubId,
       topSubEnabled,
@@ -462,9 +480,6 @@ export const VideoPlayer: React.FC<VideoPlayerProps> = ({
 
       switch (e.code) {
         case 'Space':
-          e.preventDefault();
-          togglePlay();
-          break;
         case 'KeyK':
           e.preventDefault();
           togglePlay();
@@ -535,6 +550,9 @@ export const VideoPlayer: React.FC<VideoPlayerProps> = ({
     onClose,
   ]);
 
+  // Controls are visible when mouse moves, or if video is paused, or while loading
+  const areControlsVisible = showControls || !isPlaying || loading;
+
   return (
     <div
       ref={containerRef}
@@ -553,6 +571,10 @@ export const VideoPlayer: React.FC<VideoPlayerProps> = ({
         onPlay={() => setIsPlaying(true)}
         onPause={() => setIsPlaying(false)}
         onEnded={handleEnded}
+        onError={() => {
+          console.warn('Video element reported error, attempting stream reconnect...');
+          handleSeek(timeRef.current);
+        }}
         className="w-full h-full object-contain pointer-events-none"
       />
 
@@ -590,8 +612,8 @@ export const VideoPlayer: React.FC<VideoPlayerProps> = ({
 
       {/* Top Header Controls Bar (Auto-hiding) */}
       <div
-        className={`absolute top-0 left-0 right-0 p-6 bg-gradient-to-b from-black/80 via-black/40 to-transparent flex items-center justify-between z-40 transition-opacity duration-300 pointer-events-auto ${
-          showControls ? 'opacity-100' : 'opacity-0 pointer-events-none'
+        className={`absolute top-0 left-0 right-0 p-6 bg-gradient-to-b from-black/80 via-black/40 to-transparent flex items-center justify-between z-40 transition-opacity duration-300 ${
+          areControlsVisible ? 'opacity-100 pointer-events-auto' : 'opacity-0 pointer-events-none'
         }`}
       >
         <div className="flex items-center space-x-4">
@@ -654,8 +676,8 @@ export const VideoPlayer: React.FC<VideoPlayerProps> = ({
 
       {/* Bottom Player Controls Bar (Auto-hiding) */}
       <div
-        className={`absolute bottom-0 left-0 right-0 pt-16 pb-6 px-6 bg-gradient-to-t from-black/90 via-black/60 to-transparent flex flex-col space-y-3 z-40 transition-opacity duration-300 pointer-events-auto ${
-          showControls ? 'opacity-100' : 'opacity-0 pointer-events-none'
+        className={`absolute bottom-0 left-0 right-0 pt-16 pb-6 px-6 bg-gradient-to-t from-black/90 via-black/60 to-transparent flex flex-col space-y-3 z-40 transition-opacity duration-300 ${
+          areControlsVisible ? 'opacity-100 pointer-events-auto' : 'opacity-0 pointer-events-none'
         }`}
       >
         {/* Seekbar Scrubber with Hover Thumbnail Previews */}

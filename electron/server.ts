@@ -11,6 +11,7 @@ export class LocalStreamServer {
   private server: http.Server | null = null;
   private port: number = 0;
   private activeStreams: Set<ChildProcess> = new Set();
+  private currentStreamProcess: ChildProcess | null = null;
 
   async start(): Promise<number> {
     return new Promise((resolve, reject) => {
@@ -87,13 +88,26 @@ export class LocalStreamServer {
 
     console.log(`[StreamServer] Streaming: "${filePath}" audioIndex:${audioTrack} startTime:${startTime}s`);
 
-    // Stream FFmpeg Matroska remuxing directly to pipe
+    // Kill any previous stream process to free up CPU, file handles, and memory
+    if (this.currentStreamProcess && !this.currentStreamProcess.killed) {
+      try {
+        this.currentStreamProcess.kill('SIGKILL');
+      } catch {}
+      this.currentStreamProcess = null;
+    }
+
+    // Stream FFmpeg Matroska remuxing directly to pipe:
     // -ss before -i enables fast keyframe seek (<150ms)
+    // -avoid_negative_ts make_zero aligns timestamps starting at 0
+    // -re paces reading to the native video frame rate so it doesn't flood/overflow socket buffers
     // -c:v copy preserves 10-bit HEVC/H.264 video with 0% CPU
-    // -c:a aac -ac 2 transcodes any audio stream to standard 2-ch AAC
+    // -c:a aac -ac 2 transcodes any audio stream to standard stereo AAC
+    // -flush_packets 1 forces immediate packet delivery over the pipe
     const args = [
       '-hide_banner',
       '-ss', startTime.toString(),
+      '-avoid_negative_ts', 'make_zero',
+      '-re',
       '-i', filePath,
       '-map', '0:v:0',
       '-map', `0:a:${audioTrack}`,
@@ -101,11 +115,19 @@ export class LocalStreamServer {
       '-c:a', 'aac',
       '-ac', '2',
       '-b:a', '256k',
+      '-flush_packets', '1',
       '-f', 'matroska',
       'pipe:1',
     ];
 
-    const ffmpeg = spawn(ffmpegPath, args, { windowsHide: true });
+    // Important: stdio: ['ignore', 'pipe', 'ignore'] prevents the Windows OS pipe buffer from
+    // filling up with FFmpeg progress text on stderr, which would cause FFmpeg to deadlock/freeze!
+    const ffmpeg = spawn(ffmpegPath, args, {
+      windowsHide: true,
+      stdio: ['ignore', 'pipe', 'ignore'],
+    });
+
+    this.currentStreamProcess = ffmpeg;
     this.activeStreams.add(ffmpeg);
 
     res.writeHead(200, {
@@ -123,6 +145,9 @@ export class LocalStreamServer {
       if (!killed) {
         killed = true;
         this.activeStreams.delete(ffmpeg);
+        if (this.currentStreamProcess === ffmpeg) {
+          this.currentStreamProcess = null;
+        }
         try {
           ffmpeg.kill('SIGKILL');
         } catch {}
@@ -131,10 +156,7 @@ export class LocalStreamServer {
 
     req.on('close', cleanup);
     res.on('close', cleanup);
-    res.on('finish', cleanup);
-    ffmpeg.on('close', () => {
-      cleanup();
-    });
+    ffmpeg.on('close', cleanup);
     ffmpeg.on('error', (err) => {
       console.error('[StreamServer] FFmpeg process error:', err);
       cleanup();
@@ -194,6 +216,7 @@ export class LocalStreamServer {
       } catch {}
     }
     this.activeStreams.clear();
+    this.currentStreamProcess = null;
     if (this.server) {
       this.server.close();
       this.server = null;
