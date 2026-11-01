@@ -1,0 +1,70 @@
+@tailwind base;
+@tailwind components;
+@tailwind utilities;
+
+@layer base {
+  body {
+    @apply bg-[#0f0f12] text-zinc-100 antialiased selection:bg-red-600 selection:text-white;
+    font-family: 'Inter', -apple-system, BlinkMacSystemFont, 'Segoe UI', Roboto, Oxygen, Ubuntu, Cantarell, sans-serif;
+  }
+}
+
+/* Custom Sleek Scrollbar */
+::-webkit-scrollbar {
+  width: 8px;
+  height: 8px;
+}
+
+::-webkit-scrollbar-track {
+  background: #121216;
+}
+
+::-webkit-scrollbar-thumb {
+  background: #282830;
+  border-radius: 4px;
+}
+
+::-webkit-scrollbar-thumb:hover {
+  background: #3f3f4e;
+}
+
+/* Subtitle Styling: Netflix/Fansub Grade */
+.subtitles-overlay-main {
+  text-shadow:
+    0px 0px 4px #000,
+    0px 0px 8px #000,
+    1px 1px 2px #000,
+    -1px -1px 2px #000,
+    1px -1px 2px #000,
+    -1px 1px 2px #000,
+    0 2px 4px rgba(0, 0, 0, 0.95);
+  letter-spacing: 0.03em;
+  font-weight: 600;
+  line-height: 1.35;
+}
+
+.subtitles-overlay-top {
+  text-shadow:
+    0px 0px 4px #000,
+    0px 0px 6px #000,
+    1px 1px 2px #000,
+    -1px -1px 2px #000,
+    0 2px 4px rgba(0, 0, 0, 0.9);
+  letter-spacing: 0.02em;
+  font-weight: 600;
+  line-height: 1.3;
+}
+
+/* Glassmorphism helpers */
+.glass-panel {
+  background: rgba(24, 24, 28, 0.88);
+  backdrop-filter: blur(12px);
+  border: 1px solid rgba(255, 255, 255, 0.08);
+}
+
+.glass-dropdown {
+  background: rgba(18, 18, 22, 0.96);
+  backdrop-filter: blur(16px);
+  border: 1px solid rgba(255, 255, 255, 0.12);
+  box-shadow: 0 16px 40px rgba(0, 0, 0, 0.8);
+}

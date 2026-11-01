@@ -1,0 +1,79 @@
+import React, { useMemo } from 'react';
+import { SubtitleCue } from '../../types';
+
+interface SubtitleOverlayProps {
+  currentTime: number;
+  mainCues: SubtitleCue[];
+  topCues: SubtitleCue[];
+  topSubEnabled: boolean;
+  syncOffset: number; // in seconds
+  fontSize: number;   // default 28
+  hasOutline: boolean;
+}
+
+export const SubtitleOverlay: React.FC<SubtitleOverlayProps> = ({
+  currentTime,
+  mainCues,
+  topCues,
+  topSubEnabled,
+  syncOffset,
+  fontSize,
+  hasOutline,
+}) => {
+  // Apply sync offset to current playback time
+  const adjustedTime = currentTime + syncOffset;
+
+  // Find active main dialogue cue (Bottom)
+  const activeMainCue = useMemo(() => {
+    if (!mainCues || mainCues.length === 0) return null;
+    return mainCues.find(cue => adjustedTime >= cue.start && adjustedTime <= cue.end);
+  }, [mainCues, adjustedTime]);
+
+  // Find active signs/forced cue (Top)
+  const activeTopCue = useMemo(() => {
+    if (!topSubEnabled || !topCues || topCues.length === 0) return null;
+    return topCues.find(cue => adjustedTime >= cue.start && adjustedTime <= cue.end);
+  }, [topCues, adjustedTime, topSubEnabled]);
+
+  return (
+    <div className="absolute inset-0 pointer-events-none select-none z-20 flex flex-col justify-between p-8 overflow-hidden">
+      {/* 2nd Subtitle / Signs (Top) */}
+      <div className="w-full flex justify-center items-start min-h-[60px] pt-2">
+        {activeTopCue && (
+          <div
+            className={`max-w-4xl text-center px-4 py-1 rounded bg-black/40 backdrop-blur-[2px] transition-opacity duration-150 ${
+              hasOutline ? 'subtitles-overlay-top' : ''
+            }`}
+            style={{
+              fontSize: `${Math.round(fontSize * 0.85)}px`,
+              color: '#fef08a', // High-visibility soft yellow for signs/forced
+            }}
+          >
+            {activeTopCue.text.split('\n').map((line, idx) => (
+              <div key={idx}>{line}</div>
+            ))}
+          </div>
+        )}
+      </div>
+
+      {/* Main Dialogue (Bottom) */}
+      <div className="w-full flex justify-center items-end min-h-[80px] pb-8">
+        {activeMainCue && (
+          <div
+            className={`max-w-4xl text-center px-5 py-1.5 rounded transition-opacity duration-100 ${
+              hasOutline ? 'subtitles-overlay-main' : ''
+            }`}
+            style={{
+              fontSize: `${fontSize}px`,
+              color: '#ffffff',
+            }}
+          >
+            {activeMainCue.text.split('\n').map((line, idx) => (
+              <div key={idx}>{line}</div>
+            ))}
+          </div>
+        )}
+      </div>
+    </div>
+  );
+};
