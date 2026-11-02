@@ -353,14 +353,16 @@ function setupIpcHandlers() {
       const isAss = track && /ass|ssa/i.test(track.codec || '');
 
       if (isAss) {
-        // Fast ASS extraction with input packet discard
-        const assContent = await extractEmbeddedAss(filePath, trackIndex, settings.ffmpegPath);
-        // Start font extraction non-blocking in background without stalling subtitle rendering
-        extractEmbeddedFonts(filePath, settings.ffmpegPath, port).catch(() => {});
+        // Fast ASS extraction with input packet discard + embedded fonts extraction
+        const [assContent, rawFonts] = await Promise.all([
+          extractEmbeddedAss(filePath, trackIndex, settings.ffmpegPath),
+          extractEmbeddedFonts(filePath, settings.ffmpegPath, port),
+        ]);
+        const fonts = filterFontsForAss(assContent, rawFonts);
         return {
           format: 'ass',
           content: assContent,
-          fonts: [],
+          fonts,
           port,
           cues: [],
         };

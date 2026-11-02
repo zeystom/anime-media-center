@@ -155,6 +155,8 @@ export const VideoPlayer: React.FC<VideoPlayerProps> = ({
   // Parsed Subtitle Cues
   const [mainCues, setMainCues] = useState<SubtitleCue[]>([]);
   const [topCues, setTopCues] = useState<SubtitleCue[]>([]);
+  const [isMainAssActive, setIsMainAssActive] = useState<boolean>(false);
+  const [isTopAssActive, setIsTopAssActive] = useState<boolean>(false);
 
   // JASSUB WebAssembly ASS Engine
   const jassubRef = useRef<JASSUB | null>(null);
@@ -356,16 +358,26 @@ export const VideoPlayer: React.FC<VideoPlayerProps> = ({
       setSubtitlesLoading(true);
 
       try {
-        // 1. Extract Main Dialogue Subtitle FIRST so user sees dialogue immediately
-        const mainRes = mainTrack
-          ? await window.electronAPI.extractSubtitleTrack(
-              metadata.filePath,
-              mainTrack.id,
-              mainTrack.index,
-              mainTrack.type === 'external',
-              mainTrack.filePath
-            )
-          : null;
+        const [mainRes, topRes] = await Promise.all([
+          mainTrack
+            ? window.electronAPI.extractSubtitleTrack(
+                metadata.filePath,
+                mainTrack.id,
+                mainTrack.index,
+                mainTrack.type === 'external',
+                mainTrack.filePath
+              )
+            : Promise.resolve(null),
+          topTrack && topSubEnabled
+            ? window.electronAPI.extractSubtitleTrack(
+                metadata.filePath,
+                topTrack.id,
+                topTrack.index,
+                topTrack.type === 'external',
+                topTrack.filePath
+              )
+            : Promise.resolve(null),
+        ]);
 
         if (isCancelled) return;
 
@@ -373,10 +385,13 @@ export const VideoPlayer: React.FC<VideoPlayerProps> = ({
         const assFonts: string[] = [];
         let newMainCues: SubtitleCue[] = [];
         let newTopCues: SubtitleCue[] = [];
+        let mainIsAss = false;
+        let topIsAss = false;
 
-        // Process Main Track
+        // 1. Process Main Track
         if (mainRes) {
           if (mainRes.format === 'ass' && mainRes.content) {
+            mainIsAss = true;
             assContent = mainRes.content;
             if (mainRes.fonts) assFonts.push(...mainRes.fonts);
             newMainCues = parseAssToCues(mainRes.content);
@@ -385,7 +400,20 @@ export const VideoPlayer: React.FC<VideoPlayerProps> = ({
           }
         }
 
+        // 2. Process Top Track (Signs, Songs, 2nd Subtitles)
+        if (topRes) {
+          if (topRes.format === 'ass' && topRes.content) {
+            topIsAss = true;
+            assContent = assContent ? combineAss(assContent, topRes.content) : topRes.content;
+            if (topRes.fonts) assFonts.push(...topRes.fonts);
+            newTopCues = parseAssToCues(topRes.content);
+          } else if (topRes.cues) {
+            newTopCues = topRes.cues;
+          }
+        }
+
         setMainCues(newMainCues);
+        setTopCues(newTopCues);
         setSubtitlesLoading(false);
 
         // Clean up previous JASSUB instance
@@ -398,10 +426,10 @@ export const VideoPlayer: React.FC<VideoPlayerProps> = ({
 
         if (isCancelled) return;
 
-        const effectivePort = mainRes?.port || serverPortRef.current || port;
+        const effectivePort = mainRes?.port || topRes?.port || serverPortRef.current || port;
         if (effectivePort) serverPortRef.current = effectivePort;
 
-        // If we have valid ASS content, initialize JASSUB immediately for dialogue!
+        // If we have valid ASS content (main dialogue or top signs), initialize JASSUB with all fonts!
         const hasValidAss = Boolean(
           assContent &&
           assContent.trim().length > 50 &&
@@ -412,11 +440,15 @@ export const VideoPlayer: React.FC<VideoPlayerProps> = ({
           try {
             const uniqueFonts = [...new Set(assFonts)]
               .filter((f) => !f.toLowerCase().includes('arialunicodems') && !f.toLowerCase().endsWith('.ttc'))
-              .slice(0, 8);
+              .slice(0, 16);
+
+            console.log(
+              `[VideoPlayer] Initializing JASSUB with ${uniqueFonts.length} fonts and combined ASS styles`
+            );
 
             const jassub = new JASSUB({
               video,
-              subContent: assContent,
+              subContent: assContent, // CONTAINS BOTH MAIN AND 2ND SUBTITLES COMBINED!
               fonts: uniqueFonts,
               workerUrl,
               wasmUrl,
@@ -425,6 +457,8 @@ export const VideoPlayer: React.FC<VideoPlayerProps> = ({
               debug: false,
             });
             jassubRef.current = jassub;
+            setIsMainAssActive(mainIsAss);
+            setIsTopAssActive(topIsAss);
 
             jassub.ready.catch((err) => {
               console.warn('[VideoPlayer] JASSUB worker init failed, using HTML subtitle overlay fallback:', err);
@@ -433,36 +467,18 @@ export const VideoPlayer: React.FC<VideoPlayerProps> = ({
                   jassub.destroy();
                 } catch {}
                 jassubRef.current = null;
+                setIsMainAssActive(false);
+                setIsTopAssActive(false);
               }
             });
           } catch (err) {
             console.warn('[VideoPlayer] Error creating JASSUB instance, falling back to HTML overlay:', err);
+            setIsMainAssActive(false);
+            setIsTopAssActive(false);
           }
-        }
-
-        // 2. Afterwards, extract Top Signs Track in the background if enabled
-        if (topTrack && topSubEnabled) {
-          const topRes = await window.electronAPI.extractSubtitleTrack(
-            metadata.filePath,
-            topTrack.id,
-            topTrack.index,
-            topTrack.type === 'external',
-            topTrack.filePath
-          );
-          if (!isCancelled && topRes) {
-            if (topRes.format === 'ass' && topRes.content) {
-              const combined = assContent ? combineAss(assContent, topRes.content) : topRes.content;
-              if (jassubRef.current) {
-                try {
-                  (jassubRef.current as any).setTrack?.(combined);
-                } catch {}
-              }
-              newTopCues = parseAssToCues(topRes.content);
-            } else if (topRes.cues) {
-              newTopCues = topRes.cues;
-            }
-            setTopCues(newTopCues);
-          }
+        } else {
+          setIsMainAssActive(false);
+          setIsTopAssActive(false);
         }
       } catch (err) {
         console.error('[VideoPlayer] Error loading subtitles:', err);
@@ -1019,8 +1035,8 @@ export const VideoPlayer: React.FC<VideoPlayerProps> = ({
       {/* Dual Subtitles Overlay (Top Signs & Bottom Dialogue) */}
       <SubtitleOverlay
         currentTime={currentAbsoluteTime}
-        mainCues={mainCues}
-        topCues={topCues}
+        mainCues={isMainAssActive && jassubRef.current ? [] : mainCues}
+        topCues={isTopAssActive && jassubRef.current ? [] : topCues}
         topSubEnabled={topSubEnabled}
         syncOffset={syncOffset}
         fontSize={fontSize}
