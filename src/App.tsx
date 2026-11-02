@@ -7,6 +7,36 @@ import { WhisperStudio } from './components/WhisperStudio/WhisperStudio';
 import { SettingsModal } from './components/SettingsModal';
 import { AnimeFolder, Episode, AppSettings, PlaybackProgress } from './types';
 
+function findLastWatchedFolder(
+  folders: AnimeFolder[],
+  history: Record<string, PlaybackProgress>
+): AnimeFolder | null {
+  if (folders.length === 0) return null;
+
+  const historyList = Object.values(history)
+    .filter((h) => h.lastWatchedAt && h.lastWatchedAt > 0)
+    .sort((a, b) => b.lastWatchedAt - a.lastWatchedAt);
+
+  if (historyList.length > 0) {
+    for (const recent of historyList) {
+      if (recent.folderPath) {
+        const match = folders.find(
+          (f) => f.folderPath.toLowerCase() === recent.folderPath.toLowerCase()
+        );
+        if (match) return match;
+      }
+      if (recent.filePath) {
+        const match = folders.find((f) =>
+          f.episodes.some((e) => e.filePath.toLowerCase() === recent.filePath.toLowerCase())
+        );
+        if (match) return match;
+      }
+    }
+  }
+
+  return folders[0];
+}
+
 export const App: React.FC = () => {
   // Navigation & View state
   const [currentTab, setCurrentTab] = useState<'library' | 'whisper'>('library');
@@ -49,7 +79,8 @@ export const App: React.FC = () => {
       setFolders(scannedFolders);
 
       if (scannedFolders.length > 0) {
-        setSelectedFolder(scannedFolders[0]);
+        const lastWatchedFolder = findLastWatchedFolder(scannedFolders, watchHistory);
+        setSelectedFolder(lastWatchedFolder || scannedFolders[0]);
       }
     } catch (e) {
       console.error('Failed to load initial library data:', e);
@@ -99,9 +130,9 @@ export const App: React.FC = () => {
       setFolders(scanned);
 
       if (scanned.length > 0) {
-        // Keep current selected folder if still exists, or default to first
+        // Keep current selected folder if still exists, or default to last watched anime
         const exists = scanned.find((f) => f.folderPath === selectedFolder?.folderPath);
-        setSelectedFolder(exists || scanned[0]);
+        setSelectedFolder(exists || findLastWatchedFolder(scanned, watchHistory) || scanned[0]);
       } else {
         setSelectedFolder(null);
       }
@@ -148,7 +179,7 @@ export const App: React.FC = () => {
         setLoading(true);
         const scanned = await window.electronAPI.scanLibrary(newRoot);
         setFolders(scanned);
-        setSelectedFolder(scanned.length > 0 ? scanned[0] : null);
+        setSelectedFolder(findLastWatchedFolder(scanned, history) || (scanned.length > 0 ? scanned[0] : null));
         setLoading(false);
       }
     } catch (err) {
