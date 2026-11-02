@@ -21,12 +21,19 @@ export interface KitsuAnimeCache {
 
 const memoryCache = new Map<string, KitsuAnimeCache | null>();
 
+export interface AnimeSearchQueries {
+  primary: string;
+  fallback: string | null;
+}
+
 /**
- * Normalizes an anime folder name or release title into clean search queries.
- * Strips release groups, quality brackets, hashes, scene tags, etc.
+ * Smartly constructs prioritized search queries from folder or release names:
+ * - Season 2 / Part 2 / Final Season -> searches specifically with season identifier first,
+ *   falling back to base title if specific season query yields nothing.
+ * - Season 1 / Single-season -> searches base title first (how 99% of entries are named on AniList/MAL).
  */
-export function cleanKitsuQuery(raw: string): string {
-  if (!raw) return '';
+export function buildAnimeSearchQueries(raw: string): AnimeSearchQueries {
+  if (!raw) return { primary: '', fallback: null };
   let str = raw;
 
   // 1. Remove bracketed groups [CRUCiBLE], [1080p], etc.
@@ -38,14 +45,7 @@ export function cleanKitsuQuery(raw: string): string {
   // 3. Remove scene release group suffix
   str = str.replace(/-\s*[A-Za-z0-9_]+$/, '');
 
-  // 4. Remove season / part tokens: S01, Season 1, Part 1, Cour 2...
-  str = str.replace(/\bS\d{1,2}\b/gi, '');
-  str = str.replace(/\b(Season|Part|Cour)\s*\d+\b/gi, '');
-
-  // 5. Replace dots, underscores, dashes with spaces
-  str = str.replace(/[-_–—.]+/g, ' ');
-
-  // 6. Cut off at standard scene junk tokens
+  // 4. Cut off at standard scene junk tokens
   const junkPattern =
     /\b(2160p|4k|1080p|720p|576p|480p|bluray|bdrip|remux|web-dl|webrip|web|dvdrip|dvd|hevc|x265|x264|h264|h265|avc|repack|dual-?audio)\b/i;
   const match = str.match(junkPattern);
@@ -53,8 +53,50 @@ export function cleanKitsuQuery(raw: string): string {
     str = str.substring(0, match.index);
   }
 
-  str = str.replace(/\s+/g, ' ').trim();
-  return str.length >= 2 ? str : raw.trim();
+  // 5. Replace dots, underscores, dashes with spaces
+  str = str.replace(/[-_–—.]+/g, ' ').replace(/\s+/g, ' ').trim();
+
+  // Detect season / cour / part tokens
+  const s2Match = str.match(/\bS0*([2-9]|\d{2,})\b/i) || str.match(/\bSeason\s*0*([2-9]|\d{2,})\b/i);
+  const s1Match = str.match(/\bS0*1\b/i) || str.match(/\bSeason\s*0*1\b/i);
+  const partMatch = str.match(/\b(Part|Cour)\s*0*(\d+)\b/i);
+  const finalSeasonMatch = str.match(/\b(The\s+)?Final\s+Season\b/i);
+
+  // Base title with all season/part tokens stripped
+  const baseTitle = str
+    .replace(/\bS\d{1,2}\b/gi, '')
+    .replace(/\b(Season|Part|Cour)\s*\d+\b/gi, '')
+    .replace(/\b(The\s+)?Final\s+Season\b/gi, '')
+    .replace(/\s+/g, ' ')
+    .trim();
+
+  if (s2Match) {
+    const sNum = parseInt(s2Match[1], 10);
+    const partSuffix = partMatch ? ` Part ${partMatch[2]}` : '';
+    const primary = `${baseTitle} Season ${sNum}${partSuffix}`.trim();
+    return { primary, fallback: baseTitle || null };
+  }
+
+  if (finalSeasonMatch) {
+    const partSuffix = partMatch ? ` Part ${partMatch[2]}` : '';
+    const primary = `${baseTitle} The Final Season${partSuffix}`.trim();
+    return { primary, fallback: baseTitle || null };
+  }
+
+  if (partMatch && !s1Match) {
+    const primary = `${baseTitle} Part ${partMatch[2]}`.trim();
+    return { primary, fallback: baseTitle || null };
+  }
+
+  return {
+    primary: baseTitle || str,
+    fallback: s1Match ? `${baseTitle} Season 1` : null,
+  };
+}
+
+export function cleanKitsuQuery(raw: string): string {
+  const { primary } = buildAnimeSearchQueries(raw);
+  return primary || raw.trim();
 }
 
 /**
@@ -240,10 +282,10 @@ async function fetchKitsuMetadata(query: string): Promise<{
  * Caches results locally on disk for 14 days.
  */
 export async function getKitsuMetadata(rawSeriesName: string): Promise<KitsuAnimeCache | null> {
-  const query = cleanKitsuQuery(rawSeriesName);
-  if (!query) return null;
+  const { primary, fallback } = buildAnimeSearchQueries(rawSeriesName);
+  if (!primary) return null;
 
-  const cacheKey = crypto.createHash('md5').update(query.toLowerCase()).digest('hex').slice(0, 16);
+  const cacheKey = crypto.createHash('md5').update(primary.toLowerCase()).digest('hex').slice(0, 16);
 
   if (memoryCache.has(cacheKey)) {
     return memoryCache.get(cacheKey) || null;
@@ -265,14 +307,24 @@ export async function getKitsuMetadata(rawSeriesName: string): Promise<KitsuAnim
   }
 
   try {
-    // Run AniList and Kitsu searches concurrently
-    const [aniListResult, kitsuResult] = await Promise.allSettled([
-      fetchAniListMetadata(query),
-      fetchKitsuMetadata(query),
+    // 1. Try primary search query
+    let [aniListResult, kitsuResult] = await Promise.allSettled([
+      fetchAniListMetadata(primary),
+      fetchKitsuMetadata(primary),
     ]);
 
-    const aniList = aniListResult.status === 'fulfilled' ? aniListResult.value : null;
-    const kitsu = kitsuResult.status === 'fulfilled' ? kitsuResult.value : null;
+    let aniList = aniListResult.status === 'fulfilled' ? aniListResult.value : null;
+    let kitsu = kitsuResult.status === 'fulfilled' ? kitsuResult.value : null;
+
+    // 2. If primary query found nothing and we have an alternative/fallback query, try fallback
+    if (!aniList && !kitsu && fallback && fallback.toLowerCase() !== primary.toLowerCase()) {
+      [aniListResult, kitsuResult] = await Promise.allSettled([
+        fetchAniListMetadata(fallback),
+        fetchKitsuMetadata(fallback),
+      ]);
+      aniList = aniListResult.status === 'fulfilled' ? aniListResult.value : null;
+      kitsu = kitsuResult.status === 'fulfilled' ? kitsuResult.value : null;
+    }
 
     if (!aniList && !kitsu) {
       memoryCache.set(cacheKey, null);
@@ -280,7 +332,7 @@ export async function getKitsuMetadata(rawSeriesName: string): Promise<KitsuAnim
     }
 
     const animeId = kitsu?.animeId || 'anilist';
-    const canonicalTitle = aniList?.canonicalTitle || kitsu?.canonicalTitle || query;
+    const canonicalTitle = aniList?.canonicalTitle || kitsu?.canonicalTitle || primary;
     const posterUrl = aniList?.posterUrl || kitsu?.posterUrl || null;
 
     // Merge episodes:
