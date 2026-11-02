@@ -1,7 +1,7 @@
 import React, { useState, useEffect, useMemo } from 'react';
 import { Play, Subtitles, CheckCircle2 } from 'lucide-react';
 import { Episode, PlaybackProgress } from '../../types';
-import { formatTime, cleanEpisodeTitle } from '../../utils/format';
+import { formatTime, cleanEpisodeTitle, formatEpisodeDisplayTitle } from '../../utils/format';
 
 interface EpisodeCardProps {
   episode: Episode;
@@ -39,6 +39,11 @@ export const EpisodeCard: React.FC<EpisodeCardProps> = ({ episode, progress, onP
   const percentWatched = progress && progress.duration > 0
     ? Math.min(100, Math.round((progress.currentTime / progress.duration) * 100))
     : 0;
+
+  const fullDisplayTitle = useMemo(
+    () => formatEpisodeDisplayTitle(parsed.displayTitle, episode.kitsuTitle || episode.episodeTitle),
+    [parsed.displayTitle, episode.kitsuTitle, episode.episodeTitle]
+  );
 
   return (
     <div
@@ -86,9 +91,9 @@ export const EpisodeCard: React.FC<EpisodeCardProps> = ({ episode, progress, onP
         <div>
           <h4
             className="text-xs font-semibold text-zinc-100 line-clamp-1 group-hover:text-red-400 transition-colors"
-            title={episode.kitsuTitle ? `${parsed.displayTitle} — ${episode.kitsuTitle}` : episode.fileName}
+            title={fullDisplayTitle}
           >
-            {episode.kitsuTitle ? `${parsed.displayTitle} — ${episode.kitsuTitle}` : parsed.displayTitle}
+            {fullDisplayTitle}
           </h4>
         </div>
 

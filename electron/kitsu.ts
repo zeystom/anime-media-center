@@ -21,8 +21,8 @@ export interface KitsuAnimeCache {
 const memoryCache = new Map<string, KitsuAnimeCache | null>();
 
 /**
- * Normalizes an anime folder name or release title into a clean search query for Kitsu.
- * Strips release groups, quality brackets, S01/Season 1 indicators, etc.
+ * Normalizes an anime folder name or release title into clean search queries.
+ * Strips release groups, quality brackets, hashes, scene tags, etc.
  */
 export function cleanKitsuQuery(raw: string): string {
   if (!raw) return '';
@@ -57,7 +57,181 @@ export function cleanKitsuQuery(raw: string): string {
 }
 
 /**
- * Searches Kitsu API for anime series metadata and episode stills.
+ * Parses AniList streaming episode title into episode number and English title.
+ * Examples:
+ *   "Episode 1 - The Lord of Dark Beasts" -> { number: 1, title: "The Lord of Dark Beasts" }
+ *   "Episode 02 – The Beast Lord in Captivity" -> { number: 2, title: "The Beast Lord in Captivity" }
+ *   "Ep 1: The Melancholy of Haruhi Suzumiya I" -> { number: 1, title: "The Melancholy of Haruhi Suzumiya I" }
+ */
+export function parseAniListEpisodeTitle(raw: string): { number: number; title: string } | null {
+  if (!raw) return null;
+  const match = raw.match(/^(?:Episode|Ep\.?|E)?\s*(\d+)\s*[-–—:.]\s*(.+)$/i);
+  if (match) {
+    const num = parseInt(match[1], 10);
+    const title = match[2].trim();
+    if (!isNaN(num) && title.length > 0) {
+      return { number: num, title };
+    }
+  }
+  return null;
+}
+
+/**
+ * Fetches official English episode titles and streaming thumbnails from AniList GraphQL API.
+ */
+async function fetchAniListMetadata(query: string): Promise<{
+  canonicalTitle: string;
+  posterUrl: string | null;
+  episodes: Record<number, KitsuEpisodeInfo>;
+} | null> {
+  const gqlQuery = `
+    query ($search: String) {
+      Media(search: $search, type: ANIME) {
+        id
+        title {
+          romaji
+          english
+          native
+        }
+        coverImage {
+          extraLarge
+          large
+        }
+        streamingEpisodes {
+          title
+          thumbnail
+        }
+      }
+    }
+  `;
+
+  try {
+    const res = await fetch('https://graphql.anilist.co', {
+      method: 'POST',
+      headers: {
+        'Content-Type': 'application/json',
+        Accept: 'application/json',
+        'User-Agent': 'AnimeMediaCenter/1.0',
+      },
+      body: JSON.stringify({
+        query: gqlQuery,
+        variables: { search: query },
+      }),
+      signal: AbortSignal.timeout(5000),
+    });
+
+    if (!res.ok) return null;
+    const json = await res.json();
+    const media = json.data?.Media;
+    if (!media) return null;
+
+    const canonicalTitle = media.title?.english || media.title?.romaji || query;
+    const posterUrl = media.coverImage?.extraLarge || media.coverImage?.large || null;
+    const episodes: Record<number, KitsuEpisodeInfo> = {};
+
+    if (Array.isArray(media.streamingEpisodes)) {
+      for (const ep of media.streamingEpisodes) {
+        if (!ep.title) continue;
+        const parsed = parseAniListEpisodeTitle(ep.title);
+        if (parsed) {
+          episodes[parsed.number] = {
+            number: parsed.number,
+            title: parsed.title,
+            thumbnailUrl: ep.thumbnail || null,
+            synopsis: null,
+          };
+        }
+      }
+    }
+
+    return {
+      canonicalTitle,
+      posterUrl,
+      episodes,
+    };
+  } catch {
+    return null;
+  }
+}
+
+/**
+ * Fetches community stills and episode metadata from Kitsu API.
+ */
+async function fetchKitsuMetadata(query: string): Promise<{
+  animeId: string;
+  canonicalTitle: string;
+  posterUrl: string | null;
+  episodes: Record<number, KitsuEpisodeInfo>;
+} | null> {
+  try {
+    const searchUrl = `https://kitsu.io/api/edge/anime?filter[text]=${encodeURIComponent(query)}&page[limit]=1`;
+    const searchRes = await fetch(searchUrl, {
+      headers: {
+        Accept: 'application/vnd.api+json',
+        'User-Agent': 'AnimeMediaCenter/1.0',
+      },
+      signal: AbortSignal.timeout(5000),
+    });
+
+    if (!searchRes.ok) return null;
+    const searchJson = await searchRes.json();
+    if (!searchJson.data || searchJson.data.length === 0) return null;
+
+    const animeItem = searchJson.data[0];
+    const animeId = String(animeItem.id);
+    const canonicalTitle = animeItem.attributes?.canonicalTitle || query;
+    const posterUrl = animeItem.attributes?.posterImage?.original || null;
+    const episodes: Record<number, KitsuEpisodeInfo> = {};
+
+    const epUrl1 = `https://kitsu.io/api/edge/episodes?filter[mediaId]=${animeId}&filter[mediaType]=Anime&page[limit]=50&page[offset]=0&sort=number`;
+    const epRes1 = await fetch(epUrl1, {
+      headers: {
+        Accept: 'application/vnd.api+json',
+        'User-Agent': 'AnimeMediaCenter/1.0',
+      },
+      signal: AbortSignal.timeout(5000),
+    });
+
+    if (epRes1.ok) {
+      const epJson1 = await epRes1.json();
+      if (Array.isArray(epJson1.data)) {
+        for (const ep of epJson1.data) {
+          const num = ep.attributes?.number;
+          if (typeof num === 'number') {
+            const thumb =
+              ep.attributes?.thumbnail?.original ||
+              ep.attributes?.thumbnail?.large ||
+              ep.attributes?.thumbnail?.medium ||
+              null;
+            const title =
+              ep.attributes?.canonicalTitle ||
+              ep.attributes?.titles?.en ||
+              ep.attributes?.titles?.en_jp ||
+              null;
+            episodes[num] = {
+              number: num,
+              title: title && !/^(?:Episode|Ep)\s*\d+$/i.test(title) ? title : null,
+              synopsis: ep.attributes?.synopsis || null,
+              thumbnailUrl: thumb,
+            };
+          }
+        }
+      }
+    }
+
+    return {
+      animeId,
+      canonicalTitle,
+      posterUrl,
+      episodes,
+    };
+  } catch {
+    return null;
+  }
+}
+
+/**
+ * Searches AniList & Kitsu for official English episode titles and high-res stills.
  * Caches results locally on disk for 14 days.
  */
 export async function getKitsuMetadata(rawSeriesName: string): Promise<KitsuAnimeCache | null> {
@@ -73,11 +247,12 @@ export async function getKitsuMetadata(rawSeriesName: string): Promise<KitsuAnim
   const cacheDir = storage.getMetadataCacheDir();
   const cacheFile = path.join(cacheDir, `kitsu_${cacheKey}.json`);
 
-  // Check disk cache (valid for 14 days)
+  // Check disk cache (valid for 14 days if it has non-empty episode data)
   if (fs.existsSync(cacheFile)) {
     try {
       const data = JSON.parse(fs.readFileSync(cacheFile, 'utf-8')) as KitsuAnimeCache;
-      if (Date.now() - data.fetchedAt < 14 * 24 * 60 * 60 * 1000) {
+      const hasEpisodeData = data.episodes && Object.keys(data.episodes).length > 0;
+      if (hasEpisodeData && Date.now() - data.fetchedAt < 14 * 24 * 60 * 60 * 1000) {
         memoryCache.set(cacheKey, data);
         return data;
       }
@@ -85,115 +260,55 @@ export async function getKitsuMetadata(rawSeriesName: string): Promise<KitsuAnim
   }
 
   try {
-    // 1. Search Anime ID by Query
-    const searchUrl = `https://kitsu.io/api/edge/anime?filter[text]=${encodeURIComponent(query)}&page[limit]=1`;
-    const searchRes = await fetch(searchUrl, {
-      headers: {
-        'Accept': 'application/vnd.api+json',
-        'User-Agent': 'AnimeMediaCenter/1.0',
-      },
-      signal: AbortSignal.timeout(5000),
-    });
+    // Run AniList and Kitsu searches concurrently
+    const [aniListResult, kitsuResult] = await Promise.allSettled([
+      fetchAniListMetadata(query),
+      fetchKitsuMetadata(query),
+    ]);
 
-    if (!searchRes.ok) {
+    const aniList = aniListResult.status === 'fulfilled' ? aniListResult.value : null;
+    const kitsu = kitsuResult.status === 'fulfilled' ? kitsuResult.value : null;
+
+    if (!aniList && !kitsu) {
       memoryCache.set(cacheKey, null);
       return null;
     }
 
-    const searchJson = await searchRes.json();
-    if (!searchJson.data || searchJson.data.length === 0) {
-      memoryCache.set(cacheKey, null);
-      return null;
-    }
+    const animeId = kitsu?.animeId || 'anilist';
+    const canonicalTitle = aniList?.canonicalTitle || kitsu?.canonicalTitle || query;
+    const posterUrl = aniList?.posterUrl || kitsu?.posterUrl || null;
 
-    const animeItem = searchJson.data[0];
-    const animeId = animeItem.id;
-    const canonicalTitle = animeItem.attributes?.canonicalTitle || query;
-    const posterUrl = animeItem.attributes?.posterImage?.original || null;
+    // Merge episodes:
+    // - Title: AniList English streaming title preferred, fallback to Kitsu title
+    // - Thumbnail: Kitsu community still preferred (clean HD capture), fallback to AniList thumbnail
+    const mergedEpisodes: Record<number, KitsuEpisodeInfo> = {};
 
-    // 2. Fetch Episodes for this Anime (first page up to 50)
-    const episodes: Record<number, KitsuEpisodeInfo> = {};
+    const allEpNumbers = new Set<number>([
+      ...Object.keys(aniList?.episodes || {}).map(Number),
+      ...Object.keys(kitsu?.episodes || {}).map(Number),
+    ]);
 
-    const epUrl1 = `https://kitsu.io/api/edge/episodes?filter[mediaId]=${animeId}&page[limit]=50&page[offset]=0&sort=number`;
-    const epRes1 = await fetch(epUrl1, {
-      headers: {
-        'Accept': 'application/vnd.api+json',
-        'User-Agent': 'AnimeMediaCenter/1.0',
-      },
-      signal: AbortSignal.timeout(6000),
-    });
+    for (const epNum of allEpNumbers) {
+      const aniEp = aniList?.episodes[epNum];
+      const kitEp = kitsu?.episodes[epNum];
 
-    if (epRes1.ok) {
-      const epJson1 = await epRes1.json();
-      if (epJson1.data) {
-        for (const ep of epJson1.data) {
-          const num = ep.attributes?.number;
-          if (typeof num === 'number') {
-            const thumb =
-              ep.attributes?.thumbnail?.original ||
-              ep.attributes?.thumbnail?.large ||
-              ep.attributes?.thumbnail?.medium ||
-              null;
-            episodes[num] = {
-              number: num,
-              title:
-                ep.attributes?.canonicalTitle ||
-                ep.attributes?.titles?.en ||
-                ep.attributes?.titles?.en_jp ||
-                null,
-              synopsis: ep.attributes?.synopsis || null,
-              thumbnailUrl: thumb,
-            };
-          }
-        }
-      }
+      const chosenTitle = aniEp?.title || kitEp?.title || null;
+      const chosenThumb = kitEp?.thumbnailUrl || aniEp?.thumbnailUrl || null;
+      const chosenSynopsis = kitEp?.synopsis || aniEp?.synopsis || null;
 
-      // If more than 50 episodes, fetch page 2
-      const totalCount = epJson1.meta?.count || 0;
-      if (totalCount > 50) {
-        try {
-          const epUrl2 = `https://kitsu.io/api/edge/episodes?filter[mediaId]=${animeId}&page[limit]=50&page[offset]=50&sort=number`;
-          const epRes2 = await fetch(epUrl2, {
-            headers: {
-              'Accept': 'application/vnd.api+json',
-              'User-Agent': 'AnimeMediaCenter/1.0',
-            },
-            signal: AbortSignal.timeout(6000),
-          });
-          if (epRes2.ok) {
-            const epJson2 = await epRes2.json();
-            if (epJson2.data) {
-              for (const ep of epJson2.data) {
-                const num = ep.attributes?.number;
-                if (typeof num === 'number') {
-                  const thumb =
-                    ep.attributes?.thumbnail?.original ||
-                    ep.attributes?.thumbnail?.large ||
-                    ep.attributes?.thumbnail?.medium ||
-                    null;
-                  episodes[num] = {
-                    number: num,
-                    title:
-                      ep.attributes?.canonicalTitle ||
-                      ep.attributes?.titles?.en ||
-                      ep.attributes?.titles?.en_jp ||
-                      null,
-                    synopsis: ep.attributes?.synopsis || null,
-                    thumbnailUrl: thumb,
-                  };
-                }
-              }
-            }
-          }
-        } catch {}
-      }
+      mergedEpisodes[epNum] = {
+        number: epNum,
+        title: chosenTitle,
+        thumbnailUrl: chosenThumb,
+        synopsis: chosenSynopsis,
+      };
     }
 
     const result: KitsuAnimeCache = {
       animeId,
       canonicalTitle,
       posterUrl,
-      episodes,
+      episodes: mergedEpisodes,
       fetchedAt: Date.now(),
     };
 

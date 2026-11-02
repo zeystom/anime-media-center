@@ -1,7 +1,7 @@
 import React, { useMemo } from 'react';
 import { Play, Clock, Sparkles } from 'lucide-react';
 import { Episode, PlaybackProgress } from '../../types';
-import { formatTime, cleanSeriesTitle, cleanEpisodeTitle } from '../../utils/format';
+import { formatTime, cleanSeriesTitle, cleanEpisodeTitle, formatEpisodeDisplayTitle } from '../../utils/format';
 
 interface HeroContinueWatchingProps {
   lastWatched: PlaybackProgress;
@@ -60,9 +60,9 @@ export const HeroContinueWatching: React.FC<HeroContinueWatchingProps> = ({
             <div className="flex items-center space-x-2 mt-1">
               <p
                 className="text-sm text-zinc-300 font-medium"
-                title={episode.kitsuTitle ? `${parsedEp.displayTitle} — ${episode.kitsuTitle}` : lastWatched.fileName}
+                title={formatEpisodeDisplayTitle(parsedEp.displayTitle, episode.kitsuTitle || episode.episodeTitle)}
               >
-                {episode.kitsuTitle ? `${parsedEp.displayTitle} — ${episode.kitsuTitle}` : parsedEp.displayTitle}
+                {formatEpisodeDisplayTitle(parsedEp.displayTitle, episode.kitsuTitle || episode.episodeTitle)}
               </p>
             </div>
           </div>

@@ -269,3 +269,36 @@ export function cleanEpisodeTitle(filename: string): ParsedEpisode {
     tags,
   };
 }
+
+/**
+ * Smartly formats the final episode display title combining the local parsed title
+ * (e.g. "Episode 1") with the official English episode title from AniList/Kitsu
+ * (e.g. "The Lord of Dark Beasts") -> "Episode 1 — The Lord of Dark Beasts".
+ * Gracefully avoids duplication if the filename already contained the title.
+ */
+export function formatEpisodeDisplayTitle(
+  parsedDisplayTitle: string,
+  apiTitle?: string | null
+): string {
+  if (!apiTitle || !apiTitle.trim()) {
+    return parsedDisplayTitle;
+  }
+  const cleanApi = apiTitle.trim();
+  const cleanParsed = (parsedDisplayTitle || '').trim();
+
+  // If already identical or already contains the official title
+  if (cleanParsed.toLowerCase() === cleanApi.toLowerCase()) {
+    return cleanParsed;
+  }
+  if (cleanParsed.toLowerCase().includes(cleanApi.toLowerCase())) {
+    return cleanParsed;
+  }
+
+  // If parsed title is generic "Episode X" or "EP X"
+  if (/^(?:Episode|EP|E)\s*\d+/i.test(cleanParsed)) {
+    return `${cleanParsed} — ${cleanApi}`;
+  }
+
+  return `${cleanParsed} — ${cleanApi}`;
+}
+

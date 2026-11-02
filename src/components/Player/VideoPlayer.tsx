@@ -22,7 +22,7 @@ import { TimelineScrubber } from './TimelineScrubber';
 import { TrackControls } from './TrackControls';
 import { EpisodeDrawer } from './EpisodeDrawer';
 import { RippleIndicator } from './RippleIndicator';
-import { formatTime, cleanEpisodeTitle } from '../../utils/format';
+import { formatTime, cleanEpisodeTitle, formatEpisodeDisplayTitle } from '../../utils/format';
 
 interface VideoPlayerProps {
   episode: Episode;
@@ -1069,12 +1069,12 @@ export const VideoPlayer: React.FC<VideoPlayerProps> = ({
                 title={episode.fileName}
               >
                 {parsed.seriesTitle
-                  ? `${parsed.seriesTitle}${
-                      parsed.displayTitle && parsed.displayTitle !== parsed.seriesTitle
-                        ? ` — ${parsed.displayTitle}`
-                        : ''
-                    }`
-                  : parsed.displayTitle || episode.fileName}
+                  ? `${parsed.seriesTitle} — ${formatEpisodeDisplayTitle(
+                      parsed.displayTitle,
+                      episode.kitsuTitle || episode.episodeTitle
+                    )}`
+                  : formatEpisodeDisplayTitle(parsed.displayTitle, episode.kitsuTitle || episode.episodeTitle) ||
+                    episode.fileName}
               </h1>
             </div>
           </div>

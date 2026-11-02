@@ -131,6 +131,7 @@ async function scanFolderForEpisodes(folderPath: string, port: number): Promise<
         thumbnailUrl: `http://127.0.0.1:${port}/thumb?file=${encodeURIComponent(fullPath)}&type=card`,
         kitsuThumbnail: kitsuEp?.thumbnailUrl || null,
         kitsuTitle: kitsuEp?.title || null,
+        episodeTitle: kitsuEp?.title || null,
       });
     }
 

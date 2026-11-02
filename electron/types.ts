@@ -63,6 +63,7 @@ export interface Episode {
   thumbnailUrl?: string;
   kitsuThumbnail?: string | null;
   kitsuTitle?: string | null;
+  episodeTitle?: string | null;
 }
 
 export interface AnimeFolder {

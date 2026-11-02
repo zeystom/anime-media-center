@@ -1,7 +1,7 @@
 import React, { useState, useEffect, useRef, useMemo } from 'react';
 import { X, Play, CheckCircle2, ListVideo, Film, Sparkles } from 'lucide-react';
 import { Episode, PlaybackProgress } from '../../types';
-import { formatTime, cleanEpisodeTitle, cleanSeriesTitle } from '../../utils/format';
+import { formatTime, cleanEpisodeTitle, cleanSeriesTitle, formatEpisodeDisplayTitle } from '../../utils/format';
 
 interface EpisodeDrawerProps {
   isOpen: boolean;
@@ -125,9 +125,9 @@ const EpisodeDrawerItem: React.FC<EpisodeItemProps> = ({
             className={`text-xs sm:text-sm font-semibold truncate ${
               isPlaying ? 'text-red-400 font-bold' : 'text-zinc-100 group-hover:text-white'
             }`}
-            title={episode.kitsuTitle ? `${parsed.displayTitle} — ${episode.kitsuTitle}` : episode.fileName}
+            title={formatEpisodeDisplayTitle(parsed.displayTitle, episode.kitsuTitle || episode.episodeTitle)}
           >
-            {episode.kitsuTitle ? `${parsed.displayTitle} — ${episode.kitsuTitle}` : parsed.displayTitle}
+            {formatEpisodeDisplayTitle(parsed.displayTitle, episode.kitsuTitle || episode.episodeTitle)}
           </h4>
 
           {progress?.completed && (
