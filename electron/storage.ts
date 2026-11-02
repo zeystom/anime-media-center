@@ -7,6 +7,7 @@ const DEFAULT_SETTINGS: AppSettings = {
   ffmpegPath: 'C:\\Users\\gogoh\\AppData\\Roaming\\Subtitle Edit\\SpeechToText\\Purfview-Faster-Whisper-XXL\\ffmpeg.exe',
   whisperPath: 'C:\\Users\\gogoh\\AppData\\Roaming\\Subtitle Edit\\SpeechToText\\Purfview-Faster-Whisper-XXL\\faster-whisper-xxl.exe',
   defaultLibraryRoot: 'D:\\films',
+  libraryFolders: ['D:\\films'],
   autoPlayNext: true,
   subtitlesFontSize: 28,
   subtitlesOutline: true,
@@ -62,7 +63,17 @@ export class StorageService {
     try {
       if (fs.existsSync(this.settingsFile)) {
         const raw = fs.readFileSync(this.settingsFile, 'utf-8');
-        return { ...DEFAULT_SETTINGS, ...JSON.parse(raw) };
+        const parsed = JSON.parse(raw);
+        const res: AppSettings = { ...DEFAULT_SETTINGS, ...parsed };
+
+        if (!Array.isArray(res.libraryFolders) || res.libraryFolders.length === 0) {
+          res.libraryFolders = res.defaultLibraryRoot ? [res.defaultLibraryRoot] : ['D:\\films'];
+        }
+        if (!res.defaultLibraryRoot && res.libraryFolders.length > 0) {
+          res.defaultLibraryRoot = res.libraryFolders[0];
+        }
+
+        return res;
       }
     } catch (e) {
       console.error('Failed to read settings:', e);
@@ -73,6 +84,9 @@ export class StorageService {
   updateSettings(settings: Partial<AppSettings>): AppSettings {
     const current = this.getSettings();
     const updated = { ...current, ...settings };
+    if (Array.isArray(updated.libraryFolders) && updated.libraryFolders.length > 0) {
+      updated.defaultLibraryRoot = updated.libraryFolders[0];
+    }
     try {
       fs.writeFileSync(this.settingsFile, JSON.stringify(updated, null, 2), 'utf-8');
     } catch (e) {

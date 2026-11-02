@@ -9,7 +9,7 @@ export interface ElectronAPI {
   getSettings: () => Promise<import('../../electron/types').AppSettings>;
   updateSettings: (settings: Partial<import('../../electron/types').AppSettings>) => Promise<import('../../electron/types').AppSettings>;
   browseFolder: (defaultPath?: string) => Promise<string | null>;
-  scanLibrary: (rootPath?: string) => Promise<import('../../electron/types').AnimeFolder[]>;
+  scanLibrary: (rootPath?: string | string[]) => Promise<import('../../electron/types').AnimeFolder[]>;
   getFolderEpisodes: (folderPath: string) => Promise<import('../../electron/types').Episode[]>;
   probeVideo: (filePath: string) => Promise<import('../../electron/types').VideoMetadata>;
   extractSubtitleTrack: (filePath: string, trackId: string, trackIndex: number | null, isExternal: boolean, externalPath?: string) => Promise<import('../../electron/types').SubtitleTrackPayload>;

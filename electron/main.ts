@@ -274,75 +274,102 @@ function setupIpcHandlers() {
     return null;
   });
 
-  ipcMain.handle('scan-library', async (_event, rootPath) => {
+  ipcMain.handle('scan-library', async (_event, rootPath?: string | string[]) => {
     const settings = storage.getSettings();
-    const targetRoot = rootPath || settings.defaultLibraryRoot;
+    let targetRoots: string[] = [];
+
+    if (Array.isArray(rootPath) && rootPath.length > 0) {
+      targetRoots = rootPath;
+    } else if (typeof rootPath === 'string' && rootPath.trim().length > 0) {
+      targetRoots = [rootPath.trim()];
+    } else if (Array.isArray(settings.libraryFolders) && settings.libraryFolders.length > 0) {
+      targetRoots = settings.libraryFolders;
+    } else if (settings.defaultLibraryRoot) {
+      targetRoots = [settings.defaultLibraryRoot];
+    } else {
+      targetRoots = ['D:\\films'];
+    }
+
+    const uniqueRoots = Array.from(new Set(targetRoots.map((r) => path.resolve(r))));
     const port = streamServer.getPort();
-
-    if (!fs.existsSync(targetRoot)) {
-      return [];
-    }
-
     const animeFolders: AnimeFolder[] = [];
+    const visitedPaths = new Set<string>();
 
-    try {
-      // 1. Check if the target root itself contains .mkv files
-      const rootEpisodes = await scanFolderForEpisodes(targetRoot, port);
-      if (rootEpisodes.length > 0) {
-        const hasDubtitlesCount = rootEpisodes.filter((e) => e.hasEmbeddedDubtitles).length;
-        const kitsuData = await getKitsuMetadata(path.basename(targetRoot));
-        animeFolders.push({
-          folderPath: targetRoot,
-          folderName: path.basename(targetRoot),
-          episodes: rootEpisodes,
-          hasSubtitlesCount: rootEpisodes.filter((e) => e.hasExternalSrt).length,
-          hasDubtitlesCount,
-          hasEmbeddedDubtitles: hasDubtitlesCount > 0,
-          totalEpisodes: rootEpisodes.length,
-          posterUrl: kitsuData?.posterUrl || null,
-          bannerUrl: kitsuData?.bannerUrl || null,
-          canonicalTitle: kitsuData?.canonicalTitle || null,
-          synopsis: kitsuData?.synopsis || null,
-          genres: kitsuData?.genres || [],
-          averageScore: kitsuData?.averageScore || null,
-        });
+    for (const targetRoot of uniqueRoots) {
+      if (!fs.existsSync(targetRoot)) {
+        continue;
       }
 
-      // 2. Scan immediate subdirectories concurrently in parallel
-      const entries = fs.readdirSync(targetRoot, { withFileTypes: true });
-      const dirEntries = entries.filter((e) => e.isDirectory());
-      const subFolderPromises = dirEntries.map(async (entry) => {
-        const subFolderPath = path.join(targetRoot, entry.name);
-        const episodes = await scanFolderForEpisodes(subFolderPath, port);
-        if (episodes.length > 0) {
-          const hasDubtitlesCount = episodes.filter((e) => e.hasEmbeddedDubtitles).length;
-          const kitsuData = await getKitsuMetadata(entry.name);
-          return {
-            folderPath: subFolderPath,
-            folderName: entry.name,
-            episodes,
-            hasSubtitlesCount: episodes.filter((e) => e.hasExternalSrt).length,
-            hasDubtitlesCount,
-            hasEmbeddedDubtitles: hasDubtitlesCount > 0,
-            totalEpisodes: episodes.length,
-            posterUrl: kitsuData?.posterUrl || null,
-            bannerUrl: kitsuData?.bannerUrl || null,
-            canonicalTitle: kitsuData?.canonicalTitle || null,
-            synopsis: kitsuData?.synopsis || null,
-            genres: kitsuData?.genres || [],
-            averageScore: kitsuData?.averageScore || null,
-          } as AnimeFolder;
+      try {
+        // 1. Check if the target root itself contains .mkv files
+        if (!visitedPaths.has(targetRoot)) {
+          const rootEpisodes = await scanFolderForEpisodes(targetRoot, port);
+          if (rootEpisodes.length > 0) {
+            visitedPaths.add(targetRoot);
+            const hasDubtitlesCount = rootEpisodes.filter((e) => e.hasEmbeddedDubtitles).length;
+            const kitsuData = await getKitsuMetadata(path.basename(targetRoot));
+            animeFolders.push({
+              folderPath: targetRoot,
+              folderName: path.basename(targetRoot),
+              episodes: rootEpisodes,
+              hasSubtitlesCount: rootEpisodes.filter((e) => e.hasExternalSrt).length,
+              hasDubtitlesCount,
+              hasEmbeddedDubtitles: hasDubtitlesCount > 0,
+              totalEpisodes: rootEpisodes.length,
+              posterUrl: kitsuData?.posterUrl || null,
+              bannerUrl: kitsuData?.bannerUrl || null,
+              canonicalTitle: kitsuData?.canonicalTitle || null,
+              synopsis: kitsuData?.synopsis || null,
+              genres: kitsuData?.genres || [],
+              averageScore: kitsuData?.averageScore || null,
+            });
+          }
         }
-        return null;
-      });
 
-      const resolved = await Promise.all(subFolderPromises);
-      for (const item of resolved) {
-        if (item) animeFolders.push(item);
+        // 2. Scan immediate subdirectories concurrently in parallel
+        const entries = fs.readdirSync(targetRoot, { withFileTypes: true });
+        const dirEntries = entries.filter((e) => e.isDirectory());
+        const subFolderPromises = dirEntries.map(async (entry) => {
+          const subFolderPath = path.join(targetRoot, entry.name);
+          if (visitedPaths.has(subFolderPath)) return null;
+
+          const episodes = await scanFolderForEpisodes(subFolderPath, port);
+          if (episodes.length > 0) {
+            visitedPaths.add(subFolderPath);
+            const hasDubtitlesCount = episodes.filter((e) => e.hasEmbeddedDubtitles).length;
+            const kitsuData = await getKitsuMetadata(entry.name);
+            return {
+              folderPath: subFolderPath,
+              folderName: entry.name,
+              episodes,
+              hasSubtitlesCount: episodes.filter((e) => e.hasExternalSrt).length,
+              hasDubtitlesCount,
+              hasEmbeddedDubtitles: hasDubtitlesCount > 0,
+              totalEpisodes: episodes.length,
+              posterUrl: kitsuData?.posterUrl || null,
+              bannerUrl: kitsuData?.bannerUrl || null,
+              canonicalTitle: kitsuData?.canonicalTitle || null,
+              synopsis: kitsuData?.synopsis || null,
+              genres: kitsuData?.genres || [],
+              averageScore: kitsuData?.averageScore || null,
+            } as AnimeFolder;
+          }
+          return null;
+        });
+
+        const resolved = await Promise.all(subFolderPromises);
+        for (const item of resolved) {
+          if (item) animeFolders.push(item);
+        }
+      } catch (err) {
+        console.error(`Error scanning library at ${targetRoot}:`, err);
       }
-    } catch (err) {
-      console.error('Error scanning library:', err);
     }
+
+    // Sort folders naturally so titles across different drives display cleanly
+    animeFolders.sort((a, b) =>
+      a.folderName.localeCompare(b.folderName, undefined, { sensitivity: 'base', numeric: true })
+    );
 
     return animeFolders;
   });

@@ -5,7 +5,7 @@ contextBridge.exposeInMainWorld('electronAPI', {
   getSettings: () => ipcRenderer.invoke('get-settings'),
   updateSettings: (settings: Partial<AppSettings>) => ipcRenderer.invoke('update-settings', settings),
   browseFolder: (defaultPath?: string) => ipcRenderer.invoke('browse-folder', defaultPath),
-  scanLibrary: (rootPath?: string) => ipcRenderer.invoke('scan-library', rootPath),
+  scanLibrary: (rootPath?: string | string[]) => ipcRenderer.invoke('scan-library', rootPath),
   getFolderEpisodes: (folderPath: string) => ipcRenderer.invoke('get-folder-episodes', folderPath),
   probeVideo: (filePath: string) => ipcRenderer.invoke('probe-video', filePath),
   extractSubtitleTrack: (

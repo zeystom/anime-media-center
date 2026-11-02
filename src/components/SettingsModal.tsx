@@ -1,5 +1,5 @@
-import React, { useState } from 'react';
-import { X, Settings as SettingsIcon, Save, RotateCcw, FolderOpen } from 'lucide-react';
+import React, { useState, useEffect } from 'react';
+import { X, Settings as SettingsIcon, Save, RotateCcw, Plus, Trash2, Folder } from 'lucide-react';
 import { AppSettings } from '../types';
 
 interface SettingsModalProps {
@@ -17,16 +17,47 @@ export const SettingsModal: React.FC<SettingsModalProps> = ({
 }) => {
   const [ffmpegPath, setFfmpegPath] = useState(settings.ffmpegPath);
   const [whisperPath, setWhisperPath] = useState(settings.whisperPath);
-  const [defaultLibraryRoot, setDefaultLibraryRoot] = useState(settings.defaultLibraryRoot);
+  const [libraryFolders, setLibraryFolders] = useState<string[]>(
+    Array.isArray(settings.libraryFolders) && settings.libraryFolders.length > 0
+      ? settings.libraryFolders
+      : settings.defaultLibraryRoot
+      ? [settings.defaultLibraryRoot]
+      : ['D:\\films']
+  );
   const [subtitlesFontSize, setSubtitlesFontSize] = useState(settings.subtitlesFontSize);
   const [subtitlesOutline, setSubtitlesOutline] = useState(settings.subtitlesOutline);
   const [autoPlayNext, setAutoPlayNext] = useState(settings.autoPlayNext);
 
+  useEffect(() => {
+    if (isOpen) {
+      setFfmpegPath(settings.ffmpegPath);
+      setWhisperPath(settings.whisperPath);
+      setLibraryFolders(
+        Array.isArray(settings.libraryFolders) && settings.libraryFolders.length > 0
+          ? settings.libraryFolders
+          : settings.defaultLibraryRoot
+          ? [settings.defaultLibraryRoot]
+          : ['D:\\films']
+      );
+      setSubtitlesFontSize(settings.subtitlesFontSize);
+      setSubtitlesOutline(settings.subtitlesOutline);
+      setAutoPlayNext(settings.autoPlayNext);
+    }
+  }, [isOpen, settings]);
+
   if (!isOpen) return null;
 
-  const handleBrowseLibrary = async () => {
-    const dir = await window.electronAPI.browseFolder(defaultLibraryRoot);
-    if (dir) setDefaultLibraryRoot(dir);
+  const handleAddFolder = async () => {
+    const dir = await window.electronAPI.browseFolder();
+    if (dir) {
+      if (!libraryFolders.some((f) => f.toLowerCase() === dir.toLowerCase())) {
+        setLibraryFolders((prev) => [...prev, dir]);
+      }
+    }
+  };
+
+  const handleRemoveFolder = (indexToRemove: number) => {
+    setLibraryFolders((prev) => prev.filter((_, idx) => idx !== indexToRemove));
   };
 
   const handleSubmit = (e: React.FormEvent) => {
@@ -34,7 +65,8 @@ export const SettingsModal: React.FC<SettingsModalProps> = ({
     onSave({
       ffmpegPath,
       whisperPath,
-      defaultLibraryRoot,
+      libraryFolders,
+      defaultLibraryRoot: libraryFolders[0] || '',
       subtitlesFontSize,
       subtitlesOutline,
       autoPlayNext,
@@ -45,7 +77,7 @@ export const SettingsModal: React.FC<SettingsModalProps> = ({
   const handleResetDefaults = () => {
     setFfmpegPath('C:\\Users\\gogoh\\AppData\\Roaming\\Subtitle Edit\\SpeechToText\\Purfview-Faster-Whisper-XXL\\ffmpeg.exe');
     setWhisperPath('C:\\Users\\gogoh\\AppData\\Roaming\\Subtitle Edit\\SpeechToText\\Purfview-Faster-Whisper-XXL\\faster-whisper-xxl.exe');
-    setDefaultLibraryRoot('D:\\films');
+    setLibraryFolders(['D:\\films']);
     setSubtitlesFontSize(28);
     setSubtitlesOutline(true);
     setAutoPlayNext(true);
@@ -65,7 +97,7 @@ export const SettingsModal: React.FC<SettingsModalProps> = ({
             </div>
             <div>
               <h3 className="text-base font-bold text-white tracking-tight">System & Player Settings</h3>
-              <p className="text-xs text-zinc-400">Configure external binary paths and playback preferences</p>
+              <p className="text-xs text-zinc-400">Configure media library folders, external binary paths, and playback preferences</p>
             </div>
           </div>
 
@@ -78,8 +110,69 @@ export const SettingsModal: React.FC<SettingsModalProps> = ({
         </div>
 
         <form onSubmit={handleSubmit} className="py-5 space-y-4">
+          {/* Multi-Folder Anime Library Roots */}
+          <div className="space-y-2">
+            <div className="flex items-center justify-between">
+              <div>
+                <label className="text-xs font-bold text-zinc-200 uppercase tracking-wider flex items-center space-x-2">
+                  <Folder className="w-3.5 h-3.5 text-amber-400" />
+                  <span>Anime Media Folders ({libraryFolders.length})</span>
+                </label>
+                <p className="text-[11px] text-zinc-400">
+                  Add directories across different drives (e.g. D:\films, E:\Anime). All folders will be scanned together.
+                </p>
+              </div>
+
+              <button
+                type="button"
+                onClick={handleAddFolder}
+                className="flex items-center space-x-1.5 px-3 py-1.5 rounded-lg bg-red-600/90 hover:bg-red-500 text-white text-xs font-semibold shadow-md shadow-red-600/20 transition-all hover:scale-[1.02] active:scale-[0.98]"
+              >
+                <Plus className="w-3.5 h-3.5" />
+                <span>Add Folder</span>
+              </button>
+            </div>
+
+            {/* Folder List */}
+            <div className="space-y-1.5 max-h-44 overflow-y-auto pr-1">
+              {libraryFolders.length === 0 ? (
+                <div className="p-4 rounded-xl border border-dashed border-zinc-800 bg-zinc-900/40 text-center">
+                  <p className="text-xs text-zinc-500">No media folders added. Click "+ Add Folder" to choose a directory.</p>
+                </div>
+              ) : (
+                libraryFolders.map((folder, index) => (
+                  <div
+                    key={`${folder}-${index}`}
+                    className="flex items-center justify-between gap-3 px-3 py-2 rounded-xl bg-zinc-900/90 border border-zinc-800/90 hover:border-zinc-700/80 transition-colors group"
+                  >
+                    <div className="flex items-center space-x-2.5 min-w-0 flex-1">
+                      <Folder className="w-4 h-4 text-amber-400/90 shrink-0" />
+                      <span className="font-mono text-xs text-zinc-200 truncate select-all" title={folder}>
+                        {folder}
+                      </span>
+                      {index === 0 && (
+                        <span className="text-[9px] uppercase font-bold tracking-wider px-1.5 py-0.5 rounded bg-zinc-800 text-zinc-400 border border-zinc-700/60 shrink-0">
+                          Primary
+                        </span>
+                      )}
+                    </div>
+
+                    <button
+                      type="button"
+                      onClick={() => handleRemoveFolder(index)}
+                      className="p-1.5 rounded-lg text-zinc-500 hover:text-red-400 hover:bg-red-500/10 transition-colors shrink-0"
+                      title="Remove folder from library"
+                    >
+                      <Trash2 className="w-3.5 h-3.5" />
+                    </button>
+                  </div>
+                ))
+              )}
+            </div>
+          </div>
+
           {/* FFmpeg Binary Path */}
-          <div className="space-y-1.5">
+          <div className="space-y-1.5 pt-2 border-t border-zinc-800/60">
             <label className="text-xs font-semibold text-zinc-300">FFmpeg Executable Path</label>
             <input
               type="text"
@@ -98,27 +191,6 @@ export const SettingsModal: React.FC<SettingsModalProps> = ({
               onChange={(e) => setWhisperPath(e.target.value)}
               className="w-full px-3 py-2 rounded-lg bg-zinc-900 border border-zinc-700 text-xs font-mono text-zinc-200 focus:outline-none focus:border-red-500"
             />
-          </div>
-
-          {/* Default Media Library Root */}
-          <div className="space-y-1.5">
-            <label className="text-xs font-semibold text-zinc-300">Default Anime Media Root (e.g. D:\films)</label>
-            <div className="flex items-center space-x-2">
-              <input
-                type="text"
-                value={defaultLibraryRoot}
-                onChange={(e) => setDefaultLibraryRoot(e.target.value)}
-                className="flex-1 px-3 py-2 rounded-lg bg-zinc-900 border border-zinc-700 text-xs font-mono text-zinc-200 focus:outline-none focus:border-red-500"
-              />
-              <button
-                type="button"
-                onClick={handleBrowseLibrary}
-                className="px-3 py-2 rounded-lg bg-zinc-800 hover:bg-zinc-700 text-zinc-200 text-xs font-medium border border-zinc-700 transition-colors flex items-center space-x-1"
-              >
-                <FolderOpen className="w-3.5 h-3.5" />
-                <span>Browse</span>
-              </button>
-            </div>
           </div>
 
           {/* Subtitles Visual Customization */}

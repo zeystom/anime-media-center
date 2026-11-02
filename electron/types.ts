@@ -114,6 +114,7 @@ export interface AppSettings {
   ffmpegPath: string;
   whisperPath: string;
   defaultLibraryRoot: string;
+  libraryFolders?: string[];
   autoPlayNext: boolean;
   subtitlesFontSize: number;
   subtitlesOutline: boolean;

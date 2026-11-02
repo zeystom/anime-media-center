@@ -50,6 +50,7 @@ export const App: React.FC = () => {
     ffmpegPath: 'C:\\Users\\gogoh\\AppData\\Roaming\\Subtitle Edit\\SpeechToText\\Purfview-Faster-Whisper-XXL\\ffmpeg.exe',
     whisperPath: 'C:\\Users\\gogoh\\AppData\\Roaming\\Subtitle Edit\\SpeechToText\\Purfview-Faster-Whisper-XXL\\faster-whisper-xxl.exe',
     defaultLibraryRoot: 'D:\\films',
+    libraryFolders: ['D:\\films'],
     autoPlayNext: true,
     subtitlesFontSize: 28,
     subtitlesOutline: true,
@@ -74,8 +75,8 @@ export const App: React.FC = () => {
       const watchHistory = await window.electronAPI.getAllPlaybackProgress();
       setHistory(watchHistory);
 
-      // Scan Library Root
-      const scannedFolders = await window.electronAPI.scanLibrary(appSettings.defaultLibraryRoot);
+      // Scan all configured Library Roots
+      const scannedFolders = await window.electronAPI.scanLibrary();
       setFolders(scannedFolders);
 
       if (scannedFolders.length > 0) {
@@ -126,7 +127,7 @@ export const App: React.FC = () => {
       const watchHistory = await window.electronAPI.getAllPlaybackProgress();
       setHistory(watchHistory);
 
-      const scanned = await window.electronAPI.scanLibrary(settings.defaultLibraryRoot);
+      const scanned = await window.electronAPI.scanLibrary();
       setFolders(scanned);
 
       if (scanned.length > 0) {
@@ -141,7 +142,7 @@ export const App: React.FC = () => {
     } finally {
       setLoading(false);
     }
-  }, [settings.defaultLibraryRoot, selectedFolder]);
+  }, [selectedFolder]);
 
   // Find most recently watched episode across all anime folders
   const mostRecentWatched = useMemo(() => {
@@ -175,10 +176,14 @@ export const App: React.FC = () => {
     try {
       const newRoot = await window.electronAPI.browseFolder(settings.defaultLibraryRoot);
       if (newRoot) {
-        const updated = await window.electronAPI.updateSettings({ defaultLibraryRoot: newRoot });
+        const updatedFolders = Array.from(new Set([...(settings.libraryFolders || []), newRoot]));
+        const updated = await window.electronAPI.updateSettings({
+          defaultLibraryRoot: newRoot,
+          libraryFolders: updatedFolders,
+        });
         setSettings(updated);
         setLoading(true);
-        const scanned = await window.electronAPI.scanLibrary(newRoot);
+        const scanned = await window.electronAPI.scanLibrary();
         setFolders(scanned);
         setSelectedFolder(findLastWatchedFolder(scanned, history) || (scanned.length > 0 ? scanned[0] : null));
         setLoading(false);
@@ -237,9 +242,7 @@ export const App: React.FC = () => {
   const handleSaveSettings = async (newSettings: Partial<AppSettings>) => {
     const updated = await window.electronAPI.updateSettings(newSettings);
     setSettings(updated);
-    if (newSettings.defaultLibraryRoot && newSettings.defaultLibraryRoot !== settings.defaultLibraryRoot) {
-      handleRefreshLibrary();
-    }
+    handleRefreshLibrary();
   };
 
   // Resolve current active anime folder for player
@@ -286,7 +289,11 @@ export const App: React.FC = () => {
 
             {/* Folder Browser & Episode Grid */}
             <FolderBrowser
-              libraryRoot={settings.defaultLibraryRoot}
+              libraryRoot={
+                settings.libraryFolders && settings.libraryFolders.length > 1
+                  ? `${settings.libraryFolders.length} folders (${settings.libraryFolders.map((f) => f.split('\\').pop() || f).join(', ')})`
+                  : settings.defaultLibraryRoot
+              }
               folders={folders}
               selectedFolder={selectedFolder}
               history={history}
