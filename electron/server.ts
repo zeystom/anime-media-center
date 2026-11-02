@@ -103,8 +103,8 @@ export class LocalStreamServer {
   private currentStreamResponse: http.ServerResponse | null = null;
   private inFlightThumbs: Map<string, Promise<string>> = new Map();
   private cachedThumbFiles: Set<string> = new Set();
-  private activeThumbAbort: AbortController | null = null;
   private cardThumbQueue = new ThumbnailQueue(3);
+  private scrubberThumbQueue = new ThumbnailQueue(2);
 
   async start(): Promise<number> {
     return new Promise((resolve, reject) => {
@@ -360,40 +360,21 @@ export class LocalStreamServer {
       return;
     }
 
-    const abortController = new AbortController();
-
-    // 3. For scrubber seeking ONLY: abort previous seek extraction if user moved position.
-    // NEVER abort batch episode card thumbnail extractions!
-    if (!isCard) {
-      if (this.activeThumbAbort) {
-        try {
-          this.activeThumbAbort.abort();
-        } catch {}
-      }
-      this.activeThumbAbort = abortController;
-    }
-
-    // Handle client disconnect / cancellation
-    req.on('close', () => {
-      if (!res.writableEnded) {
-        abortController.abort();
-      }
-    });
-
     try {
       const settings = storage.getSettings();
       let thumbPromise = this.inFlightThumbs.get(thumbFile);
       if (!thumbPromise) {
         thumbPromise = (async () => {
-          const release = isCard ? await this.cardThumbQueue.acquire() : () => {};
+          const release = isCard
+            ? await this.cardThumbQueue.acquire()
+            : await this.scrubberThumbQueue.acquire();
           try {
             return await generateSingleThumbnail(
               filePath,
               targetTime,
               settings.ffmpegPath,
               thumbFile,
-              { isCard },
-              abortController.signal
+              { isCard }
             );
           } finally {
             release();
@@ -405,7 +386,7 @@ export class LocalStreamServer {
 
       const generated = await thumbPromise;
 
-      if (abortController.signal.aborted || res.writableEnded) {
+      if (res.writableEnded) {
         return;
       }
 

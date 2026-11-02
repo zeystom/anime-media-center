@@ -54,22 +54,68 @@ export const TimelineScrubber: React.FC<TimelineScrubberProps> = ({
     [filePath, serverPort]
   );
 
-  // Load thumbnail with double buffering (keeps previous frame while next frame loads)
+  // Find nearest cached thumbnail so the UI never displays an empty black box or stale image
+  const getNearestCachedUrl = useCallback((targetBucket: number): string | null => {
+    if (localCacheRef.current.size === 0) return null;
+    let closestBucket = -1;
+    let minDiff = Infinity;
+    for (const b of localCacheRef.current.keys()) {
+      const diff = Math.abs(b - targetBucket);
+      if (diff < minDiff) {
+        minDiff = diff;
+        closestBucket = b;
+      }
+    }
+    // If nearest cached frame is within 120 seconds, use it as immediate preview
+    if (closestBucket !== -1 && minDiff <= 120) {
+      return localCacheRef.current.get(closestBucket) || null;
+    }
+    return null;
+  }, []);
+
+  // Pre-fetch adjacent buckets in idle time (e.g. +5s, -5s) for instant 0ms sweeping
+  const prefetchNeighbors = useCallback(
+    (centerBucket: number) => {
+      const neighbors = [centerBucket + 5, centerBucket - 5];
+      for (const nb of neighbors) {
+        if (nb >= 0 && nb <= duration && !localCacheRef.current.has(nb)) {
+          const url = getThumbUrlForBucket(nb);
+          if (url) {
+            const img = new Image();
+            img.src = url;
+            img.onload = () => {
+              localCacheRef.current.set(nb, url);
+            };
+          }
+        }
+      }
+    },
+    [duration, getThumbUrlForBucket]
+  );
+
+  // Load thumbnail with continuous updates and nearest-neighbor fallback
   const scheduleThumbnailFetch = useCallback(
     (time: number) => {
       const bucket = Math.max(0, Math.floor(time / 5) * 5);
       if (bucket === activeBucketRef.current) return;
       activeBucketRef.current = bucket;
 
-      // 1. Instant Memory Cache Hit (0ms)
+      // 1. Instant Exact Memory Cache Hit (0ms)
       const cached = localCacheRef.current.get(bucket);
       if (cached) {
         if (debounceTimerRef.current) clearTimeout(debounceTimerRef.current);
         setDisplayedThumbUrl(cached);
+        prefetchNeighbors(bucket);
         return;
       }
 
-      // 2. Debounce network/disk request during sweeping (90ms)
+      // 2. Nearest Cached Frame Fallback (0ms instant visual response while fetching exact)
+      const nearest = getNearestCachedUrl(bucket);
+      if (nearest) {
+        setDisplayedThumbUrl(nearest);
+      }
+
+      // 3. Low-latency debounce (25ms) so quick cursor movement groups requests without lag
       if (debounceTimerRef.current) clearTimeout(debounceTimerRef.current);
       debounceTimerRef.current = setTimeout(async () => {
         let url = getThumbUrlForBucket(bucket);
@@ -85,14 +131,16 @@ export const TimelineScrubber: React.FC<TimelineScrubberProps> = ({
         img.src = url;
         img.onload = () => {
           localCacheRef.current.set(bucket, url);
-          // Only show if user is still hovering over this bucket
-          if (activeBucketRef.current === bucket) {
+          // Continuous update: update preview if user is still nearby (within 20s)
+          if (Math.abs(activeBucketRef.current - bucket) <= 20) {
             setDisplayedThumbUrl(url);
           }
+          // Quietly prefetch adjacent frames
+          prefetchNeighbors(bucket);
         };
-      }, 90);
+      }, 25);
     },
-    [filePath, getThumbUrlForBucket]
+    [filePath, getThumbUrlForBucket, getNearestCachedUrl, prefetchNeighbors]
   );
 
   const calculateTimeFromX = useCallback(
