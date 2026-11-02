@@ -70,6 +70,31 @@ async function getVideoFormat(filePath: string, ffmpegPath: string): Promise<Vid
   });
 }
 
+class ThumbnailQueue {
+  private running = 0;
+  private queue: (() => void)[] = [];
+  private concurrency: number;
+
+  constructor(concurrency = 3) {
+    this.concurrency = concurrency;
+  }
+
+  async acquire(): Promise<() => void> {
+    if (this.running >= this.concurrency) {
+      await new Promise<void>((resolve) => this.queue.push(resolve));
+    }
+    this.running++;
+    let released = false;
+    return () => {
+      if (released) return;
+      released = true;
+      this.running--;
+      const next = this.queue.shift();
+      if (next) next();
+    };
+  }
+}
+
 export class LocalStreamServer {
   private server: http.Server | null = null;
   private port: number = 0;
@@ -79,6 +104,7 @@ export class LocalStreamServer {
   private inFlightThumbs: Map<string, Promise<string>> = new Map();
   private cachedThumbFiles: Set<string> = new Set();
   private activeThumbAbort: AbortController | null = null;
+  private cardThumbQueue = new ThumbnailQueue(3);
 
   async start(): Promise<number> {
     return new Promise((resolve, reject) => {
@@ -334,16 +360,18 @@ export class LocalStreamServer {
       return;
     }
 
-    // 3. Abort any previous extraction in flight if a newer position has arrived
-    if (this.activeThumbAbort) {
-      try {
-        this.activeThumbAbort.abort();
-      } catch {}
-      this.activeThumbAbort = null;
-    }
-
     const abortController = new AbortController();
-    this.activeThumbAbort = abortController;
+
+    // 3. For scrubber seeking ONLY: abort previous seek extraction if user moved position.
+    // NEVER abort batch episode card thumbnail extractions!
+    if (!isCard) {
+      if (this.activeThumbAbort) {
+        try {
+          this.activeThumbAbort.abort();
+        } catch {}
+      }
+      this.activeThumbAbort = abortController;
+    }
 
     // Handle client disconnect / cancellation
     req.on('close', () => {
@@ -356,14 +384,21 @@ export class LocalStreamServer {
       const settings = storage.getSettings();
       let thumbPromise = this.inFlightThumbs.get(thumbFile);
       if (!thumbPromise) {
-        thumbPromise = generateSingleThumbnail(
-          filePath,
-          targetTime,
-          settings.ffmpegPath,
-          thumbFile,
-          { isCard },
-          abortController.signal
-        );
+        thumbPromise = (async () => {
+          const release = isCard ? await this.cardThumbQueue.acquire() : () => {};
+          try {
+            return await generateSingleThumbnail(
+              filePath,
+              targetTime,
+              settings.ffmpegPath,
+              thumbFile,
+              { isCard },
+              abortController.signal
+            );
+          } finally {
+            release();
+          }
+        })();
         this.inFlightThumbs.set(thumbFile, thumbPromise);
         thumbPromise.finally(() => this.inFlightThumbs.delete(thumbFile));
       }

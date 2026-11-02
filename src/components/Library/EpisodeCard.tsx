@@ -12,17 +12,25 @@ interface EpisodeCardProps {
 export const EpisodeCard: React.FC<EpisodeCardProps> = ({ episode, progress, onPlay }) => {
   const [imgError, setImgError] = useState(false);
   const [activeImgUrl, setActiveImgUrl] = useState(episode.kitsuThumbnail || episode.thumbnailUrl);
+  const [retryCount, setRetryCount] = useState(0);
   const parsed = useMemo(() => cleanEpisodeTitle(episode.fileName), [episode.fileName]);
 
   useEffect(() => {
     setActiveImgUrl(episode.kitsuThumbnail || episode.thumbnailUrl);
     setImgError(false);
+    setRetryCount(0);
   }, [episode.kitsuThumbnail, episode.thumbnailUrl]);
 
   const handleImgError = () => {
     if (activeImgUrl === episode.kitsuThumbnail && episode.thumbnailUrl) {
       // Fallback from remote Kitsu still to high-res local FFmpeg thumbnail
       setActiveImgUrl(episode.thumbnailUrl);
+    } else if (retryCount < 3 && episode.thumbnailUrl) {
+      // If local thumbnail was queued or in extraction, retry
+      setTimeout(() => {
+        setRetryCount((c) => c + 1);
+        setActiveImgUrl(`${episode.thumbnailUrl}&retry=${Date.now()}`);
+      }, 1000);
     } else {
       setImgError(true);
     }

@@ -31,16 +31,23 @@ const EpisodeDrawerItem: React.FC<EpisodeItemProps> = ({
 }) => {
   const [imgError, setImgError] = useState(false);
   const [activeImgUrl, setActiveImgUrl] = useState(episode.kitsuThumbnail || episode.thumbnailUrl);
+  const [retryCount, setRetryCount] = useState(0);
   const parsed = useMemo(() => cleanEpisodeTitle(episode.fileName), [episode.fileName]);
 
   useEffect(() => {
     setActiveImgUrl(episode.kitsuThumbnail || episode.thumbnailUrl);
     setImgError(false);
+    setRetryCount(0);
   }, [episode.kitsuThumbnail, episode.thumbnailUrl]);
 
   const handleImgError = () => {
     if (activeImgUrl === episode.kitsuThumbnail && episode.thumbnailUrl) {
       setActiveImgUrl(episode.thumbnailUrl);
+    } else if (retryCount < 3 && episode.thumbnailUrl) {
+      setTimeout(() => {
+        setRetryCount((c) => c + 1);
+        setActiveImgUrl(`${episode.thumbnailUrl}&retry=${Date.now()}`);
+      }, 1000);
     } else {
       setImgError(true);
     }
