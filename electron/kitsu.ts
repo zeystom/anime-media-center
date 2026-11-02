@@ -12,6 +12,7 @@ export interface KitsuEpisodeInfo {
 
 export interface KitsuAnimeCache {
   animeId: string;
+  malId?: number | null;
   canonicalTitle: string;
   posterUrl: string | null;
   episodes: Record<number, KitsuEpisodeInfo>;
@@ -80,6 +81,7 @@ export function parseAniListEpisodeTitle(raw: string): { number: number; title: 
  * Fetches official English episode titles and streaming thumbnails from AniList GraphQL API.
  */
 async function fetchAniListMetadata(query: string): Promise<{
+  malId?: number | null;
   canonicalTitle: string;
   posterUrl: string | null;
   episodes: Record<number, KitsuEpisodeInfo>;
@@ -88,6 +90,7 @@ async function fetchAniListMetadata(query: string): Promise<{
     query ($search: String) {
       Media(search: $search, type: ANIME) {
         id
+        idMal
         title {
           romaji
           english
@@ -125,6 +128,7 @@ async function fetchAniListMetadata(query: string): Promise<{
     const media = json.data?.Media;
     if (!media) return null;
 
+    const malId = media.idMal || null;
     const canonicalTitle = media.title?.english || media.title?.romaji || query;
     const posterUrl = media.coverImage?.extraLarge || media.coverImage?.large || null;
     const episodes: Record<number, KitsuEpisodeInfo> = {};
@@ -145,6 +149,7 @@ async function fetchAniListMetadata(query: string): Promise<{
     }
 
     return {
+      malId,
       canonicalTitle,
       posterUrl,
       episodes,
@@ -304,8 +309,11 @@ export async function getKitsuMetadata(rawSeriesName: string): Promise<KitsuAnim
       };
     }
 
+    const malId = aniList?.malId || null;
+
     const result: KitsuAnimeCache = {
       animeId,
+      malId,
       canonicalTitle,
       posterUrl,
       episodes: mergedEpisodes,
@@ -321,6 +329,48 @@ export async function getKitsuMetadata(rawSeriesName: string): Promise<KitsuAnim
     return result;
   } catch (err) {
     // Network failure or timeout - silently return null for local fallback
+    return null;
+  }
+}
+
+/**
+ * Fetches community opening and ending timestamps from AniSkip API (aniskip.com).
+ * Uses MyAnimeList ID from AniList metadata.
+ */
+export async function fetchAniSkipTimes(
+  rawSeriesName: string,
+  episodeNum: number,
+  episodeLength: number
+): Promise<{ op?: { start: number; end: number }; ed?: { start: number; end: number } } | null> {
+  try {
+    const meta = await getKitsuMetadata(rawSeriesName);
+    const malId = meta?.malId;
+    if (!malId || episodeNum <= 0) return null;
+
+    const lengthParam = episodeLength > 0 ? `&episodeLength=${Math.round(episodeLength)}` : '';
+    const url = `https://api.aniskip.com/v2/skip-times/${malId}/${episodeNum}?types=op&types=ed${lengthParam}`;
+    const res = await fetch(url, {
+      headers: {
+        'User-Agent': 'AnimeMediaCenter/1.0',
+        Accept: 'application/json',
+      },
+      signal: AbortSignal.timeout(4000),
+    });
+
+    if (!res.ok) return null;
+    const json = await res.json();
+    if (!json.found || !Array.isArray(json.results)) return null;
+
+    const result: { op?: { start: number; end: number }; ed?: { start: number; end: number } } = {};
+    for (const item of json.results) {
+      if (item.skipType === 'op' && item.interval) {
+        result.op = { start: item.interval.startTime, end: item.interval.endTime };
+      } else if (item.skipType === 'ed' && item.interval) {
+        result.ed = { start: item.interval.startTime, end: item.interval.endTime };
+      }
+    }
+    return result;
+  } catch {
     return null;
   }
 }

@@ -112,7 +112,7 @@ function parseAssToCues(assContent: string): SubtitleCue[] {
 export interface DetectedOpening {
   start: number;
   end: number;
-  source: 'chapter' | 'subtitle_tag' | 'subtitle_lyrics' | 'cues';
+  source: 'chapter' | 'subtitle_tag' | 'subtitle_lyrics' | 'cues' | 'aniskip';
   title?: string;
 }
 
@@ -226,6 +226,26 @@ function detectOpeningRange(
     }
   }
 
+  // 4. Check Unnamed MKV Chapters (~85-93s duration in the first 6 minutes)
+  // Many anime encodes have chapters titled "Chapter 01", "Chapter 02" without names.
+  // In TV anime, a chapter of 85-93 seconds within the first 6 minutes is 99% the OP!
+  if (chapters && chapters.length > 0) {
+    const unnamedOp = chapters.find((c) => {
+      const duration = c.end - c.start;
+      const isIntroOrColdOpen = /intro|cold\s*open|prologue/i.test(c.title || '');
+      const isEnding = /ed|ending|preview/i.test(c.title || '');
+      return !isIntroOrColdOpen && !isEnding && c.start < 360 && duration >= 85 && duration <= 93;
+    });
+    if (unnamedOp) {
+      return {
+        start: unnamedOp.start,
+        end: unnamedOp.end,
+        source: 'chapter',
+        title: unnamedOp.title || 'Opening',
+      };
+    }
+  }
+
   return null;
 }
 
@@ -324,10 +344,44 @@ export const VideoPlayer: React.FC<VideoPlayerProps> = ({
     return null;
   }, [seasonEpisodes, currentEpIndex]);
 
-  // Detected Opening Range (from MKV chapters, ASS subtitle tags, or karaoke lyrics)
-  const detectedOpening = useMemo<DetectedOpening | null>(() => {
+  // Detected Opening Range (from local MKV chapters, ASS subtitle tags, or karaoke lyrics)
+  const localOpening = useMemo<DetectedOpening | null>(() => {
     return detectOpeningRange(metadata?.chapters, loadedAssContent, mainCues);
   }, [metadata?.chapters, loadedAssContent, mainCues]);
+
+  // AniSkip Online Fallback (for bare releases without chapters or ASS styles)
+  const [aniSkipOpening, setAniSkipOpening] = useState<DetectedOpening | null>(null);
+
+  useEffect(() => {
+    // If local detection already resolved the opening, do not query AniSkip
+    if (localOpening || duration <= 0) return;
+
+    let isCancelled = false;
+    const epNum = parseInt(episode.episodeNumber.replace(/\D/g, ''), 10) || 1;
+    const seriesName = parsed.seriesTitle || folderPath.split(/[/\\]/).pop() || '';
+
+    if (window.electronAPI.getAniSkipTimes && seriesName && epNum > 0) {
+      window.electronAPI
+        .getAniSkipTimes(seriesName, epNum, duration)
+        .then((res) => {
+          if (isCancelled || !res?.op) return;
+          setAniSkipOpening({
+            start: res.op.start,
+            end: res.op.end,
+            source: 'aniskip',
+            title: 'Opening (AniSkip)',
+          });
+        })
+        .catch(() => {});
+    }
+
+    return () => {
+      isCancelled = true;
+    };
+  }, [localOpening, duration, episode.episodeNumber, parsed.seriesTitle, folderPath]);
+
+  // Effective opening: local detection first, AniSkip fallback second
+  const detectedOpening = localOpening || aniSkipOpening;
 
   const edChapter = useMemo(() => {
     if (!metadata?.chapters || duration <= 0) return null;
@@ -348,6 +402,7 @@ export const VideoPlayer: React.FC<VideoPlayerProps> = ({
     setIsEndingCardDismissed(false);
     setIsIntroDismissed(false);
     setLoadedAssContent('');
+    setAniSkipOpening(null);
   }, [episode.filePath]);
 
   const isEndingActive =

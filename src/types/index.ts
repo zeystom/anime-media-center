@@ -20,6 +20,7 @@ export interface ElectronAPI {
   getStreamUrl: (filePath: string, audioTrackIndex: number, startTime: number) => Promise<StreamInfo>;
   stopVideoStream: () => Promise<void>;
   getThumbnailUrl: (filePath: string, time: number) => Promise<string>;
+  getAniSkipTimes: (seriesName: string, episodeNum: number, duration: number) => Promise<{ op?: { start: number; end: number }; ed?: { start: number; end: number } } | null>;
   startWhisperSeason: (folderPath: string, audioTrackNum: number, skipExistingSrt: boolean) => Promise<{ success: boolean; error?: string }>;
   cancelWhisper: () => Promise<void>;
   getWhisperStatus: () => Promise<import('../../electron/types').WhisperStatus>;

@@ -7,7 +7,7 @@ import { streamServer } from './server';
 import { probeMkv, extractEmbeddedSubtitle, extractEmbeddedAss, extractEmbeddedFonts, filterFontsForAss, parseSrt, findPrecedingKeyframe, readMkvEmbeddedTitle } from './ffmpeg';
 import { whisperManager } from './whisper';
 import { AnimeFolder, Episode, PlaybackProgress, SeasonPreference } from './types';
-import { getKitsuMetadata } from './kitsu';
+import { getKitsuMetadata, fetchAniSkipTimes } from './kitsu';
 
 const __filename = fileURLToPath(import.meta.url);
 const __dirname = path.dirname(__filename);
@@ -430,6 +430,10 @@ function setupIpcHandlers() {
   ipcMain.handle('get-thumbnail-url', async (_event, filePath: string, time: number) => {
     const port = streamServer.getPort();
     return `http://127.0.0.1:${port}/thumb?file=${encodeURIComponent(filePath)}&time=${time}`;
+  });
+
+  ipcMain.handle('get-aniskip-times', async (_event, seriesName: string, episodeNum: number, duration: number) => {
+    return await fetchAniSkipTimes(seriesName, episodeNum, duration);
   });
 
   ipcMain.handle('start-whisper-season', async (_event, folderPath: string, audioTrackNum: number, skipExistingSrt: boolean) => {

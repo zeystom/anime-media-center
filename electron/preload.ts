@@ -24,6 +24,8 @@ contextBridge.exposeInMainWorld('electronAPI', {
   stopVideoStream: () => ipcRenderer.invoke('stop-video-stream'),
   getThumbnailUrl: (filePath: string, time: number) =>
     ipcRenderer.invoke('get-thumbnail-url', filePath, time),
+  getAniSkipTimes: (seriesName: string, episodeNum: number, duration: number) =>
+    ipcRenderer.invoke('get-aniskip-times', seriesName, episodeNum, duration),
   startWhisperSeason: (folderPath: string, audioTrackNum: number, skipExistingSrt: boolean) =>
     ipcRenderer.invoke('start-whisper-season', folderPath, audioTrackNum, skipExistingSrt),
   cancelWhisper: () => ipcRenderer.invoke('cancel-whisper'),
