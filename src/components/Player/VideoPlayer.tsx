@@ -1351,6 +1351,7 @@ export const VideoPlayer: React.FC<VideoPlayerProps> = ({
         onOpen={() => setIsEpisodeDrawerOpen(true)}
         areControlsVisible={areControlsVisible}
         episodeCount={seasonEpisodes.length}
+        onActivity={resetControlsTimer}
       />
 
       {/* Track Controls Popover (3 Columns: Audio, Main Sub, Top Sub) */}
