@@ -4,7 +4,7 @@ import fs from 'fs';
 import { fileURLToPath } from 'url';
 import { storage } from './storage';
 import { streamServer } from './server';
-import { probeMkv, extractEmbeddedSubtitle, parseSrt } from './ffmpeg';
+import { probeMkv, extractEmbeddedSubtitle, parseSrt, findPrecedingKeyframe } from './ffmpeg';
 import { whisperManager } from './whisper';
 import { AnimeFolder, Episode, PlaybackProgress, SeasonPreference } from './types';
 
@@ -271,8 +271,14 @@ function setupIpcHandlers() {
   });
 
   ipcMain.handle('get-stream-url', async (_event, filePath: string, audioTrackIndex: number, startTime: number) => {
+    const settings = storage.getSettings();
+    const actualStartTime = await findPrecedingKeyframe(filePath, startTime, settings.ffmpegPath);
     const port = streamServer.getPort();
-    return `http://127.0.0.1:${port}/stream?file=${encodeURIComponent(filePath)}&audioTrack=${audioTrackIndex}&startTime=${startTime}`;
+    const url = `http://127.0.0.1:${port}/stream?file=${encodeURIComponent(filePath)}&audioTrack=${audioTrackIndex}&startTime=${actualStartTime}`;
+    return {
+      url,
+      actualStartTime,
+    };
   });
 
   ipcMain.handle('get-thumbnail-url', async (_event, filePath: string, time: number) => {

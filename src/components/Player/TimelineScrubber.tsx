@@ -45,12 +45,20 @@ export const TimelineScrubber: React.FC<TimelineScrubberProps> = ({
 
   const handleMouseDown = useCallback((e: React.MouseEvent<HTMLDivElement>) => {
     setIsDragging(true);
-    const { time } = calculateTimeFromX(e.clientX);
-    onSeek(time);
+    const { time, x } = calculateTimeFromX(e.clientX);
+    setHoverTime(time);
+    setHoverX(x);
+    setIsHovering(true);
 
     const onGlobalMouseMove = (moveEvent: MouseEvent) => {
-      const { time: dragTime } = calculateTimeFromX(moveEvent.clientX);
+      const { time: dragTime, x: dragX } = calculateTimeFromX(moveEvent.clientX);
       setHoverTime(dragTime);
+      setHoverX(dragX);
+      if (window.electronAPI && filePath) {
+        window.electronAPI.getThumbnailUrl(filePath, dragTime).then((url) => {
+          setThumbUrl(url);
+        }).catch(() => {});
+      }
     };
 
     const onGlobalMouseUp = (upEvent: MouseEvent) => {
@@ -63,10 +71,11 @@ export const TimelineScrubber: React.FC<TimelineScrubberProps> = ({
 
     window.addEventListener('mousemove', onGlobalMouseMove);
     window.addEventListener('mouseup', onGlobalMouseUp);
-  }, [calculateTimeFromX, onSeek]);
+  }, [calculateTimeFromX, onSeek, filePath]);
 
   const progressPercent = duration > 0 ? (currentTime / duration) * 100 : 0;
   const hoverPercent = duration > 0 ? (hoverTime / duration) * 100 : 0;
+  const activePercent = isDragging ? hoverPercent : progressPercent;
 
   // Clamp floating thumbnail preview box inside timeline bounds
   const previewBoxWidth = 160;
@@ -100,14 +109,14 @@ export const TimelineScrubber: React.FC<TimelineScrubberProps> = ({
         {/* Current Playback Progress Bar */}
         <div
           className="absolute left-0 top-0 bottom-0 bg-red-600 rounded-full shadow-sm shadow-red-600/50"
-          style={{ width: `${progressPercent}%` }}
+          style={{ width: `${activePercent}%` }}
         />
       </div>
 
       {/* Scrubber Knob / Playhead */}
       <div
         className="absolute w-3.5 h-3.5 bg-red-500 rounded-full shadow-md shadow-black/80 -translate-x-1/2 scale-0 group-hover:scale-100 transition-transform duration-100 pointer-events-none"
-        style={{ left: `${progressPercent}%` }}
+        style={{ left: `${activePercent}%` }}
       />
 
       {/* Floating Hover Thumbnail Preview Box */}

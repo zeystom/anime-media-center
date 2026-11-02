@@ -1,5 +1,10 @@
 export * from '../../electron/types';
 
+export interface StreamInfo {
+  url: string;
+  actualStartTime: number;
+}
+
 export interface ElectronAPI {
   getSettings: () => Promise<import('../../electron/types').AppSettings>;
   updateSettings: (settings: Partial<import('../../electron/types').AppSettings>) => Promise<import('../../electron/types').AppSettings>;
@@ -12,7 +17,7 @@ export interface ElectronAPI {
   getAllPlaybackProgress: () => Promise<Record<string, import('../../electron/types').PlaybackProgress>>;
   getSeasonPreference: (folderPath: string) => Promise<import('../../electron/types').SeasonPreference | null>;
   saveSeasonPreference: (folderPath: string, pref: import('../../electron/types').SeasonPreference) => Promise<void>;
-  getStreamUrl: (filePath: string, audioTrackIndex: number, startTime: number) => Promise<string>;
+  getStreamUrl: (filePath: string, audioTrackIndex: number, startTime: number) => Promise<StreamInfo>;
   getThumbnailUrl: (filePath: string, time: number) => Promise<string>;
   startWhisperSeason: (folderPath: string, audioTrackNum: number, skipExistingSrt: boolean) => Promise<{ success: boolean; error?: string }>;
   cancelWhisper: () => Promise<void>;

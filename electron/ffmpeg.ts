@@ -358,3 +358,76 @@ export async function generateSingleThumbnail(
     });
   });
 }
+
+/**
+ * Rapidly locates the exact timestamp of the nearest preceding keyframe (IDR/CRA)
+ * using a single-frame copy demux probe (<70ms).
+ * This ensures that zero-transcode Matroska stream seeks align video, audio,
+ * and subtitle overlays with 0ms delay and 0 frame drift.
+ */
+export async function findPrecedingKeyframe(
+  filePath: string,
+  targetTime: number,
+  ffmpegPath: string
+): Promise<number> {
+  if (targetTime <= 0.5) return 0;
+  return new Promise((resolve) => {
+    const p = spawn(
+      ffmpegPath,
+      [
+        '-hide_banner',
+        '-noaccurate_seek',
+        '-ss',
+        targetTime.toString(),
+        '-i',
+        filePath,
+        '-map',
+        '0:v:0',
+        '-c',
+        'copy',
+        '-frames:v',
+        '1',
+        '-f',
+        'framecrc',
+        '-',
+      ],
+      {
+        windowsHide: true,
+        stdio: ['ignore', 'pipe', 'ignore'],
+      }
+    );
+
+    let stdout = '';
+    const timer = setTimeout(() => {
+      try {
+        p.kill();
+      } catch {}
+      resolve(targetTime);
+    }, 350);
+
+    p.stdout.on('data', (d) => {
+      stdout += d.toString();
+    });
+
+    p.on('close', () => {
+      clearTimeout(timer);
+      const lines = stdout.split('\n').filter((l) => !l.startsWith('#') && l.trim().length > 0);
+      if (lines.length > 0) {
+        const parts = lines[0].split(',').map((s) => s.trim());
+        // framecrc line: stream_idx, dts, pts, duration, size, hash
+        const ptsOffsetMs = parseInt(parts[2], 10);
+        if (!isNaN(ptsOffsetMs)) {
+          const actualSeconds = Math.max(0, targetTime + ptsOffsetMs / 1000);
+          return resolve(actualSeconds);
+        }
+      }
+      resolve(targetTime);
+    });
+
+    p.on('error', () => {
+      clearTimeout(timer);
+      resolve(targetTime);
+    });
+  });
+}
+

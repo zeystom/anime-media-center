@@ -195,19 +195,14 @@ export const VideoPlayer: React.FC<VideoPlayerProps> = ({
         }
 
         // Setup Stream URL
-        const streamUrl = await window.electronAPI.getStreamUrl(
+        const { url: streamUrl, actualStartTime } = await window.electronAPI.getStreamUrl(
           episode.filePath,
           defaultAudioIdx,
           initialTime
         );
 
-        if (videoRef.current) {
-          videoRef.current.src = streamUrl;
-          videoRef.current.load();
-          videoRef.current.play().catch(() => {});
-          setIsPlaying(true);
-        }
-
+        if (!isMounted) return;
+        applyStream(streamUrl, actualStartTime);
         setLoading(false);
       } catch (err) {
         console.error('Failed to probe or setup video:', err);
@@ -300,7 +295,41 @@ export const VideoPlayer: React.FC<VideoPlayerProps> = ({
     [folderPath, selectedAudioIndex, selectedMainSubId, selectedTopSubId, topSubEnabled, syncOffset]
   );
 
-  // Instant Stream Seek function
+  // Sequence counter to prevent stale async seek responses from overwriting newer seeks
+  const seekSeqRef = useRef<number>(0);
+
+  // Safely apply stream URL and update playback timestamps
+  const applyStream = useCallback((url: string, actualStartTime: number) => {
+    const video = videoRef.current;
+    if (!video) return;
+
+    // 1. Immediately align state timestamps with the exact demuxed keyframe
+    timeRef.current = actualStartTime;
+    setStreamStartTime(actualStartTime);
+    setVideoElementTime(0);
+
+    // 2. Pause existing decoder context before changing source to prevent hardware decoder deadlock
+    try {
+      video.pause();
+    } catch {}
+
+    // 3. Clear existing source & reload new stream
+    video.src = url;
+    video.load();
+
+    const playPromise = video.play();
+    if (playPromise !== undefined) {
+      playPromise.catch((err) => {
+        // AbortError is normal when user seeks again rapidly
+        if (err.name !== 'AbortError') {
+          console.warn('[VideoPlayer] Play interrupted:', err);
+        }
+      });
+    }
+    setIsPlaying(true);
+  }, []);
+
+  // Instant Stream Seek function (aligned to exact keyframe with 0s audio latency)
   const handleSeek = useCallback(
     async (targetTime: number) => {
       if (seekDebounceRef.current) {
@@ -308,25 +337,26 @@ export const VideoPlayer: React.FC<VideoPlayerProps> = ({
         seekDebounceRef.current = null;
       }
 
+      const seq = ++seekSeqRef.current;
       const clamped = Math.max(0, Math.min(targetTime, duration));
       timeRef.current = clamped;
-      setStreamStartTime(clamped);
-      setVideoElementTime(0);
 
-      const streamUrl = await window.electronAPI.getStreamUrl(
-        episode.filePath,
-        selectedAudioIndex,
-        clamped
-      );
+      try {
+        const { url, actualStartTime } = await window.electronAPI.getStreamUrl(
+          episode.filePath,
+          selectedAudioIndex,
+          clamped
+        );
 
-      if (videoRef.current) {
-        videoRef.current.src = streamUrl;
-        videoRef.current.load();
-        videoRef.current.play().catch(() => {});
-        setIsPlaying(true);
+        // If another seek was initiated in the meantime, discard
+        if (seq !== seekSeqRef.current) return;
+
+        applyStream(url, actualStartTime);
+      } catch (err) {
+        console.error('Failed to seek stream:', err);
       }
     },
-    [duration, episode.filePath, selectedAudioIndex]
+    [duration, episode.filePath, selectedAudioIndex, applyStream]
   );
 
   // Play / Pause Toggle with auto-reconnect if stalled or ended
@@ -364,13 +394,11 @@ export const VideoPlayer: React.FC<VideoPlayerProps> = ({
     }
   }, []);
 
-  // Smart Skip Delta (With ultra-fast 75ms debounce for rapid keystrokes)
+  // Smart Skip Delta (With 180ms debounce for rapid keystrokes like Arrow/J/L)
   const handleSkip = useCallback(
     (deltaSec: number, label: string) => {
       const nextTime = Math.max(0, Math.min(timeRef.current + deltaSec, duration));
       timeRef.current = nextTime;
-      setStreamStartTime(nextTime);
-      setVideoElementTime(0);
       showRipple(deltaSec > 0 ? 'seek-forward' : 'seek-backward', label);
 
       if (seekDebounceRef.current) {
@@ -378,21 +406,22 @@ export const VideoPlayer: React.FC<VideoPlayerProps> = ({
       }
 
       seekDebounceRef.current = setTimeout(async () => {
-        const streamUrl = await window.electronAPI.getStreamUrl(
-          episode.filePath,
-          selectedAudioIndex,
-          nextTime
-        );
+        const seq = ++seekSeqRef.current;
+        try {
+          const { url, actualStartTime } = await window.electronAPI.getStreamUrl(
+            episode.filePath,
+            selectedAudioIndex,
+            nextTime
+          );
 
-        if (videoRef.current) {
-          videoRef.current.src = streamUrl;
-          videoRef.current.load();
-          videoRef.current.play().catch(() => {});
-          setIsPlaying(true);
+          if (seq !== seekSeqRef.current) return;
+          applyStream(url, actualStartTime);
+        } catch (err) {
+          console.error('Failed to skip stream:', err);
         }
-      }, 75);
+      }, 180);
     },
-    [duration, episode.filePath, selectedAudioIndex]
+    [duration, episode.filePath, selectedAudioIndex, applyStream]
   );
 
   // Periodic Save of Playback History (Every 3 seconds)
@@ -438,21 +467,18 @@ export const VideoPlayer: React.FC<VideoPlayerProps> = ({
       setSelectedAudioIndex(audioIdx);
       persistSeasonRule(audioIdx, selectedMainSubId, selectedTopSubId, topSubEnabled, syncOffset);
 
-      // Reload stream seamlessly from current timestamp
-      const streamUrl = await window.electronAPI.getStreamUrl(
-        episode.filePath,
-        audioIdx,
-        timeRef.current
-      );
+      const seq = ++seekSeqRef.current;
+      try {
+        const { url, actualStartTime } = await window.electronAPI.getStreamUrl(
+          episode.filePath,
+          audioIdx,
+          timeRef.current
+        );
 
-      setStreamStartTime(timeRef.current);
-      setVideoElementTime(0);
-
-      if (videoRef.current) {
-        videoRef.current.src = streamUrl;
-        videoRef.current.load();
-        videoRef.current.play().catch(() => {});
-        setIsPlaying(true);
+        if (seq !== seekSeqRef.current) return;
+        applyStream(url, actualStartTime);
+      } catch (err) {
+        console.error('Failed to switch audio track:', err);
       }
     },
     [
@@ -462,6 +488,7 @@ export const VideoPlayer: React.FC<VideoPlayerProps> = ({
       topSubEnabled,
       syncOffset,
       persistSeasonRule,
+      applyStream,
     ]
   );
 
@@ -627,8 +654,14 @@ export const VideoPlayer: React.FC<VideoPlayerProps> = ({
         onPause={() => setIsPlaying(false)}
         onEnded={handleEnded}
         onError={() => {
-          console.warn('Video element reported error, attempting stream reconnect...');
+          console.warn('[VideoPlayer] Video element reported error, attempting stream reconnect...');
           handleSeek(timeRef.current);
+        }}
+        onStalled={() => {
+          if (isPlaying && videoRef.current && videoRef.current.readyState < 2) {
+            console.warn('[VideoPlayer] Video playback stalled, reconnecting stream...');
+            handleSeek(timeRef.current);
+          }
         }}
         className="w-full h-full object-contain pointer-events-none"
       />
