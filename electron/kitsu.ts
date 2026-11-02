@@ -28,6 +28,20 @@ const memoryCache = new Map<string, KitsuAnimeCache | null>();
 export interface AnimeSearchQueries {
   primary: string;
   fallback: string | null;
+  targetSeason: number | 'final' | null;
+  targetPart: number | null;
+}
+
+function isSequelTitle(title: string): boolean {
+  if (!title) return false;
+  if (/\b(?:The\s+)?Final\s+Season\b/i.test(title)) return true;
+  if (/\bSeason\s*0*([2-9]|\d{2,})\b/i.test(title)) return true;
+  if (/\b([2-9]|\d{2,})(?:nd|rd|th)\s*Season\b/i.test(title)) return true;
+  if (/\bSecond\s*Season\b/i.test(title)) return true;
+  if (/\bThird\s*Season\b/i.test(title)) return true;
+  if (/\bFourth\s*Season\b/i.test(title)) return true;
+  if (/\b(?:II|III|IV|V|VI)\b/.test(title)) return true;
+  return false;
 }
 
 /**
@@ -37,7 +51,7 @@ export interface AnimeSearchQueries {
  * - Season 1 / Single-season -> searches base title first (how 99% of entries are named on AniList/MAL).
  */
 export function buildAnimeSearchQueries(raw: string): AnimeSearchQueries {
-  if (!raw) return { primary: '', fallback: null };
+  if (!raw) return { primary: '', fallback: null, targetSeason: null, targetPart: null };
   let str = raw;
 
   // 1. Remove bracketed groups [CRUCiBLE], [1080p], etc.
@@ -60,11 +74,12 @@ export function buildAnimeSearchQueries(raw: string): AnimeSearchQueries {
   // 5. Replace dots, underscores, dashes with spaces
   str = str.replace(/[-_–—.]+/g, ' ').replace(/\s+/g, ' ').trim();
 
-  // Detect season / cour / part tokens
-  const s2Match = str.match(/\bS0*([2-9]|\d{2,})\b/i) || str.match(/\bSeason\s*0*([2-9]|\d{2,})\b/i);
-  const s1Match = str.match(/\bS0*1\b/i) || str.match(/\bSeason\s*0*1\b/i);
+  // Detect season / cour / part tokens accurately
+  const seasonMatch = str.match(/\b(?:S|Season\s*)0*(\d+)\b/i);
+  const targetSeason = seasonMatch ? parseInt(seasonMatch[1], 10) : null;
   const partMatch = str.match(/\b(Part|Cour)\s*0*(\d+)\b/i);
-  const finalSeasonMatch = str.match(/\b(The\s+)?Final\s+Season\b/i);
+  const targetPart = partMatch ? parseInt(partMatch[2], 10) : null;
+  const finalSeasonMatch = /\b(?:The\s+)?Final\s+Season\b/i.test(str);
 
   // Base title with all season/part tokens stripped
   const baseTitle = str
@@ -74,27 +89,31 @@ export function buildAnimeSearchQueries(raw: string): AnimeSearchQueries {
     .replace(/\s+/g, ' ')
     .trim();
 
-  if (s2Match) {
-    const sNum = parseInt(s2Match[1], 10);
-    const partSuffix = partMatch ? ` Part ${partMatch[2]}` : '';
-    const primary = `${baseTitle} Season ${sNum}${partSuffix}`.trim();
-    return { primary, fallback: baseTitle || null };
+  // ONLY treat as higher season if targetSeason >= 2!
+  if (targetSeason !== null && targetSeason >= 2) {
+    const partSuffix = targetPart ? ` Part ${targetPart}` : '';
+    const primary = `${baseTitle} Season ${targetSeason}${partSuffix}`.trim();
+    return { primary, fallback: baseTitle || null, targetSeason, targetPart };
   }
 
   if (finalSeasonMatch) {
-    const partSuffix = partMatch ? ` Part ${partMatch[2]}` : '';
+    const partSuffix = targetPart ? ` Part ${targetPart}` : '';
     const primary = `${baseTitle} The Final Season${partSuffix}`.trim();
-    return { primary, fallback: baseTitle || null };
+    return { primary, fallback: baseTitle || null, targetSeason: 'final', targetPart };
   }
 
-  if (partMatch && !s1Match) {
-    const primary = `${baseTitle} Part ${partMatch[2]}`.trim();
-    return { primary, fallback: baseTitle || null };
+  if (targetPart !== null && (targetSeason === null || targetSeason === 1)) {
+    const primary = `${baseTitle} Part ${targetPart}`.trim();
+    return { primary, fallback: baseTitle || null, targetSeason: targetSeason || 1, targetPart };
   }
 
+  // For Season 1 or unnumbered base series:
+  // 99% of entries on MAL / AniList / Kitsu are named purely by their base title (e.g. "Clevatess", "Death Note")
   return {
     primary: baseTitle || str,
-    fallback: s1Match ? `${baseTitle} Season 1` : null,
+    fallback: null,
+    targetSeason: targetSeason || 1,
+    targetPart: null,
   };
 }
 
@@ -126,7 +145,10 @@ export function parseAniListEpisodeTitle(raw: string): { number: number; title: 
 /**
  * Fetches official English episode titles and streaming thumbnails from AniList GraphQL API.
  */
-async function fetchAniListMetadata(query: string): Promise<{
+async function fetchAniListMetadata(
+  query: string,
+  targetSeason: number | 'final' | null = null
+): Promise<{
   malId?: number | null;
   canonicalTitle: string;
   posterUrl: string | null;
@@ -138,25 +160,27 @@ async function fetchAniListMetadata(query: string): Promise<{
 } | null> {
   const gqlQuery = `
     query ($search: String) {
-      Media(search: $search, type: ANIME) {
-        id
-        idMal
-        title {
-          romaji
-          english
-          native
-        }
-        bannerImage
-        coverImage {
-          extraLarge
-          large
-        }
-        description
-        genres
-        averageScore
-        streamingEpisodes {
-          title
-          thumbnail
+      Page(page: 1, perPage: 5) {
+        media(search: $search, type: ANIME, sort: SEARCH_MATCH) {
+          id
+          idMal
+          title {
+            romaji
+            english
+            native
+          }
+          bannerImage
+          coverImage {
+            extraLarge
+            large
+          }
+          description
+          genres
+          averageScore
+          streamingEpisodes {
+            title
+            thumbnail
+          }
         }
       }
     }
@@ -179,8 +203,31 @@ async function fetchAniListMetadata(query: string): Promise<{
 
     if (!res.ok) return null;
     const json = await res.json();
-    const media = json.data?.Media;
-    if (!media) return null;
+    const mediaList: any[] = json.data?.Page?.media;
+    if (!Array.isArray(mediaList) || mediaList.length === 0) return null;
+
+    // Pick best matching media candidate according to target season
+    let media = mediaList[0];
+    if (mediaList.length > 1) {
+      if (targetSeason === 1 || targetSeason === null) {
+        const nonSequel = mediaList.find((m) => {
+          const t = m.title?.english || m.title?.romaji || '';
+          return !isSequelTitle(t);
+        });
+        if (nonSequel) media = nonSequel;
+      } else if (typeof targetSeason === 'number' && targetSeason >= 2) {
+        const matching = mediaList.find((m) => {
+          const t = m.title?.english || m.title?.romaji || '';
+          return (
+            new RegExp(`\\b(?:Season\\s*0*${targetSeason}|${targetSeason}(?:nd|rd|th)\\s*Season)\\b`, 'i').test(t) ||
+            (targetSeason === 2 && /\b(?:II|Second\s*Season)\b/i.test(t)) ||
+            (targetSeason === 3 && /\b(?:III|Third\s*Season)\b/i.test(t)) ||
+            (targetSeason === 4 && /\b(?:IV|Fourth\s*Season)\b/i.test(t))
+          );
+        });
+        if (matching) media = matching;
+      }
+    }
 
     const malId = media.idMal || null;
     const canonicalTitle = media.title?.english || media.title?.romaji || query;
@@ -224,14 +271,17 @@ async function fetchAniListMetadata(query: string): Promise<{
 /**
  * Fetches community stills and episode metadata from Kitsu API.
  */
-async function fetchKitsuMetadata(query: string): Promise<{
+async function fetchKitsuMetadata(
+  query: string,
+  targetSeason: number | 'final' | null = null
+): Promise<{
   animeId: string;
   canonicalTitle: string;
   posterUrl: string | null;
   episodes: Record<number, KitsuEpisodeInfo>;
 } | null> {
   try {
-    const searchUrl = `https://kitsu.io/api/edge/anime?filter[text]=${encodeURIComponent(query)}&page[limit]=1`;
+    const searchUrl = `https://kitsu.io/api/edge/anime?filter[text]=${encodeURIComponent(query)}&page[limit]=5`;
     const searchRes = await fetch(searchUrl, {
       headers: {
         Accept: 'application/vnd.api+json',
@@ -244,7 +294,28 @@ async function fetchKitsuMetadata(query: string): Promise<{
     const searchJson = await searchRes.json();
     if (!searchJson.data || searchJson.data.length === 0) return null;
 
-    const animeItem = searchJson.data[0];
+    let animeItem = searchJson.data[0];
+    if (searchJson.data.length > 1) {
+      if (targetSeason === 1 || targetSeason === null) {
+        const nonSequel = searchJson.data.find((item: any) => {
+          const t = item.attributes?.canonicalTitle || '';
+          return !isSequelTitle(t);
+        });
+        if (nonSequel) animeItem = nonSequel;
+      } else if (typeof targetSeason === 'number' && targetSeason >= 2) {
+        const matching = searchJson.data.find((item: any) => {
+          const t = item.attributes?.canonicalTitle || '';
+          return (
+            new RegExp(`\\b(?:Season\\s*0*${targetSeason}|${targetSeason}(?:nd|rd|th)\\s*Season)\\b`, 'i').test(t) ||
+            (targetSeason === 2 && /\b(?:II|Second\s*Season)\b/i.test(t)) ||
+            (targetSeason === 3 && /\b(?:III|Third\s*Season)\b/i.test(t)) ||
+            (targetSeason === 4 && /\b(?:IV|Fourth\s*Season)\b/i.test(t))
+          );
+        });
+        if (matching) animeItem = matching;
+      }
+    }
+
     const animeId = String(animeItem.id);
     const canonicalTitle = animeItem.attributes?.canonicalTitle || query;
     const posterUrl = animeItem.attributes?.posterImage?.original || null;
@@ -302,7 +373,7 @@ async function fetchKitsuMetadata(query: string): Promise<{
  * Caches results locally on disk for 14 days.
  */
 export async function getKitsuMetadata(rawSeriesName: string): Promise<KitsuAnimeCache | null> {
-  const { primary, fallback } = buildAnimeSearchQueries(rawSeriesName);
+  const { primary, fallback, targetSeason } = buildAnimeSearchQueries(rawSeriesName);
   if (!primary) return null;
 
   const cacheKey = crypto.createHash('md5').update(primary.toLowerCase()).digest('hex').slice(0, 16);
@@ -329,8 +400,8 @@ export async function getKitsuMetadata(rawSeriesName: string): Promise<KitsuAnim
   try {
     // 1. Try primary search query
     let [aniListResult, kitsuResult] = await Promise.allSettled([
-      fetchAniListMetadata(primary),
-      fetchKitsuMetadata(primary),
+      fetchAniListMetadata(primary, targetSeason),
+      fetchKitsuMetadata(primary, targetSeason),
     ]);
 
     let aniList = aniListResult.status === 'fulfilled' ? aniListResult.value : null;
@@ -339,8 +410,8 @@ export async function getKitsuMetadata(rawSeriesName: string): Promise<KitsuAnim
     // 2. If primary query found nothing and we have an alternative/fallback query, try fallback
     if (!aniList && !kitsu && fallback && fallback.toLowerCase() !== primary.toLowerCase()) {
       [aniListResult, kitsuResult] = await Promise.allSettled([
-        fetchAniListMetadata(fallback),
-        fetchKitsuMetadata(fallback),
+        fetchAniListMetadata(fallback, targetSeason),
+        fetchKitsuMetadata(fallback, targetSeason),
       ]);
       aniList = aniListResult.status === 'fulfilled' ? aniListResult.value : null;
       kitsu = kitsuResult.status === 'fulfilled' ? kitsuResult.value : null;

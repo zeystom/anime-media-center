@@ -69,15 +69,15 @@ async function scanFolderForEpisodes(folderPath: string, port: number): Promise<
   try {
     const files = fs.readdirSync(folderPath);
     const mkvFiles = files.filter((f) => f.toLowerCase().endsWith('.mkv'));
-    const srtFiles = new Set(files.filter((f) => f.toLowerCase().endsWith('.srt')));
+    if (mkvFiles.length === 0) {
+      return [];
+    }
 
+    const srtFiles = new Set(files.filter((f) => f.toLowerCase().endsWith('.srt')));
     mkvFiles.sort((a, b) => a.localeCompare(b, undefined, { numeric: true, sensitivity: 'base' }));
 
     const settings = storage.getSettings();
-    let hasDubtitles = false;
-    if (mkvFiles.length > 0) {
-      hasDubtitles = await checkFolderHasDubtitles(path.join(folderPath, mkvFiles[0]), settings.ffmpegPath);
-    }
+    const hasDubtitles = await checkFolderHasDubtitles(path.join(folderPath, mkvFiles[0]), settings.ffmpegPath);
 
     // Attempt to fetch Kitsu anime metadata in parallel (or from local cache)
     const folderName = path.basename(folderPath);
