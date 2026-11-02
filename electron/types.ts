@@ -82,6 +82,12 @@ export interface AnimeFolder {
   hasDubtitlesCount?: number;
   hasEmbeddedDubtitles?: boolean;
   totalEpisodes: number;
+  posterUrl?: string | null;
+  bannerUrl?: string | null;
+  canonicalTitle?: string | null;
+  synopsis?: string | null;
+  genres?: string[];
+  averageScore?: number | null;
 }
 
 export interface PlaybackProgress {

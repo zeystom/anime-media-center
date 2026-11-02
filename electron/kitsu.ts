@@ -15,6 +15,10 @@ export interface KitsuAnimeCache {
   malId?: number | null;
   canonicalTitle: string;
   posterUrl: string | null;
+  bannerUrl?: string | null;
+  synopsis?: string | null;
+  genres?: string[];
+  averageScore?: number | null;
   episodes: Record<number, KitsuEpisodeInfo>;
   fetchedAt: number;
 }
@@ -126,6 +130,10 @@ async function fetchAniListMetadata(query: string): Promise<{
   malId?: number | null;
   canonicalTitle: string;
   posterUrl: string | null;
+  bannerUrl: string | null;
+  synopsis: string | null;
+  genres: string[];
+  averageScore: number | null;
   episodes: Record<number, KitsuEpisodeInfo>;
 } | null> {
   const gqlQuery = `
@@ -138,10 +146,14 @@ async function fetchAniListMetadata(query: string): Promise<{
           english
           native
         }
+        bannerImage
         coverImage {
           extraLarge
           large
         }
+        description
+        genres
+        averageScore
         streamingEpisodes {
           title
           thumbnail
@@ -173,6 +185,10 @@ async function fetchAniListMetadata(query: string): Promise<{
     const malId = media.idMal || null;
     const canonicalTitle = media.title?.english || media.title?.romaji || query;
     const posterUrl = media.coverImage?.extraLarge || media.coverImage?.large || null;
+    const bannerUrl = media.bannerImage || null;
+    const synopsis = media.description ? media.description.replace(/<[^>]+>/g, '').trim() : null;
+    const genres = Array.isArray(media.genres) ? media.genres : [];
+    const averageScore = typeof media.averageScore === 'number' ? media.averageScore : null;
     const episodes: Record<number, KitsuEpisodeInfo> = {};
 
     if (Array.isArray(media.streamingEpisodes)) {
@@ -194,6 +210,10 @@ async function fetchAniListMetadata(query: string): Promise<{
       malId,
       canonicalTitle,
       posterUrl,
+      bannerUrl,
+      synopsis,
+      genres,
+      averageScore,
       episodes,
     };
   } catch {
@@ -362,12 +382,20 @@ export async function getKitsuMetadata(rawSeriesName: string): Promise<KitsuAnim
     }
 
     const malId = aniList?.malId || null;
+    const bannerUrl = aniList?.bannerUrl || null;
+    const synopsis = aniList?.synopsis || null;
+    const genres = aniList?.genres || [];
+    const averageScore = aniList?.averageScore || null;
 
     const result: KitsuAnimeCache = {
       animeId,
       malId,
       canonicalTitle,
       posterUrl,
+      bannerUrl,
+      synopsis,
+      genres,
+      averageScore,
       episodes: mergedEpisodes,
       fetchedAt: Date.now(),
     };

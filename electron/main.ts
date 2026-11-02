@@ -290,6 +290,7 @@ function setupIpcHandlers() {
       const rootEpisodes = await scanFolderForEpisodes(targetRoot, port);
       if (rootEpisodes.length > 0) {
         const hasDubtitlesCount = rootEpisodes.filter((e) => e.hasEmbeddedDubtitles).length;
+        const kitsuData = await getKitsuMetadata(path.basename(targetRoot));
         animeFolders.push({
           folderPath: targetRoot,
           folderName: path.basename(targetRoot),
@@ -298,6 +299,12 @@ function setupIpcHandlers() {
           hasDubtitlesCount,
           hasEmbeddedDubtitles: hasDubtitlesCount > 0,
           totalEpisodes: rootEpisodes.length,
+          posterUrl: kitsuData?.posterUrl || null,
+          bannerUrl: kitsuData?.bannerUrl || null,
+          canonicalTitle: kitsuData?.canonicalTitle || null,
+          synopsis: kitsuData?.synopsis || null,
+          genres: kitsuData?.genres || [],
+          averageScore: kitsuData?.averageScore || null,
         });
       }
 
@@ -309,6 +316,7 @@ function setupIpcHandlers() {
         const episodes = await scanFolderForEpisodes(subFolderPath, port);
         if (episodes.length > 0) {
           const hasDubtitlesCount = episodes.filter((e) => e.hasEmbeddedDubtitles).length;
+          const kitsuData = await getKitsuMetadata(entry.name);
           return {
             folderPath: subFolderPath,
             folderName: entry.name,
@@ -317,6 +325,12 @@ function setupIpcHandlers() {
             hasDubtitlesCount,
             hasEmbeddedDubtitles: hasDubtitlesCount > 0,
             totalEpisodes: episodes.length,
+            posterUrl: kitsuData?.posterUrl || null,
+            bannerUrl: kitsuData?.bannerUrl || null,
+            canonicalTitle: kitsuData?.canonicalTitle || null,
+            synopsis: kitsuData?.synopsis || null,
+            genres: kitsuData?.genres || [],
+            averageScore: kitsuData?.averageScore || null,
           } as AnimeFolder;
         }
         return null;

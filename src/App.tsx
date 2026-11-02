@@ -161,6 +161,7 @@ export const App: React.FC = () => {
           progress: top,
           episode: found,
           seasonName: folder.folderName,
+          folder,
         };
       }
     }
@@ -277,6 +278,8 @@ export const App: React.FC = () => {
                 lastWatched={mostRecentWatched.progress}
                 episode={mostRecentWatched.episode}
                 seasonName={mostRecentWatched.seasonName}
+                posterUrl={mostRecentWatched.folder?.posterUrl}
+                bannerUrl={mostRecentWatched.folder?.bannerUrl}
                 onResume={(ep, time) => handlePlayEpisode(ep, time)}
               />
             )}
