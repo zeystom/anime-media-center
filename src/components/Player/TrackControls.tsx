@@ -251,7 +251,7 @@ export const TrackControls: React.FC<TrackControlsProps> = ({
                 <button
                   onClick={() => onUpdateSyncOffset(-0.5)}
                   className="p-1 rounded hover:bg-zinc-800 text-zinc-400 hover:text-white transition-colors"
-                  title="Delay Subtitles (-0.5s) [HotKey: []"
+                  aria-label="Delay Subtitles (-0.5s) [HotKey: []"
                 >
                   <Minus className="w-3.5 h-3.5" />
                 </button>
@@ -263,7 +263,7 @@ export const TrackControls: React.FC<TrackControlsProps> = ({
                 <button
                   onClick={() => onUpdateSyncOffset(0.5)}
                   className="p-1 rounded hover:bg-zinc-800 text-zinc-400 hover:text-white transition-colors"
-                  title="Speed Up Subtitles (+0.5s) [HotKey: ]]"
+                  aria-label="Speed Up Subtitles (+0.5s) [HotKey: ]]"
                 >
                   <Plus className="w-3.5 h-3.5" />
                 </button>
@@ -272,7 +272,7 @@ export const TrackControls: React.FC<TrackControlsProps> = ({
                   <button
                     onClick={onResetSyncOffset}
                     className="p-1 ml-0.5 rounded hover:bg-zinc-800 text-zinc-400 hover:text-red-400 transition-colors"
-                    title="Reset Sync Offset to 0s"
+                    aria-label="Reset Sync Offset to 0s"
                   >
                     <RotateCcw className="w-3 h-3" />
                   </button>
@@ -291,7 +291,7 @@ export const TrackControls: React.FC<TrackControlsProps> = ({
                   onClick={() => onUpdateFontSize(fontSize - 2)}
                   disabled={fontSize <= 14}
                   className="p-1 rounded hover:bg-zinc-800 text-zinc-400 hover:text-white disabled:opacity-30 transition-colors"
-                  title="Decrease Subtitle Font Size"
+                  aria-label="Decrease Subtitle Font Size"
                 >
                   <Minus className="w-3.5 h-3.5" />
                 </button>
@@ -304,7 +304,7 @@ export const TrackControls: React.FC<TrackControlsProps> = ({
                   onClick={() => onUpdateFontSize(fontSize + 2)}
                   disabled={fontSize >= 60}
                   className="p-1 rounded hover:bg-zinc-800 text-zinc-400 hover:text-white disabled:opacity-30 transition-colors"
-                  title="Increase Subtitle Font Size"
+                  aria-label="Increase Subtitle Font Size"
                 >
                   <Plus className="w-3.5 h-3.5" />
                 </button>

@@ -110,7 +110,7 @@ export const EpisodeDrawer: React.FC<EpisodeDrawerProps> = ({
                       className={`text-xs font-semibold truncate ${
                         isPlaying ? 'text-red-400' : 'text-zinc-200 group-hover:text-white'
                       }`}
-                      title={ep.fileName}
+                      aria-label={ep.fileName}
                     >
                       {ep.fileName}
                     </h4>

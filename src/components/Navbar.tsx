@@ -15,7 +15,7 @@ export const Navbar: React.FC<NavbarProps> = ({
   isWhisperActive,
 }) => {
   return (
-    <header className="h-14 border-b border-zinc-800/80 bg-[#121216]/90 backdrop-blur-md px-6 flex items-center justify-between z-30 select-none">
+    <header className="h-14 border-b border-zinc-800/80 bg-[#121216] px-6 flex items-center justify-between z-30 select-none">
       {/* Brand Logo & Name */}
       <div className="flex items-center space-x-3 cursor-pointer" onClick={() => onSelectTab('library')}>
         <div className="w-8 h-8 rounded-lg bg-gradient-to-tr from-red-600 to-indigo-600 flex items-center justify-center shadow-lg shadow-red-600/20">

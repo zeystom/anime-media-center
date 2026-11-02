@@ -57,14 +57,12 @@
 
 /* Glassmorphism helpers */
 .glass-panel {
-  background: rgba(24, 24, 28, 0.88);
-  backdrop-filter: blur(12px);
+  background: rgba(24, 24, 28, 0.95);
   border: 1px solid rgba(255, 255, 255, 0.08);
 }
 
 .glass-dropdown {
-  background: rgba(18, 18, 22, 0.96);
-  backdrop-filter: blur(16px);
+  background: rgba(18, 18, 22, 0.98);
   border: 1px solid rgba(255, 255, 255, 0.12);
   box-shadow: 0 16px 40px rgba(0, 0, 0, 0.8);
 }

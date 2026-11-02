@@ -13,6 +13,9 @@ const __dirname = path.dirname(__filename);
 
 // Crucial: Hardware HEVC Decoding support for Chromium on Windows
 app.commandLine.appendSwitch('enable-features', 'PlatformHEVCDecoderSupport');
+// Disable DirectComposition video hardware overlays (MPO) to prevent mailbox desync & black screen crashes on UI hovers
+app.commandLine.appendSwitch('disable-direct-composition-video-overlays');
+app.commandLine.appendSwitch('disable-features', 'DirectCompositionVideoOverlays,UseOverlays');
 app.commandLine.appendSwitch('ignore-gpu-blocklist');
 app.commandLine.appendSwitch('disable-backgrounding-occluded-windows');
 app.commandLine.appendSwitch('disable-renderer-backgrounding');

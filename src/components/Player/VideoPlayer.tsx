@@ -689,7 +689,7 @@ export const VideoPlayer: React.FC<VideoPlayerProps> = ({
           <button
             onClick={onClose}
             className="p-2 rounded-xl bg-black/60 hover:bg-black/80 text-zinc-200 hover:text-white border border-white/10 transition-all hover:scale-105"
-            title="Back to Library [Esc]"
+            aria-label="Back to Library [Esc]"
           >
             <ArrowLeft className="w-5 h-5" />
           </button>
@@ -715,7 +715,7 @@ export const VideoPlayer: React.FC<VideoPlayerProps> = ({
                 ? 'bg-yellow-500/20 text-yellow-300 border-yellow-500/40 shadow-sm shadow-yellow-500/20'
                 : 'bg-black/60 text-zinc-400 border-white/10 hover:text-zinc-200'
             }`}
-            title="Toggle 2nd Top Subtitle / Signs (English forced only)"
+            aria-label="Toggle 2nd Top Subtitle / Signs (English forced only)"
           >
             <Sparkles className={`w-3.5 h-3.5 ${topSubEnabled ? 'text-yellow-400' : 'text-zinc-400'}`} />
             <span>Top Sub: {topSubEnabled ? 'ON' : 'OFF'}</span>
@@ -725,7 +725,7 @@ export const VideoPlayer: React.FC<VideoPlayerProps> = ({
           <button
             onClick={() => setIsTrackControlsOpen(true)}
             className="flex items-center space-x-1.5 px-3 py-1.5 rounded-xl bg-black/60 hover:bg-black/80 text-zinc-200 hover:text-white border border-white/10 text-xs font-medium transition-all"
-            title="Configure Audio Tracks & Dual Subtitles"
+            aria-label="Configure Audio Tracks & Dual Subtitles"
           >
             <Subtitles className="w-4 h-4 text-emerald-400" />
             <span>Tracks</span>
@@ -735,7 +735,7 @@ export const VideoPlayer: React.FC<VideoPlayerProps> = ({
           <button
             onClick={() => setIsEpisodeDrawerOpen(true)}
             className="flex items-center space-x-1.5 px-3 py-1.5 rounded-xl bg-black/60 hover:bg-black/80 text-zinc-200 hover:text-white border border-white/10 text-xs font-medium transition-all"
-            title="Switch Episodes"
+            aria-label="Switch Episodes"
           >
             <ListVideo className="w-4 h-4 text-red-500" />
             <span>Episodes</span>
@@ -764,7 +764,7 @@ export const VideoPlayer: React.FC<VideoPlayerProps> = ({
             <button
               onClick={togglePlay}
               className="p-2 rounded-xl text-white hover:text-red-500 transition-colors"
-              title={isPlaying ? 'Pause [Space]' : 'Play [Space]'}
+              aria-label={isPlaying ? 'Pause [Space]' : 'Play [Space]'}
             >
               {isPlaying ? <Pause className="w-6 h-6 fill-white" /> : <Play className="w-6 h-6 fill-white" />}
             </button>
@@ -772,7 +772,7 @@ export const VideoPlayer: React.FC<VideoPlayerProps> = ({
             <button
               onClick={() => handleSkip(-5, '-5s')}
               className="p-1.5 rounded-lg text-zinc-300 hover:text-white transition-colors"
-              title="Seek -5s [Left Arrow]"
+              aria-label="Seek -5s [Left Arrow]"
             >
               <Rewind className="w-5 h-5" />
             </button>
@@ -780,7 +780,7 @@ export const VideoPlayer: React.FC<VideoPlayerProps> = ({
             <button
               onClick={() => handleSkip(5, '+5s')}
               className="p-1.5 rounded-lg text-zinc-300 hover:text-white transition-colors"
-              title="Seek +5s [Right Arrow]"
+              aria-label="Seek +5s [Right Arrow]"
             >
               <FastForward className="w-5 h-5" />
             </button>
@@ -794,7 +794,7 @@ export const VideoPlayer: React.FC<VideoPlayerProps> = ({
                   if (videoRef.current) videoRef.current.muted = nextMute;
                 }}
                 className="p-1.5 rounded-lg text-zinc-300 hover:text-white transition-colors"
-                title="Mute [M]"
+                aria-label="Mute [M]"
               >
                 {isMuted || volume === 0 ? (
                   <VolumeX className="w-5 h-5 text-red-400" />
@@ -839,7 +839,7 @@ export const VideoPlayer: React.FC<VideoPlayerProps> = ({
                 onClick={() => handleUpdateFontSize(fontSize - 2)}
                 disabled={fontSize <= 14}
                 className="w-5 h-5 flex items-center justify-center rounded hover:bg-white/20 active:bg-white/30 text-white font-bold disabled:opacity-30 transition-colors"
-                title="Decrease Subtitle Size [-]"
+                aria-label="Decrease Subtitle Size [-]"
               >
                 -
               </button>
@@ -850,7 +850,7 @@ export const VideoPlayer: React.FC<VideoPlayerProps> = ({
                 onClick={() => handleUpdateFontSize(fontSize + 2)}
                 disabled={fontSize >= 60}
                 className="w-5 h-5 flex items-center justify-center rounded hover:bg-white/20 active:bg-white/30 text-white font-bold disabled:opacity-30 transition-colors"
-                title="Increase Subtitle Size [+]"
+                aria-label="Increase Subtitle Size [+]"
               >
                 +
               </button>
@@ -860,7 +860,7 @@ export const VideoPlayer: React.FC<VideoPlayerProps> = ({
             <button
               onClick={() => handleSkip(85, 'Intro Skipped (+85s)')}
               className="flex items-center space-x-2 px-3.5 py-1.5 rounded-xl bg-zinc-900/90 hover:bg-zinc-800 text-white font-bold text-xs border border-white/20 shadow-lg transition-all hover:scale-105 active:scale-95"
-              title="Skip Opening Intro Theme (+85 seconds)"
+              aria-label="Skip Opening Intro Theme (+85 seconds)"
             >
               <FastForward className="w-4 h-4 text-red-500 fill-red-500" />
               <span>Skip Intro (+85s)</span>
@@ -870,7 +870,7 @@ export const VideoPlayer: React.FC<VideoPlayerProps> = ({
             <button
               onClick={toggleFullscreen}
               className="p-2 rounded-xl text-zinc-300 hover:text-white transition-colors"
-              title={isFullscreen ? 'Exit Fullscreen [F]' : 'Fullscreen [F]'}
+              aria-label={isFullscreen ? 'Exit Fullscreen [F]' : 'Fullscreen [F]'}
             >
               {isFullscreen ? <Minimize className="w-5 h-5" /> : <Maximize className="w-5 h-5" />}
             </button>
