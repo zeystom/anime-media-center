@@ -241,11 +241,19 @@ export const VideoPlayer: React.FC<VideoPlayerProps> = ({
     duration > 0 &&
     currentAbsoluteTime >= endingStartTime;
 
-  // Opening is active during the first 3.5 minutes (210s) of any TV anime episode
+  // Is user currently inside an explicit OP chapter anywhere in the episode?
+  const isInsideOpChapter =
+    opChapter !== null &&
+    currentAbsoluteTime >= opChapter.start - 3 &&
+    currentAbsoluteTime < opChapter.end;
+
+  // Opening prompt is active:
+  // 1) Anytime inside an explicit OP chapter (even if it's on minute 5 or 8!)
+  // 2) OR fallback: within the first 4.5 minutes (270s) of the episode
   const isIntroActive =
     !isIntroDismissed &&
     duration > 240 &&
-    currentAbsoluteTime < 210;
+    (isInsideOpChapter || (!opChapter && currentAbsoluteTime < 270) || (opChapter && currentAbsoluteTime < Math.max(270, opChapter.end)));
 
   // Ripple feedback
   const [ripple, setRipple] = useState<{ type: any; text?: string } | null>(null);
@@ -1025,7 +1033,8 @@ export const VideoPlayer: React.FC<VideoPlayerProps> = ({
           }
           break;
         case 'KeyS':
-          if (isIntroActive) {
+          // Universal S shortcut: skips opening whenever active, or anywhere in first 70% of episode
+          if (isIntroActive || (duration > 0 && currentAbsoluteTime < duration * 0.7)) {
             e.preventDefault();
             handleSkipIntro();
           }
@@ -1358,7 +1367,11 @@ export const VideoPlayer: React.FC<VideoPlayerProps> = ({
               title="Skip Opening Theme [S]"
             >
               <FastForward className="w-4 h-4 text-red-500 fill-red-500 group-hover:scale-110 transition-transform" />
-              <span>Skip Opening</span>
+              <span>
+                {isInsideOpChapter && opChapter
+                  ? `Skip Opening (${formatTime(opChapter.end)})`
+                  : 'Skip Opening'}
+              </span>
               <span className="px-1.5 py-0.5 rounded text-[10px] font-bold bg-white/10 text-zinc-300 border border-white/10 font-mono">
                 S
               </span>
