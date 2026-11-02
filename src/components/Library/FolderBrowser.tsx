@@ -279,22 +279,24 @@ export const FolderBrowser: React.FC<FolderBrowserProps> = ({
                   <span>{selectedFolder.episodes.length} Episodes found</span>
                   <span>•</span>
                   {selectedFolder.hasEmbeddedDubtitles && (
-                    <>
-                      <span className="inline-flex items-center space-x-1 px-2 py-0.5 rounded bg-purple-500/15 border border-purple-500/30 text-purple-300 font-semibold">
-                        <Subtitles className="w-3 h-3 text-purple-400" />
-                        <span>Dub Sub Embedded</span>
-                      </span>
-                      <span>•</span>
-                    </>
+                    <span className="inline-flex items-center space-x-1 px-2 py-0.5 rounded bg-purple-500/15 border border-purple-500/30 text-purple-300 font-semibold">
+                      <Subtitles className="w-3 h-3 text-purple-400" />
+                      <span>Dub Sub Embedded</span>
+                    </span>
                   )}
-                  {selectedFolder.hasSubtitlesCount > 0 ? (
+                  {selectedFolder.hasEmbeddedDubtitles && selectedFolder.hasSubtitlesCount > 0 && (
+                    <span>•</span>
+                  )}
+                  {selectedFolder.hasSubtitlesCount > 0 && (
                     <span className="inline-flex items-center space-x-1 px-2 py-0.5 rounded bg-emerald-500/15 border border-emerald-500/30 text-emerald-300 font-semibold">
                       <Subtitles className="w-3 h-3 text-emerald-400" />
                       <span>{selectedFolder.hasSubtitlesCount} / {selectedFolder.totalEpisodes} AI Sub</span>
                     </span>
-                  ) : (
+                  )}
+                  {!selectedFolder.hasEmbeddedDubtitles && selectedFolder.hasSubtitlesCount === 0 && (
                     <span className="inline-flex items-center space-x-1 px-2 py-0.5 rounded bg-zinc-800/80 text-zinc-400 border border-zinc-700/60 font-medium text-[11px]">
-                      <span>0 / {selectedFolder.totalEpisodes} Subtitles</span>
+                      <Subtitles className="w-3 h-3 text-zinc-500" />
+                      <span>No Subtitles</span>
                     </span>
                   )}
                 </p>
