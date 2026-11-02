@@ -509,6 +509,9 @@ export const VideoPlayer: React.FC<VideoPlayerProps> = ({
             setIsMainAssActive(mainIsAss);
             setIsTopAssActive(topIsAss);
 
+            // Ensure timeOffset is 100% synchronized to the actual stream keyframe
+            jassub.timeOffset = streamStartTimeRef.current + syncOffsetRef.current;
+
             jassub.ready.catch((err) => {
               console.warn('[VideoPlayer] JASSUB worker init failed, using HTML subtitle overlay fallback:', err);
               if (jassubRef.current === jassub) {
@@ -649,8 +652,9 @@ export const VideoPlayer: React.FC<VideoPlayerProps> = ({
     const video = videoRef.current;
     if (!video) return;
 
-    // 1. Immediately align state timestamps with the exact demuxed keyframe
+    // 1. Immediately align state and ref timestamps with the exact demuxed keyframe
     timeRef.current = actualStartTime;
+    streamStartTimeRef.current = actualStartTime;
     setStreamStartTime(actualStartTime);
     setVideoElementTime(0);
 
@@ -1079,7 +1083,12 @@ export const VideoPlayer: React.FC<VideoPlayerProps> = ({
             setVideoElementTime(videoRef.current.currentTime);
           }
         }}
-        onPlay={() => setIsPlaying(true)}
+        onPlay={() => {
+          setIsPlaying(true);
+          if (jassubRef.current) {
+            jassubRef.current.timeOffset = streamStartTimeRef.current + syncOffsetRef.current;
+          }
+        }}
         onPause={() => setIsPlaying(false)}
         onEnded={handleEnded}
         onError={handleVideoError}
