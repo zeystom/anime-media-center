@@ -1060,8 +1060,12 @@ export const VideoPlayer: React.FC<VideoPlayerProps> = ({
   const handleContainerMouseMove = useCallback(
     (e: React.MouseEvent<HTMLDivElement>) => {
       resetControlsTimer();
-      // Right edge hover gesture: if mouse pushes within 18px of right screen edge, open Episode Drawer
-      if (e.clientX >= window.innerWidth - 18 && !isEpisodeDrawerOpen && !isTrackControlsOpen) {
+      // Right edge hover gesture:
+      // Strictly disabled in the bottom controls zone (bottom 140px) and top navbar (top 80px),
+      // so it never interferes with scrubbing the timeline or clicking Fullscreen / Audio & Subtitles!
+      const isOutsideControls = e.clientY > 80 && e.clientY < window.innerHeight - 140;
+      const isRightEdge = e.clientX >= window.innerWidth - 18;
+      if (isRightEdge && isOutsideControls && !isEpisodeDrawerOpen && !isTrackControlsOpen) {
         setIsEpisodeDrawerOpen(true);
       }
     },
@@ -1184,6 +1188,10 @@ export const VideoPlayer: React.FC<VideoPlayerProps> = ({
 
       {/* Bottom Player Controls Bar (Auto-hiding) */}
       <div
+        onMouseMove={(e) => {
+          resetControlsTimer();
+          e.stopPropagation();
+        }}
         className={`absolute bottom-0 left-0 right-0 pt-16 pb-6 px-6 bg-gradient-to-t from-black/90 via-black/60 to-transparent flex flex-col space-y-3 z-40 transition-opacity duration-300 ${
           areControlsVisible ? 'opacity-100 pointer-events-auto' : 'opacity-0 pointer-events-none'
         }`}
