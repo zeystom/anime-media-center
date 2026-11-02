@@ -23,12 +23,14 @@ export const HeroContinueWatching: React.FC<HeroContinueWatchingProps> = ({
   const cleanSeason = useMemo(() => cleanSeriesTitle(seasonName), [seasonName]);
   const parsedEp = useMemo(() => cleanEpisodeTitle(lastWatched.fileName), [lastWatched.fileName]);
 
+  const bgThumb = episode.kitsuThumbnail || episode.thumbnailUrl;
+
   return (
     <div className="relative w-full rounded-2xl overflow-hidden mb-8 border border-zinc-800 bg-[#121218] p-6 md:p-8 shadow-2xl">
       {/* Episode Thumbnail Streaming Background */}
-      {episode.thumbnailUrl && (
+      {bgThumb && (
         <img
-          src={episode.thumbnailUrl}
+          src={bgThumb}
           alt=""
           className="absolute inset-0 w-full h-full object-cover blur-xl opacity-25 scale-105 pointer-events-none select-none"
         />
@@ -56,8 +58,11 @@ export const HeroContinueWatching: React.FC<HeroContinueWatchingProps> = ({
               {cleanSeason || seasonName}
             </h2>
             <div className="flex items-center space-x-2 mt-1">
-              <p className="text-sm text-zinc-300 font-medium" title={lastWatched.fileName}>
-                {parsedEp.displayTitle}
+              <p
+                className="text-sm text-zinc-300 font-medium"
+                title={episode.kitsuTitle ? `${parsedEp.displayTitle} — ${episode.kitsuTitle}` : lastWatched.fileName}
+              >
+                {episode.kitsuTitle ? `${parsedEp.displayTitle} — ${episode.kitsuTitle}` : parsedEp.displayTitle}
               </p>
             </div>
           </div>

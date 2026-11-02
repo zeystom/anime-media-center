@@ -50,6 +50,14 @@ export class StorageService {
     return dir;
   }
 
+  getMetadataCacheDir(): string {
+    const dir = path.join(this.baseDir, 'metadata_cache');
+    if (!fs.existsSync(dir)) {
+      fs.mkdirSync(dir, { recursive: true });
+    }
+    return dir;
+  }
+
   getSettings(): AppSettings {
     try {
       if (fs.existsSync(this.settingsFile)) {

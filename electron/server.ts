@@ -279,6 +279,7 @@ export class LocalStreamServer {
   private async handleThumb(req: http.IncomingMessage, res: http.ServerResponse, query: any) {
     const filePath = query.file as string;
     const timeStr = (query.time as string) || '0';
+    const isCard = query.type === 'card';
 
     if (!filePath || !fs.existsSync(filePath)) {
       res.writeHead(400);
@@ -286,15 +287,43 @@ export class LocalStreamServer {
       return;
     }
 
-    const time = Math.max(0, parseFloat(timeStr) || 0);
-    // Quantize to 5-second intervals for caching efficiency
-    const bucket = Math.floor(time / 5) * 5;
+    // 1. For card thumbnails, check if a local sidecar image exists next to the video file
+    if (isCard) {
+      const dir = path.dirname(filePath);
+      const base = path.parse(filePath).name;
+      const candidates = [
+        path.join(dir, `${base}.jpg`),
+        path.join(dir, `${base}.png`),
+        path.join(dir, `${base}-thumb.jpg`),
+        path.join(dir, `${base}-thumb.png`),
+        path.join(dir, `${base}.thumb.jpg`),
+      ];
+      for (const cand of candidates) {
+        if (fs.existsSync(cand)) {
+          res.writeHead(200, {
+            'Content-Type': cand.toLowerCase().endsWith('.png') ? 'image/png' : 'image/jpeg',
+            'Cache-Control': 'public, max-age=86400',
+          });
+          fs.createReadStream(cand).pipe(res);
+          return;
+        }
+      }
+    }
 
     const fileHash = crypto.createHash('md5').update(filePath).digest('hex').slice(0, 16);
     const thumbDir = path.join(storage.getThumbnailDir(), fileHash);
-    const thumbFile = path.join(thumbDir, `thumb_${bucket}.jpg`);
 
-    // 1. Fast Cache Hit (in-memory or disk)
+    // For cards: dedicated card_hq.jpg. For scrubber: quantized 5-second interval bucket
+    const thumbFile = isCard
+      ? path.join(thumbDir, 'card_hq.jpg')
+      : path.join(thumbDir, `thumb_${Math.floor((Math.max(0, parseFloat(timeStr) || 0)) / 5) * 5}.jpg`);
+
+    // Safe timestamp: for cards, default to 280 seconds (~4.5 minutes in) to avoid intro/OP; for scrubber, use requested time
+    const targetTime = isCard
+      ? (timeStr && timeStr !== '60' && timeStr !== '0' ? parseFloat(timeStr) : 280)
+      : Math.floor((Math.max(0, parseFloat(timeStr) || 0)) / 5) * 5;
+
+    // 2. Fast Cache Hit (in-memory or disk)
     if (this.cachedThumbFiles.has(thumbFile) || fs.existsSync(thumbFile)) {
       this.cachedThumbFiles.add(thumbFile);
       res.writeHead(200, {
@@ -305,7 +334,7 @@ export class LocalStreamServer {
       return;
     }
 
-    // 2. Abort any previous extraction in flight if a newer position has arrived
+    // 3. Abort any previous extraction in flight if a newer position has arrived
     if (this.activeThumbAbort) {
       try {
         this.activeThumbAbort.abort();
@@ -329,9 +358,10 @@ export class LocalStreamServer {
       if (!thumbPromise) {
         thumbPromise = generateSingleThumbnail(
           filePath,
-          bucket,
+          targetTime,
           settings.ffmpegPath,
           thumbFile,
+          { isCard },
           abortController.signal
         );
         this.inFlightThumbs.set(thumbFile, thumbPromise);

@@ -61,6 +61,8 @@ export interface Episode {
   externalSrtPath?: string;
   hasEmbeddedDubtitles?: boolean;
   thumbnailUrl?: string;
+  kitsuThumbnail?: string | null;
+  kitsuTitle?: string | null;
 }
 
 export interface AnimeFolder {

@@ -493,13 +493,24 @@ export async function generateSingleThumbnail(
   timeSec: number,
   ffmpegPath: string,
   outputPath: string,
+  signalOrOptions?: AbortSignal | { isCard?: boolean },
   signal?: AbortSignal
 ): Promise<string> {
   if (fs.existsSync(outputPath)) {
     return outputPath;
   }
 
-  if (signal?.aborted) {
+  const isCard =
+    typeof signalOrOptions === 'object' &&
+    signalOrOptions !== null &&
+    !(signalOrOptions instanceof AbortSignal) &&
+    'isCard' in signalOrOptions
+      ? Boolean(signalOrOptions.isCard)
+      : false;
+
+  const activeSignal = signalOrOptions instanceof AbortSignal ? signalOrOptions : signal;
+
+  if (activeSignal?.aborted) {
     return '';
   }
 
@@ -509,26 +520,36 @@ export async function generateSingleThumbnail(
       fs.mkdirSync(parentDir, { recursive: true });
     }
 
-    // Fast Keyframe-Skipping Seeking:
-    // 1. -noaccurate_seek + -ss before -i: Jumps directly to keyframe index without scanning stream.
-    // 2. -skip_frame nokey: Tells decoder to ignore all non-keyframes (B/P frames) completely.
-    // 3. -an -sn: Skips all audio and subtitle stream parsing/demuxing.
-    // 4. -threads 2: Prevents thread starvation on multi-core CPUs.
-    const fastArgs = [
-      '-hide_banner',
-      '-y',
-      '-noaccurate_seek',
-      '-ss', timeSec.toString(),
-      '-skip_frame', 'nokey',
-      '-i', filePath,
-      '-an',
-      '-sn',
-      '-threads', '2',
-      '-frames:v', '1',
-      '-vf', 'scale=160:90',
-      '-q:v', '5',
-      outputPath,
-    ];
+    // High quality for cards (640x360 with thumbnail filter), or fast keyframe skip for scrubber (160x90)
+    const fastArgs = isCard
+      ? [
+          '-hide_banner',
+          '-y',
+          '-ss', timeSec.toString(),
+          '-i', filePath,
+          '-an',
+          '-sn',
+          '-threads', '2',
+          '-vf', 'thumbnail=50,scale=640:360',
+          '-frames:v', '1',
+          '-q:v', '2',
+          outputPath,
+        ]
+      : [
+          '-hide_banner',
+          '-y',
+          '-noaccurate_seek',
+          '-ss', timeSec.toString(),
+          '-skip_frame', 'nokey',
+          '-i', filePath,
+          '-an',
+          '-sn',
+          '-threads', '2',
+          '-frames:v', '1',
+          '-vf', 'scale=160:90',
+          '-q:v', '5',
+          outputPath,
+        ];
 
     let child = spawn(ffmpegPath, fastArgs, {
       windowsHide: true,
@@ -542,40 +563,54 @@ export async function generateSingleThumbnail(
       resolve('');
     };
 
-    if (signal) {
-      signal.addEventListener('abort', onAbort, { once: true });
+    if (activeSignal) {
+      activeSignal.addEventListener('abort', onAbort, { once: true });
     }
 
     child.on('close', (code) => {
-      if (signal) {
-        signal.removeEventListener('abort', onAbort);
+      if (activeSignal) {
+        activeSignal.removeEventListener('abort', onAbort);
       }
 
       if (code === 0 && fs.existsSync(outputPath) && fs.statSync(outputPath).size > 100) {
         resolve(outputPath);
       } else {
         // Fallback for edge cases where keyframe skip didn't catch a frame
-        if (signal?.aborted) return resolve('');
-        
-        const fallbackArgs = [
-          '-hide_banner',
-          '-y',
-          '-ss', timeSec.toString(),
-          '-i', filePath,
-          '-an',
-          '-sn',
-          '-threads', '2',
-          '-frames:v', '1',
-          '-vf', 'scale=160:90',
-          '-q:v', '5',
-          outputPath,
-        ];
+        if (activeSignal?.aborted) return resolve('');
+
+        const fallbackArgs = isCard
+          ? [
+              '-hide_banner',
+              '-y',
+              '-ss', timeSec.toString(),
+              '-i', filePath,
+              '-an',
+              '-sn',
+              '-threads', '2',
+              '-vf', 'scale=640:360',
+              '-frames:v', '1',
+              '-q:v', '2',
+              outputPath,
+            ]
+          : [
+              '-hide_banner',
+              '-y',
+              '-ss', timeSec.toString(),
+              '-i', filePath,
+              '-an',
+              '-sn',
+              '-threads', '2',
+              '-frames:v', '1',
+              '-vf', 'scale=160:90',
+              '-q:v', '5',
+              outputPath,
+            ];
         const fbChild = spawn(ffmpegPath, fallbackArgs, {
           windowsHide: true,
           stdio: ['ignore', 'ignore', 'ignore'],
         });
-        if (signal) {
-          signal.addEventListener('abort', () => {
+        if (activeSignal) {
+          activeSignal.addEventListener('abort', () => {
             try { fbChild.kill(); } catch {}
             resolve('');
           }, { once: true });
@@ -592,7 +627,7 @@ export async function generateSingleThumbnail(
     });
 
     child.on('error', () => {
-      if (signal) signal.removeEventListener('abort', onAbort);
+      if (activeSignal) activeSignal.removeEventListener('abort', onAbort);
       resolve('');
     });
   });

@@ -1,4 +1,4 @@
-import React, { useState, useMemo } from 'react';
+import React, { useState, useEffect, useMemo } from 'react';
 import { Play, Subtitles, CheckCircle2 } from 'lucide-react';
 import { Episode, PlaybackProgress } from '../../types';
 import { formatTime, cleanEpisodeTitle } from '../../utils/format';
@@ -11,7 +11,22 @@ interface EpisodeCardProps {
 
 export const EpisodeCard: React.FC<EpisodeCardProps> = ({ episode, progress, onPlay }) => {
   const [imgError, setImgError] = useState(false);
+  const [activeImgUrl, setActiveImgUrl] = useState(episode.kitsuThumbnail || episode.thumbnailUrl);
   const parsed = useMemo(() => cleanEpisodeTitle(episode.fileName), [episode.fileName]);
+
+  useEffect(() => {
+    setActiveImgUrl(episode.kitsuThumbnail || episode.thumbnailUrl);
+    setImgError(false);
+  }, [episode.kitsuThumbnail, episode.thumbnailUrl]);
+
+  const handleImgError = () => {
+    if (activeImgUrl === episode.kitsuThumbnail && episode.thumbnailUrl) {
+      // Fallback from remote Kitsu still to high-res local FFmpeg thumbnail
+      setActiveImgUrl(episode.thumbnailUrl);
+    } else {
+      setImgError(true);
+    }
+  };
 
   const percentWatched = progress && progress.duration > 0
     ? Math.min(100, Math.round((progress.currentTime / progress.duration) * 100))
@@ -24,11 +39,11 @@ export const EpisodeCard: React.FC<EpisodeCardProps> = ({ episode, progress, onP
     >
       {/* Thumbnail Aspect Container (16:9) */}
       <div className="relative aspect-video w-full bg-zinc-950 overflow-hidden">
-        {!imgError && episode.thumbnailUrl ? (
+        {!imgError && activeImgUrl ? (
           <img
-            src={episode.thumbnailUrl}
+            src={activeImgUrl}
             alt={episode.title}
-            onError={() => setImgError(true)}
+            onError={handleImgError}
             className="w-full h-full object-cover transition-transform duration-300 group-hover:scale-105"
             loading="lazy"
           />
@@ -63,9 +78,9 @@ export const EpisodeCard: React.FC<EpisodeCardProps> = ({ episode, progress, onP
         <div>
           <h4
             className="text-xs font-semibold text-zinc-100 line-clamp-1 group-hover:text-red-400 transition-colors"
-            title={episode.fileName}
+            title={episode.kitsuTitle ? `${parsed.displayTitle} — ${episode.kitsuTitle}` : episode.fileName}
           >
-            {parsed.displayTitle}
+            {episode.kitsuTitle ? `${parsed.displayTitle} — ${episode.kitsuTitle}` : parsed.displayTitle}
           </h4>
         </div>
 

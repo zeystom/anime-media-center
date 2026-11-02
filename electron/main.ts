@@ -7,6 +7,7 @@ import { streamServer } from './server';
 import { probeMkv, extractEmbeddedSubtitle, extractEmbeddedAss, extractEmbeddedFonts, filterFontsForAss, parseSrt, findPrecedingKeyframe } from './ffmpeg';
 import { whisperManager } from './whisper';
 import { AnimeFolder, Episode, PlaybackProgress, SeasonPreference } from './types';
+import { getKitsuMetadata } from './kitsu';
 
 const __filename = fileURLToPath(import.meta.url);
 const __dirname = path.dirname(__filename);
@@ -78,6 +79,10 @@ async function scanFolderForEpisodes(folderPath: string, port: number): Promise<
       hasDubtitles = await checkFolderHasDubtitles(path.join(folderPath, mkvFiles[0]), settings.ffmpegPath);
     }
 
+    // Attempt to fetch Kitsu anime metadata in parallel (or from local cache)
+    const folderName = path.basename(folderPath);
+    const kitsuData = await getKitsuMetadata(folderName);
+
     const episodes: Episode[] = [];
 
     for (const file of mkvFiles) {
@@ -105,6 +110,15 @@ async function scanFolderForEpisodes(folderPath: string, port: number): Promise<
         }
       }
 
+      // Match numeric episode index for Kitsu metadata
+      const numMatch =
+        file.match(/s\d+e(\d+)/i) ||
+        file.match(/\b(?:e|ep|episode)[_.\s-]*(\d+)\b/i) ||
+        file.match(/\b\d+x(\d+)\b/i) ||
+        file.match(/[-_.\s](\d{1,3})[-_.\s]/);
+      const numericIndex = numMatch ? parseInt(numMatch[1], 10) : null;
+      const kitsuEp = numericIndex !== null && kitsuData ? kitsuData.episodes[numericIndex] : null;
+
       episodes.push({
         filePath: fullPath,
         fileName: file,
@@ -114,7 +128,9 @@ async function scanFolderForEpisodes(folderPath: string, port: number): Promise<
         hasExternalSrt,
         externalSrtPath,
         hasEmbeddedDubtitles: hasDubtitles,
-        thumbnailUrl: `http://127.0.0.1:${port}/thumb?file=${encodeURIComponent(fullPath)}&time=60`,
+        thumbnailUrl: `http://127.0.0.1:${port}/thumb?file=${encodeURIComponent(fullPath)}&type=card`,
+        kitsuThumbnail: kitsuEp?.thumbnailUrl || null,
+        kitsuTitle: kitsuEp?.title || null,
       });
     }
 

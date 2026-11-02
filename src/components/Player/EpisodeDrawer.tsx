@@ -30,7 +30,21 @@ const EpisodeDrawerItem: React.FC<EpisodeItemProps> = ({
   isCurrentRef,
 }) => {
   const [imgError, setImgError] = useState(false);
+  const [activeImgUrl, setActiveImgUrl] = useState(episode.kitsuThumbnail || episode.thumbnailUrl);
   const parsed = useMemo(() => cleanEpisodeTitle(episode.fileName), [episode.fileName]);
+
+  useEffect(() => {
+    setActiveImgUrl(episode.kitsuThumbnail || episode.thumbnailUrl);
+    setImgError(false);
+  }, [episode.kitsuThumbnail, episode.thumbnailUrl]);
+
+  const handleImgError = () => {
+    if (activeImgUrl === episode.kitsuThumbnail && episode.thumbnailUrl) {
+      setActiveImgUrl(episode.thumbnailUrl);
+    } else {
+      setImgError(true);
+    }
+  };
 
   const percentWatched =
     progress && progress.duration > 0
@@ -49,11 +63,11 @@ const EpisodeDrawerItem: React.FC<EpisodeItemProps> = ({
     >
       {/* Thumbnail Card (16:9 aspect) */}
       <div className="relative w-32 sm:w-36 aspect-video rounded-xl overflow-hidden shrink-0 bg-zinc-950 border border-white/10 shadow-sm">
-        {!imgError && episode.thumbnailUrl ? (
+        {!imgError && activeImgUrl ? (
           <img
-            src={episode.thumbnailUrl}
+            src={activeImgUrl}
             alt={episode.fileName}
-            onError={() => setImgError(true)}
+            onError={handleImgError}
             className="w-full h-full object-cover transition-transform duration-300 group-hover:scale-105"
             loading="lazy"
           />
@@ -104,9 +118,9 @@ const EpisodeDrawerItem: React.FC<EpisodeItemProps> = ({
             className={`text-xs sm:text-sm font-semibold truncate ${
               isPlaying ? 'text-red-400 font-bold' : 'text-zinc-100 group-hover:text-white'
             }`}
-            title={episode.fileName}
+            title={episode.kitsuTitle ? `${parsed.displayTitle} — ${episode.kitsuTitle}` : episode.fileName}
           >
-            {parsed.displayTitle}
+            {episode.kitsuTitle ? `${parsed.displayTitle} — ${episode.kitsuTitle}` : parsed.displayTitle}
           </h4>
 
           {progress?.completed && (
