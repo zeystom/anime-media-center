@@ -116,9 +116,7 @@ export const FolderBrowser: React.FC<FolderBrowserProps> = ({
                 <div
                   key={folder.folderPath}
                   onClick={() => onSelectFolder(folder)}
-                  className={`group relative shrink-0 w-36 sm:w-44 md:w-48 aspect-[2/3] cursor-pointer select-none transition-transform duration-300 ease-out ${
-                    isSelected ? 'scale-[1.02]' : 'hover:scale-[1.03] active:scale-[0.99]'
-                  }`}
+                  className="group relative shrink-0 w-36 sm:w-44 md:w-48 aspect-[2/3] cursor-pointer select-none transition-transform duration-300 ease-out hover:scale-[1.03] active:scale-[0.99]"
                 >
                   {/* Soft Ambient Selection Glow (Permeates outside without being clipped) */}
                   <div
@@ -141,12 +139,14 @@ export const FolderBrowser: React.FC<FolderBrowserProps> = ({
                       isolation: 'isolate',
                     }}
                   >
-                    {/* Poster Image with Smooth Hover Zoom & Pre-Rounded Corners */}
+                    {/* Poster Image with Subtle Depth Blur on Selected & Smooth Hover Zoom */}
                     {posterSrc ? (
                       <img
                         src={posterSrc}
                         alt={displayTitle}
-                        className="w-full h-full object-cover rounded-2xl group-hover:scale-105 transition-transform duration-500 ease-out bg-zinc-950"
+                        className={`w-full h-full object-cover rounded-2xl transition-all duration-500 ease-out bg-zinc-950 group-hover:scale-105 ${
+                          isSelected ? 'blur-[1.5px] scale-[1.02] opacity-90' : 'opacity-100'
+                        }`}
                         style={{
                           transform: 'translateZ(0)',
                           backfaceVisibility: 'hidden',
@@ -161,24 +161,31 @@ export const FolderBrowser: React.FC<FolderBrowserProps> = ({
                     )}
 
                     {/* Vignette Gradients */}
-                    <div className="absolute inset-0 bg-gradient-to-t from-black/95 via-black/30 to-black/20 group-hover:via-black/20 transition-all pointer-events-none" />
+                    <div className="absolute inset-0 bg-gradient-to-t from-black/95 via-black/35 to-black/20 group-hover:via-black/20 transition-all pointer-events-none" />
 
-                    {/* Top Badges */}
-                    <div className="absolute top-2.5 left-2.5 right-2.5 flex items-center justify-between pointer-events-none">
+                    {/* Top Badges: Subtitle Status & Episode Count */}
+                    <div className="absolute top-2.5 left-2.5 right-2.5 flex items-center justify-between pointer-events-none z-10">
                       {folder.hasEmbeddedDubtitles ? (
                         <span className="px-2 py-0.5 rounded-md text-[10px] font-bold bg-purple-600/90 text-white backdrop-blur-md shadow-md border border-purple-400/30">
                           Dub Sub
                         </span>
+                      ) : folder.hasSubtitlesCount > 0 ? (
+                        <span className="px-2 py-0.5 rounded-md text-[10px] font-bold bg-indigo-600/90 text-white backdrop-blur-md shadow-md border border-indigo-400/30 flex items-center space-x-1">
+                          <Sparkles className="w-2.5 h-2.5 text-indigo-300" />
+                          <span>AI Sub</span>
+                        </span>
                       ) : (
-                        <span />
+                        <span className="px-2 py-0.5 rounded-md text-[10px] font-bold bg-zinc-800/90 text-zinc-400 backdrop-blur-md border border-zinc-700/60">
+                          No Sub
+                        </span>
                       )}
                       <span className="px-2 py-0.5 rounded-md text-[10px] font-mono font-bold bg-black/80 text-zinc-200 border border-white/15 backdrop-blur-md">
                         {folder.episodes.length} EPS
                       </span>
                     </div>
 
-                    {/* Bottom Text & Score */}
-                    <div className="absolute bottom-0 left-0 right-0 p-3 pointer-events-none flex flex-col justify-end space-y-1">
+                    {/* Bottom Text & Score - Razor sharp typography without blur */}
+                    <div className="absolute bottom-0 left-0 right-0 p-3 pointer-events-none z-10 flex flex-col justify-end space-y-1">
                       {folder.averageScore && (
                         <div className="flex items-center space-x-1 text-amber-400 text-[10px] font-bold">
                           <Star className="w-3 h-3 fill-amber-400" />
@@ -186,7 +193,7 @@ export const FolderBrowser: React.FC<FolderBrowserProps> = ({
                         </div>
                       )}
                       <h4
-                        className="text-xs sm:text-sm font-extrabold text-white tracking-tight line-clamp-2 group-hover:text-red-400 transition-colors"
+                        className="text-xs sm:text-sm font-extrabold text-white tracking-tight line-clamp-2 group-hover:text-red-400 transition-colors drop-shadow-sm"
                         title={displayTitle}
                       >
                         {displayTitle}
@@ -195,11 +202,6 @@ export const FolderBrowser: React.FC<FolderBrowserProps> = ({
                         {folder.folderName}
                       </p>
                     </div>
-
-                    {/* Active Selection Glow Dot */}
-                    {isSelected && (
-                      <div className="absolute top-2.5 left-2.5 w-2 h-2 rounded-full bg-red-500 shadow-[0_0_8px_rgba(239,68,68,1)] animate-pulse" />
-                    )}
                   </div>
                 </div>
               );
