@@ -1,7 +1,7 @@
-import React, { useState } from 'react';
+import React, { useState, useMemo } from 'react';
 import { Play, Subtitles, CheckCircle2 } from 'lucide-react';
 import { Episode, PlaybackProgress } from '../../types';
-import { formatTime, formatFileSize } from '../../utils/format';
+import { formatTime, formatFileSize, cleanEpisodeTitle } from '../../utils/format';
 
 interface EpisodeCardProps {
   episode: Episode;
@@ -11,6 +11,7 @@ interface EpisodeCardProps {
 
 export const EpisodeCard: React.FC<EpisodeCardProps> = ({ episode, progress, onPlay }) => {
   const [imgError, setImgError] = useState(false);
+  const parsed = useMemo(() => cleanEpisodeTitle(episode.fileName), [episode.fileName]);
 
   const percentWatched = progress && progress.duration > 0
     ? Math.min(100, Math.round((progress.currentTime / progress.duration) * 100))
@@ -49,18 +50,26 @@ export const EpisodeCard: React.FC<EpisodeCardProps> = ({ episode, progress, onP
         {/* Top Badges */}
         <div className="absolute top-2 left-2 flex items-center space-x-1.5">
           <span className="px-2 py-0.5 rounded text-xs font-bold bg-black/75 backdrop-blur-md text-white border border-white/10">
-            {episode.episodeNumber}
+            {parsed.episodeLabel || episode.episodeNumber}
           </span>
         </div>
 
         <div className="absolute top-2 right-2 flex items-center space-x-1">
           {episode.hasExternalSrt ? (
             <span
-              title="Whisper External Subtitle Ready"
+              title="Whisper External Subtitle Ready (.srt)"
               className="flex items-center space-x-1 px-1.5 py-0.5 rounded text-[11px] font-semibold bg-emerald-500/20 text-emerald-400 border border-emerald-500/40 backdrop-blur-md"
             >
               <Subtitles className="w-3 h-3" />
               <span>SRT Ready</span>
+            </span>
+          ) : episode.hasEmbeddedDubtitles ? (
+            <span
+              title="Embedded English Dubtitles (SDH) detected inside MKV"
+              className="flex items-center space-x-1 px-1.5 py-0.5 rounded text-[11px] font-semibold bg-purple-500/25 text-purple-300 border border-purple-500/50 backdrop-blur-md shadow-sm shadow-purple-500/20"
+            >
+              <Subtitles className="w-3 h-3 text-purple-400" />
+              <span>Dub Sub</span>
             </span>
           ) : (
             <span
@@ -86,9 +95,25 @@ export const EpisodeCard: React.FC<EpisodeCardProps> = ({ episode, progress, onP
       {/* Episode Metadata */}
       <div className="p-3 flex-1 flex flex-col justify-between">
         <div>
-          <h4 className="text-xs font-semibold text-zinc-200 line-clamp-1 group-hover:text-red-400 transition-colors" title={episode.fileName}>
-            {episode.fileName}
+          <h4
+            className="text-xs font-semibold text-zinc-100 line-clamp-1 group-hover:text-red-400 transition-colors"
+            title={episode.fileName}
+          >
+            {parsed.displayTitle}
           </h4>
+
+          {parsed.tags.length > 0 && (
+            <div className="flex flex-wrap items-center gap-1 mt-1.5">
+              {parsed.tags.slice(0, 3).map((tag) => (
+                <span
+                  key={tag}
+                  className="px-1.5 py-0.2 rounded text-[10px] font-mono font-medium bg-zinc-800 text-zinc-300 border border-white/5"
+                >
+                  {tag}
+                </span>
+              ))}
+            </div>
+          )}
         </div>
 
         <div className="mt-2.5 flex items-center justify-between text-[11px] text-zinc-400">

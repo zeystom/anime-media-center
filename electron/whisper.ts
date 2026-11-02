@@ -2,8 +2,9 @@ import { spawn, ChildProcess } from 'child_process';
 import fs from 'fs';
 import path from 'path';
 import { BrowserWindow } from 'electron';
-import { WhisperLogMessage, WhisperQueueItem } from './types';
+import { WhisperLogMessage, WhisperQueueItem, WhisperStatus } from './types';
 import { storage } from './storage';
+import { probeMkv } from './ffmpeg';
 
 export class WhisperManager {
   private activeProcess: ChildProcess | null = null;
@@ -11,6 +12,20 @@ export class WhisperManager {
   private isRunning: boolean = false;
   private cancelled: boolean = false;
   private currentItem: WhisperQueueItem | null = null;
+  private currentFolder: string = '';
+  private currentAudioTrackNum: number = 1;
+  private logsBuffer: WhisperLogMessage[] = [];
+
+  getStatus(): WhisperStatus {
+    return {
+      isRunning: this.isRunning,
+      folderPath: this.currentFolder,
+      currentFile: this.currentItem ? this.currentItem.fileName : '',
+      progress: this.currentItem ? this.currentItem.progress : 0,
+      queue: this.queue,
+      logs: this.logsBuffer.slice(-250),
+    };
+  }
 
   async startQueue(
     folderPath: string,
@@ -43,6 +58,8 @@ export class WhisperManager {
       return { success: false, error: 'No .mkv video files found in selected folder' };
     }
 
+    this.currentFolder = folderPath;
+    this.currentAudioTrackNum = audioTrackNum;
     this.queue = [];
     this.cancelled = false;
     this.isRunning = true;
@@ -73,7 +90,13 @@ export class WhisperManager {
     }
 
     this.broadcastProgress(mainWindow);
-    this.sendLog(mainWindow, 'info', `Initialized Whisper queue with ${this.queue.length} files (${this.queue.filter(q => q.status === 'skipped').length} skipped)`);
+    this.sendLog(
+      mainWindow,
+      'info',
+      `Initialized Whisper queue with ${this.queue.length} files (${
+        this.queue.filter((q) => q.status === 'skipped').length
+      } skipped)`
+    );
 
     // Run sequentially in background
     (async () => {
@@ -93,7 +116,11 @@ export class WhisperManager {
         this.currentItem = item;
         this.broadcastProgress(mainWindow);
 
-        this.sendLog(mainWindow, 'info', `[${i + 1}/${this.queue.length}] Starting: ${item.fileName} (Audio Track: ${audioTrackNum})`);
+        this.sendLog(
+          mainWindow,
+          'info',
+          `[${i + 1}/${this.queue.length}] Starting: ${item.fileName} (Audio Track: ${audioTrackNum})`
+        );
 
         try {
           await this.processSingleFile(item, whisperExe, folderPath, audioTrackNum, mainWindow);
@@ -119,8 +146,14 @@ export class WhisperManager {
       this.isRunning = false;
       this.currentItem = null;
       this.activeProcess = null;
-      mainWindow.webContents.send('whisper-done', { completedCount, failedCount });
-      this.sendLog(mainWindow, 'info', `Batch processing finished. ${completedCount} generated, ${failedCount} errors.`);
+      if (mainWindow && !mainWindow.isDestroyed()) {
+        mainWindow.webContents.send('whisper-done', { completedCount, failedCount });
+      }
+      this.sendLog(
+        mainWindow,
+        'info',
+        `Batch processing finished. ${completedCount} generated, ${failedCount} errors.`
+      );
     })();
 
     return { success: true };
@@ -137,31 +170,62 @@ export class WhisperManager {
     this.isRunning = false;
   }
 
-  private processSingleFile(
+  private async processSingleFile(
     item: WhisperQueueItem,
     whisperExe: string,
     folderPath: string,
     audioTrackNum: number,
     mainWindow: BrowserWindow
   ): Promise<void> {
+    const settings = storage.getSettings();
+
+    // Probe duration and audio language if not already known
+    let isJapaneseOrForeign = false;
+    try {
+      const meta = await probeMkv(item.filePath, settings.ffmpegPath);
+      if (meta.duration > 0) {
+        item.duration = meta.duration;
+      }
+      const selectedTrack = meta.audioTracks[audioTrackNum - 1];
+      if (selectedTrack) {
+        const lang = (selectedTrack.language || '').toLowerCase();
+        if (lang === 'jpn' || lang === 'ja' || /japanese/i.test(selectedTrack.title)) {
+          isJapaneseOrForeign = true;
+        }
+      }
+    } catch (e) {
+      // Fallback: duration unknown, will rely on percentage if outputted
+    }
+
     return new Promise((resolve, reject) => {
-      // Note: Use <folder_path>. with a trailing dot to prevent Windows backslash quote escaping bugs
-      const sanitizedOutDir = folderPath.endsWith('\\') || folderPath.endsWith('/')
-        ? `${folderPath}.`
-        : `${folderPath}\\.`;
+      // Prevent Windows backslash escaping bugs with trailing dot
+      const sanitizedOutDir =
+        folderPath.endsWith('\\') || folderPath.endsWith('/') ? `${folderPath}.` : `${folderPath}\\.`;
 
       const args = [
         item.filePath,
-        '--model', 'large-v3-turbo',
-        '--language', 'en',
-        '--ff_track', audioTrackNum.toString(),
+        '--model',
+        'large-v3-turbo',
+        '--ff_track',
+        audioTrackNum.toString(),
         '--ff_sync',
         '--sentence',
-        '--max_line_count', '2',
-        '--max_line_width', '42',
-        '--output_format', 'srt',
-        '--output_dir', sanitizedOutDir,
+        '--max_line_count',
+        '2',
+        '--max_line_width',
+        '42',
+        '--output_format',
+        'srt',
+        '--output_dir',
+        sanitizedOutDir,
       ];
+
+      // If audio is Japanese/Foreign, use translation to English; otherwise transcribe
+      if (isJapaneseOrForeign) {
+        args.push('--task', 'translate');
+      } else {
+        args.push('--task', 'transcribe', '--language', 'en');
+      }
 
       this.sendLog(mainWindow, 'info', `Executing: "${path.basename(whisperExe)}" ${args.slice(1).join(' ')}`);
 
@@ -187,6 +251,7 @@ export class WhisperManager {
         if (this.cancelled) {
           reject(new Error('Process cancelled'));
         } else if (code === 0) {
+          item.progress = 100;
           resolve();
         } else {
           reject(new Error(`Whisper exited with code ${code}`));
@@ -201,12 +266,32 @@ export class WhisperManager {
   }
 
   private parseProgress(item: WhisperQueueItem, output: string): void {
-    // Look for percentage patterns like "45%" or "[00:12<01:20, 2.50it/s]"
+    // 1. Direct percentage pattern (e.g. "45%" or " 45%|")
     const pctMatch = output.match(/(\d{1,3})%/);
     if (pctMatch) {
       item.progress = Math.min(100, Math.max(0, parseInt(pctMatch[1], 10)));
     }
 
+    // 2. Parse faster-whisper-xxl timestamp intervals: [15:23.320 --> 15:24.640]
+    const matches = Array.from(
+      output.matchAll(
+        /\[(?:(?:\d+:)?\d+:\d+(?:\.\d+)?)\s*-->\s*(?:(?:(\d+):)?(\d+):(\d+(?:\.\d+)?))\]/g
+      )
+    );
+    if (matches.length > 0) {
+      const lastMatch = matches[matches.length - 1];
+      const hrs = lastMatch[1] ? parseInt(lastMatch[1], 10) : 0;
+      const mins = parseInt(lastMatch[2], 10) || 0;
+      const secs = parseFloat(lastMatch[3]) || 0;
+      const currentSeconds = hrs * 3600 + mins * 60 + secs;
+
+      if (item.duration && item.duration > 0) {
+        const pct = Math.min(99, Math.round((currentSeconds / item.duration) * 100));
+        item.progress = Math.max(item.progress, pct);
+      }
+    }
+
+    // 3. Iteration speed
     const speedMatch = output.match(/([\d.]+\s*(?:it\/s|s\/it|frames\/s))/i);
     if (speedMatch) {
       item.speed = speedMatch[1];
@@ -214,12 +299,18 @@ export class WhisperManager {
   }
 
   private sendLog(mainWindow: BrowserWindow, type: WhisperLogMessage['type'], text: string) {
+    const logMsg: WhisperLogMessage = {
+      type,
+      text,
+      timestamp: Date.now(),
+    };
+    this.logsBuffer.push(logMsg);
+    if (this.logsBuffer.length > 300) {
+      this.logsBuffer.shift();
+    }
+
     if (mainWindow && !mainWindow.isDestroyed()) {
-      mainWindow.webContents.send('whisper-log', {
-        type,
-        text,
-        timestamp: Date.now(),
-      } as WhisperLogMessage);
+      mainWindow.webContents.send('whisper-log', logMsg);
     }
   }
 

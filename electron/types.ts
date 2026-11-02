@@ -30,6 +30,14 @@ export interface SubtitleCue {
   text: string;
 }
 
+export interface SubtitleTrackPayload {
+  format: 'ass' | 'srt';
+  content?: string;
+  fonts?: string[];
+  port?: number;
+  cues?: SubtitleCue[];
+}
+
 export interface VideoMetadata {
   filePath: string;
   fileName: string;
@@ -39,6 +47,7 @@ export interface VideoMetadata {
   subtitleTracks: SubtitleTrack[];
   hasExternalSrt: boolean;
   externalSrtPath?: string;
+  hasEmbeddedDubtitles?: boolean;
 }
 
 export interface Episode {
@@ -50,6 +59,7 @@ export interface Episode {
   duration?: number;
   hasExternalSrt: boolean;
   externalSrtPath?: string;
+  hasEmbeddedDubtitles?: boolean;
   thumbnailUrl?: string;
 }
 
@@ -58,6 +68,8 @@ export interface AnimeFolder {
   folderName: string;
   episodes: Episode[];
   hasSubtitlesCount: number;
+  hasDubtitlesCount?: number;
+  hasEmbeddedDubtitles?: boolean;
   totalEpisodes: number;
 }
 
@@ -94,6 +106,7 @@ export interface WhisperQueueItem {
   id: string;
   filePath: string;
   fileName: string;
+  duration?: number;
   status: 'pending' | 'processing' | 'completed' | 'failed' | 'skipped';
   progress: number;
   speed?: string;
@@ -104,4 +117,13 @@ export interface WhisperLogMessage {
   type: 'stdout' | 'stderr' | 'info' | 'error' | 'success';
   text: string;
   timestamp: number;
+}
+
+export interface WhisperStatus {
+  isRunning: boolean;
+  folderPath?: string;
+  currentFile: string;
+  progress: number;
+  queue: WhisperQueueItem[];
+  logs: WhisperLogMessage[];
 }

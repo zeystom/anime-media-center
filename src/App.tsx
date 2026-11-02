@@ -63,6 +63,16 @@ export const App: React.FC = () => {
 
     if (!window.electronAPI) return;
 
+    // Check whisper status on mount
+    window.electronAPI
+      .getWhisperStatus()
+      .then((status) => {
+        if (status && status.isRunning) {
+          setIsWhisperActive(true);
+        }
+      })
+      .catch(() => {});
+
     const unsubProgress = window.electronAPI.onWhisperProgress(() => {
       setIsWhisperActive(true);
     });
@@ -149,6 +159,10 @@ export const App: React.FC = () => {
 
   // Play Episode
   const handlePlayEpisode = (episode: Episode, startAt = 0) => {
+    const parentFolder = folders.find((f) => f.episodes.some((e) => e.filePath === episode.filePath));
+    if (parentFolder) {
+      setSelectedFolder(parentFolder);
+    }
     const saved = history[episode.filePath];
     const initial = startAt > 0 ? startAt : (saved?.currentTime && !saved.completed ? saved.currentTime : 0);
     setPlayerInitialTime(initial);
@@ -164,6 +178,10 @@ export const App: React.FC = () => {
 
   // Switch episode inside Player
   const handlePlayerEpisodeChange = (newEpisode: Episode) => {
+    const parentFolder = folders.find((f) => f.episodes.some((e) => e.filePath === newEpisode.filePath));
+    if (parentFolder) {
+      setSelectedFolder(parentFolder);
+    }
     setActivePlayerEpisode(newEpisode);
     setPlayerInitialTime(0);
   };
@@ -183,19 +201,35 @@ export const App: React.FC = () => {
     }
   };
 
+  // Resolve current active anime folder for player
+  const currentPlayingFolder = useMemo(() => {
+    if (!activePlayerEpisode) return null;
+    return (
+      folders.find((f) => f.episodes.some((e) => e.filePath === activePlayerEpisode.filePath)) ||
+      selectedFolder
+    );
+  }, [activePlayerEpisode, folders, selectedFolder]);
+
   return (
     <div className="flex flex-col h-screen w-screen bg-[#0f0f12] text-zinc-100 overflow-hidden font-sans">
-      {/* Top Navbar */}
-      <Navbar
-        currentTab={currentTab}
-        onSelectTab={setCurrentTab}
-        onOpenSettings={() => setSettingsOpen(true)}
-        isWhisperActive={isWhisperActive}
-      />
+      {/* Top Navbar - Only rendered in Menu/Library/Whisper views */}
+      {!activePlayerEpisode && (
+        <Navbar
+          currentTab={currentTab}
+          onSelectTab={setCurrentTab}
+          onOpenSettings={() => setSettingsOpen(true)}
+          isWhisperActive={isWhisperActive}
+        />
+      )}
 
-      {/* Main Content Area */}
-      <main className="flex-1 overflow-y-auto">
-        {currentTab === 'library' && (
+      {/* Main Content Area - Persists tab states without destroying components */}
+      <main
+        className={`flex-1 overflow-hidden relative flex flex-col ${
+          activePlayerEpisode ? 'hidden' : 'block'
+        }`}
+      >
+        {/* Library Tab View */}
+        <div className={`h-full overflow-y-auto ${currentTab === 'library' ? 'block' : 'hidden'}`}>
           <div className="max-w-7xl mx-auto px-6 py-6">
             {/* Continue Watching Hero Section */}
             {mostRecentWatched && (
@@ -222,22 +256,23 @@ export const App: React.FC = () => {
               onOpenInExplorer={(p) => window.electronAPI.openFolderInExplorer(p)}
             />
           </div>
-        )}
+        </div>
 
-        {currentTab === 'whisper' && (
+        {/* Whisper Studio Tab View (Never unmounted so active jobs & terminal logs are preserved) */}
+        <div className={`h-full flex-1 min-h-0 ${currentTab === 'whisper' ? 'flex flex-col' : 'hidden'}`}>
           <WhisperStudio
             initialFolder={selectedFolder}
             onRefreshLibrary={handleRefreshLibrary}
           />
-        )}
+        </div>
       </main>
 
       {/* Fullscreen Video Player Modal */}
-      {activePlayerEpisode && selectedFolder && (
+      {activePlayerEpisode && currentPlayingFolder && (
         <VideoPlayer
           episode={activePlayerEpisode}
-          seasonEpisodes={selectedFolder.episodes}
-          folderPath={selectedFolder.folderPath}
+          seasonEpisodes={currentPlayingFolder.episodes}
+          folderPath={currentPlayingFolder.folderPath}
           initialTime={playerInitialTime}
           settings={settings}
           history={history}

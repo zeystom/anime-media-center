@@ -1,7 +1,7 @@
-import React from 'react';
+import React, { useMemo } from 'react';
 import { Play, Clock, Sparkles } from 'lucide-react';
 import { Episode, PlaybackProgress } from '../../types';
-import { formatTime } from '../../utils/format';
+import { formatTime, cleanSeriesTitle, cleanEpisodeTitle } from '../../utils/format';
 
 interface HeroContinueWatchingProps {
   lastWatched: PlaybackProgress;
@@ -20,6 +20,9 @@ export const HeroContinueWatching: React.FC<HeroContinueWatchingProps> = ({
     ? Math.min(100, Math.round((lastWatched.currentTime / lastWatched.duration) * 100))
     : 0;
 
+  const cleanSeason = useMemo(() => cleanSeriesTitle(seasonName), [seasonName]);
+  const parsedEp = useMemo(() => cleanEpisodeTitle(lastWatched.fileName), [lastWatched.fileName]);
+
   return (
     <div className="relative w-full rounded-2xl overflow-hidden mb-8 border border-zinc-800 bg-gradient-to-r from-zinc-950 via-[#181820] to-[#121218] p-6 md:p-8 shadow-2xl">
       {/* Background Glow Accents */}
@@ -34,17 +37,31 @@ export const HeroContinueWatching: React.FC<HeroContinueWatchingProps> = ({
               <span>Continue Watching</span>
             </span>
             <span className="text-zinc-400 text-xs font-semibold px-2 py-0.5 rounded bg-zinc-800 border border-zinc-700/50">
-              {lastWatched.episodeNumber}
+              {parsedEp.episodeLabel || lastWatched.episodeNumber}
             </span>
           </div>
 
           <div>
-            <h2 className="text-2xl md:text-3xl font-extrabold text-white tracking-tight line-clamp-1">
-              {seasonName}
+            <h2 className="text-2xl md:text-3xl font-extrabold text-white tracking-tight line-clamp-1" title={seasonName}>
+              {cleanSeason || seasonName}
             </h2>
-            <p className="text-sm text-zinc-400 line-clamp-1 mt-1 font-medium">
-              {lastWatched.fileName}
-            </p>
+            <div className="flex items-center space-x-2 mt-1">
+              <p className="text-sm text-zinc-300 font-medium" title={lastWatched.fileName}>
+                {parsedEp.displayTitle}
+              </p>
+              {parsedEp.tags.length > 0 && (
+                <div className="hidden sm:flex items-center space-x-1">
+                  {parsedEp.tags.slice(0, 3).map((tag) => (
+                    <span
+                      key={tag}
+                      className="px-1.5 py-0.2 rounded text-[10px] font-mono font-medium bg-zinc-800 text-zinc-300 border border-white/5"
+                    >
+                      {tag}
+                    </span>
+                  ))}
+                </div>
+              )}
+            </div>
           </div>
 
           {/* Time & Progress */}

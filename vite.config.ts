@@ -9,8 +9,25 @@ const __dirname = path.dirname(__filename);
 
 export default defineConfig({
   base: './',
+  worker: {
+    format: 'es',
+  },
+  optimizeDeps: {
+    include: ['throughput'],
+  },
   plugins: [
     react(),
+    {
+      name: 'jassub-desynchronized-fix',
+      transform(code, id) {
+        if (id.includes('jassub') && code.includes('desynchronized: true')) {
+          return {
+            code: code.replace(/desynchronized:\s*true/g, 'desynchronized: false'),
+            map: null,
+          };
+        }
+      },
+    },
     electron([
       {
         entry: 'electron/main.ts',

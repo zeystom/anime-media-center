@@ -9,6 +9,7 @@ interface SubtitleOverlayProps {
   syncOffset: number; // in seconds
   fontSize: number;   // default 28
   hasOutline: boolean;
+  controlsVisible?: boolean;
 }
 
 export const SubtitleOverlay: React.FC<SubtitleOverlayProps> = ({
@@ -19,6 +20,7 @@ export const SubtitleOverlay: React.FC<SubtitleOverlayProps> = ({
   syncOffset,
   fontSize,
   hasOutline,
+  controlsVisible = false,
 }) => {
   // Apply sync offset to current playback time
   const adjustedTime = currentTime + syncOffset;
@@ -36,9 +38,20 @@ export const SubtitleOverlay: React.FC<SubtitleOverlayProps> = ({
   }, [topCues, adjustedTime, topSubEnabled]);
 
   return (
-    <div className="absolute inset-0 pointer-events-none select-none z-20 flex flex-col justify-between p-8 overflow-hidden">
+    <div
+      className="absolute inset-0 pointer-events-none select-none z-20 flex flex-col justify-between p-8 overflow-hidden"
+      style={{
+        transform: 'translateZ(0)',
+        backfaceVisibility: 'hidden',
+        willChange: 'transform',
+      }}
+    >
       {/* 2nd Subtitle / Signs (Top) */}
-      <div className="w-full flex justify-center items-start min-h-[60px] pt-2">
+      <div
+        className={`w-full flex justify-center items-start min-h-[60px] pt-2 transition-transform duration-300 ease-out ${
+          controlsVisible ? 'translate-y-14' : 'translate-y-0'
+        }`}
+      >
         {activeTopCue && (
           <div
             className={`max-w-4xl text-center px-4 py-1 rounded bg-black/60 transition-opacity duration-150 ${
@@ -57,7 +70,12 @@ export const SubtitleOverlay: React.FC<SubtitleOverlayProps> = ({
       </div>
 
       {/* Main Dialogue (Bottom) */}
-      <div className="w-full flex justify-center items-end min-h-[80px] pb-8">
+      {/* Smoothly glides up above the timeline scrubber when UI controls appear, and returns down when UI hides */}
+      <div
+        className={`w-full flex justify-center items-end min-h-[80px] pb-4 transition-transform duration-300 ease-out ${
+          controlsVisible ? '-translate-y-24' : 'translate-y-0'
+        }`}
+      >
         {activeMainCue && (
           <div
             className={`max-w-4xl text-center px-5 py-1.5 rounded transition-opacity duration-100 ${

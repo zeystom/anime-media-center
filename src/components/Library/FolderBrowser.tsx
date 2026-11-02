@@ -1,6 +1,7 @@
 import React from 'react';
 import { Folder, FolderOpen, RefreshCw, ExternalLink, Sparkles, Film, HardDrive } from 'lucide-react';
 import { AnimeFolder, Episode, PlaybackProgress } from '../../types';
+import { cleanSeriesTitle } from '../../utils/format';
 import { EpisodeCard } from './EpisodeCard';
 
 interface FolderBrowserProps {
@@ -91,9 +92,17 @@ export const FolderBrowser: React.FC<FolderBrowserProps> = ({
                   }`}
                 >
                   <Folder className={`w-4 h-4 ${isSelected ? 'text-red-500' : 'text-zinc-500'}`} />
-                  <span className="truncate max-w-[200px]" title={folder.folderName}>
-                    {folder.folderName}
+                  <span className="truncate max-w-[220px]" title={folder.folderName}>
+                    {cleanSeriesTitle(folder.folderName) || folder.folderName}
                   </span>
+                  {folder.hasEmbeddedDubtitles && (
+                    <span
+                      title="Embedded English Dubtitles (SDH) available"
+                      className="px-1.5 py-0.5 rounded text-[10px] font-bold bg-purple-500/20 text-purple-300 border border-purple-500/40"
+                    >
+                      Dub Sub
+                    </span>
+                  )}
                   <span className="px-1.5 py-0.5 rounded text-[10px] bg-zinc-950/80 text-zinc-400">
                     {folder.episodes.length}
                   </span>
@@ -109,12 +118,21 @@ export const FolderBrowser: React.FC<FolderBrowserProps> = ({
         <div className="space-y-4">
           <div className="flex flex-wrap items-center justify-between gap-4 pb-2 border-b border-zinc-800/80">
             <div>
-              <h2 className="text-xl font-bold text-white tracking-tight flex items-center space-x-2">
-                <span>{selectedFolder.folderName}</span>
+              <h2 className="text-xl font-bold text-white tracking-tight flex items-center space-x-2" title={selectedFolder.folderName}>
+                <span>{cleanSeriesTitle(selectedFolder.folderName) || selectedFolder.folderName}</span>
               </h2>
-              <p className="text-xs text-zinc-400 mt-1 flex items-center space-x-3">
+              <p className="text-xs text-zinc-400 mt-1 flex flex-wrap items-center gap-x-3 gap-y-1">
                 <span>{selectedFolder.episodes.length} Episodes found</span>
                 <span>•</span>
+                {selectedFolder.hasEmbeddedDubtitles && (
+                  <>
+                    <span className="inline-flex items-center space-x-1 px-2 py-0.5 rounded bg-purple-500/15 border border-purple-500/30 text-purple-300 font-semibold">
+                      <Sparkles className="w-3 h-3 text-purple-400" />
+                      <span>Dubtitles / SDH Embedded</span>
+                    </span>
+                    <span>•</span>
+                  </>
+                )}
                 <span className="text-emerald-400 font-semibold">
                   {selectedFolder.hasSubtitlesCount} / {selectedFolder.totalEpisodes} with External SRT
                 </span>

@@ -1,4 +1,8 @@
-import React, { useState, useEffect, useRef, useCallback } from 'react';
+import React, { useState, useEffect, useRef, useCallback, useMemo } from 'react';
+import JASSUB from 'jassub';
+import workerUrl from 'jassub/dist/worker/worker.js?worker&url';
+import wasmUrl from 'jassub/dist/wasm/jassub-worker.wasm?url';
+import modernWasmUrl from 'jassub/dist/wasm/jassub-worker-modern.wasm?url';
 import {
   Play,
   Pause,
@@ -20,7 +24,7 @@ import { TimelineScrubber } from './TimelineScrubber';
 import { TrackControls } from './TrackControls';
 import { EpisodeDrawer } from './EpisodeDrawer';
 import { RippleIndicator } from './RippleIndicator';
-import { formatTime } from '../../utils/format';
+import { formatTime, cleanEpisodeTitle } from '../../utils/format';
 
 interface VideoPlayerProps {
   episode: Episode;
@@ -31,6 +35,75 @@ interface VideoPlayerProps {
   history: Record<string, any>;
   onClose: () => void;
   onEpisodeChange: (episode: Episode) => void;
+}
+
+function combineAss(ass1: string, ass2: string): string {
+  if (!ass1) return ass2;
+  if (!ass2) return ass1;
+
+  const ass2Styles = ass2.match(/\[V4\+ Styles\]([\s\S]*?)(\[Events\]|$)/i);
+  const ass2Events = ass2.match(/\[Events\]([\s\S]*?)$/i);
+
+  let combined = ass1;
+  if (ass2Styles && ass2Styles[1]) {
+    const styles = ass2Styles[1].split('\n').filter((l) => l.trim().startsWith('Style:'));
+    if (styles.length > 0) {
+      combined = combined.replace(/\[Events\]/i, `${styles.join('\n')}\n\n[Events]`);
+    }
+  }
+  if (ass2Events && ass2Events[1]) {
+    const lines = ass2Events[1].split('\n').filter((l) => l.trim().startsWith('Dialogue:'));
+    if (lines.length > 0) {
+      combined = combined.trim() + '\n' + lines.join('\n');
+    }
+  }
+  return combined;
+}
+
+function parseAssTimestamp(timeStr: string): number {
+  const parts = timeStr.trim().split(':');
+  if (parts.length === 3) {
+    const hours = parseFloat(parts[0]) || 0;
+    const minutes = parseFloat(parts[1]) || 0;
+    const seconds = parseFloat(parts[2]) || 0;
+    return hours * 3600 + minutes * 60 + seconds;
+  }
+  return 0;
+}
+
+function cleanAssText(raw: string): string {
+  return raw
+    .replace(/\{[^}]+\}/g, '')
+    .replace(/<[^>]+>/g, '')
+    .replace(/\\N/gi, '\n')
+    .replace(/\\h/gi, ' ')
+    .trim();
+}
+
+function parseAssToCues(assContent: string): SubtitleCue[] {
+  const cues: SubtitleCue[] = [];
+  const lines = assContent.replace(/\r\n/g, '\n').replace(/\r/g, '\n').split('\n');
+  let id = 1;
+
+  for (const line of lines) {
+    if (!line.startsWith('Dialogue:')) continue;
+    const colonIdx = line.indexOf(':');
+    if (colonIdx === -1) continue;
+    const rest = line.slice(colonIdx + 1).trim();
+    const parts = rest.split(',');
+    if (parts.length < 10) continue;
+
+    const start = parseAssTimestamp(parts[1]);
+    const end = parseAssTimestamp(parts[2]);
+    const rawText = parts.slice(9).join(',');
+    const text = cleanAssText(rawText);
+
+    if (text && end > start) {
+      cues.push({ id: id++, start, end, text });
+    }
+  }
+
+  return cues;
 }
 
 export const VideoPlayer: React.FC<VideoPlayerProps> = ({
@@ -45,6 +118,9 @@ export const VideoPlayer: React.FC<VideoPlayerProps> = ({
 }) => {
   const videoRef = useRef<HTMLVideoElement>(null);
   const containerRef = useRef<HTMLDivElement>(null);
+
+  // Clean parsed episode metadata
+  const parsed = useMemo(() => cleanEpisodeTitle(episode.fileName), [episode.fileName]);
 
   // Video metadata
   const [metadata, setMetadata] = useState<VideoMetadata | null>(null);
@@ -76,10 +152,19 @@ export const VideoPlayer: React.FC<VideoPlayerProps> = ({
   const [topSubEnabled, setTopSubEnabled] = useState<boolean>(false);
   const [syncOffset, setSyncOffset] = useState<number>(0);
   const [fontSize, setFontSize] = useState<number>(settings.subtitlesFontSize || 28);
+  const [subtitlesLoading, setSubtitlesLoading] = useState<boolean>(false);
 
   // Parsed Subtitle Cues
   const [mainCues, setMainCues] = useState<SubtitleCue[]>([]);
   const [topCues, setTopCues] = useState<SubtitleCue[]>([]);
+
+  // JASSUB WebAssembly ASS Engine
+  const jassubRef = useRef<JASSUB | null>(null);
+  const serverPortRef = useRef<number>(0);
+  const streamStartTimeRef = useRef<number>(0);
+  streamStartTimeRef.current = streamStartTime;
+  const syncOffsetRef = useRef<number>(0);
+  syncOffsetRef.current = syncOffset;
 
   // UI Drawer / Modals
   const [isTrackControlsOpen, setIsTrackControlsOpen] = useState<boolean>(false);
@@ -128,41 +213,80 @@ export const VideoPlayer: React.FC<VideoPlayerProps> = ({
 
         // Determine Default Audio Track (Auto-select 'eng' by default)
         let defaultAudioIdx = 0;
+        let selectedAudioTrack: any = null;
         if (seasonPref?.preferredAudioIndex !== undefined) {
           defaultAudioIdx = seasonPref.preferredAudioIndex;
+          selectedAudioTrack = meta.audioTracks.find((t) => t.audioIndex === defaultAudioIdx);
         } else {
           const engTrack = meta.audioTracks.find(
             (t) => t.language === 'eng' || t.language === 'en' || /english/i.test(t.title)
           );
           if (engTrack) {
             defaultAudioIdx = engTrack.audioIndex;
+            selectedAudioTrack = engTrack;
+          } else {
+            selectedAudioTrack = meta.audioTracks[0];
           }
         }
         setSelectedAudioIndex(defaultAudioIdx);
 
         // Determine Default Main Subtitle:
-        // Prioritize: 1) External .srt (Whisper) -> 2) Embedded English [Dubtitle] -> 3) Embedded English
+        // When English Audio (Dub) is playing: prioritize English Dubtitles (SDH) / External Whisper SRT!
+        // When Japanese Audio is playing: prioritize English translation dialogue (CR / full ASS)!
         let mainSubId: string | null = null;
         if (seasonPref?.mainSubtitleTrackId !== undefined) {
           mainSubId = seasonPref.mainSubtitleTrackId;
         } else {
-          const extSub = meta.subtitleTracks.find((s) => s.type === 'external');
+          const isEngAudio =
+            selectedAudioTrack &&
+            (selectedAudioTrack.language === 'eng' ||
+              selectedAudioTrack.language === 'en' ||
+              /english|dub/i.test(selectedAudioTrack.title));
+
           const engDubtitle = meta.subtitleTracks.find(
             (s) =>
               (s.language === 'eng' || s.language === 'en') &&
-              (s.isDubtitle || /dubtitle|amzn/i.test(s.title)) &&
+              (s.isDubtitle || /sdh|dubtitle|hearing impaired/i.test(s.title)) &&
               !s.isSigns
+          );
+          const extSub = meta.subtitleTracks.find((s) => s.type === 'external');
+          const defaultEngSub = meta.subtitleTracks.find(
+            (s) => (s.language === 'eng' || s.language === 'en') && s.isDefault && !s.isSigns
           );
           const engDialogue = meta.subtitleTracks.find(
             (s) => (s.language === 'eng' || s.language === 'en') && !s.isSigns
           );
 
-          if (extSub) {
-            mainSubId = extSub.id;
-          } else if (engDubtitle) {
-            mainSubId = engDubtitle.id;
-          } else if (engDialogue) {
-            mainSubId = engDialogue.id;
+          if (isEngAudio) {
+            // For English Dub:
+            // 1) Embedded Dubtitle / SDH
+            // 2) External Whisper SRT
+            // 3) Default English Subtitle
+            // 4) Other English Dialogue
+            if (engDubtitle) {
+              mainSubId = engDubtitle.id;
+            } else if (extSub) {
+              mainSubId = extSub.id;
+            } else if (defaultEngSub) {
+              mainSubId = defaultEngSub.id;
+            } else if (engDialogue) {
+              mainSubId = engDialogue.id;
+            }
+          } else {
+            // For Japanese / other original languages:
+            // 1) Default English translation
+            // 2) External Whisper SRT
+            // 3) Other English dialogue
+            // 4) Embedded Dubtitle
+            if (defaultEngSub) {
+              mainSubId = defaultEngSub.id;
+            } else if (extSub) {
+              mainSubId = extSub.id;
+            } else if (engDialogue) {
+              mainSubId = engDialogue.id;
+            } else if (engDubtitle) {
+              mainSubId = engDubtitle.id;
+            }
           }
         }
         setSelectedMainSubId(mainSubId);
@@ -176,6 +300,9 @@ export const VideoPlayer: React.FC<VideoPlayerProps> = ({
           topSubId = seasonPref.topSubtitleTrackId;
           topEnabled = seasonPref.topSubEnabled;
         } else {
+          const selectedMain = meta.subtitleTracks.find((s) => s.id === mainSubId);
+          const isMainFull = selectedMain && /full|all/i.test(selectedMain.title);
+
           const engSigns = meta.subtitleTracks.find(
             (s) =>
               (s.language === 'eng' || s.language === 'en') &&
@@ -184,7 +311,7 @@ export const VideoPlayer: React.FC<VideoPlayerProps> = ({
           );
           if (engSigns) {
             topSubId = engSigns.id;
-            topEnabled = true;
+            topEnabled = !isMainFull;
           }
         }
 
@@ -215,63 +342,222 @@ export const VideoPlayer: React.FC<VideoPlayerProps> = ({
     };
   }, [episode.filePath, folderPath]);
 
-  // 2. Subtitle Extraction when Main Sub changes
+  // 2. Subtitle Extraction & JASSUB Rendering
   useEffect(() => {
-    if (!metadata || !selectedMainSubId) {
-      setMainCues([]);
-      return;
+    let isCancelled = false;
+
+    async function loadSubtitles() {
+      if (!metadata) return;
+
+      const video = videoRef.current;
+      const port = serverPortRef.current;
+
+      const mainTrack = metadata.subtitleTracks.find((s) => s.id === selectedMainSubId);
+      const topTrack = topSubEnabled ? metadata.subtitleTracks.find((s) => s.id === selectedTopSubId) : null;
+
+      setSubtitlesLoading(true);
+
+      try {
+        const [mainRes, topRes] = await Promise.all([
+          mainTrack
+            ? window.electronAPI.extractSubtitleTrack(
+                metadata.filePath,
+                mainTrack.id,
+                mainTrack.index,
+                mainTrack.type === 'external',
+                mainTrack.filePath
+              )
+            : Promise.resolve(null),
+          topTrack
+            ? window.electronAPI.extractSubtitleTrack(
+                metadata.filePath,
+                topTrack.id,
+                topTrack.index,
+                topTrack.type === 'external',
+                topTrack.filePath
+              )
+            : Promise.resolve(null),
+        ]);
+
+        if (isCancelled) return;
+
+        let assContent = '';
+        const assFonts: string[] = [];
+        let newMainCues: SubtitleCue[] = [];
+        let newTopCues: SubtitleCue[] = [];
+
+        // 1. Process Main Track
+        if (mainRes) {
+          if (mainRes.format === 'ass' && mainRes.content) {
+            assContent = mainRes.content;
+            if (mainRes.fonts) assFonts.push(...mainRes.fonts);
+            // Pre-parse ASS dialogue cues as fallback for HTML overlay
+            newMainCues = parseAssToCues(mainRes.content);
+          } else if (mainRes.cues) {
+            newMainCues = mainRes.cues;
+          }
+        }
+
+        // 2. Process Top Track
+        if (topRes) {
+          if (topRes.format === 'ass' && topRes.content) {
+            assContent = assContent ? combineAss(assContent, topRes.content) : topRes.content;
+            if (topRes.fonts) assFonts.push(...topRes.fonts);
+            newTopCues = parseAssToCues(topRes.content);
+          } else if (topRes.cues) {
+            newTopCues = topRes.cues;
+          }
+        }
+
+        setMainCues(newMainCues);
+        setTopCues(newTopCues);
+
+        // Clean up previous JASSUB instance
+        if (jassubRef.current) {
+          try {
+            await jassubRef.current.destroy();
+          } catch {}
+          jassubRef.current = null;
+        }
+
+        if (isCancelled) return;
+
+        const effectivePort = mainRes?.port || topRes?.port || serverPortRef.current || port;
+        if (effectivePort) serverPortRef.current = effectivePort;
+
+        // If we have valid ASS content, initialize JASSUB!
+        const hasValidAss = Boolean(
+          assContent &&
+          assContent.trim().length > 50 &&
+          /\[Events\]/i.test(assContent)
+        );
+
+        if (hasValidAss && video) {
+          try {
+            const uniqueFonts = [...new Set(assFonts)]
+              .filter((f) => !f.toLowerCase().includes('arialunicodems') && !f.toLowerCase().endsWith('.ttc'))
+              .slice(0, 8);
+
+            console.log(
+              `[VideoPlayer] Initializing JASSUB with ${uniqueFonts.length} fonts, timeOffset: ${
+                streamStartTimeRef.current + syncOffsetRef.current
+              }`
+            );
+            const jassub = new JASSUB({
+              video,
+              subContent: assContent,
+              fonts: uniqueFonts,
+              workerUrl,
+              wasmUrl,
+              modernWasmUrl,
+              timeOffset: streamStartTimeRef.current + syncOffsetRef.current,
+              debug: false,
+            });
+            jassubRef.current = jassub;
+
+            // Catch any worker-level font loading/wasm init errors quietly and fall back to HTML overlay
+            jassub.ready.catch((err) => {
+              console.warn('[VideoPlayer] JASSUB worker init failed, using HTML subtitle overlay fallback:', err);
+              if (jassubRef.current === jassub) {
+                try {
+                  jassub.destroy().catch(() => {});
+                } catch {}
+                jassubRef.current = null;
+              }
+            });
+          } catch (err) {
+            console.error('[VideoPlayer] Failed to initialize JASSUB:', err);
+          }
+        }
+      } catch (err) {
+        console.error('[VideoPlayer] Error loading subtitles:', err);
+      } finally {
+        if (!isCancelled) {
+          setSubtitlesLoading(false);
+        }
+      }
     }
 
-    const track = metadata.subtitleTracks.find((s) => s.id === selectedMainSubId);
-    if (!track) {
-      setMainCues([]);
-      return;
-    }
+    loadSubtitles();
 
-    window.electronAPI
-      .extractSubtitleTrack(
-        metadata.filePath,
-        track.id,
-        track.index,
-        track.type === 'external',
-        track.filePath
-      )
-      .then((cues) => {
-        setMainCues(cues);
-      })
-      .catch((err) => {
-        console.error('Failed to extract main subtitles:', err);
-      });
-  }, [metadata, selectedMainSubId]);
+    return () => {
+      isCancelled = true;
+      if (jassubRef.current) {
+        jassubRef.current.destroy().catch(() => {});
+        jassubRef.current = null;
+      }
+    };
+  }, [metadata, selectedMainSubId, selectedTopSubId, topSubEnabled]);
 
-  // 3. Subtitle Extraction when Top Sub changes
+  // Player Unmount Cleanup: Stop video, destroy JASSUB, and terminate all backend FFmpeg streams
   useEffect(() => {
-    if (!metadata || !selectedTopSubId || !topSubEnabled) {
-      setTopCues([]);
-      return;
-    }
+    return () => {
+      if (videoRef.current) {
+        try {
+          videoRef.current.pause();
+          videoRef.current.removeAttribute('src');
+          videoRef.current.load();
+        } catch {}
+      }
+      if (jassubRef.current) {
+        try {
+          jassubRef.current.destroy().catch(() => {});
+        } catch {}
+        jassubRef.current = null;
+      }
+      if (window.electronAPI) {
+        window.electronAPI.stopVideoStream().catch(() => {});
+      }
+    };
+  }, []);
 
-    const track = metadata.subtitleTracks.find((s) => s.id === selectedTopSubId);
-    if (!track) {
-      setTopCues([]);
-      return;
-    }
+  // Synchronize JASSUB when paused or seeking while paused
+  useEffect(() => {
+    const video = videoRef.current;
+    if (!video) return;
 
-    window.electronAPI
-      .extractSubtitleTrack(
-        metadata.filePath,
-        track.id,
-        track.index,
-        track.type === 'external',
-        track.filePath
-      )
-      .then((cues) => {
-        setTopCues(cues);
-      })
-      .catch((err) => {
-        console.error('Failed to extract top subtitles:', err);
-      });
-  }, [metadata, selectedTopSubId, topSubEnabled]);
+    const handlePauseOrSeek = () => {
+      const jassub = jassubRef.current;
+      if (!jassub || !(jassub as any).renderer) return;
+
+      // Only manually render when paused (during playback, requestVideoFrameCallback handles rendering smoothly)
+      if (video.paused) {
+        try {
+          jassub.manualRender(
+            {
+              expectedDisplayTime: performance.now(),
+              width: video.videoWidth || 1920,
+              height: video.videoHeight || 1080,
+              mediaTime: video.currentTime,
+            },
+            true
+          );
+        } catch {}
+      }
+    };
+
+    video.addEventListener('seeked', handlePauseOrSeek);
+    video.addEventListener('pause', handlePauseOrSeek);
+
+    return () => {
+      video.removeEventListener('seeked', handlePauseOrSeek);
+      video.removeEventListener('pause', handlePauseOrSeek);
+    };
+  }, []);
+
+  // Keep the Chromium compositor awake during playback so video frames never freeze/blank
+  // when mouse is idle, UI is hidden, and no subtitles are on screen
+  useEffect(() => {
+    if (!isPlaying) return;
+    let animId: number;
+    const pulse = () => {
+      animId = requestAnimationFrame(pulse);
+    };
+    animId = requestAnimationFrame(pulse);
+    return () => {
+      if (animId) cancelAnimationFrame(animId);
+    };
+  }, [isPlaying]);
 
   // Save season preference whenever audio/sub selection changes
   const persistSeasonRule = useCallback(
@@ -308,12 +594,31 @@ export const VideoPlayer: React.FC<VideoPlayerProps> = ({
     setStreamStartTime(actualStartTime);
     setVideoElementTime(0);
 
+    const portMatch = url.match(/http:\/\/127\.0\.0\.1:(\d+)/);
+    if (portMatch) {
+      serverPortRef.current = parseInt(portMatch[1], 10);
+    }
+    if (jassubRef.current && (jassubRef.current as any).renderer) {
+      try {
+        jassubRef.current.timeOffset = actualStartTime + syncOffsetRef.current;
+        jassubRef.current.manualRender(
+          {
+            expectedDisplayTime: performance.now(),
+            width: video.videoWidth || 1920,
+            height: video.videoHeight || 1080,
+            mediaTime: 0,
+          },
+          true
+        );
+      } catch {}
+    }
+
     // 2. Pause existing decoder context before changing source to prevent hardware decoder deadlock
     try {
       video.pause();
     } catch {}
 
-    // 3. Clear existing source & play new stream seamlessly
+    // 3. Set new source and play
     video.src = url;
 
     const playPromise = video.play();
@@ -453,7 +758,46 @@ export const VideoPlayer: React.FC<VideoPlayerProps> = ({
   const handleSelectAudio = useCallback(
     async (audioIdx: number) => {
       setSelectedAudioIndex(audioIdx);
-      persistSeasonRule(audioIdx, selectedMainSubId, selectedTopSubId, topSubEnabled, syncOffset);
+
+      // Smartly adjust default subtitle when switching audio track language
+      let newMainSubId = selectedMainSubId;
+      if (metadata) {
+        const newAudio = metadata.audioTracks.find((t) => t.audioIndex === audioIdx);
+        const isEng =
+          newAudio &&
+          (newAudio.language === 'eng' ||
+            newAudio.language === 'en' ||
+            /english|dub/i.test(newAudio.title));
+
+        if (isEng) {
+          // Switch to English Dubtitles / SDH
+          const dubTrack = metadata.subtitleTracks.find(
+            (s) =>
+              (s.language === 'eng' || s.language === 'en') &&
+              (s.isDubtitle || /sdh|dubtitle|hearing impaired/i.test(s.title)) &&
+              !s.isSigns
+          );
+          if (dubTrack) {
+            newMainSubId = dubTrack.id;
+            setSelectedMainSubId(newMainSubId);
+          }
+        } else {
+          // Switch to Japanese: choose English translation
+          const transTrack = metadata.subtitleTracks.find(
+            (s) =>
+              (s.language === 'eng' || s.language === 'en') &&
+              !s.isDubtitle &&
+              !/sdh|dubtitle/i.test(s.title) &&
+              !s.isSigns
+          );
+          if (transTrack) {
+            newMainSubId = transTrack.id;
+            setSelectedMainSubId(newMainSubId);
+          }
+        }
+      }
+
+      persistSeasonRule(audioIdx, newMainSubId, selectedTopSubId, topSubEnabled, syncOffset);
 
       const seq = ++seekSeqRef.current;
       try {
@@ -471,6 +815,7 @@ export const VideoPlayer: React.FC<VideoPlayerProps> = ({
     },
     [
       episode.filePath,
+      metadata,
       selectedMainSubId,
       selectedTopSubId,
       topSubEnabled,
@@ -513,6 +858,9 @@ export const VideoPlayer: React.FC<VideoPlayerProps> = ({
     (delta: number) => {
       const nextOffset = Math.round((syncOffset + delta) * 10) / 10;
       setSyncOffset(nextOffset);
+      if (jassubRef.current) {
+        jassubRef.current.timeOffset = streamStartTimeRef.current + nextOffset;
+      }
       showRipple('sync', `Sub Sync: ${nextOffset > 0 ? `+${nextOffset}s` : `${nextOffset}s`}`);
       persistSeasonRule(selectedAudioIndex, selectedMainSubId, selectedTopSubId, topSubEnabled, nextOffset);
     },
@@ -620,14 +968,22 @@ export const VideoPlayer: React.FC<VideoPlayerProps> = ({
     onClose,
   ]);
 
-  // Controls are visible when mouse moves, or if video is paused, or while loading
-  const areControlsVisible = showControls || !isPlaying || loading;
+  // Controls are visible when mouse moves, or if video is paused, or while loading, or if a modal/drawer is open
+  const areControlsVisible = showControls || !isPlaying || loading || isTrackControlsOpen || isEpisodeDrawerOpen;
+
+  const handleVideoError = useCallback((e: React.SyntheticEvent<HTMLVideoElement>) => {
+    const video = e.currentTarget;
+    const mediaError = video.error;
+    console.warn('[VideoPlayer] Video element error:', mediaError?.code, mediaError?.message);
+  }, []);
 
   return (
     <div
       ref={containerRef}
       onMouseMove={resetControlsTimer}
-      className="relative w-screen h-screen bg-black overflow-hidden flex items-center justify-center select-none"
+      className={`fixed inset-0 z-50 w-screen h-screen bg-black overflow-hidden flex items-center justify-center select-none ${
+        !areControlsVisible ? 'hide-cursor cursor-none' : ''
+      }`}
     >
       {/* Native Video Element */}
       <video
@@ -641,18 +997,28 @@ export const VideoPlayer: React.FC<VideoPlayerProps> = ({
         onPlay={() => setIsPlaying(true)}
         onPause={() => setIsPlaying(false)}
         onEnded={handleEnded}
-        onError={(e) => {
-          console.warn('[VideoPlayer] Video element reported error:', e);
+        onError={handleVideoError}
+        className="w-full h-full object-contain pointer-events-none bg-black"
+        style={{
+          transform: 'translateZ(0)',
+          backfaceVisibility: 'hidden',
         }}
-        className="w-full h-full object-contain pointer-events-none"
       />
+
+      {/* GPU Compositor Keep-Alive: ensures Chromium presents video frames even when UI is hidden & mouse is still */}
+      <div className="compositor-keep-alive" aria-hidden="true" />
 
       {/* Instant Single-Click Play/Pause Surface */}
       {/* Clicking anywhere immediately pauses/plays with ZERO delay */}
       <div
-        onClick={togglePlay}
+        onClick={() => {
+          togglePlay();
+          resetControlsTimer();
+        }}
         onDoubleClick={toggleFullscreen}
-        className="absolute inset-0 cursor-pointer z-10"
+        className={`absolute inset-0 z-10 ${
+          areControlsVisible ? 'cursor-default' : 'cursor-none'
+        }`}
       />
 
       {/* Dual Subtitles Overlay (Top Signs & Bottom Dialogue) */}
@@ -664,6 +1030,7 @@ export const VideoPlayer: React.FC<VideoPlayerProps> = ({
         syncOffset={syncOffset}
         fontSize={fontSize}
         hasOutline={settings.subtitlesOutline}
+        controlsVisible={areControlsVisible}
       />
 
       {/* YouTube Style Animated Seeking Ripple */}
@@ -694,19 +1061,59 @@ export const VideoPlayer: React.FC<VideoPlayerProps> = ({
             <ArrowLeft className="w-5 h-5" />
           </button>
 
-          <div>
-            <div className="flex items-center space-x-2">
-              <span className="px-2 py-0.5 rounded text-xs font-bold bg-red-600 text-white">
-                {episode.episodeNumber}
+          <div className="min-w-0">
+            <div className="flex items-center space-x-2.5">
+              <span className="px-2 py-0.5 rounded text-xs font-bold bg-red-600 text-white shrink-0">
+                {parsed.episodeLabel || episode.episodeNumber}
               </span>
-              <h1 className="text-sm md:text-base font-bold text-white tracking-tight truncate max-w-md md:max-w-2xl">
-                {episode.fileName}
+              <h1
+                className="text-sm md:text-base font-bold text-white tracking-tight truncate max-w-md md:max-w-2xl"
+                title={episode.fileName}
+              >
+                {parsed.seriesTitle
+                  ? `${parsed.seriesTitle}${
+                      parsed.displayTitle && parsed.displayTitle !== parsed.seriesTitle
+                        ? ` — ${parsed.displayTitle}`
+                        : ''
+                    }`
+                  : parsed.displayTitle || episode.fileName}
               </h1>
+              {parsed.tags.length > 0 && (
+                <div className="hidden lg:flex items-center space-x-1 shrink-0">
+                  {parsed.tags.slice(0, 3).map((tag: string) => (
+                    <span
+                      key={tag}
+                      className="px-1.5 py-0.5 rounded text-[10px] font-mono font-medium bg-white/10 text-zinc-300 border border-white/10"
+                    >
+                      {tag}
+                    </span>
+                  ))}
+                </div>
+              )}
             </div>
           </div>
         </div>
 
         <div className="flex items-center space-x-2.5">
+          {/* Subtitle Loading Spinner */}
+          {subtitlesLoading && (
+            <div className="flex items-center space-x-1.5 px-3 py-1.5 rounded-xl bg-indigo-500/20 border border-indigo-500/40 text-xs text-indigo-300 backdrop-blur-md animate-pulse">
+              <div className="w-3 h-3 border-2 border-indigo-400 border-t-transparent rounded-full animate-spin" />
+              <span>Loading Subtitles...</span>
+            </div>
+          )}
+
+          {/* Dub Sub / SDH Active Indicator */}
+          {metadata?.hasEmbeddedDubtitles && (
+            <div
+              title="Embedded English Dubtitles (SDH) available in this episode"
+              className="hidden sm:flex items-center space-x-1 px-2.5 py-1.5 rounded-xl bg-purple-500/20 border border-purple-500/35 text-[11px] font-bold text-purple-300"
+            >
+              <Subtitles className="w-3.5 h-3.5 text-purple-400" />
+              <span>Dub Sub Ready</span>
+            </div>
+          )}
+
           {/* Top Subtitle Quick 1-Click Toggle Button on the bar */}
           <button
             onClick={handleToggleTopSub}
@@ -754,6 +1161,7 @@ export const VideoPlayer: React.FC<VideoPlayerProps> = ({
           currentTime={currentAbsoluteTime}
           duration={duration}
           filePath={episode.filePath}
+          serverPort={serverPortRef.current}
           onSeek={handleSeek}
         />
 

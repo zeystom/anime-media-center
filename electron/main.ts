@@ -4,18 +4,18 @@ import fs from 'fs';
 import { fileURLToPath } from 'url';
 import { storage } from './storage';
 import { streamServer } from './server';
-import { probeMkv, extractEmbeddedSubtitle, parseSrt, findPrecedingKeyframe } from './ffmpeg';
+import { probeMkv, extractEmbeddedSubtitle, extractEmbeddedAss, extractEmbeddedFonts, filterFontsForAss, parseSrt, findPrecedingKeyframe } from './ffmpeg';
 import { whisperManager } from './whisper';
 import { AnimeFolder, Episode, PlaybackProgress, SeasonPreference } from './types';
 
 const __filename = fileURLToPath(import.meta.url);
 const __dirname = path.dirname(__filename);
 
-// Crucial: Hardware HEVC Decoding support for Chromium on Windows
-app.commandLine.appendSwitch('enable-features', 'PlatformHEVCDecoderSupport');
 // Disable DirectComposition video hardware overlays (MPO) to prevent mailbox desync & black screen crashes on UI hovers
 app.commandLine.appendSwitch('disable-direct-composition-video-overlays');
-app.commandLine.appendSwitch('disable-features', 'DirectCompositionVideoOverlays,UseOverlays');
+app.commandLine.appendSwitch('disable-features', 'DirectCompositionVideoOverlays');
+app.commandLine.appendSwitch('enable-gpu-rasterization');
+app.commandLine.appendSwitch('enable-zero-copy');
 app.commandLine.appendSwitch('ignore-gpu-blocklist');
 app.commandLine.appendSwitch('disable-backgrounding-occluded-windows');
 app.commandLine.appendSwitch('disable-renderer-backgrounding');
@@ -44,13 +44,39 @@ function parseEpisodeNumber(filename: string): string {
   return 'EP';
 }
 
-function scanFolderForEpisodes(folderPath: string, port: number): Episode[] {
+const dubtitleFolderCache = new Map<string, boolean>();
+
+async function checkFolderHasDubtitles(firstMkvPath: string, ffmpegPath: string): Promise<boolean> {
+  const folder = path.dirname(firstMkvPath);
+  if (dubtitleFolderCache.has(folder)) {
+    return dubtitleFolderCache.get(folder)!;
+  }
+  try {
+    const meta = await probeMkv(firstMkvPath, ffmpegPath);
+    const hasDub = Boolean(meta.hasEmbeddedDubtitles);
+    dubtitleFolderCache.set(folder, hasDub);
+    return hasDub;
+  } catch (e) {
+    dubtitleFolderCache.set(folder, false);
+    return false;
+  }
+}
+
+async function scanFolderForEpisodes(folderPath: string, port: number): Promise<Episode[]> {
   if (!fs.existsSync(folderPath)) return [];
 
   try {
     const files = fs.readdirSync(folderPath);
     const mkvFiles = files.filter((f) => f.toLowerCase().endsWith('.mkv'));
     const srtFiles = new Set(files.filter((f) => f.toLowerCase().endsWith('.srt')));
+
+    mkvFiles.sort((a, b) => a.localeCompare(b, undefined, { numeric: true, sensitivity: 'base' }));
+
+    const settings = storage.getSettings();
+    let hasDubtitles = false;
+    if (mkvFiles.length > 0) {
+      hasDubtitles = await checkFolderHasDubtitles(path.join(folderPath, mkvFiles[0]), settings.ffmpegPath);
+    }
 
     const episodes: Episode[] = [];
 
@@ -87,6 +113,7 @@ function scanFolderForEpisodes(folderPath: string, port: number): Episode[] {
         size: stat.size,
         hasExternalSrt,
         externalSrtPath,
+        hasEmbeddedDubtitles: hasDubtitles,
         thumbnailUrl: `http://127.0.0.1:${port}/thumb?file=${encodeURIComponent(fullPath)}&time=60`,
       });
     }
@@ -103,6 +130,16 @@ function scanFolderForEpisodes(folderPath: string, port: number): Episode[] {
 
 async function createWindow() {
   try {
+    // Set AppUserModelId for Windows taskbar & Start Menu integration
+    if (process.platform === 'win32') {
+      app.setAppUserModelId('com.animemediacenter.app');
+    }
+
+    // Determine custom application icon
+    const iconIco = path.join(__dirname, '../app-icon.ico');
+    const iconPng = path.join(__dirname, '../app-icon.png');
+    const appIcon = fs.existsSync(iconIco) ? iconIco : fs.existsSync(iconPng) ? iconPng : undefined;
+
     // Start local streaming server
     const serverPort = await streamServer.start();
 
@@ -116,6 +153,7 @@ async function createWindow() {
       minHeight: 700,
       backgroundColor: '#0f0f12',
       title: 'Anime Media Center & Whisper Studio',
+      icon: appIcon,
       autoHideMenuBar: true, // Auto-hide menu bar on Windows/Linux
       webPreferences: {
         preload: fs.existsSync(path.join(__dirname, 'preload.cjs'))
@@ -145,6 +183,15 @@ async function createWindow() {
         mainWindow?.webContents.toggleDevTools();
         event.preventDefault();
       }
+    });
+
+    // Forward renderer console to Node terminal
+    mainWindow.webContents.on('console-message', (_event, level, message, line, sourceId) => {
+      console.log(`[Renderer] [${level}] ${message} (${sourceId}:${line})`);
+    });
+
+    mainWindow.webContents.on('render-process-gone', (_event, details) => {
+      console.error('[Electron] Render process gone:', details.reason, details.exitCode);
     });
 
     // In dev mode, load Vite dev server; in production, load dist index.html
@@ -205,13 +252,16 @@ function setupIpcHandlers() {
 
     try {
       // 1. Check if the target root itself contains .mkv files
-      const rootEpisodes = scanFolderForEpisodes(targetRoot, port);
+      const rootEpisodes = await scanFolderForEpisodes(targetRoot, port);
       if (rootEpisodes.length > 0) {
+        const hasDubtitlesCount = rootEpisodes.filter((e) => e.hasEmbeddedDubtitles).length;
         animeFolders.push({
           folderPath: targetRoot,
           folderName: path.basename(targetRoot),
           episodes: rootEpisodes,
           hasSubtitlesCount: rootEpisodes.filter((e) => e.hasExternalSrt).length,
+          hasDubtitlesCount,
+          hasEmbeddedDubtitles: hasDubtitlesCount > 0,
           totalEpisodes: rootEpisodes.length,
         });
       }
@@ -221,13 +271,16 @@ function setupIpcHandlers() {
       for (const entry of entries) {
         if (entry.isDirectory()) {
           const subFolderPath = path.join(targetRoot, entry.name);
-          const episodes = scanFolderForEpisodes(subFolderPath, port);
+          const episodes = await scanFolderForEpisodes(subFolderPath, port);
           if (episodes.length > 0) {
+            const hasDubtitlesCount = episodes.filter((e) => e.hasEmbeddedDubtitles).length;
             animeFolders.push({
               folderPath: subFolderPath,
               folderName: entry.name,
               episodes,
               hasSubtitlesCount: episodes.filter((e) => e.hasExternalSrt).length,
+              hasDubtitlesCount,
+              hasEmbeddedDubtitles: hasDubtitlesCount > 0,
               totalEpisodes: episodes.length,
             });
           }
@@ -241,7 +294,7 @@ function setupIpcHandlers() {
   });
 
   ipcMain.handle('get-folder-episodes', async (_event, folderPath) => {
-    return scanFolderForEpisodes(folderPath, streamServer.getPort());
+    return await scanFolderForEpisodes(folderPath, streamServer.getPort());
   });
 
   ipcMain.handle('probe-video', async (_event, filePath) => {
@@ -249,20 +302,58 @@ function setupIpcHandlers() {
     return await probeMkv(filePath, settings.ffmpegPath);
   });
 
+  ipcMain.handle('stop-video-stream', async () => {
+    streamServer.stopActiveStreams();
+    return { success: true };
+  });
+
   ipcMain.handle('extract-subtitle-track', async (_event, filePath, trackId, trackIndex, isExternal, externalPath) => {
     const settings = storage.getSettings();
+    const port = streamServer.getPort();
 
     if (isExternal && externalPath && fs.existsSync(externalPath)) {
       const content = fs.readFileSync(externalPath, 'utf-8');
-      return parseSrt(content);
+      return {
+        format: 'srt',
+        port,
+        cues: parseSrt(content),
+      };
     }
 
     if (trackIndex !== null && trackIndex !== undefined) {
-      const content = await extractEmbeddedSubtitle(filePath, trackIndex, settings.ffmpegPath);
-      return parseSrt(content);
+      // Check if this track is ASS/SSA
+      const metadata = await probeMkv(filePath, settings.ffmpegPath);
+      const track = metadata.subtitleTracks.find((t) => t.index === trackIndex);
+      const isAss = track && /ass|ssa/i.test(track.codec || '');
+
+      if (isAss) {
+        const [assContent, rawFonts] = await Promise.all([
+          extractEmbeddedAss(filePath, trackIndex, settings.ffmpegPath),
+          extractEmbeddedFonts(filePath, settings.ffmpegPath, port),
+        ]);
+        const fonts = filterFontsForAss(assContent, rawFonts);
+        return {
+          format: 'ass',
+          content: assContent,
+          fonts,
+          port,
+          cues: [],
+        };
+      } else {
+        const content = await extractEmbeddedSubtitle(filePath, trackIndex, settings.ffmpegPath);
+        return {
+          format: 'srt',
+          port,
+          cues: parseSrt(content),
+        };
+      }
     }
 
-    return [];
+    return {
+      format: 'srt',
+      port,
+      cues: [],
+    };
   });
 
   ipcMain.handle('save-playback-progress', async (_event, progress: PlaybackProgress) => {
@@ -285,7 +376,10 @@ function setupIpcHandlers() {
     const settings = storage.getSettings();
     const actualStartTime = await findPrecedingKeyframe(filePath, startTime, settings.ffmpegPath);
     const port = streamServer.getPort();
-    const url = `http://127.0.0.1:${port}/stream?file=${encodeURIComponent(filePath)}&audioTrack=${audioTrackIndex}&startTime=${startTime}&_t=${Date.now()}`;
+    // Pass the keyframe-aligned actualStartTime to the server, not the raw startTime.
+    // This ensures FFmpeg seeks to the exact same keyframe that actualStartTime represents,
+    // preventing timestamp misalignment between the stream and the UI.
+    const url = `http://127.0.0.1:${port}/stream?file=${encodeURIComponent(filePath)}&audioTrack=${audioTrackIndex}&startTime=${actualStartTime}&_t=${Date.now()}`;
     return {
       url,
       actualStartTime,
@@ -304,6 +398,10 @@ function setupIpcHandlers() {
 
   ipcMain.handle('cancel-whisper', async () => {
     whisperManager.cancel();
+  });
+
+  ipcMain.handle('get-whisper-status', async () => {
+    return whisperManager.getStatus();
   });
 
   ipcMain.handle('open-folder', async (_event, folderPath: string) => {

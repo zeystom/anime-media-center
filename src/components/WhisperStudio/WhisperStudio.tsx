@@ -1,4 +1,4 @@
-import React, { useState, useEffect } from 'react';
+import React, { useState, useEffect, useMemo } from 'react';
 import {
   FolderOpen,
   Sparkles,
@@ -9,6 +9,7 @@ import {
   Check,
 } from 'lucide-react';
 import { AnimeFolder, Episode, AudioTrack, WhisperLogMessage, WhisperQueueItem } from '../../types';
+import { cleanSeriesTitle, cleanEpisodeTitle } from '../../utils/format';
 import { TerminalLog } from './TerminalLog';
 
 interface WhisperStudioProps {
@@ -34,6 +35,38 @@ export const WhisperStudio: React.FC<WhisperStudioProps> = ({
   const [queue, setQueue] = useState<WhisperQueueItem[]>([]);
   const [logs, setLogs] = useState<WhisperLogMessage[]>([]);
 
+  // Synchronize initialFolder when user opens Whisper from library (unless job is running)
+  useEffect(() => {
+    if (initialFolder?.folderPath && !isProcessing) {
+      setSelectedFolder(initialFolder.folderPath);
+    }
+  }, [initialFolder, isProcessing]);
+
+  // Initial Status Recovery on Mount (re-syncs state if app reloaded or remounted)
+  useEffect(() => {
+    if (!window.electronAPI) return;
+
+    (async () => {
+      try {
+        const status = await window.electronAPI.getWhisperStatus();
+        if (status.isRunning) {
+          setIsProcessing(true);
+          setCurrentFile(status.currentFile);
+          setOverallProgress(status.progress);
+          setQueue(status.queue);
+          if (status.folderPath) {
+            setSelectedFolder(status.folderPath);
+          }
+          if (status.logs && status.logs.length > 0) {
+            setLogs(status.logs);
+          }
+        }
+      } catch (err) {
+        console.error('Failed to get whisper status on mount:', err);
+      }
+    })();
+  }, []);
+
   // When selected folder changes, reload episodes and probe 1st file
   useEffect(() => {
     if (!selectedFolder) return;
@@ -55,7 +88,6 @@ export const WhisperStudio: React.FC<WhisperStudioProps> = ({
           setSampleAudioTracks(meta.audioTracks);
 
           // Auto-detect English track for --ff_track (1-indexed track number)
-          // 1st audio track is track 1, 2nd is track 2...
           let engTrackNum = 1;
           for (let i = 0; i < meta.audioTracks.length; i++) {
             const t = meta.audioTracks[i];
@@ -85,7 +117,11 @@ export const WhisperStudio: React.FC<WhisperStudioProps> = ({
     if (!window.electronAPI) return;
 
     const unsubLog = window.electronAPI.onWhisperLog((log) => {
-      setLogs((prev) => [...prev, log]);
+      setLogs((prev) => {
+        // Keep up to 350 items in memory to prevent DOM lag
+        const updated = [...prev, log];
+        return updated.length > 350 ? updated.slice(-350) : updated;
+      });
     });
 
     const unsubProgress = window.electronAPI.onWhisperProgress((data) => {
@@ -160,6 +196,7 @@ export const WhisperStudio: React.FC<WhisperStudioProps> = ({
   };
 
   const existingSrtCount = episodes.filter((e) => e.hasExternalSrt).length;
+  const cleanTitle = useMemo(() => cleanSeriesTitle(selectedFolder), [selectedFolder]);
 
   return (
     <div className="flex-1 flex flex-col h-[calc(100vh-3.5rem)] overflow-hidden bg-[#0f0f12] p-6 space-y-6">
@@ -185,7 +222,7 @@ export const WhisperStudio: React.FC<WhisperStudioProps> = ({
           {isProcessing ? (
             <button
               onClick={handleCancel}
-              className="flex items-center space-x-2 px-5 py-2.5 rounded-xl bg-red-600 hover:bg-red-500 text-white font-bold text-xs shadow-lg shadow-red-600/30 transition-all"
+              className="flex items-center space-x-2 px-5 py-2.5 rounded-xl bg-red-600 hover:bg-red-500 text-white font-bold text-xs shadow-lg shadow-red-600/30 transition-all active:scale-95"
             >
               <StopCircle className="w-4 h-4" />
               <span>Cancel Queue</span>
@@ -206,12 +243,19 @@ export const WhisperStudio: React.FC<WhisperStudioProps> = ({
       {/* Main Grid: Left Controls (1/3) & Right Live Terminal (2/3) */}
       <div className="flex-1 grid grid-cols-1 lg:grid-cols-12 gap-6 min-h-0">
         {/* Left Column: Configuration & Audio Selector */}
-        <div className="lg:col-span-5 flex flex-col space-y-4 overflow-y-auto pr-1">
+        <div className="lg:col-span-5 flex flex-col space-y-4 overflow-y-auto pr-1 scrollbar-thin">
           {/* 1. Folder Selection Card */}
           <div className="p-4 rounded-xl bg-[#141418] border border-zinc-800 space-y-3">
-            <span className="text-xs font-bold uppercase tracking-wider text-zinc-400 block">
-              1. Target Anime Season Folder
-            </span>
+            <div className="flex items-center justify-between">
+              <span className="text-xs font-bold uppercase tracking-wider text-zinc-400 block">
+                1. Target Anime Season Folder
+              </span>
+              {cleanTitle && (
+                <span className="text-xs font-bold text-indigo-400 truncate max-w-[200px]" title={cleanTitle}>
+                  {cleanTitle}
+                </span>
+              )}
+            </div>
 
             <div className="flex items-center space-x-2">
               <input
@@ -220,10 +264,12 @@ export const WhisperStudio: React.FC<WhisperStudioProps> = ({
                 value={selectedFolder}
                 placeholder="Select an anime season directory..."
                 className="flex-1 px-3 py-2 rounded-lg bg-zinc-900 border border-zinc-700/80 text-xs font-mono text-zinc-200 truncate focus:outline-none"
+                title={selectedFolder}
               />
               <button
                 onClick={handleBrowseFolder}
-                className="flex items-center space-x-1.5 px-3 py-2 rounded-lg bg-zinc-800 hover:bg-zinc-700 text-zinc-200 text-xs font-medium border border-zinc-700 transition-colors shrink-0"
+                disabled={isProcessing}
+                className="flex items-center space-x-1.5 px-3 py-2 rounded-lg bg-zinc-800 hover:bg-zinc-700 text-zinc-200 text-xs font-medium border border-zinc-700 transition-colors shrink-0 disabled:opacity-50"
               >
                 <FolderOpen className="w-4 h-4 text-zinc-400" />
                 <span>Browse</span>
@@ -231,16 +277,24 @@ export const WhisperStudio: React.FC<WhisperStudioProps> = ({
             </div>
 
             {episodes.length > 0 && (
-              <div className="flex items-center justify-between text-xs text-zinc-400 pt-1">
-                <span>{episodes.length} MKV episodes detected</span>
-                <span className="text-emerald-400 font-semibold">
-                  {existingSrtCount} already have .srt
-                </span>
+              <div className="flex flex-col space-y-1.5 text-xs text-zinc-400 pt-1">
+                <div className="flex items-center justify-between">
+                  <span>{episodes.length} MKV episodes detected</span>
+                  <span className="text-emerald-400 font-semibold">
+                    {existingSrtCount} already have .srt
+                  </span>
+                </div>
+                {episodes.some((e) => e.hasEmbeddedDubtitles) && (
+                  <div className="flex items-center space-x-1.5 text-purple-300 bg-purple-500/15 border border-purple-500/30 px-2 py-1 rounded-md text-[11px] font-medium">
+                    <Sparkles className="w-3.5 h-3.5 shrink-0 text-purple-400" />
+                    <span>Embedded Dubtitles (SDH) detected. Whisper generation is optional!</span>
+                  </div>
+                )}
               </div>
             )}
           </div>
 
-          {/* 2. Audio Track Selection Card (Auto-highlights English) */}
+          {/* 2. Audio Track Selection Card */}
           <div className="p-4 rounded-xl bg-[#141418] border border-zinc-800 space-y-3">
             <div className="flex items-center justify-between">
               <span className="text-xs font-bold uppercase tracking-wider text-zinc-400 flex items-center space-x-1.5">
@@ -260,11 +314,12 @@ export const WhisperStudio: React.FC<WhisperStudioProps> = ({
                   return (
                     <button
                       key={track.audioIndex}
+                      disabled={isProcessing}
                       onClick={() => setSelectedAudioTrackNum(trackNum)}
                       className={`w-full flex items-center justify-between p-3 rounded-xl text-left transition-all border ${
                         isSelected
                           ? 'bg-indigo-600/20 border-indigo-500 text-white shadow-sm'
-                          : 'bg-zinc-900/60 border-zinc-800/80 text-zinc-300 hover:bg-zinc-800/60'
+                          : 'bg-zinc-900/60 border-zinc-800/80 text-zinc-300 hover:bg-zinc-800/60 disabled:opacity-50'
                       }`}
                     >
                       <div className="truncate mr-2">
@@ -306,9 +361,10 @@ export const WhisperStudio: React.FC<WhisperStudioProps> = ({
             <label className="flex items-center space-x-3 cursor-pointer">
               <input
                 type="checkbox"
+                disabled={isProcessing}
                 checked={skipExistingSrt}
                 onChange={(e) => setSkipExistingSrt(e.target.checked)}
-                className="w-4 h-4 rounded bg-zinc-900 border-zinc-700 text-red-600 focus:ring-0 cursor-pointer"
+                className="w-4 h-4 rounded bg-zinc-900 border-zinc-700 text-red-600 focus:ring-0 cursor-pointer disabled:opacity-50"
               />
               <span className="text-xs font-medium text-zinc-200">
                 Skip episodes that already have .srt files
@@ -316,56 +372,101 @@ export const WhisperStudio: React.FC<WhisperStudioProps> = ({
             </label>
 
             <div className="text-[11px] text-zinc-500 space-y-1 pt-1 font-mono">
-              <div>• Model: large-v3-turbo (English)</div>
+              <div>• Model: large-v3-turbo (faster-whisper)</div>
               <div>• Sentence alignment: --sentence --ff_sync</div>
+              <div>• Auto-mode: Transcribe (ENG) / Translate (JPN)</div>
               <div>• Max lines: 2 | Max width: 42 chars</div>
             </div>
           </div>
 
           {/* Queue Status List if active */}
           {queue.length > 0 && (
-            <div className="p-4 rounded-xl bg-[#141418] border border-zinc-800 space-y-2 flex-1 min-h-[140px] overflow-y-auto">
-              <div className="flex items-center justify-between text-xs font-bold uppercase text-zinc-400">
+            <div className="p-4 rounded-xl bg-[#141418] border border-zinc-800 space-y-2 flex-1 min-h-[160px] overflow-y-auto scrollbar-thin">
+              <div className="flex items-center justify-between text-xs font-bold uppercase text-zinc-400 pb-1 border-b border-zinc-800/80">
                 <span>Season Queue ({queue.length})</span>
                 <span className="text-indigo-400">
-                  {queue.filter((q) => q.status === 'completed').length} / {queue.length} Done
+                  {queue.filter((q) => q.status === 'completed' || q.status === 'skipped').length} /{' '}
+                  {queue.length} Done
                 </span>
               </div>
 
-              <div className="space-y-1.5 pt-1">
-                {queue.map((item) => (
-                  <div
-                    key={item.id}
-                    className="flex items-center justify-between p-2 rounded-lg bg-zinc-900/60 text-xs text-zinc-300 border border-zinc-800/60"
-                  >
-                    <span className="truncate max-w-[200px]" title={item.fileName}>
-                      {item.fileName}
-                    </span>
+              <div className="space-y-2 pt-1">
+                {queue.map((item) => {
+                  const parsed = cleanEpisodeTitle(item.fileName);
+                  const isCurrent = item.status === 'processing';
 
-                    <span className="shrink-0 ml-2">
-                      {item.status === 'completed' && (
-                        <span className="flex items-center space-x-1 text-emerald-400 text-[11px] font-semibold">
-                          <CheckCircle2 className="w-3.5 h-3.5" />
-                          <span>Done</span>
+                  return (
+                    <div
+                      key={item.id}
+                      className={`p-2.5 rounded-xl border flex flex-col space-y-1.5 transition-all ${
+                        isCurrent
+                          ? 'bg-indigo-600/15 border-indigo-500/50 shadow-sm'
+                          : item.status === 'completed'
+                          ? 'bg-zinc-900/60 border-zinc-800/80 text-zinc-300'
+                          : item.status === 'skipped'
+                          ? 'bg-zinc-900/30 border-zinc-800/30 text-zinc-500 opacity-60'
+                          : 'bg-zinc-900/40 border-zinc-800/40 text-zinc-400'
+                      }`}
+                    >
+                      <div className="flex items-center justify-between">
+                        <div className="flex items-center space-x-2 truncate mr-2">
+                          <span
+                            className={`px-1.5 py-0.5 rounded text-[10px] font-bold ${
+                              isCurrent
+                                ? 'bg-indigo-600 text-white'
+                                : item.status === 'completed'
+                                ? 'bg-emerald-500/20 text-emerald-400 border border-emerald-500/30'
+                                : 'bg-zinc-800 text-zinc-400'
+                            }`}
+                          >
+                            {parsed.episodeLabel}
+                          </span>
+                          <span
+                            className={`text-xs font-semibold truncate ${
+                              isCurrent ? 'text-indigo-300 font-bold' : 'text-zinc-200'
+                            }`}
+                            title={item.fileName}
+                          >
+                            {parsed.displayTitle}
+                          </span>
+                        </div>
+
+                        <span className="shrink-0 ml-1">
+                          {item.status === 'completed' && (
+                            <span className="flex items-center space-x-1 text-emerald-400 text-[11px] font-semibold">
+                              <CheckCircle2 className="w-3.5 h-3.5" />
+                              <span>Done</span>
+                            </span>
+                          )}
+                          {item.status === 'skipped' && (
+                            <span className="text-zinc-500 text-[11px]">Skipped</span>
+                          )}
+                          {item.status === 'processing' && (
+                            <span className="text-indigo-400 font-bold text-[11px] font-mono animate-pulse">
+                              {item.progress}% {item.speed || ''}
+                            </span>
+                          )}
+                          {item.status === 'pending' && (
+                            <span className="text-zinc-500 text-[11px]">Queued</span>
+                          )}
+                          {item.status === 'failed' && (
+                            <span className="text-red-400 text-[11px]">{item.error || 'Failed'}</span>
+                          )}
                         </span>
+                      </div>
+
+                      {/* Mini progress bar for currently processing item */}
+                      {isCurrent && (
+                        <div className="w-full h-1 bg-zinc-800 rounded-full overflow-hidden">
+                          <div
+                            className="h-full bg-gradient-to-r from-indigo-500 to-red-500 transition-all duration-300"
+                            style={{ width: `${Math.max(5, item.progress)}%` }}
+                          />
+                        </div>
                       )}
-                      {item.status === 'skipped' && (
-                        <span className="text-zinc-500 text-[11px]">Skipped</span>
-                      )}
-                      {item.status === 'processing' && (
-                        <span className="text-indigo-400 font-bold text-[11px] animate-pulse">
-                          {item.progress}% {item.speed || ''}
-                        </span>
-                      )}
-                      {item.status === 'pending' && (
-                        <span className="text-zinc-500 text-[11px]">Queued</span>
-                      )}
-                      {item.status === 'failed' && (
-                        <span className="text-red-400 text-[11px]">Failed</span>
-                      )}
-                    </span>
-                  </div>
-                ))}
+                    </div>
+                  );
+                })}
               </div>
             </div>
           )}
@@ -375,16 +476,24 @@ export const WhisperStudio: React.FC<WhisperStudioProps> = ({
         <div className="lg:col-span-7 flex flex-col h-full min-h-[400px] space-y-3">
           {/* Active Progress Bar Banner */}
           {isProcessing && currentFile && (
-            <div className="p-3 rounded-xl bg-zinc-900 border border-indigo-500/30 flex flex-col space-y-2">
+            <div className="p-3.5 rounded-2xl bg-zinc-900/90 border border-indigo-500/30 flex flex-col space-y-2 shadow-lg">
               <div className="flex items-center justify-between text-xs">
-                <span className="font-semibold text-zinc-200 truncate max-w-md">
-                  Transcribing: <span className="text-indigo-400">{currentFile}</span>
+                <div className="flex items-center space-x-2 truncate max-w-md">
+                  <span className="w-2 h-2 rounded-full bg-indigo-500 animate-pulse" />
+                  <span className="font-semibold text-zinc-200 truncate">
+                    Transcribing:{' '}
+                    <span className="text-indigo-400 font-bold">
+                      {cleanEpisodeTitle(currentFile).displayTitle}
+                    </span>
+                  </span>
+                </div>
+                <span className="font-mono font-bold text-indigo-400 text-sm">
+                  {overallProgress}%
                 </span>
-                <span className="font-mono font-bold text-indigo-400">{overallProgress}%</span>
               </div>
-              <div className="w-full h-1.5 rounded-full bg-zinc-800 overflow-hidden">
+              <div className="w-full h-2 rounded-full bg-zinc-800 overflow-hidden">
                 <div
-                  className="h-full bg-gradient-to-r from-indigo-500 to-red-500 rounded-full transition-all duration-300"
+                  className="h-full bg-gradient-to-r from-indigo-500 via-purple-500 to-red-500 rounded-full transition-all duration-300"
                   style={{ width: `${overallProgress}%` }}
                 />
               </div>

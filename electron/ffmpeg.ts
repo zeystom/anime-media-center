@@ -206,7 +206,8 @@ function parseFfmpegProbeOutput(filePath: string, stderr: string): VideoMetadata
       const isDefault = block.includes('(default)');
       const isForced = block.includes('(forced)') || /forced/i.test(title);
       const isSigns = isForced || /sign|song|signs|songs/i.test(title);
-      const isDubtitle = /dubtitle|sdh|dialogue|dialog|amzn|cr/i.test(title);
+      const isHearingImpaired = block.includes('(hearing impaired)') || /hearing impaired/i.test(title);
+      const isDubtitle = isHearingImpaired || /sdh|dubtitle|\bcc\b|closed caption/i.test(title) || /sdh|dubtitle/i.test(block);
 
       const codecMatch = entry.details.match(/^([a-zA-Z0-9_-]+)/);
       const codec = codecMatch ? codecMatch[1].toLowerCase() : 'subrip';
@@ -227,6 +228,14 @@ function parseFfmpegProbeOutput(filePath: string, stderr: string): VideoMetadata
       subtitleTracks.push(subTrack);
     }
   }
+
+  // Detect whether this file contains embedded English dubtitles (SDH / dubtitle)
+  const hasEmbeddedDubtitles = subtitleTracks.some(
+    (s) =>
+      (s.language === 'eng' || s.language === 'en') &&
+      (s.isDubtitle || /sdh|dubtitle|hearing impaired|\bcc\b/i.test(s.title)) &&
+      !s.isSigns
+  );
 
   // 3. Check for external .srt files in the same directory
   const baseNameWithoutExt = path.parse(fileName).name;
@@ -273,8 +282,12 @@ function parseFfmpegProbeOutput(filePath: string, stderr: string): VideoMetadata
     subtitleTracks,
     hasExternalSrt,
     externalSrtPath,
+    hasEmbeddedDubtitles,
   };
 }
+
+const inFlightAss = new Map<string, Promise<string>>();
+const inFlightSrt = new Map<string, Promise<string>>();
 
 export async function extractEmbeddedSubtitle(
   filePath: string,
@@ -286,74 +299,300 @@ export async function extractEmbeddedSubtitle(
   const cacheFile = path.join(cacheDir, `${fileHash}.srt`);
 
   if (fs.existsSync(cacheFile)) {
-    return fs.readFileSync(cacheFile, 'utf-8');
+    try {
+      const stat = fs.statSync(cacheFile);
+      if (stat.size > 0) {
+        return fs.readFileSync(cacheFile, 'utf-8');
+      } else {
+        fs.unlinkSync(cacheFile);
+      }
+    } catch {}
   }
 
-  return new Promise((resolve, reject) => {
+  const inFlight = inFlightSrt.get(cacheFile);
+  if (inFlight) return inFlight;
+
+  const promise = new Promise<string>((resolve) => {
     const args = [
       '-hide_banner',
       '-y',
       '-i', filePath,
       '-map', `0:${streamIndex}`,
-      '-f', 'srt',
+      '-vn',
+      '-an',
+      '-c:s', 'srt',
       cacheFile,
     ];
 
-    const child = spawn(ffmpegPath, args, { windowsHide: true });
-    let stderr = '';
-    child.stderr.on('data', (d) => { stderr += d.toString(); });
+    const child = spawn(ffmpegPath, args, {
+      windowsHide: true,
+      stdio: ['ignore', 'ignore', 'ignore'],
+    });
 
     child.on('close', (code) => {
-      if (fs.existsSync(cacheFile) && fs.statSync(cacheFile).size > 0) {
-        resolve(fs.readFileSync(cacheFile, 'utf-8'));
-      } else {
-        // If empty or failed, resolve empty
-        resolve('');
+      inFlightSrt.delete(cacheFile);
+      if (code === 0 && fs.existsSync(cacheFile)) {
+        try {
+          const stat = fs.statSync(cacheFile);
+          if (stat.size > 0) {
+            return resolve(fs.readFileSync(cacheFile, 'utf-8'));
+          }
+          fs.unlinkSync(cacheFile);
+        } catch {}
       }
+      resolve('');
     });
 
-    child.on('error', (err) => {
-      reject(err);
+    child.on('error', () => {
+      inFlightSrt.delete(cacheFile);
+      try {
+        if (fs.existsSync(cacheFile)) fs.unlinkSync(cacheFile);
+      } catch {}
+      resolve('');
     });
   });
+
+  inFlightSrt.set(cacheFile, promise);
+  return promise;
+}
+
+export async function extractEmbeddedAss(
+  filePath: string,
+  streamIndex: number,
+  ffmpegPath: string
+): Promise<string> {
+  const cacheDir = storage.getSubtitleCacheDir();
+  const fileHash = crypto.createHash('md5').update(`${filePath}:${streamIndex}`).digest('hex');
+  const cacheFile = path.join(cacheDir, `${fileHash}.ass`);
+
+  if (fs.existsSync(cacheFile)) {
+    try {
+      const stat = fs.statSync(cacheFile);
+      if (stat.size > 0) {
+        return fs.readFileSync(cacheFile, 'utf-8');
+      } else {
+        fs.unlinkSync(cacheFile);
+      }
+    } catch {}
+  }
+
+  const inFlight = inFlightAss.get(cacheFile);
+  if (inFlight) return inFlight;
+
+  const promise = new Promise<string>((resolve) => {
+    const args = [
+      '-hide_banner',
+      '-y',
+      '-i', filePath,
+      '-map', `0:${streamIndex}`,
+      '-vn',
+      '-an',
+      '-c:s', 'copy',
+      cacheFile,
+    ];
+
+    const child = spawn(ffmpegPath, args, {
+      windowsHide: true,
+      stdio: ['ignore', 'ignore', 'ignore'],
+    });
+
+    child.on('close', (code) => {
+      inFlightAss.delete(cacheFile);
+      if (code === 0 && fs.existsSync(cacheFile)) {
+        try {
+          const stat = fs.statSync(cacheFile);
+          if (stat.size > 0) {
+            return resolve(fs.readFileSync(cacheFile, 'utf-8'));
+          }
+          fs.unlinkSync(cacheFile);
+        } catch {}
+      }
+      resolve('');
+    });
+
+    child.on('error', () => {
+      inFlightAss.delete(cacheFile);
+      try {
+        if (fs.existsSync(cacheFile)) fs.unlinkSync(cacheFile);
+      } catch {}
+      resolve('');
+    });
+  });
+
+  inFlightAss.set(cacheFile, promise);
+  return promise;
+}
+
+export async function extractEmbeddedFonts(
+  filePath: string,
+  ffmpegPath: string,
+  port: number
+): Promise<string[]> {
+  const fileHash = crypto.createHash('md5').update(filePath).digest('hex').slice(0, 16);
+  const fontsDir = path.join(storage.getThumbnailDir(), 'fonts', fileHash);
+
+  if (!fs.existsSync(fontsDir)) {
+    fs.mkdirSync(fontsDir, { recursive: true });
+  }
+
+  // Check if fonts are already extracted
+  const existingFiles = fs.readdirSync(fontsDir).filter((f) => /\.(ttf|otf|ttc|woff2?)$/i.test(f));
+  if (existingFiles.length === 0) {
+    await new Promise<void>((resolve) => {
+      const p = spawn(
+        ffmpegPath,
+        ['-hide_banner', '-y', '-dump_attachment:t', '', '-i', filePath, '-vn', '-an', '-t', '0', '-f', 'null', '-'],
+        { cwd: fontsDir, windowsHide: true, stdio: ['ignore', 'ignore', 'ignore'] }
+      );
+      p.on('close', () => resolve());
+      p.on('error', () => resolve());
+    });
+  }
+
+  // Filter valid TTF/OTF fonts (exclude TTC collections as WASM FreeType does not support them without index)
+  const fontFiles = fs.readdirSync(fontsDir).filter((f) => /\.(ttf|otf|woff2?)$/i.test(f));
+  return fontFiles.map((name) => `http://127.0.0.1:${port}/font/${fileHash}/${encodeURIComponent(name)}`);
+}
+
+export function filterFontsForAss(assContent: string, fontUrls: string[]): string[] {
+  if (!assContent || fontUrls.length === 0) return [];
+  const referenced = new Set<string>();
+  const styleRegex = /^Style:\s*[^,]+,\s*([^,]+)/gim;
+  let m: RegExpExecArray | null;
+  while ((m = styleRegex.exec(assContent)) !== null) {
+    referenced.add(m[1].trim().toLowerCase().replace(/[\s-_]/g, ''));
+  }
+  const inlineRegex = /\\fn([^\\}]+)/gi;
+  while ((m = inlineRegex.exec(assContent)) !== null) {
+    referenced.add(m[1].trim().toLowerCase().replace(/[\s-_]/g, ''));
+  }
+
+  if (referenced.size === 0) {
+    return fontUrls
+      .filter((u) => !u.toLowerCase().includes('arialunicodems') && !u.toLowerCase().endsWith('.ttc'))
+      .slice(0, 5);
+  }
+
+  const matched = fontUrls.filter((u) => {
+    const fileName = decodeURIComponent(u.split('/').pop() || '').toLowerCase();
+    if (fileName.endsWith('.ttc')) return false;
+    if (fileName.includes('arialunicodems') && !referenced.has('arialunicodems')) return false;
+
+    const cleanFile = fileName.replace(/[\s-_]/g, '');
+    for (const ref of referenced) {
+      if (cleanFile.includes(ref) || ref.includes(cleanFile.replace(/\.[a-z0-9]+$/, ''))) return true;
+    }
+    return false;
+  });
+
+  return matched.slice(0, 8);
 }
 
 export async function generateSingleThumbnail(
   filePath: string,
   timeSec: number,
   ffmpegPath: string,
-  outputPath: string
+  outputPath: string,
+  signal?: AbortSignal
 ): Promise<string> {
   if (fs.existsSync(outputPath)) {
     return outputPath;
   }
 
-  return new Promise((resolve, reject) => {
+  if (signal?.aborted) {
+    return '';
+  }
+
+  return new Promise((resolve) => {
     const parentDir = path.dirname(outputPath);
     if (!fs.existsSync(parentDir)) {
       fs.mkdirSync(parentDir, { recursive: true });
     }
 
-    const args = [
+    // Fast Keyframe-Skipping Seeking:
+    // 1. -noaccurate_seek + -ss before -i: Jumps directly to keyframe index without scanning stream.
+    // 2. -skip_frame nokey: Tells decoder to ignore all non-keyframes (B/P frames) completely.
+    // 3. -an -sn: Skips all audio and subtitle stream parsing/demuxing.
+    // 4. -threads 2: Prevents thread starvation on multi-core CPUs.
+    const fastArgs = [
       '-hide_banner',
       '-y',
+      '-noaccurate_seek',
       '-ss', timeSec.toString(),
+      '-skip_frame', 'nokey',
       '-i', filePath,
-      '-vframes', '1',
+      '-an',
+      '-sn',
+      '-threads', '2',
+      '-frames:v', '1',
       '-vf', 'scale=160:90',
-      '-q:v', '3',
+      '-q:v', '5',
       outputPath,
     ];
 
-    const child = spawn(ffmpegPath, args, { windowsHide: true });
+    let child = spawn(ffmpegPath, fastArgs, {
+      windowsHide: true,
+      stdio: ['ignore', 'ignore', 'ignore'],
+    });
+
+    const onAbort = () => {
+      try {
+        child.kill();
+      } catch {}
+      resolve('');
+    };
+
+    if (signal) {
+      signal.addEventListener('abort', onAbort, { once: true });
+    }
+
     child.on('close', (code) => {
-      if (code === 0 && fs.existsSync(outputPath)) {
+      if (signal) {
+        signal.removeEventListener('abort', onAbort);
+      }
+
+      if (code === 0 && fs.existsSync(outputPath) && fs.statSync(outputPath).size > 100) {
         resolve(outputPath);
       } else {
-        resolve('');
+        // Fallback for edge cases where keyframe skip didn't catch a frame
+        if (signal?.aborted) return resolve('');
+        
+        const fallbackArgs = [
+          '-hide_banner',
+          '-y',
+          '-ss', timeSec.toString(),
+          '-i', filePath,
+          '-an',
+          '-sn',
+          '-threads', '2',
+          '-frames:v', '1',
+          '-vf', 'scale=160:90',
+          '-q:v', '5',
+          outputPath,
+        ];
+        const fbChild = spawn(ffmpegPath, fallbackArgs, {
+          windowsHide: true,
+          stdio: ['ignore', 'ignore', 'ignore'],
+        });
+        if (signal) {
+          signal.addEventListener('abort', () => {
+            try { fbChild.kill(); } catch {}
+            resolve('');
+          }, { once: true });
+        }
+        fbChild.on('close', (fbCode) => {
+          if (fbCode === 0 && fs.existsSync(outputPath)) {
+            resolve(outputPath);
+          } else {
+            resolve('');
+          }
+        });
+        fbChild.on('error', () => resolve(''));
       }
     });
+
     child.on('error', () => {
+      if (signal) signal.removeEventListener('abort', onAbort);
       resolve('');
     });
   });
@@ -403,7 +642,7 @@ export async function findPrecedingKeyframe(
         p.kill();
       } catch {}
       resolve(targetTime);
-    }, 350);
+    }, 600);
 
     p.stdout.on('data', (d) => {
       stdout += d.toString();

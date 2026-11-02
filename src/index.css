@@ -66,3 +66,59 @@
   border: 1px solid rgba(255, 255, 255, 0.12);
   box-shadow: 0 16px 40px rgba(0, 0, 0, 0.8);
 }
+
+/*
+ * Ensure video element always has a solid black backing to prevent white flashes
+ */
+video {
+  background-color: #000000;
+}
+
+/* Hide mouse cursor and all child elements during video playback */
+.hide-cursor,
+.hide-cursor * {
+  cursor: none !important;
+}
+
+/* JASSUB Canvas: render on top of video, below UI controls, with click-through and isolated GPU layer */
+canvas.JASSUB {
+  position: absolute !important;
+  pointer-events: none !important;
+  z-index: 15 !important;
+  transform: translateZ(0) !important;
+  backface-visibility: hidden !important;
+  will-change: transform !important;
+  contain: strict !important;
+}
+
+/*
+ * Chromium Compositor Keep-Alive:
+ * Prevents Chromium's Direct3D compositor from going to sleep / dropping the video frame
+ * when the mouse is idle, UI controls are hidden, and no subtitles are currently visible.
+ */
+@keyframes keepCompositorAlive {
+  0% {
+    opacity: 0.001;
+    transform: translateZ(0);
+  }
+  50% {
+    opacity: 0.002;
+    transform: translateZ(0);
+  }
+  100% {
+    opacity: 0.001;
+    transform: translateZ(0);
+  }
+}
+
+.compositor-keep-alive {
+  position: absolute;
+  top: 0;
+  left: 0;
+  width: 1px;
+  height: 1px;
+  pointer-events: none;
+  animation: keepCompositorAlive 1s infinite linear;
+  will-change: opacity, transform;
+  z-index: 1;
+}

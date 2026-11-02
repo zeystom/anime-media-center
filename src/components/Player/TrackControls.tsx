@@ -166,6 +166,11 @@ export const TrackControls: React.FC<TrackControlsProps> = ({
                             WHISPER
                           </span>
                         )}
+                        {track.isDubtitle && (
+                          <span className="text-[10px] px-1 py-0.2 rounded bg-purple-500/25 text-purple-300 border border-purple-500/40 font-bold">
+                            DUBTITLE / SDH
+                          </span>
+                        )}
                       </div>
                       <div className="text-[10px] text-zinc-500">
                         {track.languageName} {track.isDubtitle ? '• Dialogue/Dub' : ''}

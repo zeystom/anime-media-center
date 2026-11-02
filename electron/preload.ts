@@ -21,11 +21,13 @@ contextBridge.exposeInMainWorld('electronAPI', {
   saveSeasonPreference: (folderPath: string, pref: SeasonPreference) => ipcRenderer.invoke('save-season-preference', folderPath, pref),
   getStreamUrl: (filePath: string, audioTrackIndex: number, startTime: number) =>
     ipcRenderer.invoke('get-stream-url', filePath, audioTrackIndex, startTime),
+  stopVideoStream: () => ipcRenderer.invoke('stop-video-stream'),
   getThumbnailUrl: (filePath: string, time: number) =>
     ipcRenderer.invoke('get-thumbnail-url', filePath, time),
   startWhisperSeason: (folderPath: string, audioTrackNum: number, skipExistingSrt: boolean) =>
     ipcRenderer.invoke('start-whisper-season', folderPath, audioTrackNum, skipExistingSrt),
   cancelWhisper: () => ipcRenderer.invoke('cancel-whisper'),
+  getWhisperStatus: () => ipcRenderer.invoke('get-whisper-status'),
   onWhisperLog: (callback: (log: any) => void) => {
     const handler = (_event: any, log: any) => callback(log);
     ipcRenderer.on('whisper-log', handler);
