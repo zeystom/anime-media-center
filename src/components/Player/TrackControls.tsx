@@ -1,4 +1,4 @@
-import React from 'react';
+import React, { useEffect } from 'react';
 import { Volume2, Subtitles, Check, Plus, Minus, RotateCcw, X, Sparkles, Type } from 'lucide-react';
 import { AudioTrack, SubtitleTrack } from '../../types';
 
@@ -22,6 +22,87 @@ interface TrackControlsProps {
   onUpdateFontSize: (size: number) => void;
 }
 
+function getSubTrackDisplay(track: SubtitleTrack, index: number, allTracks: SubtitleTrack[]) {
+  // 1. Technical badge
+  let badge = 'SRT';
+  if (track.type === 'external') {
+    badge = 'SRT';
+  } else if (track.codec) {
+    badge = track.codec.toUpperCase().replace('SUBRIP', 'SRT');
+  }
+
+  // 2. Determine human-readable primary title
+  let title = '';
+  if (track.type === 'external') {
+    title = 'External .srt (Whisper)';
+  } else {
+    const lang = track.languageName || 'English';
+    const rawTitle = (track.title || '').trim();
+    const isRawCodecOnly = /^(ass|ssa|subrip|srt)(\s*\((default|forced|hearing impaired)\))?$/i.test(rawTitle);
+
+    if (track.isDubtitle || /sdh|dubtitle|hearing impaired/i.test(rawTitle)) {
+      title = `${lang} — Dubtitle / SDH`;
+    } else if (track.isSigns || track.isForced || /sign|song|forced/i.test(rawTitle)) {
+      title = `${lang} — Signs / Forced`;
+    } else if (!isRawCodecOnly && rawTitle && !/^stream\s*#?\d+/i.test(rawTitle)) {
+      const cleaned = rawTitle
+        .replace(/\b(ass|ssa|subrip|srt)\b/gi, '')
+        .replace(/\((default)\)/gi, '')
+        .trim();
+      title = cleaned || `${lang} — Full Dialogue`;
+    } else {
+      title = `${lang} — Full Dialogue`;
+    }
+  }
+
+  // 3. De-duplicate identical names by appending stream/track index
+  const duplicates = allTracks.filter((t) => {
+    if (t.id === track.id) return false;
+    if (t.type === 'external' && track.type === 'external') return true;
+    if (t.type === 'external' || track.type === 'external') return false;
+    const tLang = t.languageName || 'English';
+    const tRaw = (t.title || '').trim();
+    const tIsRaw = /^(ass|ssa|subrip|srt)(\s*\((default|forced|hearing impaired)\))?$/i.test(tRaw);
+    let tTitle = '';
+    if (t.isDubtitle || /sdh|dubtitle|hearing impaired/i.test(tRaw)) {
+      tTitle = `${tLang} — Dubtitle / SDH`;
+    } else if (t.isSigns || t.isForced || /sign|song|forced/i.test(tRaw)) {
+      tTitle = `${tLang} — Signs / Forced`;
+    } else if (!tIsRaw && tRaw && !/^stream\s*#?\d+/i.test(tRaw)) {
+      tTitle = tRaw.replace(/\b(ass|ssa|subrip|srt)\b/gi, '').replace(/\((default)\)/gi, '').trim() || `${tLang} — Full Dialogue`;
+    } else {
+      tTitle = `${tLang} — Full Dialogue`;
+    }
+    return tTitle.toLowerCase() === title.toLowerCase();
+  });
+
+  if (duplicates.length > 0 && track.type !== 'external') {
+    const trackNum = track.index !== null && track.index !== undefined ? track.index : index + 1;
+    title = `${title} (Track #${trackNum})`;
+  }
+
+  return { title, badge };
+}
+
+function getAudioTrackDisplay(track: AudioTrack, allTracks: AudioTrack[]) {
+  const lang = track.languageName || 'Audio';
+  const codec = (track.codec || 'AUDIO').toUpperCase();
+  let title = track.title || `${lang} Audio`;
+
+  if (/^([a-zA-Z]+)\s*\([a-zA-Z0-9_-]+\)$/i.test(title)) {
+    title = lang;
+  }
+
+  const duplicates = allTracks.filter(
+    (t) => t.audioIndex !== track.audioIndex && (t.title || t.languageName) === (track.title || track.languageName)
+  );
+  if (duplicates.length > 0) {
+    title = `${title} (Track #${track.audioIndex + 1})`;
+  }
+
+  return { title, badge: codec };
+}
+
 export const TrackControls: React.FC<TrackControlsProps> = ({
   isOpen,
   onClose,
@@ -41,6 +122,18 @@ export const TrackControls: React.FC<TrackControlsProps> = ({
   fontSize,
   onUpdateFontSize,
 }) => {
+  useEffect(() => {
+    if (!isOpen) return;
+    const handleKeyDown = (e: KeyboardEvent) => {
+      if (e.key === 'Escape') {
+        e.stopPropagation();
+        onClose();
+      }
+    };
+    window.addEventListener('keydown', handleKeyDown);
+    return () => window.removeEventListener('keydown', handleKeyDown);
+  }, [isOpen, onClose]);
+
   if (!isOpen) return null;
 
   // Filter 2nd Subtitle / Signs (Top):
@@ -52,7 +145,10 @@ export const TrackControls: React.FC<TrackControlsProps> = ({
   });
 
   return (
-    <div className="fixed inset-0 z-50 flex items-center justify-center p-4 bg-black/80 animate-in fade-in duration-150">
+    <div
+      className="fixed inset-0 z-50 flex items-center justify-center p-4 bg-black/80 animate-in fade-in duration-150"
+      onClick={onClose}
+    >
       <div
         className="relative w-full max-w-4xl glass-dropdown rounded-2xl border border-zinc-700/80 p-6 text-zinc-100 shadow-2xl animate-in zoom-in-95 duration-150"
         onClick={(e) => e.stopPropagation()}
@@ -90,6 +186,7 @@ export const TrackControls: React.FC<TrackControlsProps> = ({
               {audioTracks.map((track) => {
                 const isSelected = selectedAudioIndex === track.audioIndex;
                 const isEng = track.language === 'eng' || track.language === 'en';
+                const { title, badge } = getAudioTrackDisplay(track, audioTracks);
 
                 return (
                   <button
@@ -103,7 +200,7 @@ export const TrackControls: React.FC<TrackControlsProps> = ({
                   >
                     <div className="truncate mr-2">
                       <div className="truncate font-medium flex items-center space-x-1.5">
-                        <span>{track.title}</span>
+                        <span>{title}</span>
                         {isEng && (
                           <span className="text-[10px] px-1 rounded bg-indigo-500/20 text-indigo-300 border border-indigo-500/30 font-semibold">
                             ENG
@@ -111,10 +208,15 @@ export const TrackControls: React.FC<TrackControlsProps> = ({
                         )}
                       </div>
                       <div className="text-[10px] text-zinc-500 capitalize">
-                        {track.languageName} • {track.codec.toUpperCase()}
+                        {track.languageName}
                       </div>
                     </div>
-                    {isSelected && <Check className="w-4 h-4 text-red-500 shrink-0" />}
+                    <div className="flex items-center space-x-2 shrink-0">
+                      <span className="px-1.5 py-0.5 rounded text-[10px] font-mono font-medium bg-zinc-800 text-zinc-400 border border-zinc-700/50">
+                        {badge}
+                      </span>
+                      {isSelected && <Check className="w-4 h-4 text-red-500 shrink-0" />}
+                    </div>
                   </button>
                 );
               })}
@@ -144,9 +246,9 @@ export const TrackControls: React.FC<TrackControlsProps> = ({
                 {selectedMainSubId === null && <Check className="w-4 h-4 text-red-500 shrink-0" />}
               </button>
 
-              {subtitleTracks.map((track) => {
+              {subtitleTracks.map((track, idx) => {
                 const isSelected = selectedMainSubId === track.id;
-                const isExternal = track.type === 'external';
+                const { title, badge } = getSubTrackDisplay(track, idx, subtitleTracks);
 
                 return (
                   <button
@@ -160,23 +262,18 @@ export const TrackControls: React.FC<TrackControlsProps> = ({
                   >
                     <div className="truncate mr-2">
                       <div className="truncate font-medium flex items-center space-x-1.5">
-                        <span>{track.title}</span>
-                        {isExternal && (
-                          <span className="text-[10px] px-1 py-0.2 rounded bg-emerald-500/20 text-emerald-300 border border-emerald-500/30 font-bold">
-                            WHISPER
-                          </span>
-                        )}
-                        {track.isDubtitle && (
-                          <span className="text-[10px] px-1 py-0.2 rounded bg-purple-500/25 text-purple-300 border border-purple-500/40 font-bold">
-                            DUBTITLE / SDH
-                          </span>
-                        )}
+                        <span>{title}</span>
                       </div>
                       <div className="text-[10px] text-zinc-500">
-                        {track.languageName} {track.isDubtitle ? '• Dialogue/Dub' : ''}
+                        {track.languageName}
                       </div>
                     </div>
-                    {isSelected && <Check className="w-4 h-4 text-red-500 shrink-0" />}
+                    <div className="flex items-center space-x-2 shrink-0">
+                      <span className="px-1.5 py-0.5 rounded text-[10px] font-mono font-medium bg-zinc-800 text-zinc-400 border border-zinc-700/50">
+                        {badge}
+                      </span>
+                      {isSelected && <Check className="w-4 h-4 text-red-500 shrink-0" />}
+                    </div>
                   </button>
                 );
               })}
@@ -217,8 +314,9 @@ export const TrackControls: React.FC<TrackControlsProps> = ({
               </button>
 
               {topSignsTracks.length > 0 ? (
-                topSignsTracks.map((track) => {
+                topSignsTracks.map((track, idx) => {
                   const isSelected = selectedTopSubId === track.id;
+                  const { title, badge } = getSubTrackDisplay(track, idx, topSignsTracks);
                   return (
                     <button
                       key={track.id}
@@ -230,10 +328,15 @@ export const TrackControls: React.FC<TrackControlsProps> = ({
                       }`}
                     >
                       <div className="truncate mr-2">
-                        <div className="truncate font-medium">{track.title}</div>
+                        <div className="truncate font-medium">{title}</div>
                         <div className="text-[10px] text-yellow-500/80">English Signs / Forced Only</div>
                       </div>
-                      {isSelected && <Check className="w-4 h-4 text-yellow-400 shrink-0" />}
+                      <div className="flex items-center space-x-2 shrink-0">
+                        <span className="px-1.5 py-0.5 rounded text-[10px] font-mono font-medium bg-zinc-800 text-zinc-400 border border-zinc-700/50">
+                          {badge}
+                        </span>
+                        {isSelected && <Check className="w-4 h-4 text-yellow-400 shrink-0" />}
+                      </div>
                     </button>
                   );
                 })
@@ -317,12 +420,9 @@ export const TrackControls: React.FC<TrackControlsProps> = ({
             </div>
           </div>
 
-          <button
-            onClick={onClose}
-            className="px-5 py-2 rounded-xl bg-red-600 hover:bg-red-500 text-white text-xs font-bold shadow-md shadow-red-600/30 transition-colors"
-          >
-            Apply & Close
-          </button>
+          <div className="text-xs text-zinc-500 font-medium">
+            Changes apply immediately • Press Esc or click outside to close
+          </div>
         </div>
       </div>
     </div>

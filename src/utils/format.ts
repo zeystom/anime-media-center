@@ -30,6 +30,37 @@ export interface ParsedEpisode {
 }
 
 /**
+ * Extracts release-level metadata tags (e.g. 1080p, BluRay, HEVC, Dual Audio)
+ * to be displayed once at the season level.
+ */
+export function extractReleaseTags(raw: string): string[] {
+  if (!raw) return [];
+  const tags: string[] = [];
+  const tagMatchers = [
+    { label: '4K', regex: /\b(2160p|4k)\b/i },
+    { label: '1080p', regex: /\b1080p\b/i },
+    { label: '720p', regex: /\b720p\b/i },
+    { label: '576p', regex: /\b576p\b/i },
+    { label: '480p', regex: /\b480p\b/i },
+    { label: 'BluRay', regex: /\b(bluray|bdrip|remux)\b/i },
+    { label: 'DVD', regex: /\b(dvd|dvdrip)\b/i },
+    { label: 'WEB-DL', regex: /\b(web-dl|webrip)\b/i },
+    { label: 'HEVC', regex: /\b(hevc|x265|h\.?265)\b/i },
+    { label: 'AVC', regex: /\b(x264|h\.?264|avc)\b/i },
+    { label: '10-bit', regex: /\b(10-?bit|hi10p)\b/i },
+    { label: 'Dual Audio', regex: /\b(dual-?audio|multi-?audio)\b/i },
+  ];
+
+  for (const t of tagMatchers) {
+    if (t.regex.test(raw) && !tags.includes(t.label)) {
+      tags.push(t.label);
+    }
+  }
+
+  return tags;
+}
+
+/**
  * Cleans series or folder name by removing bracketed hashes, release groups, and tech specs.
  * Handles both standard anime releases ([Group] Title [Quality]) and scene dot-releases
  * (Title.S01.REPACK.1080p.BluRay.Remux.Dual-Audio...).

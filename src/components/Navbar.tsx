@@ -25,9 +25,6 @@ export const Navbar: React.FC<NavbarProps> = ({
           <span className="font-bold tracking-tight text-base text-zinc-100">
             Anime<span className="text-red-500">Center</span>
           </span>
-          <span className="text-[10px] uppercase font-semibold px-1.5 py-0.5 rounded bg-zinc-800 text-zinc-400 border border-zinc-700/50">
-            10-bit HEVC
-          </span>
         </div>
       </div>
 

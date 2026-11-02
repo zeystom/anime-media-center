@@ -24,7 +24,17 @@ export const HeroContinueWatching: React.FC<HeroContinueWatchingProps> = ({
   const parsedEp = useMemo(() => cleanEpisodeTitle(lastWatched.fileName), [lastWatched.fileName]);
 
   return (
-    <div className="relative w-full rounded-2xl overflow-hidden mb-8 border border-zinc-800 bg-gradient-to-r from-zinc-950 via-[#181820] to-[#121218] p-6 md:p-8 shadow-2xl">
+    <div className="relative w-full rounded-2xl overflow-hidden mb-8 border border-zinc-800 bg-[#121218] p-6 md:p-8 shadow-2xl">
+      {/* Episode Thumbnail Streaming Background */}
+      {episode.thumbnailUrl && (
+        <img
+          src={episode.thumbnailUrl}
+          alt=""
+          className="absolute inset-0 w-full h-full object-cover blur-xl opacity-25 scale-105 pointer-events-none select-none"
+        />
+      )}
+      <div className="absolute inset-0 bg-gradient-to-r from-[#0e0e13]/95 via-[#121218]/80 to-transparent pointer-events-none" />
+
       {/* Background Glow Accents */}
       <div className="absolute top-0 right-0 -mr-20 -mt-20 w-96 h-96 bg-red-600/10 rounded-full blur-3xl pointer-events-none" />
       <div className="absolute bottom-0 left-1/3 -mb-20 w-80 h-80 bg-indigo-600/10 rounded-full blur-3xl pointer-events-none" />
@@ -49,18 +59,6 @@ export const HeroContinueWatching: React.FC<HeroContinueWatchingProps> = ({
               <p className="text-sm text-zinc-300 font-medium" title={lastWatched.fileName}>
                 {parsedEp.displayTitle}
               </p>
-              {parsedEp.tags.length > 0 && (
-                <div className="hidden sm:flex items-center space-x-1">
-                  {parsedEp.tags.slice(0, 3).map((tag) => (
-                    <span
-                      key={tag}
-                      className="px-1.5 py-0.2 rounded text-[10px] font-mono font-medium bg-zinc-800 text-zinc-300 border border-white/5"
-                    >
-                      {tag}
-                    </span>
-                  ))}
-                </div>
-              )}
             </div>
           </div>
 

@@ -11,12 +11,10 @@ import {
   Maximize,
   Minimize,
   FastForward,
-  Rewind,
   ArrowLeft,
   ListVideo,
   Subtitles,
   Sparkles,
-  Type,
 } from 'lucide-react';
 import { Episode, VideoMetadata, SubtitleCue, SeasonPreference, AppSettings } from '../../types';
 import { SubtitleOverlay } from './SubtitleOverlay';
@@ -1078,18 +1076,6 @@ export const VideoPlayer: React.FC<VideoPlayerProps> = ({
                     }`
                   : parsed.displayTitle || episode.fileName}
               </h1>
-              {parsed.tags.length > 0 && (
-                <div className="hidden lg:flex items-center space-x-1 shrink-0">
-                  {parsed.tags.slice(0, 3).map((tag: string) => (
-                    <span
-                      key={tag}
-                      className="px-1.5 py-0.5 rounded text-[10px] font-mono font-medium bg-white/10 text-zinc-300 border border-white/10"
-                    >
-                      {tag}
-                    </span>
-                  ))}
-                </div>
-              )}
             </div>
           </div>
         </div>
@@ -1100,17 +1086,6 @@ export const VideoPlayer: React.FC<VideoPlayerProps> = ({
             <div className="flex items-center space-x-1.5 px-3 py-1.5 rounded-xl bg-indigo-500/20 border border-indigo-500/40 text-xs text-indigo-300 backdrop-blur-md animate-pulse">
               <div className="w-3 h-3 border-2 border-indigo-400 border-t-transparent rounded-full animate-spin" />
               <span>Loading Subtitles...</span>
-            </div>
-          )}
-
-          {/* Dub Sub / SDH Active Indicator */}
-          {metadata?.hasEmbeddedDubtitles && (
-            <div
-              title="Embedded English Dubtitles (SDH) available in this episode"
-              className="hidden sm:flex items-center space-x-1 px-2.5 py-1.5 rounded-xl bg-purple-500/20 border border-purple-500/35 text-[11px] font-bold text-purple-300"
-            >
-              <Subtitles className="w-3.5 h-3.5 text-purple-400" />
-              <span>Dub Sub Ready</span>
             </div>
           )}
 
@@ -1167,7 +1142,7 @@ export const VideoPlayer: React.FC<VideoPlayerProps> = ({
 
         {/* Action Controls Toolbar */}
         <div className="flex items-center justify-between">
-          {/* Left: Play/Pause, Rewind, Fast Forward, Volume, Time */}
+          {/* Left: Play/Pause, Volume, Time */}
           <div className="flex items-center space-x-4">
             <button
               onClick={togglePlay}
@@ -1175,22 +1150,6 @@ export const VideoPlayer: React.FC<VideoPlayerProps> = ({
               aria-label={isPlaying ? 'Pause [Space]' : 'Play [Space]'}
             >
               {isPlaying ? <Pause className="w-6 h-6 fill-white" /> : <Play className="w-6 h-6 fill-white" />}
-            </button>
-
-            <button
-              onClick={() => handleSkip(-5, '-5s')}
-              className="p-1.5 rounded-lg text-zinc-300 hover:text-white transition-colors"
-              aria-label="Seek -5s [Left Arrow]"
-            >
-              <Rewind className="w-5 h-5" />
-            </button>
-
-            <button
-              onClick={() => handleSkip(5, '+5s')}
-              className="p-1.5 rounded-lg text-zinc-300 hover:text-white transition-colors"
-              aria-label="Seek +5s [Right Arrow]"
-            >
-              <FastForward className="w-5 h-5" />
             </button>
 
             {/* Volume Control */}
@@ -1238,32 +1197,8 @@ export const VideoPlayer: React.FC<VideoPlayerProps> = ({
             </div>
           </div>
 
-          {/* Right: Subtitle Font Size Controls, Skip Intro (+85s) Button, Fullscreen */}
+          {/* Right: Skip Intro (+85s) Button, Fullscreen */}
           <div className="flex items-center space-x-3">
-            {/* Quick In-Player Subtitle Font Size Changer */}
-            <div className="flex items-center space-x-1 px-2.5 py-1.5 rounded-xl bg-black/70 hover:bg-black/90 border border-white/10 text-xs text-zinc-300">
-              <Type className="w-3.5 h-3.5 text-zinc-400 mr-0.5" />
-              <button
-                onClick={() => handleUpdateFontSize(fontSize - 2)}
-                disabled={fontSize <= 14}
-                className="w-5 h-5 flex items-center justify-center rounded hover:bg-white/20 active:bg-white/30 text-white font-bold disabled:opacity-30 transition-colors"
-                aria-label="Decrease Subtitle Size [-]"
-              >
-                -
-              </button>
-              <span className="text-[11px] font-mono font-bold text-white min-w-[28px] text-center select-none">
-                {fontSize}px
-              </span>
-              <button
-                onClick={() => handleUpdateFontSize(fontSize + 2)}
-                disabled={fontSize >= 60}
-                className="w-5 h-5 flex items-center justify-center rounded hover:bg-white/20 active:bg-white/30 text-white font-bold disabled:opacity-30 transition-colors"
-                aria-label="Increase Subtitle Size [+]"
-              >
-                +
-              </button>
-            </div>
-
             {/* Skip Intro (+85s) Dedicated Button */}
             <button
               onClick={() => handleSkip(85, 'Intro Skipped (+85s)')}

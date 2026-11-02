@@ -1,7 +1,7 @@
 import React, { useState, useEffect, useRef, useMemo } from 'react';
-import { X, Play, CheckCircle2, Subtitles, ListVideo, Sparkles, Film, Clock } from 'lucide-react';
+import { X, Play, CheckCircle2, ListVideo, Film, Sparkles } from 'lucide-react';
 import { Episode, PlaybackProgress } from '../../types';
-import { formatTime, formatFileSize, cleanEpisodeTitle, cleanSeriesTitle } from '../../utils/format';
+import { formatTime, cleanEpisodeTitle, cleanSeriesTitle } from '../../utils/format';
 
 interface EpisodeDrawerProps {
   isOpen: boolean;
@@ -66,13 +66,6 @@ const EpisodeDrawerItem: React.FC<EpisodeItemProps> = ({
           </div>
         )}
 
-        {/* Top-Left Episode Badge Pill */}
-        <div className="absolute top-1.5 left-1.5">
-          <span className="px-1.5 py-0.5 rounded text-[10px] font-bold bg-black/80 backdrop-blur-md text-white border border-white/10">
-            {parsed.episodeLabel}
-          </span>
-        </div>
-
         {/* Active Now Playing Indicator / Hover Play Overlay */}
         {isPlaying ? (
           <div className="absolute inset-0 bg-red-950/40 backdrop-blur-[1px] flex items-center justify-center">
@@ -104,78 +97,36 @@ const EpisodeDrawerItem: React.FC<EpisodeItemProps> = ({
       </div>
 
       {/* Episode Details */}
-      <div className="flex-1 min-w-0 flex flex-col justify-between py-0.5">
-        <div>
-          {/* Main Title Row */}
-          <div className="flex items-center justify-between gap-1.5">
-            <h4
-              className={`text-xs sm:text-sm font-semibold truncate ${
-                isPlaying ? 'text-red-400 font-bold' : 'text-zinc-100 group-hover:text-white'
-              }`}
-              title={episode.fileName}
-            >
-              {parsed.displayTitle}
-            </h4>
+      <div className="flex-1 min-w-0 flex flex-col justify-center py-0.5">
+        {/* Main Title Row */}
+        <div className="flex items-center justify-between gap-1.5">
+          <h4
+            className={`text-xs sm:text-sm font-semibold truncate ${
+              isPlaying ? 'text-red-400 font-bold' : 'text-zinc-100 group-hover:text-white'
+            }`}
+            title={episode.fileName}
+          >
+            {parsed.displayTitle}
+          </h4>
 
-            {progress?.completed && (
-              <span title="Completed">
-                <CheckCircle2 className="w-4 h-4 text-emerald-400 shrink-0" />
-              </span>
-            )}
-          </div>
-
-          {/* Quality & Feature Badges */}
-          {parsed.tags.length > 0 && (
-            <div className="flex flex-wrap items-center gap-1 mt-1.5">
-              {parsed.tags.slice(0, 4).map((tag) => (
-                <span
-                  key={tag}
-                  className="px-1.5 py-0.2 rounded text-[10px] font-mono font-medium bg-zinc-800/90 text-zinc-300 border border-white/5"
-                >
-                  {tag}
-                </span>
-              ))}
-            </div>
+          {progress?.completed && (
+            <span title="Completed">
+              <CheckCircle2 className="w-4 h-4 text-emerald-400 shrink-0" />
+            </span>
           )}
         </div>
 
-        {/* Metadata Footer */}
-        <div className="flex items-center space-x-2 mt-2 text-[11px] text-zinc-400">
-          <span className="font-mono">{formatFileSize(episode.size)}</span>
-
-          {progress && progress.currentTime > 0 && (
-            <>
-              <span className="text-zinc-600">•</span>
-              <span className="flex items-center space-x-1 font-mono text-zinc-300">
-                <Clock className="w-3 h-3 text-zinc-500" />
-                <span>{formatTime(progress.currentTime)}</span>
-              </span>
-            </>
+        {/* Timestamp Footer */}
+        <div className="mt-1.5 text-[11px] text-zinc-400 font-mono">
+          {progress && progress.currentTime > 0 ? (
+            <span>
+              {formatTime(progress.currentTime)} / {formatTime(progress.duration || episode.duration || 0)}
+            </span>
+          ) : (
+            <span className="text-zinc-500">
+              {episode.duration && episode.duration > 0 ? formatTime(episode.duration) : 'Unwatched'}
+            </span>
           )}
-
-          {episode.hasExternalSrt ? (
-            <>
-              <span className="text-zinc-600">•</span>
-              <span
-                title="Whisper External Subtitle Ready"
-                className="flex items-center space-x-1 font-medium text-emerald-400"
-              >
-                <Subtitles className="w-3 h-3" />
-                <span>SRT</span>
-              </span>
-            </>
-          ) : episode.hasEmbeddedDubtitles ? (
-            <>
-              <span className="text-zinc-600">•</span>
-              <span
-                title="Embedded English Dubtitles (SDH) inside MKV"
-                className="flex items-center space-x-1 font-medium text-purple-400"
-              >
-                <Subtitles className="w-3 h-3" />
-                <span>Dub Sub</span>
-              </span>
-            </>
-          ) : null}
         </div>
       </div>
     </div>

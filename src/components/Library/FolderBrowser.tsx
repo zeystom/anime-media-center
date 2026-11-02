@@ -1,17 +1,17 @@
-import React from 'react';
-import { Folder, FolderOpen, RefreshCw, ExternalLink, Sparkles, Film, HardDrive } from 'lucide-react';
+import React, { useMemo } from 'react';
+import { Folder, RefreshCw, ExternalLink, Sparkles, Film } from 'lucide-react';
 import { AnimeFolder, Episode, PlaybackProgress } from '../../types';
-import { cleanSeriesTitle } from '../../utils/format';
+import { cleanSeriesTitle, extractReleaseTags } from '../../utils/format';
 import { EpisodeCard } from './EpisodeCard';
 
 interface FolderBrowserProps {
-  libraryRoot: string;
+  libraryRoot?: string;
   folders: AnimeFolder[];
   selectedFolder: AnimeFolder | null;
   history: Record<string, PlaybackProgress>;
   loading: boolean;
   onSelectFolder: (folder: AnimeFolder) => void;
-  onChangeRoot: () => void;
+  onChangeRoot?: () => void;
   onRefresh: () => void;
   onPlayEpisode: (episode: Episode) => void;
   onOpenWhisper: (folder: AnimeFolder) => void;
@@ -31,51 +31,29 @@ export const FolderBrowser: React.FC<FolderBrowserProps> = ({
   onOpenWhisper,
   onOpenInExplorer,
 }) => {
+  const releaseTags = useMemo(() => {
+    if (!selectedFolder) return [];
+    const combined = `${selectedFolder.folderName} ${selectedFolder.episodes[0]?.fileName || ''}`;
+    return extractReleaseTags(combined);
+  }, [selectedFolder]);
+
   return (
     <div className="space-y-6">
-      {/* Path Toolbar */}
-      <div className="flex flex-wrap items-center justify-between gap-4 p-4 rounded-xl bg-[#141418] border border-zinc-800">
-        <div className="flex items-center space-x-3 overflow-hidden">
-          <div className="w-9 h-9 rounded-lg bg-zinc-800 flex items-center justify-center shrink-0 text-zinc-300">
-            <HardDrive className="w-5 h-5 text-indigo-400" />
-          </div>
-          <div className="overflow-hidden">
-            <span className="text-[11px] font-semibold uppercase tracking-wider text-zinc-400 block">
-              Library Directory
-            </span>
-            <span className="text-sm font-mono text-zinc-200 truncate block max-w-md md:max-w-xl" title={libraryRoot}>
-              {libraryRoot}
-            </span>
-          </div>
-        </div>
-
-        <div className="flex items-center space-x-2">
-          <button
-            onClick={onChangeRoot}
-            className="flex items-center space-x-2 px-3 py-2 rounded-lg bg-zinc-800 hover:bg-zinc-700 text-zinc-200 text-xs font-medium border border-zinc-700/60 transition-colors"
-          >
-            <FolderOpen className="w-4 h-4 text-zinc-400" />
-            <span>Change Folder</span>
-          </button>
-
-          <button
-            onClick={onRefresh}
-            disabled={loading}
-            className="p-2 rounded-lg bg-zinc-800 hover:bg-zinc-700 text-zinc-300 border border-zinc-700/60 transition-colors disabled:opacity-50"
-            title="Scan Again"
-          >
-            <RefreshCw className={`w-4 h-4 ${loading ? 'animate-spin' : ''}`} />
-          </button>
-        </div>
-      </div>
-
       {/* Anime Folder Tabs / Selector */}
       {folders.length > 0 && (
         <div className="space-y-3">
-          <div className="flex items-center justify-between">
+          <div className="flex items-center space-x-2.5">
             <h3 className="text-sm font-semibold uppercase tracking-wider text-zinc-400">
               Anime Seasons ({folders.length})
             </h3>
+            <button
+              onClick={onRefresh}
+              disabled={loading}
+              className="p-1 rounded-md text-zinc-400 hover:text-zinc-200 hover:bg-zinc-800 transition-colors disabled:opacity-50"
+              title="Refresh Seasons"
+            >
+              <RefreshCw className={`w-3.5 h-3.5 ${loading ? 'animate-spin' : ''}`} />
+            </button>
           </div>
 
           <div className="flex items-center space-x-2 overflow-x-auto pb-2 scrollbar-thin">
@@ -118,9 +96,23 @@ export const FolderBrowser: React.FC<FolderBrowserProps> = ({
         <div className="space-y-4">
           <div className="flex flex-wrap items-center justify-between gap-4 pb-2 border-b border-zinc-800/80">
             <div>
-              <h2 className="text-xl font-bold text-white tracking-tight flex items-center space-x-2" title={selectedFolder.folderName}>
-                <span>{cleanSeriesTitle(selectedFolder.folderName) || selectedFolder.folderName}</span>
-              </h2>
+              <div className="flex flex-wrap items-center gap-2.5">
+                <h2 className="text-xl font-bold text-white tracking-tight" title={selectedFolder.folderName}>
+                  {cleanSeriesTitle(selectedFolder.folderName) || selectedFolder.folderName}
+                </h2>
+                {releaseTags.length > 0 && (
+                  <div className="flex items-center gap-1.5">
+                    {releaseTags.map((tag) => (
+                      <span
+                        key={tag}
+                        className="px-2 py-0.5 rounded text-[10px] font-mono font-semibold bg-zinc-800/90 text-zinc-300 border border-zinc-700/60"
+                      >
+                        {tag}
+                      </span>
+                    ))}
+                  </div>
+                )}
+              </div>
               <p className="text-xs text-zinc-400 mt-1 flex flex-wrap items-center gap-x-3 gap-y-1">
                 <span>{selectedFolder.episodes.length} Episodes found</span>
                 <span>•</span>
