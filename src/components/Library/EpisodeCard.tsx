@@ -100,21 +100,21 @@ export const EpisodeCard: React.FC<EpisodeCardProps> = ({ episode, progress, onP
         <div className="mt-2.5 flex items-center justify-between text-[11px]">
           {/* Subtitle / Dub Indicator (Lower-Left under Episode) */}
           <div>
-            {episode.hasExternalSrt ? (
-              <span
-                title="Whisper External Subtitle Ready (.srt)"
-                className="inline-flex items-center space-x-1 px-1.5 py-0.5 rounded text-[10px] font-semibold bg-emerald-500/20 text-emerald-300 border border-emerald-500/40"
-              >
-                <Subtitles className="w-3 h-3 text-emerald-400" />
-                <span>SRT Ready</span>
-              </span>
-            ) : episode.hasEmbeddedDubtitles ? (
+            {episode.hasEmbeddedDubtitles ? (
               <span
                 title="Embedded English Dubtitles (SDH) detected"
                 className="inline-flex items-center space-x-1 px-1.5 py-0.5 rounded text-[10px] font-semibold bg-purple-500/25 text-purple-300 border border-purple-500/40"
               >
                 <Subtitles className="w-3 h-3 text-purple-400" />
                 <span>Dub Sub</span>
+              </span>
+            ) : episode.hasExternalSrt ? (
+              <span
+                title="Whisper AI Subtitle Ready (.srt)"
+                className="inline-flex items-center space-x-1 px-1.5 py-0.5 rounded text-[10px] font-semibold bg-emerald-500/20 text-emerald-300 border border-emerald-500/40"
+              >
+                <Subtitles className="w-3 h-3 text-emerald-400" />
+                <span>AI Sub</span>
               </span>
             ) : null}
           </div>

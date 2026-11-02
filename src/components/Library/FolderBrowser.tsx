@@ -1,5 +1,5 @@
 import React, { useState, useMemo } from 'react';
-import { RefreshCw, ExternalLink, Sparkles, Film, Search, Star, X } from 'lucide-react';
+import { RefreshCw, ExternalLink, Sparkles, Subtitles, Film, Search, Star, X } from 'lucide-react';
 import { AnimeFolder, Episode, PlaybackProgress } from '../../types';
 import { cleanSeriesTitle, extractReleaseTags } from '../../utils/format';
 import { EpisodeCard } from './EpisodeCard';
@@ -170,9 +170,8 @@ export const FolderBrowser: React.FC<FolderBrowserProps> = ({
                           Dub Sub
                         </span>
                       ) : folder.hasSubtitlesCount > 0 ? (
-                        <span className="px-2 py-0.5 rounded-md text-[10px] font-bold bg-indigo-600/90 text-white backdrop-blur-md shadow-md border border-indigo-400/30 flex items-center space-x-1">
-                          <Sparkles className="w-2.5 h-2.5 text-indigo-300" />
-                          <span>AI Sub</span>
+                        <span className="px-2 py-0.5 rounded-md text-[10px] font-bold bg-emerald-600/90 text-white backdrop-blur-md shadow-md border border-emerald-400/30">
+                          AI Sub
                         </span>
                       ) : (
                         <span className="px-2 py-0.5 rounded-md text-[10px] font-bold bg-zinc-800/90 text-zinc-400 backdrop-blur-md border border-zinc-700/60">
@@ -282,15 +281,22 @@ export const FolderBrowser: React.FC<FolderBrowserProps> = ({
                   {selectedFolder.hasEmbeddedDubtitles && (
                     <>
                       <span className="inline-flex items-center space-x-1 px-2 py-0.5 rounded bg-purple-500/15 border border-purple-500/30 text-purple-300 font-semibold">
-                        <Sparkles className="w-3 h-3 text-purple-400" />
-                        <span>Dubtitles / SDH Embedded</span>
+                        <Subtitles className="w-3 h-3 text-purple-400" />
+                        <span>Dub Sub Embedded</span>
                       </span>
                       <span>•</span>
                     </>
                   )}
-                  <span className="text-emerald-400 font-semibold">
-                    {selectedFolder.hasSubtitlesCount} / {selectedFolder.totalEpisodes} with External SRT
-                  </span>
+                  {selectedFolder.hasSubtitlesCount > 0 ? (
+                    <span className="inline-flex items-center space-x-1 px-2 py-0.5 rounded bg-emerald-500/15 border border-emerald-500/30 text-emerald-300 font-semibold">
+                      <Subtitles className="w-3 h-3 text-emerald-400" />
+                      <span>{selectedFolder.hasSubtitlesCount} / {selectedFolder.totalEpisodes} AI Sub</span>
+                    </span>
+                  ) : (
+                    <span className="inline-flex items-center space-x-1 px-2 py-0.5 rounded bg-zinc-800/80 text-zinc-400 border border-zinc-700/60 font-medium text-[11px]">
+                      <span>0 / {selectedFolder.totalEpisodes} Subtitles</span>
+                    </span>
+                  )}
                 </p>
               </div>
 
