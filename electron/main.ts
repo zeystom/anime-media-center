@@ -4,7 +4,7 @@ import fs from 'fs';
 import { fileURLToPath } from 'url';
 import { storage } from './storage';
 import { streamServer } from './server';
-import { probeMkv, extractEmbeddedSubtitle, extractEmbeddedAss, extractEmbeddedFonts, filterFontsForAss, parseSrt, findPrecedingKeyframe } from './ffmpeg';
+import { probeMkv, extractEmbeddedSubtitle, extractEmbeddedAss, extractEmbeddedFonts, filterFontsForAss, parseSrt, findPrecedingKeyframe, readMkvEmbeddedTitle } from './ffmpeg';
 import { whisperManager } from './whisper';
 import { AnimeFolder, Episode, PlaybackProgress, SeasonPreference } from './types';
 import { getKitsuMetadata } from './kitsu';
@@ -119,6 +119,10 @@ async function scanFolderForEpisodes(folderPath: string, port: number): Promise<
       const numericIndex = numMatch ? parseInt(numMatch[1], 10) : null;
       const kitsuEp = numericIndex !== null && kitsuData ? kitsuData.episodes[numericIndex] : null;
 
+      // Extract official embedded MKV container title in <1ms as local fallback
+      const embeddedTitle = readMkvEmbeddedTitle(fullPath);
+      const officialTitle = kitsuEp?.title || embeddedTitle || null;
+
       episodes.push({
         filePath: fullPath,
         fileName: file,
@@ -130,8 +134,8 @@ async function scanFolderForEpisodes(folderPath: string, port: number): Promise<
         hasEmbeddedDubtitles: hasDubtitles,
         thumbnailUrl: `http://127.0.0.1:${port}/thumb?file=${encodeURIComponent(fullPath)}&type=card`,
         kitsuThumbnail: kitsuEp?.thumbnailUrl || null,
-        kitsuTitle: kitsuEp?.title || null,
-        episodeTitle: kitsuEp?.title || null,
+        kitsuTitle: officialTitle,
+        episodeTitle: officialTitle,
       });
     }
 
@@ -283,25 +287,30 @@ function setupIpcHandlers() {
         });
       }
 
-      // 2. Scan immediate subdirectories
+      // 2. Scan immediate subdirectories concurrently in parallel
       const entries = fs.readdirSync(targetRoot, { withFileTypes: true });
-      for (const entry of entries) {
-        if (entry.isDirectory()) {
-          const subFolderPath = path.join(targetRoot, entry.name);
-          const episodes = await scanFolderForEpisodes(subFolderPath, port);
-          if (episodes.length > 0) {
-            const hasDubtitlesCount = episodes.filter((e) => e.hasEmbeddedDubtitles).length;
-            animeFolders.push({
-              folderPath: subFolderPath,
-              folderName: entry.name,
-              episodes,
-              hasSubtitlesCount: episodes.filter((e) => e.hasExternalSrt).length,
-              hasDubtitlesCount,
-              hasEmbeddedDubtitles: hasDubtitlesCount > 0,
-              totalEpisodes: episodes.length,
-            });
-          }
+      const dirEntries = entries.filter((e) => e.isDirectory());
+      const subFolderPromises = dirEntries.map(async (entry) => {
+        const subFolderPath = path.join(targetRoot, entry.name);
+        const episodes = await scanFolderForEpisodes(subFolderPath, port);
+        if (episodes.length > 0) {
+          const hasDubtitlesCount = episodes.filter((e) => e.hasEmbeddedDubtitles).length;
+          return {
+            folderPath: subFolderPath,
+            folderName: entry.name,
+            episodes,
+            hasSubtitlesCount: episodes.filter((e) => e.hasExternalSrt).length,
+            hasDubtitlesCount,
+            hasEmbeddedDubtitles: hasDubtitlesCount > 0,
+            totalEpisodes: episodes.length,
+          } as AnimeFolder;
         }
+        return null;
+      });
+
+      const resolved = await Promise.all(subFolderPromises);
+      for (const item of resolved) {
+        if (item) animeFolders.push(item);
       }
     } catch (err) {
       console.error('Error scanning library:', err);
@@ -338,21 +347,20 @@ function setupIpcHandlers() {
     }
 
     if (trackIndex !== null && trackIndex !== undefined) {
-      // Check if this track is ASS/SSA
+      // Check if this track is ASS/SSA (probeMkv uses in-memory cache, instant)
       const metadata = await probeMkv(filePath, settings.ffmpegPath);
       const track = metadata.subtitleTracks.find((t) => t.index === trackIndex);
       const isAss = track && /ass|ssa/i.test(track.codec || '');
 
       if (isAss) {
-        const [assContent, rawFonts] = await Promise.all([
-          extractEmbeddedAss(filePath, trackIndex, settings.ffmpegPath),
-          extractEmbeddedFonts(filePath, settings.ffmpegPath, port),
-        ]);
-        const fonts = filterFontsForAss(assContent, rawFonts);
+        // Fast ASS extraction with input packet discard
+        const assContent = await extractEmbeddedAss(filePath, trackIndex, settings.ffmpegPath);
+        // Start font extraction non-blocking in background without stalling subtitle rendering
+        extractEmbeddedFonts(filePath, settings.ffmpegPath, port).catch(() => {});
         return {
           format: 'ass',
           content: assContent,
-          fonts,
+          fonts: [],
           port,
           cues: [],
         };

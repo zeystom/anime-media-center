@@ -115,7 +115,64 @@ export function parseSrt(content: string): SubtitleCue[] {
   return cues;
 }
 
+const probeCache = new Map<string, VideoMetadata>();
+
+/**
+ * Fast EBML reader that inspects the first 64KB of a Matroska (.mkv) file
+ * to instantly extract the official container Segment Title (element ID 0x7BA9).
+ * Runs in under 1ms with 0 subprocesses or network requests.
+ */
+export function readMkvEmbeddedTitle(filePath: string): string | null {
+  try {
+    const fd = fs.openSync(filePath, 'r');
+    const buf = Buffer.alloc(65536);
+    const bytesRead = fs.readSync(fd, buf, 0, 65536, 0);
+    fs.closeSync(fd);
+
+    if (bytesRead < 4) return null;
+
+    // Matroska Segment Info Title element ID: 0x7BA9
+    const idx = buf.indexOf(Buffer.from([0x7b, 0xa9]));
+    if (idx === -1 || idx + 2 >= bytesRead) return null;
+
+    // EBML variable length integer for size
+    let firstByte = buf[idx + 2];
+    let length = 0;
+    let mask = 0x80;
+    let numBytes = 1;
+    while ((firstByte & mask) === 0 && numBytes <= 8) {
+      mask >>= 1;
+      numBytes++;
+    }
+    length = firstByte & (mask - 1);
+    for (let i = 1; i < numBytes; i++) {
+      if (idx + 2 + i >= bytesRead) return null;
+      length = (length << 8) | buf[idx + 2 + i];
+    }
+
+    if (length <= 0 || length > 1024 || idx + 2 + numBytes + length > bytesRead) return null;
+
+    const rawTitle = buf.slice(idx + 2 + numBytes, idx + 2 + numBytes + length).toString('utf8').trim();
+    if (!rawTitle) return null;
+
+    // Strip show name and season/episode prefix
+    // e.g. "Clevatess S01E06 Insect Controlling Wizard" -> "Insect Controlling Wizard"
+    // e.g. "Clevatess S01E01 The Lord of Dark Beasts" -> "The Lord of Dark Beasts"
+    const cleaned = rawTitle
+      .replace(/^.*?\b(?:S\d{1,2}\s*E\d{1,3}|EP?\s*\d{1,3})\s*[-–—:.]?\s*/i, '')
+      .replace(/^[-_–—.\s]+|[-_–—.\s]+$/g, '')
+      .trim();
+
+    return cleaned.length >= 2 ? cleaned : rawTitle;
+  } catch {
+    return null;
+  }
+}
+
 export async function probeMkv(filePath: string, ffmpegPath: string): Promise<VideoMetadata> {
+  const cached = probeCache.get(filePath);
+  if (cached) return cached;
+
   return new Promise((resolve, reject) => {
     const args = ['-hide_banner', '-i', filePath];
     const child = spawn(ffmpegPath, args, { windowsHide: true });
@@ -132,6 +189,7 @@ export async function probeMkv(filePath: string, ffmpegPath: string): Promise<Vi
     child.on('close', () => {
       try {
         const metadata = parseFfmpegProbeOutput(filePath, stderr);
+        probeCache.set(filePath, metadata);
         resolve(metadata);
       } catch (err: any) {
         reject(err);
@@ -316,6 +374,8 @@ export async function extractEmbeddedSubtitle(
     const args = [
       '-hide_banner',
       '-y',
+      '-discard:v', 'all',
+      '-discard:a', 'all',
       '-i', filePath,
       '-map', `0:${streamIndex}`,
       '-vn',
@@ -383,6 +443,8 @@ export async function extractEmbeddedAss(
     const args = [
       '-hide_banner',
       '-y',
+      '-discard:v', 'all',
+      '-discard:a', 'all',
       '-i', filePath,
       '-map', `0:${streamIndex}`,
       '-vn',

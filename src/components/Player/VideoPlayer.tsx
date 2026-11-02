@@ -356,26 +356,16 @@ export const VideoPlayer: React.FC<VideoPlayerProps> = ({
       setSubtitlesLoading(true);
 
       try {
-        const [mainRes, topRes] = await Promise.all([
-          mainTrack
-            ? window.electronAPI.extractSubtitleTrack(
-                metadata.filePath,
-                mainTrack.id,
-                mainTrack.index,
-                mainTrack.type === 'external',
-                mainTrack.filePath
-              )
-            : Promise.resolve(null),
-          topTrack
-            ? window.electronAPI.extractSubtitleTrack(
-                metadata.filePath,
-                topTrack.id,
-                topTrack.index,
-                topTrack.type === 'external',
-                topTrack.filePath
-              )
-            : Promise.resolve(null),
-        ]);
+        // 1. Extract Main Dialogue Subtitle FIRST so user sees dialogue immediately
+        const mainRes = mainTrack
+          ? await window.electronAPI.extractSubtitleTrack(
+              metadata.filePath,
+              mainTrack.id,
+              mainTrack.index,
+              mainTrack.type === 'external',
+              mainTrack.filePath
+            )
+          : null;
 
         if (isCancelled) return;
 
@@ -384,31 +374,19 @@ export const VideoPlayer: React.FC<VideoPlayerProps> = ({
         let newMainCues: SubtitleCue[] = [];
         let newTopCues: SubtitleCue[] = [];
 
-        // 1. Process Main Track
+        // Process Main Track
         if (mainRes) {
           if (mainRes.format === 'ass' && mainRes.content) {
             assContent = mainRes.content;
             if (mainRes.fonts) assFonts.push(...mainRes.fonts);
-            // Pre-parse ASS dialogue cues as fallback for HTML overlay
             newMainCues = parseAssToCues(mainRes.content);
           } else if (mainRes.cues) {
             newMainCues = mainRes.cues;
           }
         }
 
-        // 2. Process Top Track
-        if (topRes) {
-          if (topRes.format === 'ass' && topRes.content) {
-            assContent = assContent ? combineAss(assContent, topRes.content) : topRes.content;
-            if (topRes.fonts) assFonts.push(...topRes.fonts);
-            newTopCues = parseAssToCues(topRes.content);
-          } else if (topRes.cues) {
-            newTopCues = topRes.cues;
-          }
-        }
-
         setMainCues(newMainCues);
-        setTopCues(newTopCues);
+        setSubtitlesLoading(false);
 
         // Clean up previous JASSUB instance
         if (jassubRef.current) {
@@ -420,10 +398,10 @@ export const VideoPlayer: React.FC<VideoPlayerProps> = ({
 
         if (isCancelled) return;
 
-        const effectivePort = mainRes?.port || topRes?.port || serverPortRef.current || port;
+        const effectivePort = mainRes?.port || serverPortRef.current || port;
         if (effectivePort) serverPortRef.current = effectivePort;
 
-        // If we have valid ASS content, initialize JASSUB!
+        // If we have valid ASS content, initialize JASSUB immediately for dialogue!
         const hasValidAss = Boolean(
           assContent &&
           assContent.trim().length > 50 &&
@@ -436,11 +414,6 @@ export const VideoPlayer: React.FC<VideoPlayerProps> = ({
               .filter((f) => !f.toLowerCase().includes('arialunicodems') && !f.toLowerCase().endsWith('.ttc'))
               .slice(0, 8);
 
-            console.log(
-              `[VideoPlayer] Initializing JASSUB with ${uniqueFonts.length} fonts, timeOffset: ${
-                streamStartTimeRef.current + syncOffsetRef.current
-              }`
-            );
             const jassub = new JASSUB({
               video,
               subContent: assContent,
@@ -453,18 +426,42 @@ export const VideoPlayer: React.FC<VideoPlayerProps> = ({
             });
             jassubRef.current = jassub;
 
-            // Catch any worker-level font loading/wasm init errors quietly and fall back to HTML overlay
             jassub.ready.catch((err) => {
               console.warn('[VideoPlayer] JASSUB worker init failed, using HTML subtitle overlay fallback:', err);
               if (jassubRef.current === jassub) {
                 try {
-                  jassub.destroy().catch(() => {});
+                  jassub.destroy();
                 } catch {}
                 jassubRef.current = null;
               }
             });
           } catch (err) {
-            console.error('[VideoPlayer] Failed to initialize JASSUB:', err);
+            console.warn('[VideoPlayer] Error creating JASSUB instance, falling back to HTML overlay:', err);
+          }
+        }
+
+        // 2. Afterwards, extract Top Signs Track in the background if enabled
+        if (topTrack && topSubEnabled) {
+          const topRes = await window.electronAPI.extractSubtitleTrack(
+            metadata.filePath,
+            topTrack.id,
+            topTrack.index,
+            topTrack.type === 'external',
+            topTrack.filePath
+          );
+          if (!isCancelled && topRes) {
+            if (topRes.format === 'ass' && topRes.content) {
+              const combined = assContent ? combineAss(assContent, topRes.content) : topRes.content;
+              if (jassubRef.current) {
+                try {
+                  (jassubRef.current as any).setTrack?.(combined);
+                } catch {}
+              }
+              newTopCues = parseAssToCues(topRes.content);
+            } else if (topRes.cues) {
+              newTopCues = topRes.cues;
+            }
+            setTopCues(newTopCues);
           }
         }
       } catch (err) {

@@ -162,6 +162,14 @@ export const FolderBrowser: React.FC<FolderBrowserProps> = ({
             ))}
           </div>
         </div>
+      ) : loading ? (
+        <div className="flex flex-col items-center justify-center py-24 text-center rounded-2xl border border-zinc-800/40 bg-zinc-900/20 p-8">
+          <div className="w-10 h-10 rounded-full border-4 border-red-600/20 border-t-red-600 animate-spin mb-4" />
+          <h3 className="text-base font-semibold text-zinc-200">Scanning Library & Syncing Metadata...</h3>
+          <p className="text-xs text-zinc-500 max-w-sm mt-1">
+            Analyzing media files and episodes in {libraryRoot}
+          </p>
+        </div>
       ) : (
         <div className="flex flex-col items-center justify-center py-20 text-center rounded-2xl border border-dashed border-zinc-800 p-8">
           <Film className="w-12 h-12 text-zinc-600 mb-3" />
