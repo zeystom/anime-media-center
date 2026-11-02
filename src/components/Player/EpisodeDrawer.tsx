@@ -28,7 +28,7 @@ export const EpisodeDrawer: React.FC<EpisodeDrawerProps> = ({
 
   return (
     <div
-      className="fixed inset-0 z-50 flex justify-end bg-black/60 backdrop-blur-sm animate-in fade-in duration-200"
+      className="fixed inset-0 z-50 flex justify-end bg-black/80 animate-in fade-in duration-200"
       onClick={onClose}
     >
       <div

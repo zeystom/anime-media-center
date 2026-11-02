@@ -125,7 +125,7 @@ export const TimelineScrubber: React.FC<TimelineScrubberProps> = ({
           className="absolute bottom-9 -translate-x-1/2 pointer-events-none z-30 flex flex-col items-center animate-in fade-in zoom-in-95 duration-100"
           style={{ left: `${clampedX}px` }}
         >
-          <div className="p-1 rounded-lg bg-zinc-900/95 border border-zinc-700/80 shadow-2xl backdrop-blur-md flex flex-col items-center">
+          <div className="p-1 rounded-lg bg-zinc-900 border border-zinc-700/80 shadow-2xl flex flex-col items-center">
             {/* 160x90 Thumbnail Container */}
             <div className="w-[160px] h-[90px] bg-black rounded overflow-hidden relative">
               {thumbUrl ? (

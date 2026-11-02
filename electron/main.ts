@@ -14,6 +14,8 @@ const __dirname = path.dirname(__filename);
 // Crucial: Hardware HEVC Decoding support for Chromium on Windows
 app.commandLine.appendSwitch('enable-features', 'PlatformHEVCDecoderSupport');
 app.commandLine.appendSwitch('ignore-gpu-blocklist');
+app.commandLine.appendSwitch('disable-backgrounding-occluded-windows');
+app.commandLine.appendSwitch('disable-renderer-backgrounding');
 
 let mainWindow: BrowserWindow | null = null;
 
@@ -119,7 +121,13 @@ async function createWindow() {
         nodeIntegration: false,
         contextIsolation: true,
         webSecurity: false, // Required for smooth local HTTP Matroska stream playback
+        backgroundThrottling: false,
       },
+    });
+
+    // Monitor child processes for hardware GPU recovery
+    app.on('child-process-gone', (_event: any, details: any) => {
+      console.warn('[Electron] Child process gone:', details.type, details.reason);
     });
 
     mainWindow.setMenu(null);

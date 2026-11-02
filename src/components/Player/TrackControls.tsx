@@ -52,7 +52,7 @@ export const TrackControls: React.FC<TrackControlsProps> = ({
   });
 
   return (
-    <div className="fixed inset-0 z-50 flex items-center justify-center p-4 bg-black/60 backdrop-blur-sm animate-in fade-in duration-150">
+    <div className="fixed inset-0 z-50 flex items-center justify-center p-4 bg-black/80 animate-in fade-in duration-150">
       <div
         className="relative w-full max-w-4xl glass-dropdown rounded-2xl border border-zinc-700/80 p-6 text-zinc-100 shadow-2xl animate-in zoom-in-95 duration-150"
         onClick={(e) => e.stopPropagation()}

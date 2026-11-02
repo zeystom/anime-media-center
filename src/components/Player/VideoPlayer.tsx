@@ -313,9 +313,8 @@ export const VideoPlayer: React.FC<VideoPlayerProps> = ({
       video.pause();
     } catch {}
 
-    // 3. Clear existing source & reload new stream
+    // 3. Clear existing source & play new stream seamlessly
     video.src = url;
-    video.load();
 
     const playPromise = video.play();
     if (playPromise !== undefined) {
@@ -672,7 +671,7 @@ export const VideoPlayer: React.FC<VideoPlayerProps> = ({
 
       {/* Loading Spinner */}
       {loading && (
-        <div className="absolute inset-0 flex flex-col items-center justify-center bg-black/60 backdrop-blur-sm z-30 pointer-events-none">
+        <div className="absolute inset-0 flex flex-col items-center justify-center bg-black/80 z-30 pointer-events-none">
           <div className="w-12 h-12 rounded-full border-4 border-red-600/30 border-t-red-600 animate-spin mb-3" />
           <span className="text-xs font-semibold text-zinc-300 tracking-wide">
             Preparing 10-bit Video Stream...
@@ -682,14 +681,14 @@ export const VideoPlayer: React.FC<VideoPlayerProps> = ({
 
       {/* Top Header Controls Bar (Auto-hiding) */}
       <div
-        className={`absolute top-0 left-0 right-0 p-6 bg-gradient-to-b from-black/80 via-black/40 to-transparent flex items-center justify-between z-40 transition-opacity duration-300 ${
+        className={`absolute top-0 left-0 right-0 p-6 bg-gradient-to-b from-black/90 via-black/50 to-transparent flex items-center justify-between z-40 transition-opacity duration-300 ${
           areControlsVisible ? 'opacity-100 pointer-events-auto' : 'opacity-0 pointer-events-none'
         }`}
       >
         <div className="flex items-center space-x-4">
           <button
             onClick={onClose}
-            className="p-2 rounded-xl bg-black/40 hover:bg-black/70 text-zinc-200 hover:text-white border border-white/10 backdrop-blur-md transition-all hover:scale-105"
+            className="p-2 rounded-xl bg-black/60 hover:bg-black/80 text-zinc-200 hover:text-white border border-white/10 transition-all hover:scale-105"
             title="Back to Library [Esc]"
           >
             <ArrowLeft className="w-5 h-5" />
@@ -714,7 +713,7 @@ export const VideoPlayer: React.FC<VideoPlayerProps> = ({
             className={`flex items-center space-x-1.5 px-3 py-1.5 rounded-xl text-xs font-bold border transition-all ${
               topSubEnabled
                 ? 'bg-yellow-500/20 text-yellow-300 border-yellow-500/40 shadow-sm shadow-yellow-500/20'
-                : 'bg-black/40 text-zinc-400 border-white/10 hover:text-zinc-200'
+                : 'bg-black/60 text-zinc-400 border-white/10 hover:text-zinc-200'
             }`}
             title="Toggle 2nd Top Subtitle / Signs (English forced only)"
           >
@@ -725,7 +724,7 @@ export const VideoPlayer: React.FC<VideoPlayerProps> = ({
           {/* Audio & Subtitles Menu */}
           <button
             onClick={() => setIsTrackControlsOpen(true)}
-            className="flex items-center space-x-1.5 px-3 py-1.5 rounded-xl bg-black/40 hover:bg-black/70 text-zinc-200 hover:text-white border border-white/10 backdrop-blur-md text-xs font-medium transition-all"
+            className="flex items-center space-x-1.5 px-3 py-1.5 rounded-xl bg-black/60 hover:bg-black/80 text-zinc-200 hover:text-white border border-white/10 text-xs font-medium transition-all"
             title="Configure Audio Tracks & Dual Subtitles"
           >
             <Subtitles className="w-4 h-4 text-emerald-400" />
@@ -735,7 +734,7 @@ export const VideoPlayer: React.FC<VideoPlayerProps> = ({
           {/* Episode Drawer Button */}
           <button
             onClick={() => setIsEpisodeDrawerOpen(true)}
-            className="flex items-center space-x-1.5 px-3 py-1.5 rounded-xl bg-black/40 hover:bg-black/70 text-zinc-200 hover:text-white border border-white/10 backdrop-blur-md text-xs font-medium transition-all"
+            className="flex items-center space-x-1.5 px-3 py-1.5 rounded-xl bg-black/60 hover:bg-black/80 text-zinc-200 hover:text-white border border-white/10 text-xs font-medium transition-all"
             title="Switch Episodes"
           >
             <ListVideo className="w-4 h-4 text-red-500" />
@@ -834,7 +833,7 @@ export const VideoPlayer: React.FC<VideoPlayerProps> = ({
           {/* Right: Subtitle Font Size Controls, Skip Intro (+85s) Button, Fullscreen */}
           <div className="flex items-center space-x-3">
             {/* Quick In-Player Subtitle Font Size Changer */}
-            <div className="flex items-center space-x-1 px-2.5 py-1.5 rounded-xl bg-black/40 hover:bg-black/60 border border-white/10 backdrop-blur-md text-xs text-zinc-300">
+            <div className="flex items-center space-x-1 px-2.5 py-1.5 rounded-xl bg-black/70 hover:bg-black/90 border border-white/10 text-xs text-zinc-300">
               <Type className="w-3.5 h-3.5 text-zinc-400 mr-0.5" />
               <button
                 onClick={() => handleUpdateFontSize(fontSize - 2)}
@@ -860,7 +859,7 @@ export const VideoPlayer: React.FC<VideoPlayerProps> = ({
             {/* Skip Intro (+85s) Dedicated Button */}
             <button
               onClick={() => handleSkip(85, 'Intro Skipped (+85s)')}
-              className="flex items-center space-x-2 px-3.5 py-1.5 rounded-xl bg-white/10 hover:bg-white/20 text-white font-bold text-xs border border-white/20 backdrop-blur-md shadow-lg transition-all hover:scale-105 active:scale-95"
+              className="flex items-center space-x-2 px-3.5 py-1.5 rounded-xl bg-zinc-900/90 hover:bg-zinc-800 text-white font-bold text-xs border border-white/20 shadow-lg transition-all hover:scale-105 active:scale-95"
               title="Skip Opening Intro Theme (+85 seconds)"
             >
               <FastForward className="w-4 h-4 text-red-500 fill-red-500" />

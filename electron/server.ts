@@ -100,16 +100,17 @@ export class LocalStreamServer {
     // Stream FFmpeg Matroska remuxing directly to pipe:
     // -noaccurate_seek forces demuxer to start both audio and video together from the keyframe
     // -ss before -i enables fast keyframe seek (<150ms)
+    // -re paces stream output at native frame rate so loopback network buffers don't overflow
     // -avoid_negative_ts make_zero aligns timestamps starting at 0 (placed on output)
     // -max_interleave_delta 100000 tightly interleaves audio packets with video frames (every 100ms)
     // -c:v copy preserves 10-bit HEVC/H.264 video with 0% CPU
     // -c:a aac -ac 2 transcodes any audio stream to standard stereo AAC
     // -flush_packets 1 forces immediate packet delivery over the pipe
-    // (Note: -re is intentionally NOT used, so Chromium can burst-buffer audio & video instantly on seek)
     const args = [
       '-hide_banner',
       '-noaccurate_seek',
       '-ss', startTime.toString(),
+      '-re',
       '-i', filePath,
       '-map', '0:v:0',
       '-map', `0:a:${audioTrack}`,

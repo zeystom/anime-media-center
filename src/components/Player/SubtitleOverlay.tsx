@@ -41,7 +41,7 @@ export const SubtitleOverlay: React.FC<SubtitleOverlayProps> = ({
       <div className="w-full flex justify-center items-start min-h-[60px] pt-2">
         {activeTopCue && (
           <div
-            className={`max-w-4xl text-center px-4 py-1 rounded bg-black/40 backdrop-blur-[2px] transition-opacity duration-150 ${
+            className={`max-w-4xl text-center px-4 py-1 rounded bg-black/60 transition-opacity duration-150 ${
               hasOutline ? 'subtitles-overlay-top' : ''
             }`}
             style={{
