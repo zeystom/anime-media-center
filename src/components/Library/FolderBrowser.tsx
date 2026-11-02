@@ -99,7 +99,7 @@ export const FolderBrowser: React.FC<FolderBrowserProps> = ({
           </div>
 
           {/* Vertical 2:3 Anime Poster Cards Showcase */}
-          <div className="flex items-stretch space-x-4 overflow-x-auto pb-4 pt-1 scrollbar-thin px-1">
+          <div className="flex items-stretch space-x-5 overflow-x-auto pt-2 pb-7 px-3 scrollbar-none sm:scrollbar-thin">
             {filteredFolders.map((folder) => {
               const isSelected = selectedFolder?.folderPath === folder.folderPath;
               const displayTitle =
@@ -116,67 +116,91 @@ export const FolderBrowser: React.FC<FolderBrowserProps> = ({
                 <div
                   key={folder.folderPath}
                   onClick={() => onSelectFolder(folder)}
-                  className={`group relative shrink-0 w-36 sm:w-44 md:w-48 aspect-[2/3] rounded-2xl overflow-hidden cursor-pointer select-none transition-all duration-300 ${
-                    isSelected
-                      ? 'ring-2 ring-red-500 shadow-2xl shadow-red-500/30 scale-[1.02]'
-                      : 'border border-white/10 hover:border-white/30 hover:scale-[1.03] hover:shadow-xl hover:shadow-black/70'
+                  className={`group relative shrink-0 w-36 sm:w-44 md:w-48 aspect-[2/3] cursor-pointer select-none transition-transform duration-300 ease-out ${
+                    isSelected ? 'scale-[1.02]' : 'hover:scale-[1.03] active:scale-[0.99]'
                   }`}
                 >
-                  {/* Poster Image with Smooth Hover Zoom */}
-                  {posterSrc ? (
-                    <img
-                      src={posterSrc}
-                      alt={displayTitle}
-                      className="w-full h-full object-cover group-hover:scale-105 transition-transform duration-500 bg-zinc-950"
-                      loading="lazy"
-                    />
-                  ) : (
-                    <div className="w-full h-full bg-gradient-to-br from-zinc-800 to-zinc-950 flex flex-col items-center justify-center p-4 text-center">
-                      <Film className="w-10 h-10 text-zinc-600 mb-2" />
-                      <span className="text-xs font-bold text-zinc-300 line-clamp-2">{displayTitle}</span>
-                    </div>
-                  )}
+                  {/* Soft Ambient Selection Glow (Permeates outside without being clipped) */}
+                  <div
+                    className={`absolute -inset-1 rounded-2xl bg-red-600/35 blur-md pointer-events-none transition-opacity duration-300 ${
+                      isSelected ? 'opacity-100' : 'opacity-0'
+                    }`}
+                  />
 
-                  {/* Vignette Gradients */}
-                  <div className="absolute inset-0 bg-gradient-to-t from-black/95 via-black/30 to-black/20 group-hover:via-black/20 transition-all pointer-events-none" />
-
-                  {/* Top Badges */}
-                  <div className="absolute top-2.5 left-2.5 right-2.5 flex items-center justify-between pointer-events-none">
-                    {folder.hasEmbeddedDubtitles ? (
-                      <span className="px-2 py-0.5 rounded-md text-[10px] font-bold bg-purple-600/90 text-white backdrop-blur-md shadow-md border border-purple-400/30">
-                        Dub Sub
-                      </span>
+                  {/* Inner Card Container with Guaranteed Chromium Border-Radius Clip */}
+                  <div
+                    className={`relative w-full h-full rounded-2xl overflow-hidden bg-zinc-950 border-2 transition-colors duration-200 ${
+                      isSelected
+                        ? 'border-red-500 shadow-[0_4px_16px_rgba(239,68,68,0.3)]'
+                        : 'border-white/10 hover:border-white/30 shadow-lg shadow-black/50'
+                    }`}
+                    style={{
+                      transform: 'translateZ(0)',
+                      WebkitMaskImage: '-webkit-radial-gradient(white, black)',
+                      backfaceVisibility: 'hidden',
+                      isolation: 'isolate',
+                    }}
+                  >
+                    {/* Poster Image with Smooth Hover Zoom & Pre-Rounded Corners */}
+                    {posterSrc ? (
+                      <img
+                        src={posterSrc}
+                        alt={displayTitle}
+                        className="w-full h-full object-cover rounded-2xl group-hover:scale-105 transition-transform duration-500 ease-out bg-zinc-950"
+                        style={{
+                          transform: 'translateZ(0)',
+                          backfaceVisibility: 'hidden',
+                        }}
+                        loading="lazy"
+                      />
                     ) : (
-                      <span />
-                    )}
-                    <span className="px-2 py-0.5 rounded-md text-[10px] font-mono font-bold bg-black/80 text-zinc-200 border border-white/15 backdrop-blur-md">
-                      {folder.episodes.length} EPS
-                    </span>
-                  </div>
-
-                  {/* Bottom Text & Score */}
-                  <div className="absolute bottom-0 left-0 right-0 p-3 pointer-events-none flex flex-col justify-end space-y-1">
-                    {folder.averageScore && (
-                      <div className="flex items-center space-x-1 text-amber-400 text-[10px] font-bold">
-                        <Star className="w-3 h-3 fill-amber-400" />
-                        <span>{(folder.averageScore / 10).toFixed(1)}</span>
+                      <div className="w-full h-full bg-gradient-to-br from-zinc-800 to-zinc-950 flex flex-col items-center justify-center p-4 text-center rounded-2xl">
+                        <Film className="w-10 h-10 text-zinc-600 mb-2" />
+                        <span className="text-xs font-bold text-zinc-300 line-clamp-2">{displayTitle}</span>
                       </div>
                     )}
-                    <h4
-                      className="text-xs sm:text-sm font-extrabold text-white tracking-tight line-clamp-2 group-hover:text-red-400 transition-colors"
-                      title={displayTitle}
-                    >
-                      {displayTitle}
-                    </h4>
-                    <p className="text-[10px] text-zinc-400 truncate">
-                      {folder.folderName}
-                    </p>
-                  </div>
 
-                  {/* Active Selection Glow Dot */}
-                  {isSelected && (
-                    <div className="absolute top-2.5 left-2.5 w-2 h-2 rounded-full bg-red-500 shadow-[0_0_8px_rgba(239,68,68,1)] animate-pulse" />
-                  )}
+                    {/* Vignette Gradients */}
+                    <div className="absolute inset-0 bg-gradient-to-t from-black/95 via-black/30 to-black/20 group-hover:via-black/20 transition-all pointer-events-none" />
+
+                    {/* Top Badges */}
+                    <div className="absolute top-2.5 left-2.5 right-2.5 flex items-center justify-between pointer-events-none">
+                      {folder.hasEmbeddedDubtitles ? (
+                        <span className="px-2 py-0.5 rounded-md text-[10px] font-bold bg-purple-600/90 text-white backdrop-blur-md shadow-md border border-purple-400/30">
+                          Dub Sub
+                        </span>
+                      ) : (
+                        <span />
+                      )}
+                      <span className="px-2 py-0.5 rounded-md text-[10px] font-mono font-bold bg-black/80 text-zinc-200 border border-white/15 backdrop-blur-md">
+                        {folder.episodes.length} EPS
+                      </span>
+                    </div>
+
+                    {/* Bottom Text & Score */}
+                    <div className="absolute bottom-0 left-0 right-0 p-3 pointer-events-none flex flex-col justify-end space-y-1">
+                      {folder.averageScore && (
+                        <div className="flex items-center space-x-1 text-amber-400 text-[10px] font-bold">
+                          <Star className="w-3 h-3 fill-amber-400" />
+                          <span>{(folder.averageScore / 10).toFixed(1)}</span>
+                        </div>
+                      )}
+                      <h4
+                        className="text-xs sm:text-sm font-extrabold text-white tracking-tight line-clamp-2 group-hover:text-red-400 transition-colors"
+                        title={displayTitle}
+                      >
+                        {displayTitle}
+                      </h4>
+                      <p className="text-[10px] text-zinc-400 truncate">
+                        {folder.folderName}
+                      </p>
+                    </div>
+
+                    {/* Active Selection Glow Dot */}
+                    {isSelected && (
+                      <div className="absolute top-2.5 left-2.5 w-2 h-2 rounded-full bg-red-500 shadow-[0_0_8px_rgba(239,68,68,1)] animate-pulse" />
+                    )}
+                  </div>
                 </div>
               );
             })}

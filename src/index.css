@@ -16,7 +16,7 @@
 }
 
 ::-webkit-scrollbar-track {
-  background: #121216;
+  background: transparent;
 }
 
 ::-webkit-scrollbar-thumb {
@@ -26,6 +26,15 @@
 
 ::-webkit-scrollbar-thumb:hover {
   background: #3f3f4e;
+}
+
+/* Hide scrollbars utility */
+.scrollbar-none::-webkit-scrollbar {
+  display: none;
+}
+.scrollbar-none {
+  -ms-overflow-style: none;
+  scrollbar-width: none;
 }
 
 /* Subtitle Styling: Netflix/Fansub Grade */
