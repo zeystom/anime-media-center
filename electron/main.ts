@@ -195,6 +195,12 @@ async function createWindow() {
     mainWindow.setMenu(null);
     mainWindow.removeMenu();
 
+    // Open in maximized windowed mode (fills screen while keeping Windows taskbar visible)
+    mainWindow.maximize();
+    mainWindow.once('ready-to-show', () => {
+      mainWindow?.maximize();
+    });
+
     // Setup IPC Handlers (Guarded against duplicate registration)
     setupIpcHandlers();
 
