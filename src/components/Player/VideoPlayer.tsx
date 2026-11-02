@@ -1363,6 +1363,7 @@ export const VideoPlayer: React.FC<VideoPlayerProps> = ({
           filePath={episode.filePath}
           serverPort={serverPortRef.current}
           onSeek={handleSeek}
+          openingRange={detectedOpening}
         />
 
         {/* Action Controls Toolbar */}
@@ -1470,7 +1471,7 @@ export const VideoPlayer: React.FC<VideoPlayerProps> = ({
       {isIntroActive && detectedOpening && (
         <div
           className={`absolute left-6 z-40 transition-all duration-300 flex items-center select-none pointer-events-auto ${
-            areControlsVisible ? 'bottom-24 opacity-100 translate-y-0' : 'bottom-10 opacity-90 hover:opacity-100 translate-y-0'
+            areControlsVisible ? 'bottom-32 opacity-100 translate-y-0' : 'bottom-16 opacity-90 hover:opacity-100 translate-y-0'
           }`}
         >
           <div className="bg-zinc-950/90 hover:bg-zinc-900/95 backdrop-blur-2xl border border-white/20 p-2 pl-3.5 pr-2.5 rounded-2xl shadow-2xl flex items-center space-x-2.5 transition-all group hover:border-red-500/50 hover:shadow-red-500/10">
@@ -1501,7 +1502,11 @@ export const VideoPlayer: React.FC<VideoPlayerProps> = ({
 
       {/* Floating Next Episode / Skip Ending Prompt Card */}
       {isEndingActive && nextEpisode && (
-        <div className="absolute bottom-24 right-6 z-40 bg-zinc-950/95 backdrop-blur-2xl border border-white/15 p-3.5 rounded-2xl shadow-2xl flex items-center space-x-3.5 animate-in slide-in-from-bottom-4 duration-300">
+        <div
+          className={`absolute right-6 z-40 bg-zinc-950/95 backdrop-blur-2xl border border-white/15 p-3.5 rounded-2xl shadow-2xl flex items-center space-x-3.5 animate-in slide-in-from-bottom-4 transition-all duration-300 ${
+            areControlsVisible ? 'bottom-32' : 'bottom-16'
+          }`}
+        >
           <div className="w-16 sm:w-20 aspect-video rounded-xl overflow-hidden shrink-0 bg-black border border-white/10 relative">
             <img
               src={nextEpisode.kitsuThumbnail || nextEpisode.thumbnailUrl}

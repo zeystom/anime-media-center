@@ -1,12 +1,18 @@
 import React, { useState, useRef, useCallback, useEffect } from 'react';
 import { formatTime } from '../../utils/format';
 
+export interface TimelineOpeningRange {
+  start: number;
+  end: number;
+}
+
 interface TimelineScrubberProps {
   currentTime: number;
   duration: number;
   filePath: string;
   serverPort?: number;
   onSeek: (seconds: number) => void;
+  openingRange?: TimelineOpeningRange | null;
 }
 
 const BOX_WIDTH = 176;
@@ -18,6 +24,7 @@ export const TimelineScrubber: React.FC<TimelineScrubberProps> = ({
   filePath,
   serverPort = 0,
   onSeek,
+  openingRange = null,
 }) => {
   const containerRef = useRef<HTMLDivElement>(null);
   const tooltipRef = useRef<HTMLDivElement>(null);
@@ -177,7 +184,8 @@ export const TimelineScrubber: React.FC<TimelineScrubberProps> = ({
           arrowRef.current.style.left = `${arrowX}px`;
         }
         if (timestampRef.current) {
-          timestampRef.current.textContent = formatTime(time);
+          const isInsideOp = openingRange && time >= openingRange.start && time <= openingRange.end;
+          timestampRef.current.textContent = isInsideOp ? `${formatTime(time)} • OP` : formatTime(time);
         }
         if (ghostBarRef.current) {
           ghostBarRef.current.style.width = `${fraction * 100}%`;
@@ -189,7 +197,7 @@ export const TimelineScrubber: React.FC<TimelineScrubberProps> = ({
 
       scheduleThumbnailFetch(time);
     },
-    [calculateTimeFromX, scheduleThumbnailFetch]
+    [calculateTimeFromX, scheduleThumbnailFetch, openingRange]
   );
 
   const handleMouseMove = useCallback(
@@ -225,6 +233,9 @@ export const TimelineScrubber: React.FC<TimelineScrubberProps> = ({
   );
 
   const progressPercent = duration > 0 ? (currentTime / duration) * 100 : 0;
+  const opStartPct = openingRange && duration > 0 ? (openingRange.start / duration) * 100 : 0;
+  const opEndPct = openingRange && duration > 0 ? (openingRange.end / duration) * 100 : 0;
+  const opWidthPct = Math.max(0, opEndPct - opStartPct);
 
   return (
     <div
@@ -248,9 +259,29 @@ export const TimelineScrubber: React.FC<TimelineScrubberProps> = ({
           style={{ width: '0%' }}
         />
 
+        {/* Opening Theme Segment Highlight (Amber / Golden accent with bright border markers) */}
+        {openingRange && duration > 0 && opWidthPct > 0 && (
+          <div
+            className="absolute top-0 bottom-0 bg-amber-400/50 group-hover:bg-amber-400/70 border-l border-r border-amber-300 shadow-[0_0_8px_rgba(251,191,36,0.35)] pointer-events-none transition-colors duration-150 z-[5]"
+            style={{
+              left: `${opStartPct}%`,
+              width: `${opWidthPct}%`,
+            }}
+            title={`Opening (${formatTime(openingRange.start)} - ${formatTime(openingRange.end)})`}
+          />
+        )}
+
+        {/* End of Opening Tick Notch (Crisp visual marker for exactly where OP finishes) */}
+        {openingRange && duration > 0 && opEndPct > 0 && opEndPct <= 100 && (
+          <div
+            className="absolute top-0 bottom-0 w-0.5 bg-amber-200/90 shadow-[0_0_4px_rgba(253,224,71,0.8)] pointer-events-none z-20"
+            style={{ left: `${opEndPct}%` }}
+          />
+        )}
+
         {/* Current Playback Progress Bar */}
         <div
-          className="absolute left-0 top-0 bottom-0 bg-red-600 rounded-full shadow-sm shadow-red-600/50"
+          className="absolute left-0 top-0 bottom-0 bg-red-600 rounded-full shadow-sm shadow-red-600/50 z-10"
           style={{ width: `${progressPercent}%` }}
         />
       </div>
