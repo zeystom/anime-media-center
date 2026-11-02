@@ -20,6 +20,8 @@ interface TrackControlsProps {
   onResetSyncOffset: () => void;
   fontSize: number;
   onUpdateFontSize: (size: number) => void;
+  hasOutline?: boolean;
+  onToggleOutline?: () => void;
 }
 
 function getSubTrackDisplay(track: SubtitleTrack, index: number, allTracks: SubtitleTrack[]) {
@@ -121,6 +123,8 @@ export const TrackControls: React.FC<TrackControlsProps> = ({
   onResetSyncOffset,
   fontSize,
   onUpdateFontSize,
+  hasOutline = true,
+  onToggleOutline,
 }) => {
   useEffect(() => {
     if (!isOpen) return;
@@ -391,7 +395,7 @@ export const TrackControls: React.FC<TrackControlsProps> = ({
             {/* Font Size Changer */}
             <div className="flex items-center space-x-2 pl-3 border-l border-zinc-800">
               <span className="text-xs font-semibold text-zinc-300 flex items-center space-x-1">
-                <Type className="w-3.5 h-3.5 text-indigo-400" />
+                <Type className="w-3.5 h-3.5 text-zinc-400" />
                 <span>Font Size:</span>
               </span>
               <div className="flex items-center space-x-1 bg-zinc-900 p-1 rounded-lg border border-zinc-800">
@@ -418,6 +422,21 @@ export const TrackControls: React.FC<TrackControlsProps> = ({
                 </button>
               </div>
             </div>
+
+            {/* Subtitle Outline Toggle */}
+            {onToggleOutline && (
+              <div className="flex items-center space-x-2 pl-3 border-l border-zinc-800">
+                <label className="flex items-center space-x-2 cursor-pointer select-none">
+                  <input
+                    type="checkbox"
+                    checked={hasOutline}
+                    onChange={onToggleOutline}
+                    className="w-3.5 h-3.5 rounded bg-zinc-900 border-zinc-700 text-red-600 focus:ring-0 cursor-pointer"
+                  />
+                  <span className="text-xs text-zinc-300 font-medium">Text Outline</span>
+                </label>
+              </div>
+            )}
           </div>
 
           <div className="text-xs text-zinc-500 font-medium">

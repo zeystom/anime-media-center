@@ -47,10 +47,10 @@ export const App: React.FC = () => {
 
   // Library & Data state
   const [settings, setSettings] = useState<AppSettings>({
-    ffmpegPath: 'C:\\Users\\gogoh\\AppData\\Roaming\\Subtitle Edit\\SpeechToText\\Purfview-Faster-Whisper-XXL\\ffmpeg.exe',
-    whisperPath: 'C:\\Users\\gogoh\\AppData\\Roaming\\Subtitle Edit\\SpeechToText\\Purfview-Faster-Whisper-XXL\\faster-whisper-xxl.exe',
-    defaultLibraryRoot: 'D:\\films',
-    libraryFolders: ['D:\\films'],
+    ffmpegPath: '',
+    whisperPath: '',
+    defaultLibraryRoot: '',
+    libraryFolders: [],
     autoPlayNext: true,
     subtitlesFontSize: 28,
     subtitlesOutline: true,

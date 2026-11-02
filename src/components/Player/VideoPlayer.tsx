@@ -310,6 +310,7 @@ export const VideoPlayer: React.FC<VideoPlayerProps> = ({
   const [topSubEnabled, setTopSubEnabled] = useState<boolean>(false);
   const [syncOffset, setSyncOffset] = useState<number>(0);
   const [fontSize, setFontSize] = useState<number>(settings.subtitlesFontSize || 28);
+  const [subtitlesOutline, setSubtitlesOutline] = useState<boolean>(settings.subtitlesOutline !== false);
   const [subtitlesLoading, setSubtitlesLoading] = useState<boolean>(false);
 
   // Parsed Subtitle Cues & Raw ASS for smart feature detection
@@ -1163,8 +1164,20 @@ export const VideoPlayer: React.FC<VideoPlayerProps> = ({
         window.electronAPI.updateSettings({ subtitlesFontSize: clamped }).catch(() => {});
       }
     },
-    []
+    [showRipple]
   );
+
+  // Subtitle Outline Toggle (Live in-player & persisted)
+  const handleToggleOutline = useCallback(() => {
+    setSubtitlesOutline((prev) => {
+      const next = !prev;
+      showRipple('sync', next ? 'Sub Outline: ON' : 'Sub Outline: OFF');
+      if (window.electronAPI) {
+        window.electronAPI.updateSettings({ subtitlesOutline: next }).catch(() => {});
+      }
+      return next;
+    });
+  }, [showRipple]);
 
   // Keyboard Shortcuts: YouTube & Desktop Grade
   useEffect(() => {
@@ -1339,7 +1352,7 @@ export const VideoPlayer: React.FC<VideoPlayerProps> = ({
         topSubEnabled={topSubEnabled}
         syncOffset={syncOffset}
         fontSize={fontSize}
-        hasOutline={settings.subtitlesOutline}
+        hasOutline={subtitlesOutline}
         controlsVisible={areControlsVisible}
       />
 
@@ -1624,6 +1637,8 @@ export const VideoPlayer: React.FC<VideoPlayerProps> = ({
         onResetSyncOffset={() => handleUpdateSyncOffset(-syncOffset)}
         fontSize={fontSize}
         onUpdateFontSize={handleUpdateFontSize}
+        hasOutline={subtitlesOutline}
+        onToggleOutline={handleToggleOutline}
       />
 
       {/* Episode Drawer (In-Player Switcher) */}
