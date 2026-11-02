@@ -58,6 +58,9 @@ export const VideoPlayer: React.FC<VideoPlayerProps> = ({
   const [videoElementTime, setVideoElementTime] = useState<number>(0);
   const [duration, setDuration] = useState<number>(0);
 
+  // Debounce ref for rapid seeking/skipping
+  const seekDebounceRef = useRef<any>(null);
+
   // Absolute playback time = streamStartTime + videoElement.currentTime
   const currentAbsoluteTime = streamStartTime + videoElementTime;
 
@@ -298,7 +301,13 @@ export const VideoPlayer: React.FC<VideoPlayerProps> = ({
   // Instant Stream Seek function
   const handleSeek = useCallback(
     async (targetTime: number) => {
+      if (seekDebounceRef.current) {
+        clearTimeout(seekDebounceRef.current);
+        seekDebounceRef.current = null;
+      }
+
       const clamped = Math.max(0, Math.min(targetTime, duration));
+      timeRef.current = clamped;
       setStreamStartTime(clamped);
       setVideoElementTime(0);
 
@@ -353,14 +362,35 @@ export const VideoPlayer: React.FC<VideoPlayerProps> = ({
     }
   }, []);
 
-  // Smart Skip Delta
+  // Smart Skip Delta (With ultra-fast 75ms debounce for rapid keystrokes)
   const handleSkip = useCallback(
     (deltaSec: number, label: string) => {
-      const nextTime = timeRef.current + deltaSec;
-      handleSeek(nextTime);
+      const nextTime = Math.max(0, Math.min(timeRef.current + deltaSec, duration));
+      timeRef.current = nextTime;
+      setStreamStartTime(nextTime);
+      setVideoElementTime(0);
       showRipple(deltaSec > 0 ? 'seek-forward' : 'seek-backward', label);
+
+      if (seekDebounceRef.current) {
+        clearTimeout(seekDebounceRef.current);
+      }
+
+      seekDebounceRef.current = setTimeout(async () => {
+        const streamUrl = await window.electronAPI.getStreamUrl(
+          episode.filePath,
+          selectedAudioIndex,
+          nextTime
+        );
+
+        if (videoRef.current) {
+          videoRef.current.src = streamUrl;
+          videoRef.current.load();
+          videoRef.current.play().catch(() => {});
+          setIsPlaying(true);
+        }
+      }, 75);
     },
-    [handleSeek]
+    [duration, episode.filePath, selectedAudioIndex]
   );
 
   // Periodic Save of Playback History (Every 3 seconds)

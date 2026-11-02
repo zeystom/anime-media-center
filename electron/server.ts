@@ -91,23 +91,23 @@ export class LocalStreamServer {
     // Kill any previous stream process to free up CPU, file handles, and memory
     if (this.currentStreamProcess && !this.currentStreamProcess.killed) {
       try {
-        this.currentStreamProcess.kill('SIGKILL');
+        this.currentStreamProcess.stdout?.destroy();
+        this.currentStreamProcess.kill();
       } catch {}
       this.currentStreamProcess = null;
     }
 
     // Stream FFmpeg Matroska remuxing directly to pipe:
     // -ss before -i enables fast keyframe seek (<150ms)
-    // -avoid_negative_ts make_zero aligns timestamps starting at 0
-    // -re paces reading to the native video frame rate so it doesn't flood/overflow socket buffers
+    // -avoid_negative_ts make_zero aligns timestamps starting at 0 (placed on output)
+    // -max_interleave_delta 100000 tightly interleaves audio packets with video frames (every 100ms)
     // -c:v copy preserves 10-bit HEVC/H.264 video with 0% CPU
     // -c:a aac -ac 2 transcodes any audio stream to standard stereo AAC
     // -flush_packets 1 forces immediate packet delivery over the pipe
+    // (Note: -re is intentionally NOT used, so Chromium can burst-buffer audio & video instantly on seek)
     const args = [
       '-hide_banner',
       '-ss', startTime.toString(),
-      '-avoid_negative_ts', 'make_zero',
-      '-re',
       '-i', filePath,
       '-map', '0:v:0',
       '-map', `0:a:${audioTrack}`,
@@ -115,6 +115,8 @@ export class LocalStreamServer {
       '-c:a', 'aac',
       '-ac', '2',
       '-b:a', '256k',
+      '-avoid_negative_ts', 'make_zero',
+      '-max_interleave_delta', '100000',
       '-flush_packets', '1',
       '-f', 'matroska',
       'pipe:1',
@@ -149,7 +151,10 @@ export class LocalStreamServer {
           this.currentStreamProcess = null;
         }
         try {
-          ffmpeg.kill('SIGKILL');
+          ffmpeg.stdout?.destroy();
+        } catch {}
+        try {
+          ffmpeg.kill();
         } catch {}
       }
     };
