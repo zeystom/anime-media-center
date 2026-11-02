@@ -25,6 +25,7 @@ import { SubtitleOverlay } from './SubtitleOverlay';
 import { TimelineScrubber } from './TimelineScrubber';
 import { TrackControls } from './TrackControls';
 import { EpisodeDrawer } from './EpisodeDrawer';
+import { MagneticEpisodePeek } from './MagneticEpisodePeek';
 import { RippleIndicator } from './RippleIndicator';
 import { formatTime, cleanEpisodeTitle, formatEpisodeDisplayTitle } from '../../utils/format';
 
@@ -1057,20 +1058,9 @@ export const VideoPlayer: React.FC<VideoPlayerProps> = ({
     console.warn('[VideoPlayer] Video element error:', mediaError?.code, mediaError?.message);
   }, []);
 
-  const handleContainerMouseMove = useCallback(
-    (e: React.MouseEvent<HTMLDivElement>) => {
-      resetControlsTimer();
-      // Right edge hover gesture:
-      // Strictly disabled in the bottom controls zone (bottom 140px) and top navbar (top 80px),
-      // so it never interferes with scrubbing the timeline or clicking Fullscreen / Audio & Subtitles!
-      const isOutsideControls = e.clientY > 80 && e.clientY < window.innerHeight - 140;
-      const isRightEdge = e.clientX >= window.innerWidth - 18;
-      if (isRightEdge && isOutsideControls && !isEpisodeDrawerOpen && !isTrackControlsOpen) {
-        setIsEpisodeDrawerOpen(true);
-      }
-    },
-    [resetControlsTimer, isEpisodeDrawerOpen, isTrackControlsOpen]
-  );
+  const handleContainerMouseMove = useCallback(() => {
+    resetControlsTimer();
+  }, [resetControlsTimer]);
 
   return (
     <div
@@ -1355,22 +1345,13 @@ export const VideoPlayer: React.FC<VideoPlayerProps> = ({
         </div>
       )}
 
-      {/* Right Edge "Episodes" Peek Tab (Click or hover to open drawer) */}
-      {!isEpisodeDrawerOpen && (
-        <div
-          onMouseEnter={() => setIsEpisodeDrawerOpen(true)}
-          onClick={() => setIsEpisodeDrawerOpen(true)}
-          className={`fixed right-0 top-1/2 -translate-y-1/2 z-40 pr-1 pl-2.5 py-4 rounded-l-2xl bg-zinc-900/80 hover:bg-zinc-800 text-zinc-400 hover:text-white border-y border-l border-white/10 shadow-xl backdrop-blur-md cursor-pointer transition-all duration-300 group flex items-center space-x-1.5 ${
-            areControlsVisible ? 'opacity-70 translate-x-0' : 'opacity-0 translate-x-2 pointer-events-none'
-          }`}
-          title="Episodes (or push cursor to right edge)"
-        >
-          <ChevronLeft className="w-4 h-4 text-zinc-400 group-hover:text-red-400 transition-colors" />
-          <span className="text-[11px] font-semibold tracking-wider uppercase text-zinc-300 group-hover:text-white [writing-mode:vertical-lr] rotate-180">
-            Episodes
-          </span>
-        </div>
-      )}
+      {/* Right Edge Magnetic Peek Arc (Organic elastic curve following cursor & snapping open) */}
+      <MagneticEpisodePeek
+        isOpen={isEpisodeDrawerOpen}
+        onOpen={() => setIsEpisodeDrawerOpen(true)}
+        areControlsVisible={areControlsVisible}
+        episodeCount={seasonEpisodes.length}
+      />
 
       {/* Track Controls Popover (3 Columns: Audio, Main Sub, Top Sub) */}
       <TrackControls

@@ -197,17 +197,19 @@ export const EpisodeDrawer: React.FC<EpisodeDrawerProps> = ({
     return cleanSeriesTitle(episodes[0].fileName || currentEpisode.fileName);
   }, [episodes, currentEpisode]);
 
-  if (!isOpen) return null;
-
   return (
     <div
-      className="fixed inset-0 z-50 flex justify-end bg-black/80 backdrop-blur-sm animate-in fade-in duration-200"
+      className={`fixed inset-0 z-50 flex justify-end bg-black/80 backdrop-blur-sm transition-opacity duration-300 ease-out select-none ${
+        isOpen ? 'opacity-100 pointer-events-auto' : 'opacity-0 pointer-events-none'
+      }`}
       onClick={onClose}
     >
       <div
         onMouseEnter={handleMouseEnter}
         onMouseLeave={handleMouseLeave}
-        className="w-full sm:max-w-md md:max-w-[480px] h-full bg-[#101014]/95 backdrop-blur-xl border-l border-zinc-800 p-6 flex flex-col shadow-2xl animate-in slide-in-from-right duration-200"
+        className={`w-full sm:max-w-md md:max-w-[480px] h-full bg-[#101014]/95 backdrop-blur-2xl border-l border-white/10 p-6 flex flex-col shadow-[-25px_0_60px_rgba(0,0,0,0.85)] transition-transform duration-400 ease-[cubic-bezier(0.16,1,0.3,1)] transform ${
+          isOpen ? 'translate-x-0' : 'translate-x-full'
+        }`}
         onClick={(e) => e.stopPropagation()}
       >
         {/* Header */}
