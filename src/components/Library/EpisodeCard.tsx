@@ -47,29 +47,6 @@ export const EpisodeCard: React.FC<EpisodeCardProps> = ({ episode, progress, onP
           </div>
         </div>
 
-        {/* Subtle Indicator for External SRT or Embedded Dubtitles */}
-        {(episode.hasExternalSrt || episode.hasEmbeddedDubtitles) && (
-          <div className="absolute top-2 right-2 flex items-center space-x-1">
-            {episode.hasExternalSrt ? (
-              <span
-                title="Whisper External Subtitle Ready (.srt)"
-                className="flex items-center space-x-1 px-1.5 py-0.5 rounded text-[10px] font-semibold bg-emerald-500/25 text-emerald-300 border border-emerald-500/40 backdrop-blur-md"
-              >
-                <Subtitles className="w-3 h-3" />
-                <span>SRT Ready</span>
-              </span>
-            ) : (
-              <span
-                title="Embedded English Dubtitles (SDH) detected"
-                className="flex items-center space-x-1 px-1.5 py-0.5 rounded text-[10px] font-semibold bg-purple-500/25 text-purple-300 border border-purple-500/40 backdrop-blur-md"
-              >
-                <Subtitles className="w-3 h-3 text-purple-400" />
-                <span>Dub Sub</span>
-              </span>
-            )}
-          </div>
-        )}
-
         {/* Bottom Progress Bar if watched */}
         {progress && progress.currentTime > 0 && (
           <div className="absolute bottom-0 left-0 right-0 h-1.5 bg-zinc-800/80">
@@ -92,25 +69,49 @@ export const EpisodeCard: React.FC<EpisodeCardProps> = ({ episode, progress, onP
           </h4>
         </div>
 
-        <div className="mt-2.5 flex items-center justify-between text-[11px] text-zinc-400">
-          {progress && progress.currentTime > 0 ? (
-            <span className="flex items-center space-x-1 font-mono text-zinc-300 ml-auto">
-              {progress.completed ? (
-                <>
-                  <CheckCircle2 className="w-3 h-3 text-emerald-400" />
-                  <span className="text-emerald-400 font-medium">Watched</span>
-                </>
-              ) : (
-                <span>
-                  {formatTime(progress.currentTime)} / {formatTime(progress.duration || episode.duration || 0)}
-                </span>
-              )}
-            </span>
-          ) : (
-            <span className="text-zinc-500 ml-auto">
-              {episode.duration && episode.duration > 0 ? formatTime(episode.duration) : 'Unwatched'}
-            </span>
-          )}
+        <div className="mt-2.5 flex items-center justify-between text-[11px]">
+          {/* Subtitle / Dub Indicator (Lower-Left under Episode) */}
+          <div>
+            {episode.hasExternalSrt ? (
+              <span
+                title="Whisper External Subtitle Ready (.srt)"
+                className="inline-flex items-center space-x-1 px-1.5 py-0.5 rounded text-[10px] font-semibold bg-emerald-500/20 text-emerald-300 border border-emerald-500/40"
+              >
+                <Subtitles className="w-3 h-3 text-emerald-400" />
+                <span>SRT Ready</span>
+              </span>
+            ) : episode.hasEmbeddedDubtitles ? (
+              <span
+                title="Embedded English Dubtitles (SDH) detected"
+                className="inline-flex items-center space-x-1 px-1.5 py-0.5 rounded text-[10px] font-semibold bg-purple-500/25 text-purple-300 border border-purple-500/40"
+              >
+                <Subtitles className="w-3 h-3 text-purple-400" />
+                <span>Dub Sub</span>
+              </span>
+            ) : null}
+          </div>
+
+          {/* Watch Progress / Timestamp (Lower-Right) */}
+          <div className="text-zinc-400">
+            {progress && progress.currentTime > 0 ? (
+              <span className="flex items-center space-x-1 font-mono text-zinc-300">
+                {progress.completed ? (
+                  <>
+                    <CheckCircle2 className="w-3 h-3 text-emerald-400" />
+                    <span className="text-emerald-400 font-medium">Watched</span>
+                  </>
+                ) : (
+                  <span>
+                    {formatTime(progress.currentTime)} / {formatTime(progress.duration || episode.duration || 0)}
+                  </span>
+                )}
+              </span>
+            ) : (
+              <span className="text-zinc-500 font-mono">
+                {episode.duration && episode.duration > 0 ? formatTime(episode.duration) : 'Unwatched'}
+              </span>
+            )}
+          </div>
         </div>
       </div>
     </div>
