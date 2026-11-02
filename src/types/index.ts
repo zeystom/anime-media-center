@@ -9,6 +9,15 @@ export interface ElectronAPI {
   getSettings: () => Promise<import('../../electron/types').AppSettings>;
   updateSettings: (settings: Partial<import('../../electron/types').AppSettings>) => Promise<import('../../electron/types').AppSettings>;
   browseFolder: (defaultPath?: string) => Promise<string | null>;
+  browseFile: (options?: { title?: string; defaultPath?: string; extensions?: string[] }) => Promise<string | null>;
+  checkBinaries: (paths?: { ffmpegPath?: string; whisperPath?: string }) => Promise<{
+    ffmpegExists: boolean;
+    whisperExists: boolean;
+    modelExists: boolean;
+    modelName: string;
+  }>;
+  autoDetectBinaries: () => Promise<{ ffmpegPath: string; whisperPath: string }>;
+  openExternalUrl: (url: string) => Promise<boolean>;
   scanLibrary: (rootPath?: string | string[]) => Promise<import('../../electron/types').AnimeFolder[]>;
   getFolderEpisodes: (folderPath: string) => Promise<import('../../electron/types').Episode[]>;
   probeVideo: (filePath: string) => Promise<import('../../electron/types').VideoMetadata>;

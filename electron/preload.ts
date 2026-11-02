@@ -5,6 +5,12 @@ contextBridge.exposeInMainWorld('electronAPI', {
   getSettings: () => ipcRenderer.invoke('get-settings'),
   updateSettings: (settings: Partial<AppSettings>) => ipcRenderer.invoke('update-settings', settings),
   browseFolder: (defaultPath?: string) => ipcRenderer.invoke('browse-folder', defaultPath),
+  browseFile: (options?: { title?: string; defaultPath?: string; extensions?: string[] }) =>
+    ipcRenderer.invoke('browse-file', options),
+  checkBinaries: (paths?: { ffmpegPath?: string; whisperPath?: string }) =>
+    ipcRenderer.invoke('check-binaries', paths),
+  autoDetectBinaries: () => ipcRenderer.invoke('auto-detect-binaries'),
+  openExternalUrl: (url: string) => ipcRenderer.invoke('open-external-url', url),
   scanLibrary: (rootPath?: string | string[]) => ipcRenderer.invoke('scan-library', rootPath),
   getFolderEpisodes: (folderPath: string) => ipcRenderer.invoke('get-folder-episodes', folderPath),
   probeVideo: (filePath: string) => ipcRenderer.invoke('probe-video', filePath),

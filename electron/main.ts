@@ -2,7 +2,7 @@ import { app, BrowserWindow, ipcMain, dialog, shell, Menu } from 'electron';
 import path from 'path';
 import fs from 'fs';
 import { fileURLToPath } from 'url';
-import { storage } from './storage';
+import { storage, autoDetectFfmpegPath, autoDetectWhisperPath } from './storage';
 import { streamServer } from './server';
 import { probeMkv, extractEmbeddedSubtitle, extractEmbeddedAss, extractEmbeddedFonts, filterFontsForAss, parseSrt, findPrecedingKeyframe, readMkvEmbeddedTitle } from './ffmpeg';
 import { whisperManager } from './whisper';
@@ -274,6 +274,78 @@ function setupIpcHandlers() {
     return null;
   });
 
+  ipcMain.handle('browse-file', async (_event, options?: { title?: string; defaultPath?: string; extensions?: string[] }) => {
+    const win = mainWindow || BrowserWindow.getFocusedWindow();
+    const filters =
+      options?.extensions && options.extensions.length > 0
+        ? [
+            { name: 'Allowed Files', extensions: options.extensions },
+            { name: 'All Files (*.*)', extensions: ['*'] },
+          ]
+        : [
+            { name: 'Executable Files (*.exe)', extensions: ['exe'] },
+            { name: 'All Files (*.*)', extensions: ['*'] },
+          ];
+
+    const res = await dialog.showOpenDialog(win || (undefined as any), {
+      title: options?.title || 'Select Executable File',
+      defaultPath: options?.defaultPath,
+      filters,
+      properties: ['openFile'],
+    });
+    if (!res.canceled && res.filePaths.length > 0) {
+      return res.filePaths[0];
+    }
+    return null;
+  });
+
+  ipcMain.handle('check-binaries', async (_event, paths?: { ffmpegPath?: string; whisperPath?: string }) => {
+    const settings = storage.getSettings();
+    const ffmpegPath = paths?.ffmpegPath !== undefined ? paths.ffmpegPath : settings.ffmpegPath;
+    const whisperPath = paths?.whisperPath !== undefined ? paths.whisperPath : settings.whisperPath;
+
+    const ffmpegExists = Boolean(ffmpegPath && fs.existsSync(ffmpegPath));
+    const whisperExists = Boolean(whisperPath && fs.existsSync(whisperPath));
+
+    let modelExists = false;
+    const modelName = 'large-v3-turbo';
+    if (whisperExists) {
+      const modelsDir = path.join(path.dirname(whisperPath), '_models');
+      if (fs.existsSync(modelsDir)) {
+        try {
+          const files = fs.readdirSync(modelsDir);
+          modelExists = files.some(
+            (m) => m.toLowerCase().includes('large-v3-turbo') || m.toLowerCase().includes('large')
+          );
+        } catch {}
+      }
+    }
+
+    return {
+      ffmpegExists,
+      whisperExists,
+      modelExists,
+      modelName,
+    };
+  });
+
+  ipcMain.handle('auto-detect-binaries', async () => {
+    const whisperPath = autoDetectWhisperPath();
+    const ffmpegPath = autoDetectFfmpegPath(whisperPath);
+    return {
+      ffmpegPath,
+      whisperPath,
+    };
+  });
+
+  ipcMain.handle('open-external-url', async (_event, url: string) => {
+    if (url && (url.startsWith('https://') || url.startsWith('http://'))) {
+      await shell.openExternal(url);
+      return true;
+    }
+    return false;
+  });
+
   ipcMain.handle('scan-library', async (_event, rootPath?: string | string[]) => {
     const settings = storage.getSettings();
     let targetRoots: string[] = [];
@@ -287,7 +359,7 @@ function setupIpcHandlers() {
     } else if (settings.defaultLibraryRoot) {
       targetRoots = [settings.defaultLibraryRoot];
     } else {
-      targetRoots = ['D:\\films'];
+      targetRoots = [];
     }
 
     const uniqueRoots = Array.from(new Set(targetRoots.map((r) => path.resolve(r))));
