@@ -20,7 +20,7 @@ import {
   ChevronLeft,
   X,
 } from 'lucide-react';
-import { Episode, VideoMetadata, SubtitleCue, SeasonPreference, AppSettings } from '../../types';
+import { Episode, VideoMetadata, VideoChapter, SubtitleCue, SeasonPreference, AppSettings } from '../../types';
 import { SubtitleOverlay } from './SubtitleOverlay';
 import { TimelineScrubber } from './TimelineScrubber';
 import { TrackControls } from './TrackControls';
@@ -109,6 +109,126 @@ function parseAssToCues(assContent: string): SubtitleCue[] {
   return cues;
 }
 
+export interface DetectedOpening {
+  start: number;
+  end: number;
+  source: 'chapter' | 'subtitle_tag' | 'subtitle_lyrics' | 'cues';
+  title?: string;
+}
+
+function isOpeningChapterTitle(title?: string): boolean {
+  const t = (title || '').trim().toLowerCase();
+  if (!t) return false;
+  // Exclude cold opens, endings, recaps, previews, dialogue parts
+  if (/^(?:intro|prologue|pre-opening|cold\s*open|recap|preview|part\s*[ab12]|episode|ed|ending)/i.test(t)) {
+    return false;
+  }
+  // Match OP patterns
+  return (
+    /^(?:op|opening|openning)(?:\b|\d|\s|:|-|$)/i.test(t) ||
+    /(?:^|\b)(?:op|opening|openning)\s*(?:theme|\d+)?(?:\b|$)/i.test(t) ||
+    /theme\s*song/i.test(t)
+  );
+}
+
+function isOpStyleName(style?: string): boolean {
+  const s = (style || '').trim().toLowerCase();
+  if (!s) return false;
+  // Exclude ED, ending, default dialogue styles, narration
+  if (/ed|ending|option|opera|default|dialogue|narration|thought|italic|flashback/i.test(s)) return false;
+  return (
+    /^(?:op|opening)(?:_|-|$|\s)/i.test(s) ||
+    /(?:_|-)(?:op|opening)(?:_|-|$|\s)/i.test(s) ||
+    /(?:^|\b)op(?:tl|ro|kanji|lyrics|title)\b/i.test(s)
+  );
+}
+
+function detectOpeningRange(
+  chapters?: VideoChapter[],
+  assContent?: string,
+  cues?: SubtitleCue[]
+): DetectedOpening | null {
+  // 1. Check MKV Chapters
+  if (chapters && chapters.length > 0) {
+    const op = chapters.find((c) => {
+      const isMatch = isOpeningChapterTitle(c.title);
+      const duration = c.end - c.start;
+      return isMatch && duration >= 40 && duration <= 130;
+    });
+    if (op) {
+      return { start: op.start, end: op.end, source: 'chapter', title: op.title };
+    }
+  }
+
+  // 2. Check ASS Subtitles (Tags & Lyric styles)
+  if (assContent) {
+    const lines = assContent.split(/\r?\n/);
+    const opLines: { start: number; end: number; style: string }[] = [];
+    let tagOpStart: number | null = null;
+    let tagOpEnd: number | null = null;
+
+    for (const line of lines) {
+      if (!line.startsWith('Dialogue:')) continue;
+      const colonIdx = line.indexOf(':');
+      if (colonIdx === -1) continue;
+      const parts = line.slice(colonIdx + 1).split(',');
+      if (parts.length < 10) continue;
+
+      const start = parseAssTimestamp(parts[1]);
+      const end = parseAssTimestamp(parts[2]);
+      const style = parts[3]?.trim() || '';
+      const text = parts.slice(9).join(',');
+
+      // Explicit section markers in subtitle cues: {OP}, [OP], {Opening}
+      if (tagOpStart === null && /\{op\}|\[op\]|\{opening\}|\[opening\]/i.test(text)) {
+        tagOpStart = start;
+      } else if (tagOpStart !== null && tagOpEnd === null && start > tagOpStart) {
+        if (/\{episode\}|\[episode\]|\{part\s*[ab12]\}|\[part\s*[ab12]\]|\{ed\}|\[ed\]|\{title\}/i.test(text)) {
+          if (start - tagOpStart >= 40 && start - tagOpStart <= 130) {
+            tagOpEnd = start;
+          }
+        }
+      }
+
+      // Opening lyric styles
+      if (isOpStyleName(style)) {
+        opLines.push({ start, end, style });
+      }
+    }
+
+    if (tagOpStart !== null) {
+      const finalEnd = tagOpEnd || tagOpStart + 90;
+      return { start: tagOpStart, end: finalEnd, source: 'subtitle_tag' };
+    }
+
+    if (opLines.length >= 3) {
+      const minStart = Math.min(...opLines.map((l) => l.start));
+      const maxEnd = Math.max(...opLines.map((l) => l.end));
+      if (maxEnd - minStart >= 40 && maxEnd - minStart <= 120) {
+        return {
+          start: Math.max(0, minStart - 2),
+          end: Math.min(minStart + 92, maxEnd + 2),
+          source: 'subtitle_lyrics',
+        };
+      }
+    }
+  }
+
+  // 3. Check parsed subtitle cues (e.g. SRT with song tags)
+  if (cues && cues.length > 0) {
+    const opCue = cues.find((c) =>
+      /\[(?:opening\s*theme|theme\s*song|op\s*theme|opening)\]|\((?:opening\s*theme|theme\s*song|opening)\)/i.test(
+        c.text || ''
+      )
+    );
+    if (opCue) {
+      return { start: opCue.start, end: opCue.start + 90, source: 'cues' };
+    }
+  }
+
+  return null;
+}
+
 export const VideoPlayer: React.FC<VideoPlayerProps> = ({
   episode,
   seasonEpisodes,
@@ -172,7 +292,8 @@ export const VideoPlayer: React.FC<VideoPlayerProps> = ({
   const [fontSize, setFontSize] = useState<number>(settings.subtitlesFontSize || 28);
   const [subtitlesLoading, setSubtitlesLoading] = useState<boolean>(false);
 
-  // Parsed Subtitle Cues
+  // Parsed Subtitle Cues & Raw ASS for smart feature detection
+  const [loadedAssContent, setLoadedAssContent] = useState<string>('');
   const [mainCues, setMainCues] = useState<SubtitleCue[]>([]);
   const [topCues, setTopCues] = useState<SubtitleCue[]>([]);
   const [isMainAssActive, setIsMainAssActive] = useState<boolean>(false);
@@ -203,17 +324,10 @@ export const VideoPlayer: React.FC<VideoPlayerProps> = ({
     return null;
   }, [seasonEpisodes, currentEpIndex]);
 
-  const opChapter = useMemo(() => {
-    if (!metadata?.chapters) return null;
-    // Specifically search for OP or Opening, avoiding generic "Intro" cold open chapters
-    const op = metadata.chapters.find((c) =>
-      /(?:^|\s|\b)(?:op|opening)(?:\s|\b|$|theme|\d)/i.test(c.title)
-    );
-    if (op && op.end - op.start >= 40) {
-      return op;
-    }
-    return null;
-  }, [metadata?.chapters]);
+  // Detected Opening Range (from MKV chapters, ASS subtitle tags, or karaoke lyrics)
+  const detectedOpening = useMemo<DetectedOpening | null>(() => {
+    return detectOpeningRange(metadata?.chapters, loadedAssContent, mainCues);
+  }, [metadata?.chapters, loadedAssContent, mainCues]);
 
   const edChapter = useMemo(() => {
     if (!metadata?.chapters || duration <= 0) return null;
@@ -233,6 +347,7 @@ export const VideoPlayer: React.FC<VideoPlayerProps> = ({
   useEffect(() => {
     setIsEndingCardDismissed(false);
     setIsIntroDismissed(false);
+    setLoadedAssContent('');
   }, [episode.filePath]);
 
   const isEndingActive =
@@ -241,19 +356,16 @@ export const VideoPlayer: React.FC<VideoPlayerProps> = ({
     duration > 0 &&
     currentAbsoluteTime >= endingStartTime;
 
-  // Is user currently inside an explicit OP chapter anywhere in the episode?
-  const isInsideOpChapter =
-    opChapter !== null &&
-    currentAbsoluteTime >= opChapter.start - 3 &&
-    currentAbsoluteTime < opChapter.end;
-
-  // Opening prompt is active:
-  // 1) Anytime inside an explicit OP chapter (even if it's on minute 5 or 8!)
-  // 2) OR fallback: within the first 4.5 minutes (270s) of the episode
+  // Opening prompt is active ONLY when an opening is genuinely playing right now!
+  // 1) Must have a confirmed detected opening range.
+  // 2) Current playback time is strictly within [start, end).
+  // 3) Never show when no opening exists (e.g. Clevatess S01E01, Mushoku Tensei scenes),
+  //    and never hang for arbitrary 4.5 minutes during dialogue!
   const isIntroActive =
     !isIntroDismissed &&
-    duration > 240 &&
-    (isInsideOpChapter || (!opChapter && currentAbsoluteTime < 270) || (opChapter && currentAbsoluteTime < Math.max(270, opChapter.end)));
+    detectedOpening !== null &&
+    currentAbsoluteTime >= detectedOpening.start &&
+    currentAbsoluteTime < detectedOpening.end;
 
   // Ripple feedback
   const [ripple, setRipple] = useState<{ type: any; text?: string } | null>(null);
@@ -496,6 +608,7 @@ export const VideoPlayer: React.FC<VideoPlayerProps> = ({
           }
         }
 
+        setLoadedAssContent(assContent);
         setMainCues(newMainCues);
         setTopCues(newTopCues);
         setSubtitlesLoading(false);
@@ -849,18 +962,18 @@ export const VideoPlayer: React.FC<VideoPlayerProps> = ({
     onEpisodeChange(nextEpisode);
   }, [nextEpisode, onEpisodeChange]);
 
-  // Contextual Skip Intro / Opening (accurate chapter end or standard +88s TV opening skip)
+  // Contextual Skip Intro / Opening (accurate chapter/subtitle end or standard +88s TV opening skip)
   const handleSkipIntro = useCallback(() => {
     setIsIntroDismissed(true);
-    // If inside or right before a valid OP chapter
-    if (opChapter && currentAbsoluteTime >= opChapter.start - 5 && currentAbsoluteTime < opChapter.end) {
-      handleSeek(opChapter.end);
-      showRipple('forward', `Opening Skipped (${formatTime(opChapter.end)})`);
+    // If inside or right before a detected opening range
+    if (detectedOpening && currentAbsoluteTime < detectedOpening.end) {
+      handleSeek(detectedOpening.end);
+      showRipple('forward', `Opening Skipped (${formatTime(detectedOpening.end)})`);
     } else {
       // Standard TV anime opening duration is 88-90s
       handleSkip(88, 'Opening Skipped (+88s)');
     }
-  }, [opChapter, currentAbsoluteTime, handleSeek, handleSkip]);
+  }, [detectedOpening, currentAbsoluteTime, handleSeek, handleSkip]);
 
   // Auto-play Next Episode on end
   const handleEnded = useCallback(() => {
@@ -1354,10 +1467,10 @@ export const VideoPlayer: React.FC<VideoPlayerProps> = ({
       </div>
 
       {/* Floating Skip Intro / Opening Prompt Card (Netflix / Crunchyroll style) */}
-      {isIntroActive && (
+      {isIntroActive && detectedOpening && (
         <div
-          className={`absolute bottom-24 left-6 z-40 transition-all duration-300 flex items-center select-none ${
-            areControlsVisible ? 'opacity-100 translate-y-0' : 'opacity-85 hover:opacity-100'
+          className={`absolute left-6 z-40 transition-all duration-300 flex items-center select-none pointer-events-auto ${
+            areControlsVisible ? 'bottom-24 opacity-100 translate-y-0' : 'bottom-10 opacity-90 hover:opacity-100 translate-y-0'
           }`}
         >
           <div className="bg-zinc-950/90 hover:bg-zinc-900/95 backdrop-blur-2xl border border-white/20 p-2 pl-3.5 pr-2.5 rounded-2xl shadow-2xl flex items-center space-x-2.5 transition-all group hover:border-red-500/50 hover:shadow-red-500/10">
@@ -1368,9 +1481,7 @@ export const VideoPlayer: React.FC<VideoPlayerProps> = ({
             >
               <FastForward className="w-4 h-4 text-red-500 fill-red-500 group-hover:scale-110 transition-transform" />
               <span>
-                {isInsideOpChapter && opChapter
-                  ? `Skip Opening (${formatTime(opChapter.end)})`
-                  : 'Skip Opening'}
+                {`Skip Opening (${formatTime(detectedOpening.end)})`}
               </span>
               <span className="px-1.5 py-0.5 rounded text-[10px] font-bold bg-white/10 text-zinc-300 border border-white/10 font-mono">
                 S
