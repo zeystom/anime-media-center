@@ -205,7 +205,14 @@ export const VideoPlayer: React.FC<VideoPlayerProps> = ({
 
   const opChapter = useMemo(() => {
     if (!metadata?.chapters) return null;
-    return metadata.chapters.find((c) => /op|opening|intro/i.test(c.title));
+    // Specifically search for OP or Opening, avoiding generic "Intro" cold open chapters
+    const op = metadata.chapters.find((c) =>
+      /(?:^|\s|\b)(?:op|opening)(?:\s|\b|$|theme|\d)/i.test(c.title)
+    );
+    if (op && op.end - op.start >= 40) {
+      return op;
+    }
+    return null;
   }, [metadata?.chapters]);
 
   const edChapter = useMemo(() => {
@@ -221,9 +228,11 @@ export const VideoPlayer: React.FC<VideoPlayerProps> = ({
   }, [edChapter, duration]);
 
   const [isEndingCardDismissed, setIsEndingCardDismissed] = useState<boolean>(false);
+  const [isIntroDismissed, setIsIntroDismissed] = useState<boolean>(false);
 
   useEffect(() => {
     setIsEndingCardDismissed(false);
+    setIsIntroDismissed(false);
   }, [episode.filePath]);
 
   const isEndingActive =
@@ -232,8 +241,11 @@ export const VideoPlayer: React.FC<VideoPlayerProps> = ({
     duration > 0 &&
     currentAbsoluteTime >= endingStartTime;
 
+  // Opening is active during the first 3.5 minutes (210s) of any TV anime episode
   const isIntroActive =
-    currentAbsoluteTime < (opChapter ? opChapter.end + 5 : 210);
+    !isIntroDismissed &&
+    duration > 240 &&
+    currentAbsoluteTime < 210;
 
   // Ripple feedback
   const [ripple, setRipple] = useState<{ type: any; text?: string } | null>(null);
@@ -829,13 +841,16 @@ export const VideoPlayer: React.FC<VideoPlayerProps> = ({
     onEpisodeChange(nextEpisode);
   }, [nextEpisode, onEpisodeChange]);
 
-  // Contextual Skip Intro (chapter-accurate or +85s fallback)
+  // Contextual Skip Intro / Opening (accurate chapter end or standard +88s TV opening skip)
   const handleSkipIntro = useCallback(() => {
-    if (opChapter && currentAbsoluteTime < opChapter.end) {
+    setIsIntroDismissed(true);
+    // If inside or right before a valid OP chapter
+    if (opChapter && currentAbsoluteTime >= opChapter.start - 5 && currentAbsoluteTime < opChapter.end) {
       handleSeek(opChapter.end);
-      showRipple('forward', `Intro Skipped (${formatTime(opChapter.end)})`);
+      showRipple('forward', `Opening Skipped (${formatTime(opChapter.end)})`);
     } else {
-      handleSkip(85, 'Intro Skipped (+85s)');
+      // Standard TV anime opening duration is 88-90s
+      handleSkip(88, 'Opening Skipped (+88s)');
     }
   }, [opChapter, currentAbsoluteTime, handleSeek, handleSkip]);
 
@@ -1009,6 +1024,12 @@ export const VideoPlayer: React.FC<VideoPlayerProps> = ({
             handlePlayNextEpisode();
           }
           break;
+        case 'KeyS':
+          if (isIntroActive) {
+            e.preventDefault();
+            handleSkipIntro();
+          }
+          break;
         case 'KeyF':
           e.preventDefault();
           toggleFullscreen();
@@ -1066,6 +1087,8 @@ export const VideoPlayer: React.FC<VideoPlayerProps> = ({
     isEpisodeDrawerOpen,
     nextEpisode,
     handlePlayNextEpisode,
+    isIntroActive,
+    handleSkipIntro,
     onClose,
   ]);
 
@@ -1296,20 +1319,8 @@ export const VideoPlayer: React.FC<VideoPlayerProps> = ({
             </div>
           </div>
 
-          {/* Right: Contextual Skip Intro, Audio & Subtitles, Fullscreen */}
+          {/* Right: Audio & Subtitles, Fullscreen */}
           <div className="flex items-center space-x-3">
-            {/* Skip Intro (visible during intro / OP chapter) */}
-            {isIntroActive && (
-              <button
-                onClick={handleSkipIntro}
-                className="flex items-center space-x-2 px-3.5 py-1.5 rounded-xl bg-zinc-900/90 hover:bg-zinc-800 text-white font-bold text-xs border border-white/20 shadow-lg transition-all hover:scale-105 active:scale-95 animate-in fade-in duration-200"
-                aria-label="Skip Opening Intro Theme"
-              >
-                <FastForward className="w-4 h-4 text-red-500 fill-red-500" />
-                <span>Skip Intro {opChapter ? `(${formatTime(opChapter.end)})` : '(+85s)'}</span>
-              </button>
-            )}
-
             {/* Audio & Subtitles Menu (formerly in top bar) */}
             <button
               onClick={() => setIsTrackControlsOpen(true)}
@@ -1332,6 +1343,37 @@ export const VideoPlayer: React.FC<VideoPlayerProps> = ({
           </div>
         </div>
       </div>
+
+      {/* Floating Skip Intro / Opening Prompt Card (Netflix / Crunchyroll style) */}
+      {isIntroActive && (
+        <div
+          className={`absolute bottom-24 left-6 z-40 transition-all duration-300 flex items-center select-none ${
+            areControlsVisible ? 'opacity-100 translate-y-0' : 'opacity-85 hover:opacity-100'
+          }`}
+        >
+          <div className="bg-zinc-950/90 hover:bg-zinc-900/95 backdrop-blur-2xl border border-white/20 p-2 pl-3.5 pr-2.5 rounded-2xl shadow-2xl flex items-center space-x-2.5 transition-all group hover:border-red-500/50 hover:shadow-red-500/10">
+            <button
+              onClick={handleSkipIntro}
+              className="flex items-center space-x-2 text-white font-bold text-xs group-hover:text-red-400 transition-colors"
+              title="Skip Opening Theme [S]"
+            >
+              <FastForward className="w-4 h-4 text-red-500 fill-red-500 group-hover:scale-110 transition-transform" />
+              <span>Skip Opening</span>
+              <span className="px-1.5 py-0.5 rounded text-[10px] font-bold bg-white/10 text-zinc-300 border border-white/10 font-mono">
+                S
+              </span>
+            </button>
+            <button
+              onClick={() => setIsIntroDismissed(true)}
+              className="p-1 rounded-lg text-zinc-500 hover:text-zinc-300 transition-colors"
+              title="Dismiss"
+              aria-label="Dismiss Skip Opening"
+            >
+              <X className="w-3.5 h-3.5" />
+            </button>
+          </div>
+        </div>
+      )}
 
       {/* Floating Next Episode / Skip Ending Prompt Card */}
       {isEndingActive && nextEpisode && (
