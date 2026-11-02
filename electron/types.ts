@@ -38,6 +38,13 @@ export interface SubtitleTrackPayload {
   cues?: SubtitleCue[];
 }
 
+export interface VideoChapter {
+  id: number;
+  start: number; // in seconds
+  end: number;   // in seconds
+  title: string;
+}
+
 export interface VideoMetadata {
   filePath: string;
   fileName: string;
@@ -45,6 +52,7 @@ export interface VideoMetadata {
   duration: number; // in seconds
   audioTracks: AudioTrack[];
   subtitleTracks: SubtitleTrack[];
+  chapters?: VideoChapter[];
   hasExternalSrt: boolean;
   externalSrtPath?: string;
   hasEmbeddedDubtitles?: boolean;

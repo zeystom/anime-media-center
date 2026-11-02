@@ -277,9 +277,16 @@ export function cleanEpisodeTitle(filename: string): ParsedEpisode {
  * Gracefully avoids duplication if the filename already contained the title.
  */
 export function formatEpisodeDisplayTitle(
-  parsedDisplayTitle: string,
+  parsedOrEpisode: string | { fileName?: string; displayTitle?: string; kitsuTitle?: string | null; episodeTitle?: string | null; episodeNumber?: string },
   apiTitle?: string | null
 ): string {
+  if (typeof parsedOrEpisode === 'object' && parsedOrEpisode !== null) {
+    const ep = parsedOrEpisode;
+    const parsed = cleanEpisodeTitle(ep.fileName || '');
+    const official = ep.kitsuTitle || ep.episodeTitle || apiTitle;
+    return formatEpisodeDisplayTitle(parsed.displayTitle || ep.episodeNumber || '', official);
+  }
+  const parsedDisplayTitle = parsedOrEpisode || '';
   if (!apiTitle || !apiTitle.trim()) {
     return parsedDisplayTitle;
   }

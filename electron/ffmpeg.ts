@@ -2,7 +2,7 @@ import { spawn } from 'child_process';
 import fs from 'fs';
 import path from 'path';
 import crypto from 'crypto';
-import { AudioTrack, SubtitleCue, SubtitleTrack, VideoMetadata } from './types';
+import { AudioTrack, SubtitleCue, SubtitleTrack, VideoChapter, VideoMetadata } from './types';
 import { storage } from './storage';
 
 const LANG_MAP: Record<string, string> = {
@@ -331,6 +331,19 @@ function parseFfmpegProbeOutput(filePath: string, stderr: string): VideoMetadata
     console.error('Failed to scan folder for external srt:', e);
   }
 
+  // 3. Chapters
+  const chapters: VideoChapter[] = [];
+  const chapterRegex = /Chapter #0:(\d+):\s*start\s+([\d.]+),\s*end\s+([\d.]+)(?:[\r\n\s]+Metadata:[\r\n\s]+title\s*:\s*([^\r\n]+))?/gi;
+  let chMatch: RegExpExecArray | null;
+  while ((chMatch = chapterRegex.exec(stderr)) !== null) {
+    chapters.push({
+      id: parseInt(chMatch[1], 10),
+      start: parseFloat(chMatch[2]),
+      end: parseFloat(chMatch[3]),
+      title: chMatch[4] ? chMatch[4].trim() : `Chapter ${parseInt(chMatch[1], 10) + 1}`,
+    });
+  }
+
   return {
     filePath,
     fileName,
@@ -338,6 +351,7 @@ function parseFfmpegProbeOutput(filePath: string, stderr: string): VideoMetadata
     duration,
     audioTracks,
     subtitleTracks,
+    chapters,
     hasExternalSrt,
     externalSrtPath,
     hasEmbeddedDubtitles,

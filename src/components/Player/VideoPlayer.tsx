@@ -15,6 +15,10 @@ import {
   ListVideo,
   Subtitles,
   Sparkles,
+  SkipForward,
+  SlidersHorizontal,
+  ChevronLeft,
+  X,
 } from 'lucide-react';
 import { Episode, VideoMetadata, SubtitleCue, SeasonPreference, AppSettings } from '../../types';
 import { SubtitleOverlay } from './SubtitleOverlay';
@@ -170,6 +174,50 @@ export const VideoPlayer: React.FC<VideoPlayerProps> = ({
   const [isTrackControlsOpen, setIsTrackControlsOpen] = useState<boolean>(false);
   const [isEpisodeDrawerOpen, setIsEpisodeDrawerOpen] = useState<boolean>(false);
   const [autoPlayNext, setAutoPlayNext] = useState<boolean>(settings.autoPlayNext);
+
+  // Episode navigation & chapters
+  const currentEpIndex = useMemo(() => {
+    return seasonEpisodes.findIndex((e) => e.filePath === episode.filePath);
+  }, [seasonEpisodes, episode.filePath]);
+
+  const nextEpisode = useMemo(() => {
+    if (currentEpIndex >= 0 && currentEpIndex < seasonEpisodes.length - 1) {
+      return seasonEpisodes[currentEpIndex + 1];
+    }
+    return null;
+  }, [seasonEpisodes, currentEpIndex]);
+
+  const opChapter = useMemo(() => {
+    if (!metadata?.chapters) return null;
+    return metadata.chapters.find((c) => /op|opening|intro/i.test(c.title));
+  }, [metadata?.chapters]);
+
+  const edChapter = useMemo(() => {
+    if (!metadata?.chapters || duration <= 0) return null;
+    return metadata.chapters.find(
+      (c) => /ed|ending|credits|preview/i.test(c.title) && c.start >= duration - 360
+    );
+  }, [metadata?.chapters, duration]);
+
+  const endingStartTime = useMemo(() => {
+    if (edChapter) return edChapter.start;
+    return duration > 90 ? duration - 90 : Infinity;
+  }, [edChapter, duration]);
+
+  const [isEndingCardDismissed, setIsEndingCardDismissed] = useState<boolean>(false);
+
+  useEffect(() => {
+    setIsEndingCardDismissed(false);
+  }, [episode.filePath]);
+
+  const isEndingActive =
+    !isEndingCardDismissed &&
+    nextEpisode !== null &&
+    duration > 0 &&
+    currentAbsoluteTime >= endingStartTime;
+
+  const isIntroActive =
+    currentAbsoluteTime < (opChapter ? opChapter.end + 5 : 210);
 
   // Ripple feedback
   const [ripple, setRipple] = useState<{ type: any; text?: string } | null>(null);
@@ -751,19 +799,32 @@ export const VideoPlayer: React.FC<VideoPlayerProps> = ({
     return () => clearInterval(interval);
   }, [metadata, episode, folderPath, duration]);
 
+  // Play Next Episode directly
+  const handlePlayNextEpisode = useCallback(() => {
+    if (!nextEpisode) return;
+    showRipple('forward', `Next: ${formatEpisodeDisplayTitle(nextEpisode)}`);
+    onEpisodeChange(nextEpisode);
+  }, [nextEpisode, onEpisodeChange]);
+
+  // Contextual Skip Intro (chapter-accurate or +85s fallback)
+  const handleSkipIntro = useCallback(() => {
+    if (opChapter && currentAbsoluteTime < opChapter.end) {
+      handleSeek(opChapter.end);
+      showRipple('forward', `Intro Skipped (${formatTime(opChapter.end)})`);
+    } else {
+      handleSkip(85, 'Intro Skipped (+85s)');
+    }
+  }, [opChapter, currentAbsoluteTime, handleSeek, handleSkip]);
+
   // Auto-play Next Episode on end
   const handleEnded = useCallback(() => {
     // Only auto-play next if we actually reached near the end of the full duration (>95%)
     if (duration > 0 && timeRef.current / duration > 0.95) {
-      if (autoPlayNext) {
-        const curIndex = seasonEpisodes.findIndex((e) => e.filePath === episode.filePath);
-        if (curIndex !== -1 && curIndex < seasonEpisodes.length - 1) {
-          const nextEp = seasonEpisodes[curIndex + 1];
-          onEpisodeChange(nextEp);
-        }
+      if (autoPlayNext && nextEpisode) {
+        handlePlayNextEpisode();
       }
     }
-  }, [autoPlayNext, episode.filePath, seasonEpisodes, onEpisodeChange, duration]);
+  }, [autoPlayNext, nextEpisode, handlePlayNextEpisode, duration]);
 
   // Audio track switch
   const handleSelectAudio = useCallback(
@@ -919,6 +980,12 @@ export const VideoPlayer: React.FC<VideoPlayerProps> = ({
           e.preventDefault();
           handleSkip(-10, '-10s');
           break;
+        case 'KeyN':
+          if (nextEpisode) {
+            e.preventDefault();
+            handlePlayNextEpisode();
+          }
+          break;
         case 'KeyF':
           e.preventDefault();
           toggleFullscreen();
@@ -976,6 +1043,8 @@ export const VideoPlayer: React.FC<VideoPlayerProps> = ({
     isFullscreen,
     isTrackControlsOpen,
     isEpisodeDrawerOpen,
+    nextEpisode,
+    handlePlayNextEpisode,
     onClose,
   ]);
 
@@ -988,10 +1057,21 @@ export const VideoPlayer: React.FC<VideoPlayerProps> = ({
     console.warn('[VideoPlayer] Video element error:', mediaError?.code, mediaError?.message);
   }, []);
 
+  const handleContainerMouseMove = useCallback(
+    (e: React.MouseEvent<HTMLDivElement>) => {
+      resetControlsTimer();
+      // Right edge hover gesture: if mouse pushes within 18px of right screen edge, open Episode Drawer
+      if (e.clientX >= window.innerWidth - 18 && !isEpisodeDrawerOpen && !isTrackControlsOpen) {
+        setIsEpisodeDrawerOpen(true);
+      }
+    },
+    [resetControlsTimer, isEpisodeDrawerOpen, isTrackControlsOpen]
+  );
+
   return (
     <div
       ref={containerRef}
-      onMouseMove={resetControlsTimer}
+      onMouseMove={handleContainerMouseMove}
       className={`fixed inset-0 z-50 w-screen h-screen bg-black overflow-hidden flex items-center justify-center select-none ${
         !areControlsVisible ? 'hide-cursor cursor-none' : ''
       }`}
@@ -1093,49 +1173,13 @@ export const VideoPlayer: React.FC<VideoPlayerProps> = ({
           </div>
         </div>
 
-        <div className="flex items-center space-x-2.5">
-          {/* Subtitle Loading Spinner */}
-          {subtitlesLoading && (
-            <div className="flex items-center space-x-1.5 px-3 py-1.5 rounded-xl bg-indigo-500/20 border border-indigo-500/40 text-xs text-indigo-300 backdrop-blur-md animate-pulse">
-              <div className="w-3 h-3 border-2 border-indigo-400 border-t-transparent rounded-full animate-spin" />
-              <span>Loading Subtitles...</span>
-            </div>
-          )}
-
-          {/* Top Subtitle Quick 1-Click Toggle Button on the bar */}
-          <button
-            onClick={handleToggleTopSub}
-            className={`flex items-center space-x-1.5 px-3 py-1.5 rounded-xl text-xs font-bold border transition-all ${
-              topSubEnabled
-                ? 'bg-yellow-500/20 text-yellow-300 border-yellow-500/40 shadow-sm shadow-yellow-500/20'
-                : 'bg-black/60 text-zinc-400 border-white/10 hover:text-zinc-200'
-            }`}
-            aria-label="Toggle 2nd Top Subtitle / Signs (English forced only)"
-          >
-            <Sparkles className={`w-3.5 h-3.5 ${topSubEnabled ? 'text-yellow-400' : 'text-zinc-400'}`} />
-            <span>Top Sub: {topSubEnabled ? 'ON' : 'OFF'}</span>
-          </button>
-
-          {/* Audio & Subtitles Menu */}
-          <button
-            onClick={() => setIsTrackControlsOpen(true)}
-            className="flex items-center space-x-1.5 px-3 py-1.5 rounded-xl bg-black/60 hover:bg-black/80 text-zinc-200 hover:text-white border border-white/10 text-xs font-medium transition-all"
-            aria-label="Configure Audio Tracks & Dual Subtitles"
-          >
-            <Subtitles className="w-4 h-4 text-emerald-400" />
-            <span>Tracks</span>
-          </button>
-
-          {/* Episode Drawer Button */}
-          <button
-            onClick={() => setIsEpisodeDrawerOpen(true)}
-            className="flex items-center space-x-1.5 px-3 py-1.5 rounded-xl bg-black/60 hover:bg-black/80 text-zinc-200 hover:text-white border border-white/10 text-xs font-medium transition-all"
-            aria-label="Switch Episodes"
-          >
-            <ListVideo className="w-4 h-4 text-red-500" />
-            <span>Episodes</span>
-          </button>
-        </div>
+        {/* Right side of top navbar: only subtle Subtitle Loading Spinner if active */}
+        {subtitlesLoading && (
+          <div className="flex items-center space-x-1.5 px-3 py-1.5 rounded-xl bg-indigo-500/20 border border-indigo-500/40 text-xs text-indigo-300 backdrop-blur-md animate-pulse">
+            <div className="w-3 h-3 border-2 border-indigo-400 border-t-transparent rounded-full animate-spin" />
+            <span>Loading Subtitles...</span>
+          </div>
+        )}
       </div>
 
       {/* Bottom Player Controls Bar (Auto-hiding) */}
@@ -1155,14 +1199,33 @@ export const VideoPlayer: React.FC<VideoPlayerProps> = ({
 
         {/* Action Controls Toolbar */}
         <div className="flex items-center justify-between">
-          {/* Left: Play/Pause, Volume, Time */}
-          <div className="flex items-center space-x-4">
+          {/* Left: Play/Pause, Next Episode, Volume, Time */}
+          <div className="flex items-center space-x-3 sm:space-x-4">
             <button
               onClick={togglePlay}
               className="p-2 rounded-xl text-white hover:text-red-500 transition-colors"
               aria-label={isPlaying ? 'Pause [Space]' : 'Play [Space]'}
             >
               {isPlaying ? <Pause className="w-6 h-6 fill-white" /> : <Play className="w-6 h-6 fill-white" />}
+            </button>
+
+            {/* Next Episode Button [N] */}
+            <button
+              onClick={handlePlayNextEpisode}
+              disabled={!nextEpisode}
+              className={`p-2 rounded-xl transition-all ${
+                nextEpisode
+                  ? 'text-zinc-300 hover:text-white hover:bg-white/10 active:scale-95 cursor-pointer'
+                  : 'text-zinc-600 opacity-25 cursor-not-allowed'
+              }`}
+              title={
+                nextEpisode
+                  ? `Next Episode: ${formatEpisodeDisplayTitle(nextEpisode)} [N]`
+                  : 'Last Episode of Season'
+              }
+              aria-label="Next Episode [N]"
+            >
+              <SkipForward className="w-5 h-5 fill-current" />
             </button>
 
             {/* Volume Control */}
@@ -1210,16 +1273,29 @@ export const VideoPlayer: React.FC<VideoPlayerProps> = ({
             </div>
           </div>
 
-          {/* Right: Skip Intro (+85s) Button, Fullscreen */}
+          {/* Right: Contextual Skip Intro, Audio & Subtitles, Fullscreen */}
           <div className="flex items-center space-x-3">
-            {/* Skip Intro (+85s) Dedicated Button */}
+            {/* Skip Intro (visible during intro / OP chapter) */}
+            {isIntroActive && (
+              <button
+                onClick={handleSkipIntro}
+                className="flex items-center space-x-2 px-3.5 py-1.5 rounded-xl bg-zinc-900/90 hover:bg-zinc-800 text-white font-bold text-xs border border-white/20 shadow-lg transition-all hover:scale-105 active:scale-95 animate-in fade-in duration-200"
+                aria-label="Skip Opening Intro Theme"
+              >
+                <FastForward className="w-4 h-4 text-red-500 fill-red-500" />
+                <span>Skip Intro {opChapter ? `(${formatTime(opChapter.end)})` : '(+85s)'}</span>
+              </button>
+            )}
+
+            {/* Audio & Subtitles Menu (formerly in top bar) */}
             <button
-              onClick={() => handleSkip(85, 'Intro Skipped (+85s)')}
-              className="flex items-center space-x-2 px-3.5 py-1.5 rounded-xl bg-zinc-900/90 hover:bg-zinc-800 text-white font-bold text-xs border border-white/20 shadow-lg transition-all hover:scale-105 active:scale-95"
-              aria-label="Skip Opening Intro Theme (+85 seconds)"
+              onClick={() => setIsTrackControlsOpen(true)}
+              className="flex items-center space-x-2 px-3 py-1.5 rounded-xl bg-zinc-900/80 hover:bg-zinc-800 text-zinc-200 hover:text-white border border-white/15 text-xs font-medium transition-all shadow-sm"
+              aria-label="Configure Audio Tracks & Subtitles"
+              title="Audio & Subtitles"
             >
-              <FastForward className="w-4 h-4 text-red-500 fill-red-500" />
-              <span>Skip Intro (+85s)</span>
+              <SlidersHorizontal className="w-3.5 h-3.5 text-emerald-400" />
+              <span>Audio & Subtitles</span>
             </button>
 
             {/* Fullscreen Button */}
@@ -1233,6 +1309,60 @@ export const VideoPlayer: React.FC<VideoPlayerProps> = ({
           </div>
         </div>
       </div>
+
+      {/* Floating Next Episode / Skip Ending Prompt Card */}
+      {isEndingActive && nextEpisode && (
+        <div className="absolute bottom-24 right-6 z-40 bg-zinc-950/95 backdrop-blur-2xl border border-white/15 p-3.5 rounded-2xl shadow-2xl flex items-center space-x-3.5 animate-in slide-in-from-bottom-4 duration-300">
+          <div className="w-16 sm:w-20 aspect-video rounded-xl overflow-hidden shrink-0 bg-black border border-white/10 relative">
+            <img
+              src={nextEpisode.kitsuThumbnail || nextEpisode.thumbnailUrl}
+              alt={nextEpisode.fileName}
+              className="w-full h-full object-cover"
+            />
+          </div>
+
+          <div className="min-w-0 pr-1">
+            <span className="text-[10px] font-bold uppercase tracking-wider text-red-500">Next Episode</span>
+            <p className="text-xs font-bold text-white max-w-[200px] truncate" title={formatEpisodeDisplayTitle(nextEpisode)}>
+              {formatEpisodeDisplayTitle(nextEpisode)}
+            </p>
+          </div>
+
+          <button
+            onClick={handlePlayNextEpisode}
+            className="px-3.5 py-2 rounded-xl bg-red-600 hover:bg-red-500 text-white text-xs font-bold flex items-center space-x-1.5 shadow-lg shadow-red-600/30 transition-all hover:scale-105 active:scale-95 shrink-0"
+          >
+            <span>Play Next</span>
+            <SkipForward className="w-3.5 h-3.5 fill-white" />
+          </button>
+
+          <button
+            onClick={() => setIsEndingCardDismissed(true)}
+            className="p-1 rounded-lg text-zinc-500 hover:text-zinc-300 transition-colors"
+            aria-label="Dismiss Next Episode Prompt"
+            title="Dismiss"
+          >
+            <X className="w-4 h-4" />
+          </button>
+        </div>
+      )}
+
+      {/* Right Edge "Episodes" Peek Tab (Click or hover to open drawer) */}
+      {!isEpisodeDrawerOpen && (
+        <div
+          onMouseEnter={() => setIsEpisodeDrawerOpen(true)}
+          onClick={() => setIsEpisodeDrawerOpen(true)}
+          className={`fixed right-0 top-1/2 -translate-y-1/2 z-40 pr-1 pl-2.5 py-4 rounded-l-2xl bg-zinc-900/80 hover:bg-zinc-800 text-zinc-400 hover:text-white border-y border-l border-white/10 shadow-xl backdrop-blur-md cursor-pointer transition-all duration-300 group flex items-center space-x-1.5 ${
+            areControlsVisible ? 'opacity-70 translate-x-0' : 'opacity-0 translate-x-2 pointer-events-none'
+          }`}
+          title="Episodes (or push cursor to right edge)"
+        >
+          <ChevronLeft className="w-4 h-4 text-zinc-400 group-hover:text-red-400 transition-colors" />
+          <span className="text-[11px] font-semibold tracking-wider uppercase text-zinc-300 group-hover:text-white [writing-mode:vertical-lr] rotate-180">
+            Episodes
+          </span>
+        </div>
+      )}
 
       {/* Track Controls Popover (3 Columns: Audio, Main Sub, Top Sub) */}
       <TrackControls

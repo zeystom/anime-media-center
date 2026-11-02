@@ -165,6 +165,18 @@ export const EpisodeDrawer: React.FC<EpisodeDrawerProps> = ({
   onSelectEpisode,
 }) => {
   const activeElementRef = useRef<HTMLDivElement | null>(null);
+  const leaveTimerRef = useRef<any>(null);
+
+  const handleMouseEnter = () => {
+    if (leaveTimerRef.current) clearTimeout(leaveTimerRef.current);
+  };
+
+  const handleMouseLeave = () => {
+    if (leaveTimerRef.current) clearTimeout(leaveTimerRef.current);
+    leaveTimerRef.current = setTimeout(() => {
+      onClose();
+    }, 280);
+  };
 
   // Auto-scroll to current episode on drawer open
   useEffect(() => {
@@ -193,6 +205,8 @@ export const EpisodeDrawer: React.FC<EpisodeDrawerProps> = ({
       onClick={onClose}
     >
       <div
+        onMouseEnter={handleMouseEnter}
+        onMouseLeave={handleMouseLeave}
         className="w-full sm:max-w-md md:max-w-[480px] h-full bg-[#101014]/95 backdrop-blur-xl border-l border-zinc-800 p-6 flex flex-col shadow-2xl animate-in slide-in-from-right duration-200"
         onClick={(e) => e.stopPropagation()}
       >
