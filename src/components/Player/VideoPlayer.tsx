@@ -12,6 +12,7 @@ import {
   ListVideo,
   Subtitles,
   Sparkles,
+  Type,
 } from 'lucide-react';
 import { Episode, VideoMetadata, SubtitleCue, SeasonPreference, AppSettings } from '../../types';
 import { SubtitleOverlay } from './SubtitleOverlay';
@@ -74,6 +75,7 @@ export const VideoPlayer: React.FC<VideoPlayerProps> = ({
   const [selectedTopSubId, setSelectedTopSubId] = useState<string | null>(null);
   const [topSubEnabled, setTopSubEnabled] = useState<boolean>(false);
   const [syncOffset, setSyncOffset] = useState<number>(0);
+  const [fontSize, setFontSize] = useState<number>(settings.subtitlesFontSize || 28);
 
   // Parsed Subtitle Cues
   const [mainCues, setMainCues] = useState<SubtitleCue[]>([]);
@@ -502,6 +504,19 @@ export const VideoPlayer: React.FC<VideoPlayerProps> = ({
     [syncOffset, selectedAudioIndex, selectedMainSubId, selectedTopSubId, topSubEnabled, persistSeasonRule]
   );
 
+  // Subtitle Font Size Change (Live in-player & persisted)
+  const handleUpdateFontSize = useCallback(
+    (newSize: number) => {
+      const clamped = Math.max(14, Math.min(newSize, 60));
+      setFontSize(clamped);
+      showRipple('sync', `Sub Size: ${clamped}px`);
+      if (window.electronAPI) {
+        window.electronAPI.updateSettings({ subtitlesFontSize: clamped }).catch(() => {});
+      }
+    },
+    []
+  );
+
   // Keyboard Shortcuts: YouTube & Desktop Grade
   useEffect(() => {
     const handleKeyDown = (e: KeyboardEvent) => {
@@ -551,6 +566,14 @@ export const VideoPlayer: React.FC<VideoPlayerProps> = ({
           e.preventDefault();
           handleUpdateSyncOffset(0.5);
           break;
+        case 'Minus': // - or Shift + -
+          e.preventDefault();
+          handleUpdateFontSize(fontSize - 2);
+          break;
+        case 'Equal': // + or Shift + =
+          e.preventDefault();
+          handleUpdateFontSize(fontSize + 2);
+          break;
         case 'Escape':
           if (isFullscreen) {
             toggleFullscreen();
@@ -574,6 +597,8 @@ export const VideoPlayer: React.FC<VideoPlayerProps> = ({
     handleSkip,
     toggleFullscreen,
     handleUpdateSyncOffset,
+    handleUpdateFontSize,
+    fontSize,
     isFullscreen,
     isTrackControlsOpen,
     isEpisodeDrawerOpen,
@@ -623,7 +648,7 @@ export const VideoPlayer: React.FC<VideoPlayerProps> = ({
         topCues={topCues}
         topSubEnabled={topSubEnabled}
         syncOffset={syncOffset}
-        fontSize={settings.subtitlesFontSize}
+        fontSize={fontSize}
         hasOutline={settings.subtitlesOutline}
       />
 
@@ -791,8 +816,32 @@ export const VideoPlayer: React.FC<VideoPlayerProps> = ({
             </div>
           </div>
 
-          {/* Right: Skip Intro (+85s) Button, Fullscreen */}
+          {/* Right: Subtitle Font Size Controls, Skip Intro (+85s) Button, Fullscreen */}
           <div className="flex items-center space-x-3">
+            {/* Quick In-Player Subtitle Font Size Changer */}
+            <div className="flex items-center space-x-1 px-2.5 py-1.5 rounded-xl bg-black/40 hover:bg-black/60 border border-white/10 backdrop-blur-md text-xs text-zinc-300">
+              <Type className="w-3.5 h-3.5 text-zinc-400 mr-0.5" />
+              <button
+                onClick={() => handleUpdateFontSize(fontSize - 2)}
+                disabled={fontSize <= 14}
+                className="w-5 h-5 flex items-center justify-center rounded hover:bg-white/20 active:bg-white/30 text-white font-bold disabled:opacity-30 transition-colors"
+                title="Decrease Subtitle Size [-]"
+              >
+                -
+              </button>
+              <span className="text-[11px] font-mono font-bold text-white min-w-[28px] text-center select-none">
+                {fontSize}px
+              </span>
+              <button
+                onClick={() => handleUpdateFontSize(fontSize + 2)}
+                disabled={fontSize >= 60}
+                className="w-5 h-5 flex items-center justify-center rounded hover:bg-white/20 active:bg-white/30 text-white font-bold disabled:opacity-30 transition-colors"
+                title="Increase Subtitle Size [+]"
+              >
+                +
+              </button>
+            </div>
+
             {/* Skip Intro (+85s) Dedicated Button */}
             <button
               onClick={() => handleSkip(85, 'Intro Skipped (+85s)')}
@@ -832,6 +881,8 @@ export const VideoPlayer: React.FC<VideoPlayerProps> = ({
         syncOffset={syncOffset}
         onUpdateSyncOffset={handleUpdateSyncOffset}
         onResetSyncOffset={() => handleUpdateSyncOffset(-syncOffset)}
+        fontSize={fontSize}
+        onUpdateFontSize={handleUpdateFontSize}
       />
 
       {/* Episode Drawer (In-Player Switcher) */}

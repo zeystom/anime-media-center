@@ -1,4 +1,4 @@
-import { app, BrowserWindow, ipcMain, dialog, shell } from 'electron';
+import { app, BrowserWindow, ipcMain, dialog, shell, Menu } from 'electron';
 import path from 'path';
 import fs from 'fs';
 import { fileURLToPath } from 'url';
@@ -101,6 +101,9 @@ async function createWindow() {
     // Start local streaming server
     const serverPort = await streamServer.start();
 
+    // Disable application menu completely to remove File, Edit, View, Window, Help
+    Menu.setApplicationMenu(null);
+
     mainWindow = new BrowserWindow({
       width: 1400,
       height: 900,
@@ -108,6 +111,7 @@ async function createWindow() {
       minHeight: 700,
       backgroundColor: '#0f0f12',
       title: 'Anime Media Center & Whisper Studio',
+      autoHideMenuBar: true, // Auto-hide menu bar on Windows/Linux
       webPreferences: {
         preload: fs.existsSync(path.join(__dirname, 'preload.cjs'))
           ? path.join(__dirname, 'preload.cjs')
@@ -117,6 +121,9 @@ async function createWindow() {
         webSecurity: false, // Required for smooth local HTTP Matroska stream playback
       },
     });
+
+    mainWindow.setMenu(null);
+    mainWindow.removeMenu();
 
     // Setup IPC Handlers (Guarded against duplicate registration)
     setupIpcHandlers();

@@ -1,5 +1,5 @@
 import React from 'react';
-import { Volume2, Subtitles, Check, Plus, Minus, RotateCcw, X, Sparkles } from 'lucide-react';
+import { Volume2, Subtitles, Check, Plus, Minus, RotateCcw, X, Sparkles, Type } from 'lucide-react';
 import { AudioTrack, SubtitleTrack } from '../../types';
 
 interface TrackControlsProps {
@@ -18,6 +18,8 @@ interface TrackControlsProps {
   syncOffset: number;
   onUpdateSyncOffset: (delta: number) => void;
   onResetSyncOffset: () => void;
+  fontSize: number;
+  onUpdateFontSize: (size: number) => void;
 }
 
 export const TrackControls: React.FC<TrackControlsProps> = ({
@@ -36,6 +38,8 @@ export const TrackControls: React.FC<TrackControlsProps> = ({
   syncOffset,
   onUpdateSyncOffset,
   onResetSyncOffset,
+  fontSize,
+  onUpdateFontSize,
 }) => {
   if (!isOpen) return null;
 
@@ -237,40 +241,74 @@ export const TrackControls: React.FC<TrackControlsProps> = ({
           </div>
         </div>
 
-        {/* Footer: Subtitle Sync Offset Controls */}
+        {/* Footer: Subtitle Sync Offset & Font Size Controls */}
         <div className="pt-4 border-t border-zinc-800/80 flex flex-wrap items-center justify-between gap-4">
-          <div className="flex items-center space-x-3">
-            <span className="text-xs font-semibold text-zinc-300">Subtitle Sync Offset:</span>
-            <div className="flex items-center space-x-1.5 bg-zinc-900 p-1 rounded-lg border border-zinc-800">
-              <button
-                onClick={() => onUpdateSyncOffset(-0.5)}
-                className="p-1 rounded hover:bg-zinc-800 text-zinc-400 hover:text-white transition-colors"
-                title="Delay Subtitles (-0.5s) [HotKey: []"
-              >
-                <Minus className="w-3.5 h-3.5" />
-              </button>
-
-              <span className="text-xs font-mono font-bold px-2 text-zinc-200">
-                {syncOffset > 0 ? `+${syncOffset.toFixed(1)}s` : `${syncOffset.toFixed(1)}s`}
-              </span>
-
-              <button
-                onClick={() => onUpdateSyncOffset(0.5)}
-                className="p-1 rounded hover:bg-zinc-800 text-zinc-400 hover:text-white transition-colors"
-                title="Speed Up Subtitles (+0.5s) [HotKey: ]]"
-              >
-                <Plus className="w-3.5 h-3.5" />
-              </button>
-
-              {syncOffset !== 0 && (
+          <div className="flex flex-wrap items-center gap-4">
+            {/* Sync Offset */}
+            <div className="flex items-center space-x-2">
+              <span className="text-xs font-semibold text-zinc-300">Sync Offset:</span>
+              <div className="flex items-center space-x-1.5 bg-zinc-900 p-1 rounded-lg border border-zinc-800">
                 <button
-                  onClick={onResetSyncOffset}
-                  className="p-1 ml-1 rounded hover:bg-zinc-800 text-zinc-400 hover:text-red-400 transition-colors"
-                  title="Reset Sync Offset to 0s"
+                  onClick={() => onUpdateSyncOffset(-0.5)}
+                  className="p-1 rounded hover:bg-zinc-800 text-zinc-400 hover:text-white transition-colors"
+                  title="Delay Subtitles (-0.5s) [HotKey: []"
                 >
-                  <RotateCcw className="w-3 h-3" />
+                  <Minus className="w-3.5 h-3.5" />
                 </button>
-              )}
+
+                <span className="text-xs font-mono font-bold px-1.5 text-zinc-200">
+                  {syncOffset > 0 ? `+${syncOffset.toFixed(1)}s` : `${syncOffset.toFixed(1)}s`}
+                </span>
+
+                <button
+                  onClick={() => onUpdateSyncOffset(0.5)}
+                  className="p-1 rounded hover:bg-zinc-800 text-zinc-400 hover:text-white transition-colors"
+                  title="Speed Up Subtitles (+0.5s) [HotKey: ]]"
+                >
+                  <Plus className="w-3.5 h-3.5" />
+                </button>
+
+                {syncOffset !== 0 && (
+                  <button
+                    onClick={onResetSyncOffset}
+                    className="p-1 ml-0.5 rounded hover:bg-zinc-800 text-zinc-400 hover:text-red-400 transition-colors"
+                    title="Reset Sync Offset to 0s"
+                  >
+                    <RotateCcw className="w-3 h-3" />
+                  </button>
+                )}
+              </div>
+            </div>
+
+            {/* Font Size Changer */}
+            <div className="flex items-center space-x-2 pl-3 border-l border-zinc-800">
+              <span className="text-xs font-semibold text-zinc-300 flex items-center space-x-1">
+                <Type className="w-3.5 h-3.5 text-indigo-400" />
+                <span>Font Size:</span>
+              </span>
+              <div className="flex items-center space-x-1 bg-zinc-900 p-1 rounded-lg border border-zinc-800">
+                <button
+                  onClick={() => onUpdateFontSize(fontSize - 2)}
+                  disabled={fontSize <= 14}
+                  className="p-1 rounded hover:bg-zinc-800 text-zinc-400 hover:text-white disabled:opacity-30 transition-colors"
+                  title="Decrease Subtitle Font Size"
+                >
+                  <Minus className="w-3.5 h-3.5" />
+                </button>
+
+                <span className="text-xs font-mono font-bold px-2 text-zinc-200 min-w-[32px] text-center">
+                  {fontSize}px
+                </span>
+
+                <button
+                  onClick={() => onUpdateFontSize(fontSize + 2)}
+                  disabled={fontSize >= 60}
+                  className="p-1 rounded hover:bg-zinc-800 text-zinc-400 hover:text-white disabled:opacity-30 transition-colors"
+                  title="Increase Subtitle Font Size"
+                >
+                  <Plus className="w-3.5 h-3.5" />
+                </button>
+              </div>
             </div>
           </div>
 
