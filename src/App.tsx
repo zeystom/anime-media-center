@@ -79,6 +79,7 @@ export const App: React.FC = () => {
 
   // Refresh Library
   const handleRefreshLibrary = useCallback(async () => {
+    if (!window.electronAPI) return;
     setLoading(true);
     try {
       const watchHistory = await window.electronAPI.getAllPlaybackProgress();
@@ -91,6 +92,8 @@ export const App: React.FC = () => {
         // Keep current selected folder if still exists, or default to first
         const exists = scanned.find((f) => f.folderPath === selectedFolder?.folderPath);
         setSelectedFolder(exists || scanned[0]);
+      } else {
+        setSelectedFolder(null);
       }
     } catch (err) {
       console.error('Error refreshing library:', err);
@@ -126,14 +129,20 @@ export const App: React.FC = () => {
 
   // Change Root Directory
   const handleChangeRoot = async () => {
-    const newRoot = await window.electronAPI.browseFolder(settings.defaultLibraryRoot);
-    if (newRoot) {
-      const updated = await window.electronAPI.updateSettings({ defaultLibraryRoot: newRoot });
-      setSettings(updated);
-      setLoading(true);
-      const scanned = await window.electronAPI.scanLibrary(newRoot);
-      setFolders(scanned);
-      setSelectedFolder(scanned.length > 0 ? scanned[0] : null);
+    if (!window.electronAPI) return;
+    try {
+      const newRoot = await window.electronAPI.browseFolder(settings.defaultLibraryRoot);
+      if (newRoot) {
+        const updated = await window.electronAPI.updateSettings({ defaultLibraryRoot: newRoot });
+        setSettings(updated);
+        setLoading(true);
+        const scanned = await window.electronAPI.scanLibrary(newRoot);
+        setFolders(scanned);
+        setSelectedFolder(scanned.length > 0 ? scanned[0] : null);
+        setLoading(false);
+      }
+    } catch (err) {
+      console.error('Error changing root directory:', err);
       setLoading(false);
     }
   };

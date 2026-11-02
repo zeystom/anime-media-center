@@ -29,20 +29,26 @@ export default defineConfig({
           options.reload();
         },
         vite: {
-          build: {
-            outDir: 'dist-electron',
-            lib: {
-              entry: 'electron/preload.ts',
-              formats: ['cjs'],
-              fileName: () => 'preload.cjs',
-            },
-            rollupOptions: {
-              external: ['electron'],
-              output: {
-                format: 'cjs',
+          plugins: [
+            {
+              name: 'force-cjs-preload',
+              config(c) {
+                c.build = c.build || {};
+                c.build.lib = c.build.lib || {};
+                c.build.lib.formats = ['cjs'];
+                c.build.lib.fileName = () => 'preload.cjs';
+              },
+              closeBundle() {
+                try {
+                  const cjsPath = path.resolve(__dirname, 'dist-electron/preload.cjs');
+                  const jsPath = path.resolve(__dirname, 'dist-electron/preload.js');
+                  if (fs.existsSync(cjsPath)) {
+                    fs.copyFileSync(cjsPath, jsPath);
+                  }
+                } catch {}
               },
             },
-          },
+          ],
         },
       },
     ]),

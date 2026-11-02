@@ -118,8 +118,16 @@ async function createWindow() {
       },
     });
 
-    // Setup IPC Handlers
-    setupIpcHandlers(serverPort);
+    // Setup IPC Handlers (Guarded against duplicate registration)
+    setupIpcHandlers();
+
+    // Toggle DevTools with F12 or Ctrl+Shift+I
+    mainWindow.webContents.on('before-input-event', (event, input) => {
+      if (input.key === 'F12' || (input.control && input.shift && input.key.toLowerCase() === 'i')) {
+        mainWindow?.webContents.toggleDevTools();
+        event.preventDefault();
+      }
+    });
 
     // In dev mode, load Vite dev server; in production, load dist index.html
     mainWindow.webContents.on('did-fail-load', (_event, errorCode, errorDescription) => {
@@ -140,7 +148,11 @@ async function createWindow() {
   }
 }
 
-function setupIpcHandlers(port: number) {
+let ipcHandlersSetup = false;
+function setupIpcHandlers() {
+  if (ipcHandlersSetup) return;
+  ipcHandlersSetup = true;
+
   ipcMain.handle('get-settings', async () => {
     return storage.getSettings();
   });
@@ -150,8 +162,8 @@ function setupIpcHandlers(port: number) {
   });
 
   ipcMain.handle('browse-folder', async (_event, defaultPath) => {
-    if (!mainWindow) return null;
-    const res = await dialog.showOpenDialog(mainWindow, {
+    const win = mainWindow || BrowserWindow.getFocusedWindow();
+    const res = await dialog.showOpenDialog(win || (undefined as any), {
       title: 'Select Anime Folder or Library Root',
       defaultPath: defaultPath || storage.getSettings().defaultLibraryRoot,
       properties: ['openDirectory'],
@@ -165,6 +177,7 @@ function setupIpcHandlers(port: number) {
   ipcMain.handle('scan-library', async (_event, rootPath) => {
     const settings = storage.getSettings();
     const targetRoot = rootPath || settings.defaultLibraryRoot;
+    const port = streamServer.getPort();
 
     if (!fs.existsSync(targetRoot)) {
       return [];
@@ -210,7 +223,7 @@ function setupIpcHandlers(port: number) {
   });
 
   ipcMain.handle('get-folder-episodes', async (_event, folderPath) => {
-    return scanFolderForEpisodes(folderPath, port);
+    return scanFolderForEpisodes(folderPath, streamServer.getPort());
   });
 
   ipcMain.handle('probe-video', async (_event, filePath) => {
@@ -251,10 +264,12 @@ function setupIpcHandlers(port: number) {
   });
 
   ipcMain.handle('get-stream-url', async (_event, filePath: string, audioTrackIndex: number, startTime: number) => {
+    const port = streamServer.getPort();
     return `http://127.0.0.1:${port}/stream?file=${encodeURIComponent(filePath)}&audioTrack=${audioTrackIndex}&startTime=${startTime}`;
   });
 
   ipcMain.handle('get-thumbnail-url', async (_event, filePath: string, time: number) => {
+    const port = streamServer.getPort();
     return `http://127.0.0.1:${port}/thumb?file=${encodeURIComponent(filePath)}&time=${time}`;
   });
 
