@@ -1,131 +1,114 @@
-# 🎬 Anime Media Center & Whisper Studio
+# Anime Media Center & Whisper Studio
+
+A desktop media center and video player for Windows, built for watching anime releases (MKV, Dual Audio, 10-bit HEVC, Blu-ray Remux) with subtitle management and automated speech-to-text transcription.
 
 <p align="center">
-  <img src="./app-icon.png" width="128" height="128" alt="Anime Media Center Icon" />
-</p>
-
-<p align="center">
-  <b>Высокопроизводительный локальный медиацентр и видеоплеер для Windows, разработанный специально для просмотра аниме-релизов (Dual Audio, 10-bit HEVC/x265, Blu-Ray Remux, B-frames).</b>
-</p>
-
-<p align="center">
-  <img src="https://img.shields.io/badge/Platform-Windows%2010%20%7C%2011-0078D6?style=flat-square&logo=windows" alt="Platform" />
-  <img src="https://img.shields.io/badge/Electron-33-47848F?style=flat-square&logo=electron" alt="Electron" />
-  <img src="https://img.shields.io/badge/React-18-61DAFB?style=flat-square&logo=react" alt="React" />
-  <img src="https://img.shields.io/badge/Vite-5-646CFF?style=flat-square&logo=vite" alt="Vite" />
-  <img src="https://img.shields.io/badge/TailwindCSS-3.4-38B2AC?style=flat-square&logo=tailwind-css" alt="Tailwind" />
-  <img src="https://img.shields.io/badge/FFmpeg-Hardware%20NVENC-007808?style=flat-square&logo=ffmpeg" alt="FFmpeg" />
+  <img src="./app-icon.png" width="120" height="120" alt="Anime Media Center Icon" />
 </p>
 
 ---
 
-## ✨ Ключевые возможности
+## Features
 
-### 🚀 1. Аппаратный видеостриминг и мгновенный Seek
-- **Аппаратный энкодер NVIDIA NVENC (`h264_nvenc`):** обеспечивает плавное воспроизведение любых тяжелых 10-битных HEVC и 30-мегабитных Blu-Ray Remux релизов со скоростью **500+ FPS** и **~0% нагрузки на процессор**.
-- **Кадр-в-кадр синхронизация звука:** фильтр `-af aresample=async=1:first_pts=0` устраняет отставание и рассинхрон звука на файлах с отрицательным DTS и B-кадрами.
-- **Мгновенная перемотка (Sub-150ms):** генерация ключевых IDR-кадров каждую секунду (`-g 24 -forced-idr 1`) позволяет перемещаться по полосе воспроизведения без задержек и черных экранов.
+### Video Player & Streaming
+- **Hardware-accelerated playback**: Uses local FFmpeg streaming (NVIDIA NVENC with software fallback) to handle 10-bit HEVC/x265 and high-bitrate Blu-ray MKVs with low CPU usage.
+- **Accurate seeking**: Demuxes keyframes for responsive seeking and timeline scrubbing without audio desync or black frames.
+- **High-speed timeline thumbnails**: Fast preview frames while hovering the progress bar, backed by an in-memory cache and neighbor frame pre-fetching.
+- **Maximized windowed launch**: Opens maximized filling the work area while keeping the Windows taskbar accessible.
 
-### 🎭 2. Умная система субтитров и Dubtitles/SDH
-- **Детектор английских дабтитлов (Dubtitles / SDH):** плеер автоматически проверяет наличие встроенных дорожек для дубляжа (`SDH`, `hearing impaired`, `dubtitle`, `CC`).
-- **Синхронная привязка языка:**
-  - При выборе английского дубляжа (English Dub) плеер автоматически выбирает дорожку **SDH / Dubtitles** (или сгенерированный Whisper SRT).
-  - При выборе оригинальной японской дорожки плеер переключается на полный перевод диалогов (**English [CR] / Fansub**).
-- **Двухслойные субтитры (Dual Subtitles):**
-  - **Диалоги (снизу):** основной рендер текста диалогов.
-  - **Надписи и песни / Signs & Songs (сверху):** автоматический отбор только английских Signs/Forced дорожек с мгновенным переключателем `Top Sub: ON/OFF`. Иностранные языки строго отсеиваются.
-- **JASSUB WASM + Надежный Fallback:** если в ASS-субтитрах повреждены встроенные шрифты, плеер мгновенно переключается на встроенный HTML-оверлей (`parseAssToCues`), гарантируя, что субтитры **никогда не пропадут**.
-- **Память настроек на сезон:** выбранные дорожки аудио, субтитров и смещение синхронизации запоминаются для всего аниме-сезона.
+### Subtitle System
+- **Dual subtitle rendering**: Displays dialogue at the bottom and translated signs/songs at the top simultaneously.
+- **JASSUB WebAssembly (libass)**: Renders complex ASS subtitle effects, styles, embedded fonts, and vector masks in browser canvas.
+- **Smart track matching**:
+  - Automatically switches to English Dubtitles / SDH when selecting English audio.
+  - Automatically switches to full dialogue translation when selecting Japanese audio.
+  - Remembers selected audio tracks, subtitle tracks, and sync offsets per anime season.
+- **On-the-fly adjustments**: In-player sync offset controls (`[` / `]`) and live subtitle font size scaling.
 
-### 🖼️ 3. Превью на таймлайне (Scrubbing Thumbnails)
-- При наведении курсора на полосу перемотки отображаются превью-кадры текущего момента с точным таймкодом (`MM:SS`).
-- Оптимизированный дебаунс (90ms) и кэширование обеспечивают гладкое движение превью за курсором без лагов.
+### Navigation & Player Controls
+- **Magnetic episode peek**: Hovering near the right edge reveals an elastic curved tab that follows the cursor and snaps open the episode switcher. Protected from accidental triggers near bottom playback controls.
+- **Spring-animated episode drawer**: Smooth drawer transition with episode titles, thumbnails, and watch progress.
+- **Chapter-aware intro/outro skips**:
+  - Sample-accurate "Skip Intro" button based on embedded MKV OP chapters.
+  - Floating "Skip Ending & Play Next" card during ending credits or the final 90 seconds.
+- **Quick Next Episode button**: Direct button in the bottom control bar and shortcut (`N`).
+- **Cleaned-up bottom controls**: Audio track and subtitle selection relocated to a unified popover next to fullscreen and volume controls.
 
-### ⚡ 4. Whisper Studio (Генерация субтитров)
-- Пакетная генерация субтитров для целых сезонов аниме с помощью `faster-whisper-xxl` (модель `large-v3-turbo`).
-- Распознавание английской дорожки, последовательная очередь, живой вывод терминала и индикация прогресса в процентах.
-
-### 💻 5. Нативная интеграция с Windows
-- **`Anime Media Center.exe`** — автономный бинарник в корне папки с вшитой многослойной иконкой.
-- Автоматическое создание ярлыков на **Рабочем столе** и в **Меню «Пуск»**.
-- Регистрация AppUserModelId (`com.animemediacenter.app`) для закрепления на панели задач Windows без лишних консольных окон.
+### Whisper Studio
+- Batch offline subtitle generation using `faster-whisper-xxl` (supports `large-v3-turbo` model).
+- Automatically targets English audio streams, queues episodes, and writes `.srt` files directly alongside video files.
 
 ---
 
-## 🎮 Горячие клавиши (Keyboard Shortcuts)
+## Keyboard Shortcuts
 
-| Клавиша | Действие |
+| Shortcut | Action |
 | :--- | :--- |
-| `Пробел` / `Клик` | Воспроизведение / Пауза (без задержки) |
-| `F` / `Двойной клик` | Полноэкранный режим |
-| `←` / `→` | Перемотка на -5 сек / +5 сек |
-| `J` / `L` | Перемотка на -10 сек / +10 сек |
-| `[` / `]` | Сдвиг синхронизации субтитров на -0.5 сек / +0.5 сек |
-| `T` | Переключение верхних субтитров (Signs/Top Sub) |
-| `S` | Открыть меню аудиодорожек и субтитров (Tracks) |
-| `E` | Открыть боковую шторку серий (Episodes Drawer) |
-| `+` / `-` | Изменение размера шрифта субтитров |
-| `M` | Включить / выключить звук |
-| `Esc` | Закрыть модальное окно / выйти в библиотеку |
+| `Space` / `Click` | Play / Pause |
+| `F` | Toggle fullscreen |
+| `Left` / `Right` | Seek -5s / +5s |
+| `J` / `L` | Seek -10s / +10s |
+| `N` | Play next episode |
+| `[` / `]` | Subtitle sync offset (-0.5s / +0.5s) |
+| `-` / `+` | Decrease / increase subtitle font size |
+| `M` | Mute / unmute audio |
+| `Esc` | Close drawer / return to library |
 
 ---
 
-## 📦 Быстрый старт после клонирования
+## Installation & Setup
 
-### Способ 1: Автоматический запуск (в 1 клик)
-Просто запустите файл в корне проекта:
-```bat
-setup.bat
-```
-Скрипт автоматически:
-1. Установит зависимости (`npm install`).
-2. Соберет продакшен-бандл (`npm run build`).
-3. Создаст ярлыки на **Рабочем столе** и в **Меню «Пуск»** с красивой неоновой иконкой.
+### Requirements
+- Windows 10 or 11 (64-bit)
+- Node.js 18+ (if building from source)
+- FFmpeg (can use the one bundled with Subtitle Edit / Faster-Whisper-XXL)
 
----
+### Quick Start
 
-### Способ 2: Запуск через `Anime Media Center.exe`
-Дважды кликните по `Anime Media Center.exe` прямо в папке проекта. Если зависимости еще не установлены, программа сама предложит установить их в автоматическом режиме.
+1. **Automatic Setup (recommended):**
+   Run `setup.bat` in the project root. It installs dependencies, builds the production bundles, and creates Start Menu and Desktop shortcuts.
 
----
+2. **Standalone Launcher:**
+   Double-click `Anime Media Center.exe` in the root folder.
 
-### Способ 3: Ручная сборка и запуск через консоль
-```bash
-# 1. Установка зависимостей
-npm install
+3. **Manual Development / Build:**
+   ```bash
+   # Install dependencies
+   npm install
 
-# 2. Сборка проекта
-npm run build
+   # Run dev server with hot reload
+   npm run dev
 
-# 3. Запуск приложения
-npm start
+   # Build production packages
+   npm run build
 
-# Или режим разработки с Vite HMR:
-npm run dev
-```
+   # Start production app
+   npm start
+   ```
 
 ---
 
-## ⚙️ Настройки и пути по умолчанию
+## Configuration
 
-При первом запуске настройки считываются или могут быть изменены через иконку шестеренки в правом верхнем углу интерфейса:
-- **Каталог библиотеки:** `D:\films` (или любая ваша папка с аниме).
-- **Путь к FFmpeg:** `ffmpeg.exe` (встроен в Purfview Faster Whisper или системный FFmpeg).
-- **Путь к Faster-Whisper-XXL:** `faster-whisper-xxl.exe`.
-
-Настройки хранятся локально в `%APPDATA%\anime-media-center\settings.json`.
-
----
-
-## 🛠️ Стек технологий
-- **Фреймворк:** Electron 33, Node.js 22+
-- **Интерфейс:** React 18, TypeScript, Tailwind CSS, Lucide Icons, Framer Motion
-- **Сборщик:** Vite 5, vite-plugin-electron
-- **Субтитры:** JASSUB (WebAssembly libass), Custom HTML/CSS Overlays
-- **Мультимедиа:** FFmpeg (NVIDIA NVENC, libx264, fMP4 Streamer), Faster-Whisper-XXL
-- **Нативный лаунчер:** C# (.NET Framework 4.8 / Win32 GUI)
+Settings can be changed via the gear icon in the top-right corner or by editing `%APPDATA%\anime-media-center\settings.json`:
+- `defaultLibraryRoot`: Default anime directory (e.g. `D:\films`).
+- `ffmpegPath`: Path to `ffmpeg.exe`.
+- `whisperPath`: Path to `faster-whisper-xxl.exe`.
+- `autoPlayNext`: Automatically advance to the next episode when finishing one.
+- `subtitlesFontSize`: Base subtitle font size in pixels.
 
 ---
 
-## 📄 Лицензия
-MIT License. Проект создан для удобного и качественного домашнего просмотра аниме.
+## Tech Stack
+
+- **Desktop Shell**: Electron 33
+- **Frontend**: React 18, TypeScript, Tailwind CSS, Lucide Icons
+- **Bundler**: Vite 5, `vite-plugin-electron`
+- **Subtitles**: JASSUB (WebAssembly `libass`) + HTML overlay fallback
+- **Backend / Transcoding**: Local Node.js streaming server, FFmpeg (NVENC / H.264), Faster-Whisper-XXL
+
+---
+
+## License
+
+MIT
