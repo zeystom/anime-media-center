@@ -44,4 +44,11 @@ contextBridge.exposeInMainWorld('electronAPI', {
     return () => ipcRenderer.removeListener('whisper-done', handler);
   },
   openFolderInExplorer: (folderPath: string) => ipcRenderer.invoke('open-folder', folderPath),
+  setFullScreen: (flag: boolean) => ipcRenderer.invoke('set-fullscreen', flag),
+  isFullScreen: () => ipcRenderer.invoke('is-fullscreen'),
+  onFullScreenChange: (callback: (isFull: boolean) => void) => {
+    const handler = (_event: any, isFull: boolean) => callback(isFull);
+    ipcRenderer.on('fullscreen-change', handler);
+    return () => ipcRenderer.removeListener('fullscreen-change', handler);
+  },
 });

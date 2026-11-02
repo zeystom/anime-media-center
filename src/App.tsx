@@ -198,10 +198,19 @@ export const App: React.FC = () => {
     const initial = startAt > 0 ? startAt : (saved?.currentTime && !saved.completed ? saved.currentTime : 0);
     setPlayerInitialTime(initial);
     setActivePlayerEpisode(episode);
+
+    // Automatically enter fullscreen when starting playback
+    if (window.electronAPI?.setFullScreen) {
+      window.electronAPI.setFullScreen(true).catch(() => {});
+    }
   };
 
   // Close Player & Refresh Progress
   const handleClosePlayer = async () => {
+    // Automatically exit fullscreen and return to maximized windowed mode (taskbar visible)
+    if (window.electronAPI?.setFullScreen) {
+      await window.electronAPI.setFullScreen(false).catch(() => {});
+    }
     setActivePlayerEpisode(null);
     const watchHistory = await window.electronAPI.getAllPlaybackProgress();
     setHistory(watchHistory);

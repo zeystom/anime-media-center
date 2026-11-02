@@ -133,7 +133,22 @@ export const VideoPlayer: React.FC<VideoPlayerProps> = ({
   const [isPlaying, setIsPlaying] = useState<boolean>(false);
   const [volume, setVolume] = useState<number>(1);
   const [isMuted, setIsMuted] = useState<boolean>(false);
-  const [isFullscreen, setIsFullscreen] = useState<boolean>(false);
+  const [isFullscreen, setIsFullscreen] = useState<boolean>(true);
+
+  // Sync with native Electron window fullscreen state
+  useEffect(() => {
+    if (!window.electronAPI) return;
+    if (window.electronAPI.onFullScreenChange) {
+      const unsub = window.electronAPI.onFullScreenChange((isFull) => {
+        setIsFullscreen(isFull);
+      });
+      window.electronAPI.isFullScreen().then((isFull) => {
+        setIsFullscreen(isFull);
+      }).catch(() => {});
+      return () => unsub();
+    }
+  }, []);
+
   const [streamStartTime, setStreamStartTime] = useState<number>(initialTime);
   const [videoElementTime, setVideoElementTime] = useState<number>(0);
   const [duration, setDuration] = useState<number>(0);
@@ -742,17 +757,20 @@ export const VideoPlayer: React.FC<VideoPlayerProps> = ({
     }
   }, []);
 
-  // Fullscreen Toggle
+  // Fullscreen Toggle (Desktop-grade native window or DOM fallback)
   const toggleFullscreen = useCallback(() => {
-    if (!containerRef.current) return;
-    if (!document.fullscreenElement) {
-      containerRef.current.requestFullscreen().catch(() => {});
-      setIsFullscreen(true);
-    } else {
-      document.exitFullscreen().catch(() => {});
-      setIsFullscreen(false);
+    if (window.electronAPI?.setFullScreen) {
+      window.electronAPI.setFullScreen(!isFullscreen).catch(() => {});
+    } else if (containerRef.current) {
+      if (!document.fullscreenElement) {
+        containerRef.current.requestFullscreen().catch(() => {});
+        setIsFullscreen(true);
+      } else {
+        document.exitFullscreen().catch(() => {});
+        setIsFullscreen(false);
+      }
     }
-  }, []);
+  }, [isFullscreen]);
 
   // Smart Skip Delta (With 180ms debounce for rapid keystrokes like Arrow/J/L)
   const handleSkip = useCallback(
@@ -1021,9 +1039,7 @@ export const VideoPlayer: React.FC<VideoPlayerProps> = ({
           handleUpdateFontSize(fontSize + 2);
           break;
         case 'Escape':
-          if (isFullscreen) {
-            toggleFullscreen();
-          } else if (isTrackControlsOpen) {
+          if (isTrackControlsOpen) {
             setIsTrackControlsOpen(false);
           } else if (isEpisodeDrawerOpen) {
             setIsEpisodeDrawerOpen(false);

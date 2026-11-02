@@ -201,6 +201,14 @@ async function createWindow() {
       mainWindow?.maximize();
     });
 
+    // Notify renderer of native window fullscreen transitions
+    mainWindow.on('enter-full-screen', () => {
+      mainWindow?.webContents.send('fullscreen-change', true);
+    });
+    mainWindow.on('leave-full-screen', () => {
+      mainWindow?.webContents.send('fullscreen-change', false);
+    });
+
     // Setup IPC Handlers (Guarded against duplicate registration)
     setupIpcHandlers();
 
@@ -439,6 +447,19 @@ function setupIpcHandlers() {
 
   ipcMain.handle('open-folder', async (_event, folderPath: string) => {
     shell.openPath(folderPath);
+  });
+
+  ipcMain.handle('set-fullscreen', async (_event, fullscreen: boolean) => {
+    if (!mainWindow) return false;
+    mainWindow.setFullScreen(fullscreen);
+    if (!fullscreen) {
+      mainWindow.maximize();
+    }
+    return mainWindow.isFullScreen();
+  });
+
+  ipcMain.handle('is-fullscreen', async () => {
+    return mainWindow ? mainWindow.isFullScreen() : false;
   });
 }
 
