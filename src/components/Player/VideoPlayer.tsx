@@ -359,20 +359,12 @@ export const VideoPlayer: React.FC<VideoPlayerProps> = ({
     [duration, episode.filePath, selectedAudioIndex, applyStream]
   );
 
-  // Play / Pause Toggle with auto-reconnect if stalled or ended
+  // Play / Pause Toggle
   const togglePlay = useCallback(() => {
     if (!videoRef.current) return;
 
-    if (videoRef.current.ended || videoRef.current.error) {
-      handleSeek(timeRef.current);
-      return;
-    }
-
     if (videoRef.current.paused) {
-      videoRef.current.play().catch(() => {
-        // If play failed due to stream stall or closed socket, reload stream seamlessly
-        handleSeek(timeRef.current);
-      });
+      videoRef.current.play().catch(() => {});
       setIsPlaying(true);
       showRipple('play', 'Play');
     } else {
@@ -380,7 +372,7 @@ export const VideoPlayer: React.FC<VideoPlayerProps> = ({
       setIsPlaying(false);
       showRipple('pause', 'Pause');
     }
-  }, [handleSeek]);
+  }, []);
 
   // Fullscreen Toggle
   const toggleFullscreen = useCallback(() => {
@@ -455,11 +447,8 @@ export const VideoPlayer: React.FC<VideoPlayerProps> = ({
           onEpisodeChange(nextEp);
         }
       }
-    } else {
-      // If ended was triggered prematurely (e.g. stream hiccup), auto-reconnect
-      handleSeek(timeRef.current);
     }
-  }, [autoPlayNext, episode.filePath, seasonEpisodes, onEpisodeChange, duration, handleSeek]);
+  }, [autoPlayNext, episode.filePath, seasonEpisodes, onEpisodeChange, duration]);
 
   // Audio track switch
   const handleSelectAudio = useCallback(
@@ -653,15 +642,8 @@ export const VideoPlayer: React.FC<VideoPlayerProps> = ({
         onPlay={() => setIsPlaying(true)}
         onPause={() => setIsPlaying(false)}
         onEnded={handleEnded}
-        onError={() => {
-          console.warn('[VideoPlayer] Video element reported error, attempting stream reconnect...');
-          handleSeek(timeRef.current);
-        }}
-        onStalled={() => {
-          if (isPlaying && videoRef.current && videoRef.current.readyState < 2) {
-            console.warn('[VideoPlayer] Video playback stalled, reconnecting stream...');
-            handleSeek(timeRef.current);
-          }
+        onError={(e) => {
+          console.warn('[VideoPlayer] Video element reported error:', e);
         }}
         className="w-full h-full object-contain pointer-events-none"
       />

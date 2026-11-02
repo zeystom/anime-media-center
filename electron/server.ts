@@ -139,7 +139,7 @@ export class LocalStreamServer {
       'Transfer-Encoding': 'chunked',
       'Accept-Ranges': 'none',
       'Cache-Control': 'no-cache, no-store',
-      'Connection': 'keep-alive',
+      'Connection': 'close',
     });
 
     ffmpeg.stdout.pipe(res);

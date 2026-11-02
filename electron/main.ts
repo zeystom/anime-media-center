@@ -274,7 +274,7 @@ function setupIpcHandlers() {
     const settings = storage.getSettings();
     const actualStartTime = await findPrecedingKeyframe(filePath, startTime, settings.ffmpegPath);
     const port = streamServer.getPort();
-    const url = `http://127.0.0.1:${port}/stream?file=${encodeURIComponent(filePath)}&audioTrack=${audioTrackIndex}&startTime=${actualStartTime}`;
+    const url = `http://127.0.0.1:${port}/stream?file=${encodeURIComponent(filePath)}&audioTrack=${audioTrackIndex}&startTime=${startTime}&_t=${Date.now()}`;
     return {
       url,
       actualStartTime,
