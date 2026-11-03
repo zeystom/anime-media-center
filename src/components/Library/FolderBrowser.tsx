@@ -169,9 +169,13 @@ export const FolderBrowser: React.FC<FolderBrowserProps> = ({
                         <span className="px-2 py-0.5 rounded-md text-[10px] font-bold bg-purple-600/90 text-white backdrop-blur-md shadow-md border border-purple-400/30">
                           Dub Sub
                         </span>
-                      ) : folder.hasSubtitlesCount > 0 ? (
-                        <span className="px-2 py-0.5 rounded-md text-[10px] font-bold bg-emerald-600/90 text-white backdrop-blur-md shadow-md border border-emerald-400/30">
+                      ) : (folder.hasWhisperCount ?? 0) > 0 ? (
+                        <span className="px-2 py-0.5 rounded-md text-[10px] font-bold bg-indigo-600/90 text-white backdrop-blur-md shadow-md border border-indigo-400/30">
                           AI Sub
+                        </span>
+                      ) : (folder.hasExtSubCount ?? 0) > 0 || folder.hasSubtitlesCount > 0 ? (
+                        <span className="px-2 py-0.5 rounded-md text-[10px] font-bold bg-blue-600/90 text-white backdrop-blur-md shadow-md border border-blue-400/30">
+                          Ext Sub
                         </span>
                       ) : (
                         <span className="px-2 py-0.5 rounded-md text-[10px] font-bold bg-zinc-800/90 text-zinc-400 backdrop-blur-md border border-zinc-700/60">
@@ -284,20 +288,32 @@ export const FolderBrowser: React.FC<FolderBrowserProps> = ({
                       <span>Dub Sub Embedded</span>
                     </span>
                   )}
-                  {selectedFolder.hasEmbeddedDubtitles && selectedFolder.hasSubtitlesCount > 0 && (
-                    <span>•</span>
+                  {(selectedFolder.hasWhisperCount ?? 0) > 0 && (
+                    <>
+                      <span>•</span>
+                      <span className="inline-flex items-center space-x-1 px-2 py-0.5 rounded bg-indigo-500/15 border border-indigo-500/30 text-indigo-300 font-semibold">
+                        <Subtitles className="w-3 h-3 text-indigo-400" />
+                        <span>{selectedFolder.hasWhisperCount} / {selectedFolder.totalEpisodes} AI Sub</span>
+                      </span>
+                    </>
                   )}
-                  {selectedFolder.hasSubtitlesCount > 0 && (
-                    <span className="inline-flex items-center space-x-1 px-2 py-0.5 rounded bg-emerald-500/15 border border-emerald-500/30 text-emerald-300 font-semibold">
-                      <Subtitles className="w-3 h-3 text-emerald-400" />
-                      <span>{selectedFolder.hasSubtitlesCount} / {selectedFolder.totalEpisodes} AI Sub</span>
-                    </span>
+                  {(selectedFolder.hasExtSubCount ?? 0) > 0 && (
+                    <>
+                      <span>•</span>
+                      <span className="inline-flex items-center space-x-1 px-2 py-0.5 rounded bg-blue-500/15 border border-blue-500/30 text-blue-300 font-semibold">
+                        <Subtitles className="w-3 h-3 text-blue-400" />
+                        <span>{selectedFolder.hasExtSubCount} / {selectedFolder.totalEpisodes} Ext Sub</span>
+                      </span>
+                    </>
                   )}
-                  {!selectedFolder.hasEmbeddedDubtitles && selectedFolder.hasSubtitlesCount === 0 && (
-                    <span className="inline-flex items-center space-x-1 px-2 py-0.5 rounded bg-zinc-800/80 text-zinc-400 border border-zinc-700/60 font-medium text-[11px]">
-                      <Subtitles className="w-3 h-3 text-zinc-500" />
-                      <span>No Subtitles</span>
-                    </span>
+                  {!selectedFolder.hasEmbeddedDubtitles && (selectedFolder.hasWhisperCount ?? 0) === 0 && (selectedFolder.hasExtSubCount ?? 0) === 0 && (
+                    <>
+                      <span>•</span>
+                      <span className="inline-flex items-center space-x-1 px-2 py-0.5 rounded bg-zinc-800/80 text-zinc-400 border border-zinc-700/60 font-medium text-[11px]">
+                        <Subtitles className="w-3 h-3 text-zinc-500" />
+                        <span>No Subtitles</span>
+                      </span>
+                    </>
                   )}
                 </p>
               </div>

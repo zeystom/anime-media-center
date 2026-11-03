@@ -95,6 +95,39 @@ class ThumbnailQueue {
   }
 }
 
+function isAllowedFilePath(targetPath: string): boolean {
+  if (!targetPath || typeof targetPath !== 'string') return false;
+  let resolved: string;
+  try {
+    resolved = path.resolve(targetPath);
+  } catch {
+    return false;
+  }
+
+  const settings = storage.getSettings();
+  const roots: string[] = [];
+  if (Array.isArray(settings.libraryFolders)) {
+    roots.push(...settings.libraryFolders);
+  }
+  if (settings.defaultLibraryRoot) {
+    roots.push(settings.defaultLibraryRoot);
+  }
+  // Also allow thumbnail directory for /thumb
+  const thumbDir = storage.getThumbnailDir();
+  roots.push(thumbDir);
+
+  for (const root of roots) {
+    if (!root) continue;
+    try {
+      const resolvedRoot = path.resolve(root);
+      if (resolved === resolvedRoot || resolved.startsWith(resolvedRoot + path.sep)) {
+        return true;
+      }
+    } catch {}
+  }
+  return false;
+}
+
 export class LocalStreamServer {
   private server: http.Server | null = null;
   private port: number = 0;
@@ -136,10 +169,31 @@ export class LocalStreamServer {
   }
 
   private handleRequest(req: http.IncomingMessage, res: http.ServerResponse) {
-    // CORS headers
-    res.setHeader('Access-Control-Allow-Origin', '*');
-    res.setHeader('Access-Control-Allow-Methods', 'GET, OPTIONS');
-    res.setHeader('Access-Control-Allow-Headers', '*');
+    const origin = req.headers.origin;
+    const devServerUrl = process.env.VITE_DEV_SERVER_URL;
+
+    let allowedOrigin: string | null = null;
+    if (!origin) {
+      // Direct media requests from <video> / <img> tags without Origin header are permitted
+    } else if (
+      origin === 'null' ||
+      origin.startsWith('file://') ||
+      (devServerUrl && (origin === devServerUrl || origin === devServerUrl.replace(/\/$/, ''))) ||
+      origin.startsWith('http://127.0.0.1:') ||
+      origin.startsWith('http://localhost:')
+    ) {
+      allowedOrigin = origin;
+    } else {
+      res.writeHead(403);
+      res.end('Forbidden: Origin not allowed');
+      return;
+    }
+
+    if (allowedOrigin) {
+      res.setHeader('Access-Control-Allow-Origin', allowedOrigin);
+      res.setHeader('Access-Control-Allow-Methods', 'GET, OPTIONS');
+      res.setHeader('Access-Control-Allow-Headers', '*');
+    }
 
     if (req.method === 'OPTIONS') {
       res.writeHead(200);
@@ -156,8 +210,6 @@ export class LocalStreamServer {
       this.handleThumb(req, res, parsedUrl.query);
     } else if (pathname?.startsWith('/font/')) {
       this.handleFont(req, res, pathname);
-    } else if (pathname?.startsWith('/jassub/')) {
-      this.handleJassub(req, res, pathname);
     } else if (pathname === '/status') {
       res.writeHead(200, { 'Content-Type': 'application/json' });
       res.end(JSON.stringify({ status: 'ok', port: this.port }));
@@ -172,9 +224,9 @@ export class LocalStreamServer {
     const audioTrackStr = (query.audioTrack as string) || '0';
     const startTimeStr = (query.startTime as string) || '0';
 
-    if (!filePath || !fs.existsSync(filePath)) {
-      res.writeHead(400, { 'Content-Type': 'text/plain' });
-      res.end('Missing or invalid file parameter');
+    if (!filePath || !isAllowedFilePath(filePath) || !fs.existsSync(filePath)) {
+      res.writeHead(403, { 'Content-Type': 'text/plain' });
+      res.end('Access denied or file not found');
       return;
     }
 
@@ -307,9 +359,9 @@ export class LocalStreamServer {
     const timeStr = (query.time as string) || '0';
     const isCard = query.type === 'card';
 
-    if (!filePath || !fs.existsSync(filePath)) {
-      res.writeHead(400);
-      res.end('File not found');
+    if (!filePath || !isAllowedFilePath(filePath) || !fs.existsSync(filePath)) {
+      res.writeHead(403);
+      res.end('Access denied or file not found');
       return;
     }
 
@@ -409,57 +461,72 @@ export class LocalStreamServer {
     }
   }
 
-  private handleFont(req: http.IncomingMessage, res: http.ServerResponse, pathname: string) {
-    const parts = pathname.slice('/font/'.length).split('/');
-    if (parts.length >= 2) {
-      const fileHash = parts[0];
-      const fontName = decodeURIComponent(parts.slice(1).join('/'));
-      const fontPath = path.join(storage.getThumbnailDir(), 'fonts', fileHash, fontName);
-      if (fs.existsSync(fontPath)) {
-        const ext = path.extname(fontName).toLowerCase();
-        const contentType =
-          ext === '.otf' ? 'font/otf' :
-          ext === '.woff2' ? 'font/woff2' :
-          ext === '.woff' ? 'font/woff' : 'font/ttf';
-
-        res.writeHead(200, {
-          'Content-Type': contentType,
-          'Cache-Control': 'public, max-age=86400',
-        });
-        fs.createReadStream(fontPath).pipe(res);
-        return;
-      }
+  private handleFont(req: http.IncomingMessage, res: http.ServerResponse, rawPathname: string) {
+    let decodedPath: string;
+    try {
+      decodedPath = decodeURIComponent(rawPathname);
+    } catch {
+      res.writeHead(400);
+      res.end('Bad Request');
+      return;
     }
-    res.writeHead(404);
-    res.end('Font not found');
-  }
 
-  private handleJassub(req: http.IncomingMessage, res: http.ServerResponse, pathname: string) {
-    const fileName = path.basename(pathname);
-    const possiblePaths = [
-      path.join(__dirname, '../public/jassub', fileName),
-      path.join(__dirname, '../dist/jassub', fileName),
-      path.join(process.cwd(), 'public/jassub', fileName),
-      path.join(__dirname, '../../node_modules/jassub/dist/wasm', fileName),
-      path.join(__dirname, '../../node_modules/jassub/dist', fileName),
-    ];
-    const foundPath = possiblePaths.find((p) => fs.existsSync(p));
-    if (foundPath) {
-      const ext = path.extname(fileName).toLowerCase();
+    if (!decodedPath.startsWith('/font/')) {
+      res.writeHead(404);
+      res.end('Not Found');
+      return;
+    }
+
+    const segments = decodedPath.slice('/font/'.length).split('/').filter(Boolean);
+    if (segments.length !== 2) {
+      res.writeHead(400);
+      res.end('Bad Request');
+      return;
+    }
+
+    const [fileHash, fontName] = segments;
+
+    // Validate fileHash format (strictly 16 hex characters)
+    if (!/^[a-f0-9]{16}$/i.test(fileHash)) {
+      res.writeHead(400);
+      res.end('Invalid file hash');
+      return;
+    }
+
+    // Reject '..', path separators, or absolute paths in fontName
+    if (fontName.includes('..') || fontName.includes('/') || fontName.includes('\\') || path.isAbsolute(fontName)) {
+      res.writeHead(400);
+      res.end('Invalid font name');
+      return;
+    }
+
+    const fontsBaseDir = path.resolve(storage.getThumbnailDir(), 'fonts', fileHash);
+    const resolvedFontPath = path.resolve(fontsBaseDir, fontName);
+
+    // Verify resolved path is strictly within fontsBaseDir
+    if (!resolvedFontPath.startsWith(fontsBaseDir + path.sep)) {
+      res.writeHead(403);
+      res.end('Forbidden');
+      return;
+    }
+
+    if (fs.existsSync(resolvedFontPath)) {
+      const ext = path.extname(fontName).toLowerCase();
       const contentType =
-        ext === '.wasm' ? 'application/wasm' :
-        ext === '.js' ? 'application/javascript' :
-        ext === '.woff2' ? 'font/woff2' : 'application/octet-stream';
+        ext === '.otf' ? 'font/otf' :
+        ext === '.woff2' ? 'font/woff2' :
+        ext === '.woff' ? 'font/woff' : 'font/ttf';
 
       res.writeHead(200, {
         'Content-Type': contentType,
         'Cache-Control': 'public, max-age=86400',
       });
-      fs.createReadStream(foundPath).pipe(res);
+      fs.createReadStream(resolvedFontPath).pipe(res);
       return;
     }
+
     res.writeHead(404);
-    res.end('JASSUB asset not found');
+    res.end('Font not found');
   }
 
   stopActiveStreams() {

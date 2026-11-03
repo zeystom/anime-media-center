@@ -369,7 +369,7 @@ export const TrackControls: React.FC<TrackControlsProps> = ({
                 </button>
 
                 <span className="text-xs font-mono font-bold px-1.5 text-zinc-200">
-                  {syncOffset > 0 ? `+${syncOffset.toFixed(1)}s` : `${syncOffset.toFixed(1)}s`}
+                  {syncOffset > 0 ? `+${syncOffset.toFixed(1)}s (earlier)` : syncOffset < 0 ? `${syncOffset.toFixed(1)}s (later)` : '0.0s'}
                 </span>
 
                 <button

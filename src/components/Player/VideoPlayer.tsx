@@ -19,6 +19,7 @@ import {
   SlidersHorizontal,
   ChevronLeft,
   X,
+  AlertCircle,
 } from 'lucide-react';
 import { Episode, VideoMetadata, VideoChapter, SubtitleCue, SeasonPreference, AppSettings } from '../../types';
 import { SubtitleOverlay } from './SubtitleOverlay';
@@ -332,6 +333,7 @@ export const VideoPlayer: React.FC<VideoPlayerProps> = ({
   const [isTrackControlsOpen, setIsTrackControlsOpen] = useState<boolean>(false);
   const [isEpisodeDrawerOpen, setIsEpisodeDrawerOpen] = useState<boolean>(false);
   const [autoPlayNext, setAutoPlayNext] = useState<boolean>(settings.autoPlayNext);
+  const [playbackError, setPlaybackError] = useState<string | null>(null);
 
   // Episode navigation & chapters
   const currentEpIndex = useMemo(() => {
@@ -583,8 +585,14 @@ export const VideoPlayer: React.FC<VideoPlayerProps> = ({
         if (!isMounted) return;
         applyStream(streamUrl, actualStartTime);
         setLoading(false);
-      } catch (err) {
+      } catch (err: any) {
         console.error('Failed to probe or setup video:', err);
+        const errMsg = err?.message || '';
+        if (!settings.ffmpegPath || errMsg.toLowerCase().includes('ffmpeg') || errMsg.toLowerCase().includes('enoent')) {
+          setPlaybackError('FFmpeg binary not found or failed to launch. Please configure FFmpeg in Settings.');
+        } else {
+          setPlaybackError(`Failed to load video stream: ${errMsg || 'Unknown error'}`);
+        }
         setLoading(false);
       }
     })();
@@ -1148,7 +1156,13 @@ export const VideoPlayer: React.FC<VideoPlayerProps> = ({
       if (jassubRef.current) {
         jassubRef.current.timeOffset = streamStartTimeRef.current + nextOffset;
       }
-      showRipple('sync', `Sub Sync: ${nextOffset > 0 ? `+${nextOffset}s` : `${nextOffset}s`}`);
+      const syncLabel =
+        nextOffset > 0
+          ? `Sub Sync: +${nextOffset.toFixed(1)}s (earlier)`
+          : nextOffset < 0
+          ? `Sub Sync: ${nextOffset.toFixed(1)}s (later)`
+          : 'Sub Sync: 0s';
+      showRipple('sync', syncLabel);
       persistSeasonRule(selectedAudioIndex, selectedMainSubId, selectedTopSubId, topSubEnabled, nextOffset);
     },
     [syncOffset, selectedAudioIndex, selectedMainSubId, selectedTopSubId, topSubEnabled, persistSeasonRule]
@@ -1654,6 +1668,25 @@ export const VideoPlayer: React.FC<VideoPlayerProps> = ({
           onEpisodeChange(newEp);
         }}
       />
+
+      {/* Playback Error Overlay */}
+      {playbackError && (
+        <div className="absolute inset-0 z-50 flex items-center justify-center bg-black/90 p-6 animate-in fade-in duration-150">
+          <div className="max-w-md p-6 rounded-2xl bg-zinc-900 border border-zinc-800 text-center space-y-4 shadow-2xl">
+            <AlertCircle className="w-10 h-10 text-amber-400 mx-auto" />
+            <h3 className="text-base font-bold text-white">Playback Error</h3>
+            <p className="text-xs text-zinc-300 leading-relaxed">{playbackError}</p>
+            <div className="pt-2">
+              <button
+                onClick={onClose}
+                className="px-5 py-2 rounded-xl bg-zinc-800 hover:bg-zinc-700 text-xs font-semibold text-zinc-100 border border-white/10 transition-colors"
+              >
+                Back to Library
+              </button>
+            </div>
+          </div>
+        </div>
+      )}
     </div>
   );
 };

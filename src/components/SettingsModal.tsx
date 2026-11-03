@@ -146,12 +146,32 @@ export const SettingsModal: React.FC<SettingsModalProps> = ({
 
   const handleFfmpegChange = (val: string) => {
     setFfmpegPath(val);
-    onSave({ ffmpegPath: val });
+  };
+
+  const handleFfmpegBlur = () => {
+    onSave({ ffmpegPath });
+  };
+
+  const handleFfmpegKeyDown = (e: React.KeyboardEvent<HTMLInputElement>) => {
+    if (e.key === 'Enter') {
+      (e.target as HTMLInputElement).blur();
+      onSave({ ffmpegPath });
+    }
   };
 
   const handleWhisperChange = (val: string) => {
     setWhisperPath(val);
-    onSave({ whisperPath: val });
+  };
+
+  const handleWhisperBlur = () => {
+    onSave({ whisperPath });
+  };
+
+  const handleWhisperKeyDown = (e: React.KeyboardEvent<HTMLInputElement>) => {
+    if (e.key === 'Enter') {
+      (e.target as HTMLInputElement).blur();
+      onSave({ whisperPath });
+    }
   };
 
   const handleAutoDetect = async () => {
@@ -354,7 +374,7 @@ export const SettingsModal: React.FC<SettingsModalProps> = ({
                       <span>2. Standalone Release</span>
                     </div>
                     <p className="text-zinc-400 text-[10px] leading-relaxed">
-                      Download <code>Faster-Whisper-XXL_windows.7z</code> from Purfview's GitHub, extract anywhere, and click <strong>Browse</strong>.
+                      Download the Windows .7z archive from the Faster-Whisper-XXL release, extract anywhere, and click <strong>Browse</strong>. If FFmpeg is not bundled, configure ffmpeg.exe separately.
                     </p>
                     <button
                       type="button"
@@ -385,6 +405,8 @@ export const SettingsModal: React.FC<SettingsModalProps> = ({
                     placeholder="Auto-detected or specify path to ffmpeg.exe"
                     value={ffmpegPath}
                     onChange={(e) => handleFfmpegChange(e.target.value)}
+                    onBlur={handleFfmpegBlur}
+                    onKeyDown={handleFfmpegKeyDown}
                     className="w-full pl-3 pr-24 py-2 rounded-lg bg-zinc-900 border border-white/10 text-xs font-mono text-zinc-200 focus:outline-none focus:border-zinc-500"
                   />
                   <div className="absolute right-2.5 top-1/2 -translate-y-1/2 flex items-center space-x-1 pointer-events-none select-none">
@@ -424,6 +446,8 @@ export const SettingsModal: React.FC<SettingsModalProps> = ({
                     placeholder="Auto-detected or specify path to faster-whisper-xxl.exe"
                     value={whisperPath}
                     onChange={(e) => handleWhisperChange(e.target.value)}
+                    onBlur={handleWhisperBlur}
+                    onKeyDown={handleWhisperKeyDown}
                     className="w-full pl-3 pr-24 py-2 rounded-lg bg-zinc-900 border border-white/10 text-xs font-mono text-zinc-200 focus:outline-none focus:border-zinc-500"
                   />
                   <div className="absolute right-2.5 top-1/2 -translate-y-1/2 flex items-center space-x-1 pointer-events-none select-none">
@@ -461,7 +485,7 @@ export const SettingsModal: React.FC<SettingsModalProps> = ({
             className="flex items-center space-x-1.5 px-3 py-1.5 rounded-lg text-zinc-400 hover:text-white hover:bg-zinc-800/80 text-xs font-medium transition-colors"
           >
             <RotateCcw className="w-3.5 h-3.5" />
-            <span>Reset to Defaults</span>
+            <span>Reset tool paths</span>
           </button>
 
           <button

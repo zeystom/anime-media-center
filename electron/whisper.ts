@@ -1,10 +1,11 @@
 import { spawn, ChildProcess } from 'child_process';
 import fs from 'fs';
 import path from 'path';
-import { BrowserWindow } from 'electron';
+import { app, BrowserWindow } from 'electron';
 import { WhisperLogMessage, WhisperQueueItem, WhisperStatus } from './types';
 import { storage } from './storage';
-import { probeMkv } from './ffmpeg';
+import { probeMkv, invalidateProbeCache } from './ffmpeg';
+import { hasWhisperSubtitle } from './subtitles';
 
 export class WhisperManager {
   private activeProcess: ChildProcess | null = null;
@@ -15,6 +16,8 @@ export class WhisperManager {
   private currentFolder: string = '';
   private currentAudioTrackNum: number = 1;
   private logsBuffer: WhisperLogMessage[] = [];
+  private currentRunId: string | null = null;
+  private runPromise: Promise<void> | null = null;
 
   getStatus(): WhisperStatus {
     return {
@@ -33,15 +36,15 @@ export class WhisperManager {
     skipExistingSrt: boolean,
     mainWindow: BrowserWindow
   ): Promise<{ success: boolean; error?: string }> {
-    if (this.isRunning) {
+    if (this.isRunning || this.runPromise) {
       return { success: false, error: 'Whisper task is already in progress' };
     }
 
     const settings = storage.getSettings();
     const whisperExe = settings.whisperPath;
 
-    if (!fs.existsSync(whisperExe)) {
-      return { success: false, error: `Whisper binary not found at: ${whisperExe}` };
+    if (!whisperExe || !fs.existsSync(whisperExe)) {
+      return { success: false, error: `Whisper binary not found at: ${whisperExe || '(not configured)'}` };
     }
 
     if (!fs.existsSync(folderPath)) {
@@ -58,6 +61,8 @@ export class WhisperManager {
       return { success: false, error: 'No .mkv video files found in selected folder' };
     }
 
+    const runId = Date.now().toString();
+    this.currentRunId = runId;
     this.currentFolder = folderPath;
     this.currentAudioTrackNum = audioTrackNum;
     this.queue = [];
@@ -66,11 +71,9 @@ export class WhisperManager {
 
     for (const file of mkvFiles) {
       const fullPath = path.join(folderPath, file);
-      const baseName = path.parse(file).name;
-      const srtPath = path.join(folderPath, `${baseName}.srt`);
-      const hasSrt = fs.existsSync(srtPath);
+      const hasWhisper = hasWhisperSubtitle(fullPath);
 
-      if (skipExistingSrt && hasSrt) {
+      if (skipExistingSrt && hasWhisper) {
         this.queue.push({
           id: file,
           filePath: fullPath,
@@ -98,62 +101,108 @@ export class WhisperManager {
       } skipped)`
     );
 
-    // Run sequentially in background
-    (async () => {
+    // Run version pre-check
+    await this.checkWhisperVersion(whisperExe, mainWindow);
+
+    // Run sequentially in background with promise guard
+    this.runPromise = (async () => {
       let completedCount = 0;
       let failedCount = 0;
 
-      for (let i = 0; i < this.queue.length; i++) {
-        if (this.cancelled) {
-          this.sendLog(mainWindow, 'info', 'Whisper queue cancelled by user.');
-          break;
+      try {
+        for (let i = 0; i < this.queue.length; i++) {
+          if (this.cancelled || this.currentRunId !== runId) {
+            this.sendLog(mainWindow, 'info', 'Whisper queue cancelled.');
+            break;
+          }
+
+          const item = this.queue[i];
+          if (item.status === 'skipped') continue;
+
+          item.status = 'processing';
+          this.currentItem = item;
+          this.broadcastProgress(mainWindow);
+
+          // 1.5 Dynamic English audio track determination per file
+          let effectiveTrack = audioTrackNum;
+          try {
+            const meta = await probeMkv(item.filePath, settings.ffmpegPath);
+            if (meta.duration > 0) {
+              item.duration = meta.duration;
+            }
+            const engTrack = meta.audioTracks.find(
+              (t) => t.language === 'eng' || t.language === 'en' || (t.title && /english/i.test(t.title))
+            );
+            if (engTrack) {
+              effectiveTrack = engTrack.audioIndex + 1; // 1-based index (1..6)
+            }
+          } catch (e) {
+            // Duration and audio track fallback to defaults
+          }
+
+          if (effectiveTrack < 1 || effectiveTrack > 6) {
+            item.status = 'failed';
+            item.error = `Audio track number (${effectiveTrack}) exceeds maximum supported by Faster-Whisper-XXL (1-6)`;
+            failedCount++;
+            this.sendLog(mainWindow, 'error', `[${i + 1}/${this.queue.length}] ${item.fileName}: ${item.error}`);
+            this.broadcastProgress(mainWindow);
+            continue;
+          }
+
+          this.sendLog(
+            mainWindow,
+            'info',
+            `[${i + 1}/${this.queue.length}] Starting: ${item.fileName} (Audio Track: ${effectiveTrack})`
+          );
+
+          try {
+            await this.processSingleFile(item, whisperExe, folderPath, effectiveTrack, runId, mainWindow);
+
+            if (this.cancelled || this.currentRunId !== runId) {
+              item.status = 'cancelled';
+              item.error = 'Cancelled by user';
+              break;
+            }
+
+            item.status = 'completed';
+            item.progress = 100;
+            completedCount++;
+            this.sendLog(mainWindow, 'success', `[${i + 1}/${this.queue.length}] Completed: ${item.fileName}`);
+          } catch (err: any) {
+            if (this.cancelled || this.currentRunId !== runId) {
+              item.status = 'cancelled';
+              item.error = 'Cancelled by user';
+              break;
+            }
+
+            item.status = 'failed';
+            item.error = err.message || 'Unknown error';
+            failedCount++;
+            this.sendLog(mainWindow, 'error', `[${i + 1}/${this.queue.length}] Failed ${item.fileName}: ${err.message}`);
+            if (err.message && /invalid model/i.test(err.message)) {
+              this.sendLog(mainWindow, 'error', 'Update Faster-Whisper-XXL to r193.1 or newer.');
+            }
+          }
+
+          this.broadcastProgress(mainWindow);
+        }
+      } finally {
+        if (this.currentRunId === runId) {
+          this.isRunning = false;
+          this.currentItem = null;
+          this.activeProcess = null;
+          this.runPromise = null;
         }
 
-        const item = this.queue[i];
-        if (item.status === 'skipped') continue;
-
-        item.status = 'processing';
-        this.currentItem = item;
-        this.broadcastProgress(mainWindow);
-
+        if (mainWindow && !mainWindow.isDestroyed()) {
+          mainWindow.webContents.send('whisper-done', { completedCount, failedCount });
+        }
         this.sendLog(
           mainWindow,
           'info',
-          `[${i + 1}/${this.queue.length}] Starting: ${item.fileName} (Audio Track: ${audioTrackNum})`
+          `Batch processing finished. ${completedCount} generated, ${failedCount} errors.`
         );
-
-        try {
-          await this.processSingleFile(item, whisperExe, folderPath, audioTrackNum, mainWindow);
-          if (this.cancelled) {
-            item.status = 'failed';
-            item.error = 'Cancelled';
-            break;
-          }
-          item.status = 'completed';
-          item.progress = 100;
-          completedCount++;
-          this.sendLog(mainWindow, 'success', `[${i + 1}/${this.queue.length}] Completed: ${item.fileName}`);
-        } catch (err: any) {
-          item.status = 'failed';
-          item.error = err.message || 'Unknown error';
-          failedCount++;
-          this.sendLog(mainWindow, 'error', `[${i + 1}/${this.queue.length}] Failed ${item.fileName}: ${err.message}`);
-        }
-
-        this.broadcastProgress(mainWindow);
       }
-
-      this.isRunning = false;
-      this.currentItem = null;
-      this.activeProcess = null;
-      if (mainWindow && !mainWindow.isDestroyed()) {
-        mainWindow.webContents.send('whisper-done', { completedCount, failedCount });
-      }
-      this.sendLog(
-        mainWindow,
-        'info',
-        `Batch processing finished. ${completedCount} generated, ${failedCount} errors.`
-      );
     })();
 
     return { success: true };
@@ -161,13 +210,61 @@ export class WhisperManager {
 
   cancel(): void {
     this.cancelled = true;
-    if (this.activeProcess) {
+    const proc = this.activeProcess;
+    if (proc && proc.pid) {
+      if (process.platform === 'win32') {
+        try {
+          spawn('taskkill', ['/PID', proc.pid.toString(), '/T', '/F'], { windowsHide: true });
+        } catch {}
+      }
       try {
-        this.activeProcess.kill('SIGKILL');
+        proc.kill('SIGKILL');
       } catch {}
       this.activeProcess = null;
     }
-    this.isRunning = false;
+    if (this.currentItem) {
+      this.currentItem.status = 'cancelled';
+      this.currentItem.error = 'Cancelled by user';
+    }
+  }
+
+  private async checkWhisperVersion(whisperExe: string, mainWindow: BrowserWindow): Promise<void> {
+    try {
+      const helpOutput = await new Promise<string>((resolve, reject) => {
+        const child = spawn(whisperExe, ['--help'], { windowsHide: true });
+        let out = '';
+        const timer = setTimeout(() => {
+          try {
+            if (process.platform === 'win32' && child.pid) {
+              spawn('taskkill', ['/PID', child.pid.toString(), '/T', '/F'], { windowsHide: true });
+            }
+            child.kill();
+          } catch {}
+          reject(new Error('timeout'));
+        }, 5000);
+
+        child.stdout.on('data', (d) => { out += d.toString(); });
+        child.stderr.on('data', (d) => { out += d.toString(); });
+        child.on('close', () => {
+          clearTimeout(timer);
+          resolve(out);
+        });
+        child.on('error', (err) => {
+          clearTimeout(timer);
+          reject(err);
+        });
+      });
+
+      if (!helpOutput.toLowerCase().includes('turbo')) {
+        this.sendLog(
+          mainWindow,
+          'info',
+          'Notice: Update Faster-Whisper-XXL to r193.1 or newer for optimal large-v3-turbo support.'
+        );
+      }
+    } catch (err: any) {
+      this.sendLog(mainWindow, 'info', `Warning: Unable to verify Faster-Whisper-XXL version: ${err.message}`);
+    }
   }
 
   private async processSingleFile(
@@ -175,104 +272,136 @@ export class WhisperManager {
     whisperExe: string,
     folderPath: string,
     audioTrackNum: number,
+    runId: string,
     mainWindow: BrowserWindow
   ): Promise<void> {
-    const settings = storage.getSettings();
+    const fileId = path.parse(item.filePath).name.replace(/[^a-zA-Z0-9_-]/g, '_');
+    const tmpDir = path.join(app.getPath('userData'), 'whisper_tmp', runId, fileId);
 
-    // Probe duration and audio language if not already known
-    let isJapaneseOrForeign = false;
+    fs.mkdirSync(tmpDir, { recursive: true });
+
+    const stderrLines: string[] = [];
+
     try {
-      const meta = await probeMkv(item.filePath, settings.ffmpegPath);
-      if (meta.duration > 0) {
-        item.duration = meta.duration;
+      await new Promise<void>((resolve, reject) => {
+        const args = [
+          item.filePath,
+          '--model',
+          'large-v3-turbo',
+          '--task',
+          'transcribe',
+          '--language',
+          'en',
+          '--ff_track',
+          audioTrackNum.toString(),
+          '--ff_sync',
+          '--sentence',
+          '--max_line_count',
+          '2',
+          '--max_line_width',
+          '42',
+          '--output_format',
+          'srt',
+          '--output_dir',
+          tmpDir,
+        ];
+
+        this.sendLog(mainWindow, 'info', `Executing: "${path.basename(whisperExe)}" ${args.slice(1).join(' ')}`);
+
+        const child = spawn(whisperExe, args, { windowsHide: true });
+        this.activeProcess = child;
+
+        child.stdout.on('data', (data) => {
+          const text = data.toString();
+          this.parseProgress(item, text);
+          this.sendLog(mainWindow, 'stdout', text);
+          this.broadcastProgress(mainWindow);
+        });
+
+        child.stderr.on('data', (data) => {
+          const text = data.toString();
+          for (const line of text.split('\n')) {
+            const trimmed = line.trim();
+            if (trimmed) {
+              stderrLines.push(trimmed);
+              if (stderrLines.length > 20) stderrLines.shift();
+            }
+          }
+          this.parseProgress(item, text);
+          this.sendLog(mainWindow, 'stderr', text);
+          this.broadcastProgress(mainWindow);
+        });
+
+        child.on('close', (code) => {
+          this.activeProcess = null;
+          if (this.cancelled || this.currentRunId !== runId) {
+            reject(new Error('Process cancelled'));
+          } else if (code === 0) {
+            resolve();
+          } else {
+            const recentStderr = stderrLines.slice(-10).join('\n');
+            const detailMsg = recentStderr
+              ? `Whisper exited with code ${code}:\n${recentStderr}`
+              : `Whisper exited with code ${code}`;
+            reject(new Error(detailMsg));
+          }
+        });
+
+        child.on('error', (err) => {
+          this.activeProcess = null;
+          reject(err);
+        });
+      });
+
+      // Verification: ensure output .srt exists and has size > 0
+      const baseName = path.parse(item.filePath).name;
+      const producedSrt = path.join(tmpDir, `${baseName}.srt`);
+
+      if (!fs.existsSync(producedSrt) || fs.statSync(producedSrt).size === 0) {
+        throw new Error('No subtitle file produced (no speech detected?)');
       }
-      const selectedTrack = meta.audioTracks[audioTrackNum - 1];
-      if (selectedTrack) {
-        const lang = (selectedTrack.language || '').toLowerCase();
-        if (lang === 'jpn' || lang === 'ja' || /japanese/i.test(selectedTrack.title)) {
-          isJapaneseOrForeign = true;
+
+      // Move atomically to <folder>/<base>.whisper.srt
+      const destSrt = path.join(folderPath, `${baseName}.whisper.srt`);
+      try {
+        fs.renameSync(producedSrt, destSrt);
+      } catch {
+        fs.copyFileSync(producedSrt, destSrt);
+        try {
+          fs.unlinkSync(producedSrt);
+        } catch {}
+      }
+
+      // Invalidate probe cache so media player discovers the new subtitle immediately
+      invalidateProbeCache(item.filePath);
+    } finally {
+      // Clean up temporary output directory
+      try {
+        if (fs.existsSync(tmpDir)) {
+          fs.rmSync(tmpDir, { recursive: true, force: true });
         }
-      }
-    } catch (e) {
-      // Fallback: duration unknown, will rely on percentage if outputted
+      } catch {}
     }
-
-    return new Promise((resolve, reject) => {
-      // Prevent Windows backslash escaping bugs with trailing dot
-      const sanitizedOutDir =
-        folderPath.endsWith('\\') || folderPath.endsWith('/') ? `${folderPath}.` : `${folderPath}\\.`;
-
-      const args = [
-        item.filePath,
-        '--model',
-        'large-v3-turbo',
-        '--ff_track',
-        audioTrackNum.toString(),
-        '--ff_sync',
-        '--sentence',
-        '--max_line_count',
-        '2',
-        '--max_line_width',
-        '42',
-        '--output_format',
-        'srt',
-        '--output_dir',
-        sanitizedOutDir,
-      ];
-
-      // If audio is Japanese/Foreign, use translation to English; otherwise transcribe
-      if (isJapaneseOrForeign) {
-        args.push('--task', 'translate');
-      } else {
-        args.push('--task', 'transcribe', '--language', 'en');
-      }
-
-      this.sendLog(mainWindow, 'info', `Executing: "${path.basename(whisperExe)}" ${args.slice(1).join(' ')}`);
-
-      const child = spawn(whisperExe, args, { windowsHide: true });
-      this.activeProcess = child;
-
-      child.stdout.on('data', (data) => {
-        const text = data.toString();
-        this.parseProgress(item, text);
-        this.sendLog(mainWindow, 'stdout', text);
-        this.broadcastProgress(mainWindow);
-      });
-
-      child.stderr.on('data', (data) => {
-        const text = data.toString();
-        this.parseProgress(item, text);
-        this.sendLog(mainWindow, 'stderr', text);
-        this.broadcastProgress(mainWindow);
-      });
-
-      child.on('close', (code) => {
-        this.activeProcess = null;
-        if (this.cancelled) {
-          reject(new Error('Process cancelled'));
-        } else if (code === 0) {
-          item.progress = 100;
-          resolve();
-        } else {
-          reject(new Error(`Whisper exited with code ${code}`));
-        }
-      });
-
-      child.on('error', (err) => {
-        this.activeProcess = null;
-        reject(err);
-      });
-    });
   }
 
   private parseProgress(item: WhisperQueueItem, output: string): void {
-    // 1. Direct percentage pattern (e.g. "45%" or " 45%|")
-    const pctMatch = output.match(/(\d{1,3})%/);
-    if (pctMatch) {
-      item.progress = Math.min(100, Math.max(0, parseInt(pctMatch[1], 10)));
+    // 1. Check if model is currently downloading
+    const isDownloading = /hf|huggingface|download|\.bin|\.safetensors|\b\d+(?:\.\d+)?\s*(?:mb|gb|mib|gib)\b/i.test(
+      output
+    );
+    if (isDownloading) {
+      item.speed = 'Downloading model...';
+      return;
     }
 
-    // 2. Parse faster-whisper-xxl timestamp intervals: [15:23.320 --> 15:24.640]
+    // 2. Direct percentage pattern (e.g. "45%" or " 45%|")
+    const pctMatch = output.match(/(\d{1,3})%/);
+    if (pctMatch) {
+      const pct = Math.min(100, Math.max(0, parseInt(pctMatch[1], 10)));
+      item.progress = Math.max(item.progress, pct);
+    }
+
+    // 3. Parse faster-whisper-xxl timestamp intervals: [15:23.320 --> 15:24.640]
     const matches = Array.from(
       output.matchAll(
         /\[(?:(?:\d+:)?\d+:\d+(?:\.\d+)?)\s*-->\s*(?:(?:(\d+):)?(\d+):(\d+(?:\.\d+)?))\]/g
@@ -291,7 +420,7 @@ export class WhisperManager {
       }
     }
 
-    // 3. Iteration speed
+    // 4. Iteration speed
     const speedMatch = output.match(/([\d.]+\s*(?:it\/s|s\/it|frames\/s))/i);
     if (speedMatch) {
       item.speed = speedMatch[1];

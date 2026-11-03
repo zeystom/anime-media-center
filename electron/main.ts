@@ -4,8 +4,9 @@ import fs from 'fs';
 import { fileURLToPath } from 'url';
 import { storage, autoDetectFfmpegPath, autoDetectWhisperPath } from './storage';
 import { streamServer } from './server';
-import { probeMkv, extractEmbeddedSubtitle, extractEmbeddedAss, extractEmbeddedFonts, filterFontsForAss, parseSrt, findPrecedingKeyframe, readMkvEmbeddedTitle } from './ffmpeg';
+import { probeMkv, extractEmbeddedSubtitle, extractEmbeddedAss, extractEmbeddedFonts, filterFontsForAss, parseSrt, findPrecedingKeyframe, readMkvEmbeddedTitle, cleanupOldCaches } from './ffmpeg';
 import { whisperManager } from './whisper';
+import { findExternalSubtitles } from './subtitles';
 import { AnimeFolder, Episode, PlaybackProgress, SeasonPreference } from './types';
 import { getKitsuMetadata, fetchAniSkipTimes } from './kitsu';
 
@@ -23,44 +24,98 @@ app.commandLine.appendSwitch('disable-renderer-backgrounding');
 
 let mainWindow: BrowserWindow | null = null;
 
-function parseEpisodeNumber(filename: string): string {
-  // Try matching S01E02, s1e2, etc.
-  const seMatch = filename.match(/s(\d+)e(\d+)/i);
-  if (seMatch) {
-    return `S${seMatch[1].padStart(2, '0')}E${seMatch[2].padStart(2, '0')}`;
+async function asyncPool<T, R>(poolLimit: number, array: T[], iteratorFn: (item: T) => Promise<R>): Promise<R[]> {
+  const ret: Promise<R>[] = [];
+  const executing: Promise<any>[] = [];
+  for (const item of array) {
+    const p = Promise.resolve().then(() => iteratorFn(item));
+    ret.push(p);
+    if (poolLimit <= array.length) {
+      const e: Promise<any> = p.then(() => executing.splice(executing.indexOf(e), 1));
+      executing.push(e);
+      if (executing.length >= poolLimit) {
+        await Promise.race(executing);
+      }
+    }
+  }
+  return Promise.all(ret);
+}
+
+export function extractEpisodeNumber(fileName: string): { episodeNum: number | null; label: string } {
+  const withoutExt = fileName.replace(/\.[a-zA-Z0-9]+$/, '');
+  const cleaned = withoutExt.replace(/\[[^\]]*\]/g, ' ').replace(/\([^)]*\)/g, ' ').trim();
+
+  // 1. SxxExx e.g. S01E05
+  const sxxExxMatch = cleaned.match(/\bs(\d+)e(\d+)\b/i);
+  if (sxxExxMatch) {
+    const n = parseInt(sxxExxMatch[2], 10);
+    return {
+      episodeNum: n,
+      label: `S${sxxExxMatch[1].padStart(2, '0')}E${sxxExxMatch[2].padStart(2, '0')}`,
+    };
   }
 
-  // Try matching E01, EP01, Episode 01
-  const epMatch = filename.match(/(?:ep|episode|e)[.\s_-]*(\d+)/i);
-  if (epMatch) {
-    return `E${epMatch[1].padStart(2, '0')}`;
+  // 2. \b(?:ep|episode|e)[_.\s-]*(\d+)\b with word boundary
+  const epWordMatch = cleaned.match(/\b(?:ep|episode|e)[_.\s-]*(\d+)\b/i);
+  if (epWordMatch) {
+    const n = parseInt(epWordMatch[1], 10);
+    return {
+      episodeNum: n,
+      label: `E${n.toString().padStart(2, '0')}`,
+    };
   }
 
-  // Try matching standalone numbers like [01] or - 01
-  const numMatch = filename.match(/[-_\[\s](\d{2})[-_\]\s]/);
-  if (numMatch) {
-    return `E${numMatch[1]}`;
+  // 3. NxNN e.g. 1x05
+  const nxMatch = cleaned.match(/\b\d+x(\d+)\b/i);
+  if (nxMatch) {
+    const n = parseInt(nxMatch[1], 10);
+    return {
+      episodeNum: n,
+      label: `E${n.toString().padStart(2, '0')}`,
+    };
   }
 
-  return 'EP';
+  // 4. Number after ' - ' with optional version: \s-\s(\d{1,4})(?:v\d+)?\b
+  const dashMatch = cleaned.match(/\s-\s(\d{1,4})(?:v\d+)?\b/i);
+  if (dashMatch) {
+    const n = parseInt(dashMatch[1], 10);
+    return {
+      episodeNum: n,
+      label: `E${n.toString().padStart(2, '0')}`,
+    };
+  }
+
+  // 5. Fallback: number bounded by separator
+  const fallbackMatch = cleaned.match(/[-_.\s](\d{1,3})(?:v\d+)?\b/);
+  if (fallbackMatch) {
+    const n = parseInt(fallbackMatch[1], 10);
+    return {
+      episodeNum: n,
+      label: `E${n.toString().padStart(2, '0')}`,
+    };
+  }
+
+  return { episodeNum: null, label: 'EP' };
 }
 
 const dubtitleFolderCache = new Map<string, boolean>();
 
-async function checkFolderHasDubtitles(firstMkvPath: string, ffmpegPath: string): Promise<boolean> {
-  const folder = path.dirname(firstMkvPath);
-  if (dubtitleFolderCache.has(folder)) {
-    return dubtitleFolderCache.get(folder)!;
+async function checkFolderHasDubtitles(mkvFiles: string[], folderPath: string, ffmpegPath: string): Promise<boolean> {
+  if (dubtitleFolderCache.has(folderPath)) {
+    return dubtitleFolderCache.get(folderPath)!;
   }
-  try {
-    const meta = await probeMkv(firstMkvPath, ffmpegPath);
-    const hasDub = Boolean(meta.hasEmbeddedDubtitles);
-    dubtitleFolderCache.set(folder, hasDub);
-    return hasDub;
-  } catch (e) {
-    dubtitleFolderCache.set(folder, false);
-    return false;
+  const sample = mkvFiles.slice(0, 3);
+  for (const file of sample) {
+    try {
+      const meta = await probeMkv(path.join(folderPath, file), ffmpegPath);
+      if (meta.hasEmbeddedDubtitles) {
+        dubtitleFolderCache.set(folderPath, true);
+        return true;
+      }
+    } catch {}
   }
+  dubtitleFolderCache.set(folderPath, false);
+  return false;
 }
 
 async function scanFolderForEpisodes(folderPath: string, port: number): Promise<Episode[]> {
@@ -77,7 +132,7 @@ async function scanFolderForEpisodes(folderPath: string, port: number): Promise<
     mkvFiles.sort((a, b) => a.localeCompare(b, undefined, { numeric: true, sensitivity: 'base' }));
 
     const settings = storage.getSettings();
-    const hasDubtitles = await checkFolderHasDubtitles(path.join(folderPath, mkvFiles[0]), settings.ffmpegPath);
+    const hasDubtitles = await checkFolderHasDubtitles(mkvFiles, folderPath, settings.ffmpegPath);
 
     // Attempt to fetch Kitsu anime metadata in parallel (or from local cache)
     const folderName = path.basename(folderPath);
@@ -89,35 +144,16 @@ async function scanFolderForEpisodes(folderPath: string, port: number): Promise<
       const fullPath = path.join(folderPath, file);
       const stat = fs.statSync(fullPath);
       const baseName = path.parse(file).name;
-      const epNum = parseEpisodeNumber(file);
+      const { episodeNum, label: epNum } = extractEpisodeNumber(file);
 
-      // Check if .srt exists matching this file
-      let hasExternalSrt = false;
-      let externalSrtPath: string | undefined;
-
-      const directSrt = `${baseName}.srt`;
-      if (srtFiles.has(directSrt)) {
-        hasExternalSrt = true;
-        externalSrtPath = path.join(folderPath, directSrt);
-      } else {
-        // Find any srt that starts with baseName
-        for (const s of srtFiles) {
-          if (s.startsWith(baseName)) {
-            hasExternalSrt = true;
-            externalSrtPath = path.join(folderPath, s);
-            break;
-          }
-        }
-      }
+      // Check external subtitles using unified finder
+      const extSubs = findExternalSubtitles(fullPath);
+      const hasExternalSrt = extSubs.length > 0;
+      const hasWhisperSrt = extSubs.some((s) => s.isWhisper);
+      const externalSrtPath = extSubs[0]?.filePath;
 
       // Match numeric episode index for Kitsu metadata
-      const numMatch =
-        file.match(/s\d+e(\d+)/i) ||
-        file.match(/\b(?:e|ep|episode)[_.\s-]*(\d+)\b/i) ||
-        file.match(/\b\d+x(\d+)\b/i) ||
-        file.match(/[-_.\s](\d{1,3})[-_.\s]/);
-      const numericIndex = numMatch ? parseInt(numMatch[1], 10) : null;
-      const kitsuEp = numericIndex !== null && kitsuData ? kitsuData.episodes[numericIndex] : null;
+      const kitsuEp = episodeNum !== null && kitsuData ? kitsuData.episodes[episodeNum] : null;
 
       // Extract official embedded MKV container title in <1ms as local fallback
       const embeddedTitle = readMkvEmbeddedTitle(fullPath);
@@ -130,6 +166,7 @@ async function scanFolderForEpisodes(folderPath: string, port: number): Promise<
         title: baseName,
         size: stat.size,
         hasExternalSrt,
+        hasWhisperSrt,
         externalSrtPath,
         hasEmbeddedDubtitles: hasDubtitles,
         thumbnailUrl: `http://127.0.0.1:${port}/thumb?file=${encodeURIComponent(fullPath)}&type=card`,
@@ -211,6 +248,13 @@ async function createWindow() {
 
     // Setup IPC Handlers (Guarded against duplicate registration)
     setupIpcHandlers();
+
+    // Background 60-day cleanup of old thumbnails & subtitles
+    setTimeout(() => {
+      try {
+        cleanupOldCaches();
+      } catch {}
+    }, 5000);
 
     // Toggle DevTools with F12 or Ctrl+Shift+I
     mainWindow.webContents.on('before-input-event', (event, input) => {
@@ -315,7 +359,7 @@ function setupIpcHandlers() {
         try {
           const files = fs.readdirSync(modelsDir);
           modelExists = files.some(
-            (m) => m.toLowerCase().includes('large-v3-turbo') || m.toLowerCase().includes('large')
+            (m) => m.toLowerCase().includes('large-v3-turbo')
           );
         } catch {}
       }
@@ -385,6 +429,8 @@ function setupIpcHandlers() {
               folderName: path.basename(targetRoot),
               episodes: rootEpisodes,
               hasSubtitlesCount: rootEpisodes.filter((e) => e.hasExternalSrt).length,
+              hasWhisperCount: rootEpisodes.filter((e) => e.hasWhisperSrt).length,
+              hasExtSubCount: rootEpisodes.filter((e) => e.hasExternalSrt && !e.hasWhisperSrt).length,
               hasDubtitlesCount,
               hasEmbeddedDubtitles: hasDubtitlesCount > 0,
               totalEpisodes: rootEpisodes.length,
@@ -398,10 +444,10 @@ function setupIpcHandlers() {
           }
         }
 
-        // 2. Scan immediate subdirectories concurrently in parallel
+        // 2. Scan immediate subdirectories using concurrency pool of 3-4 tasks
         const entries = fs.readdirSync(targetRoot, { withFileTypes: true });
         const dirEntries = entries.filter((e) => e.isDirectory());
-        const subFolderPromises = dirEntries.map(async (entry) => {
+        const resolved = await asyncPool(3, dirEntries, async (entry) => {
           const subFolderPath = path.join(targetRoot, entry.name);
           if (visitedPaths.has(subFolderPath)) return null;
 
@@ -415,6 +461,8 @@ function setupIpcHandlers() {
               folderName: entry.name,
               episodes,
               hasSubtitlesCount: episodes.filter((e) => e.hasExternalSrt).length,
+              hasWhisperCount: episodes.filter((e) => e.hasWhisperSrt).length,
+              hasExtSubCount: episodes.filter((e) => e.hasExternalSrt && !e.hasWhisperSrt).length,
               hasDubtitlesCount,
               hasEmbeddedDubtitles: hasDubtitlesCount > 0,
               totalEpisodes: episodes.length,
@@ -429,7 +477,6 @@ function setupIpcHandlers() {
           return null;
         });
 
-        const resolved = await Promise.all(subFolderPromises);
         for (const item of resolved) {
           if (item) animeFolders.push(item);
         }
@@ -583,6 +630,7 @@ function setupIpcHandlers() {
 app.whenReady().then(createWindow);
 
 app.on('window-all-closed', () => {
+  storage.flushHistory();
   streamServer.stop();
   whisperManager.cancel();
   if (process.platform !== 'darwin') {
@@ -591,6 +639,7 @@ app.on('window-all-closed', () => {
 });
 
 app.on('before-quit', () => {
+  storage.flushHistory();
   streamServer.stop();
   whisperManager.cancel();
 });

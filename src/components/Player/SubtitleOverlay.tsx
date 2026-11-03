@@ -25,10 +25,12 @@ export const SubtitleOverlay: React.FC<SubtitleOverlayProps> = ({
   // Apply sync offset to current playback time
   const adjustedTime = currentTime + syncOffset;
 
-  // Find active main dialogue cue (Bottom)
-  const activeMainCue = useMemo(() => {
-    if (!mainCues || mainCues.length === 0) return null;
-    return mainCues.find(cue => adjustedTime >= cue.start && adjustedTime <= cue.end);
+  // Find all active main dialogue cues (Bottom, up to 3 overlapping cues)
+  const activeMainCues = useMemo(() => {
+    if (!mainCues || mainCues.length === 0) return [];
+    return mainCues
+      .filter((cue) => adjustedTime >= cue.start && adjustedTime <= cue.end)
+      .slice(0, 3);
   }, [mainCues, adjustedTime]);
 
   // Find active signs/forced cue (Top)
@@ -76,9 +78,9 @@ export const SubtitleOverlay: React.FC<SubtitleOverlayProps> = ({
           controlsVisible ? '-translate-y-24' : 'translate-y-0'
         }`}
       >
-        {activeMainCue && (
+        {activeMainCues.length > 0 && (
           <div
-            className={`max-w-4xl text-center px-5 py-1.5 rounded transition-opacity duration-100 ${
+            className={`max-w-4xl text-center px-5 py-1.5 rounded transition-opacity duration-100 flex flex-col space-y-1.5 ${
               hasOutline ? 'subtitles-overlay-main' : ''
             }`}
             style={{
@@ -86,8 +88,12 @@ export const SubtitleOverlay: React.FC<SubtitleOverlayProps> = ({
               color: '#ffffff',
             }}
           >
-            {activeMainCue.text.split('\n').map((line, idx) => (
-              <div key={idx}>{line}</div>
+            {activeMainCues.map((cue) => (
+              <div key={cue.id || cue.start}>
+                {cue.text.split('\n').map((line, idx) => (
+                  <div key={idx}>{line}</div>
+                ))}
+              </div>
             ))}
           </div>
         )}

@@ -7,7 +7,25 @@
   "scripts": {
     "dev": "vite",
     "build": "tsc && vite build",
-    "start": "electron ."
+    "start": "electron .",
+    "package": "npm run build && electron-builder"
+  },
+  "build": {
+    "appId": "com.animemediacenter.app",
+    "productName": "Anime Media Center",
+    "directories": {
+      "output": "dist-build"
+    },
+    "win": {
+      "target": ["nsis"],
+      "icon": "app-icon.ico"
+    },
+    "nsis": {
+      "oneClick": false,
+      "allowToChangeInstallationDirectory": true,
+      "createDesktopShortcut": true,
+      "createStartMenuShortcut": true
+    }
   },
   "dependencies": {
     "framer-motion": "^11.11.17",

@@ -108,15 +108,31 @@ export const EpisodeCard: React.FC<EpisodeCardProps> = ({ episode, progress, onP
                 <Subtitles className="w-3 h-3 text-purple-400" />
                 <span>Dub Sub</span>
               </span>
-            ) : episode.hasExternalSrt ? (
+            ) : episode.hasWhisperSrt ? (
               <span
-                title="Whisper AI Subtitle Ready (.srt)"
-                className="inline-flex items-center space-x-1 px-1.5 py-0.5 rounded text-[10px] font-semibold bg-emerald-500/20 text-emerald-300 border border-emerald-500/40"
+                title="Whisper AI Subtitle Ready (.whisper.srt)"
+                className="inline-flex items-center space-x-1 px-1.5 py-0.5 rounded text-[10px] font-semibold bg-indigo-500/25 text-indigo-300 border border-indigo-500/40"
               >
-                <Subtitles className="w-3 h-3 text-emerald-400" />
+                <Subtitles className="w-3 h-3 text-indigo-400" />
                 <span>AI Sub</span>
               </span>
-            ) : null}
+            ) : episode.hasExternalSrt ? (
+              <span
+                title="External Subtitle Ready (.srt)"
+                className="inline-flex items-center space-x-1 px-1.5 py-0.5 rounded text-[10px] font-semibold bg-blue-500/20 text-blue-300 border border-blue-500/40"
+              >
+                <Subtitles className="w-3 h-3 text-blue-400" />
+                <span>Ext Sub</span>
+              </span>
+            ) : (
+              <span
+                title="No English Subtitles found"
+                className="inline-flex items-center space-x-1 px-1.5 py-0.5 rounded text-[10px] font-semibold bg-zinc-800/90 text-zinc-400 border border-zinc-700/60"
+              >
+                <Subtitles className="w-3 h-3 text-zinc-500" />
+                <span>No Sub</span>
+              </span>
+            )}
           </div>
 
           {/* Watch Progress / Timestamp (Lower-Right) */}

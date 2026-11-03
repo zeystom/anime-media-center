@@ -1,6 +1,7 @@
 import { defineConfig } from 'vite';
 import react from '@vitejs/plugin-react';
 import electron from 'vite-plugin-electron';
+import fs from 'fs';
 import path from 'path';
 import { fileURLToPath } from 'url';
 
@@ -62,7 +63,9 @@ export default defineConfig({
                   if (fs.existsSync(cjsPath)) {
                     fs.copyFileSync(cjsPath, jsPath);
                   }
-                } catch {}
+                } catch (err) {
+                  console.error('[vite.config.ts] Failed to copy preload.cjs to preload.js:', err);
+                }
               },
             },
           ],

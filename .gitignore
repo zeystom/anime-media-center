@@ -1,6 +1,9 @@
 node_modules
 dist
 dist-electron
+dist-build
 *.local
 .DS_Store
 Thumbs.db
+Anime Media Center.exe
+whisper_tmp

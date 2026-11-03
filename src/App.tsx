@@ -1,4 +1,5 @@
-import React, { useState, useEffect, useCallback, useMemo } from 'react';
+import React, { useState, useEffect, useCallback, useMemo, useRef } from 'react';
+import { AlertCircle } from 'lucide-react';
 import { Navbar } from './components/Navbar';
 import { HeroContinueWatching } from './components/Library/HeroContinueWatching';
 import { FolderBrowser } from './components/Library/FolderBrowser';
@@ -60,6 +61,27 @@ export const App: React.FC = () => {
   const [selectedFolder, setSelectedFolder] = useState<AnimeFolder | null>(null);
   const [history, setHistory] = useState<Record<string, PlaybackProgress>>({});
   const [loading, setLoading] = useState<boolean>(true);
+  const [binaryStatus, setBinaryStatus] = useState<{ ffmpegExists: boolean; whisperExists: boolean }>({
+    ffmpegExists: true,
+    whisperExists: true,
+  });
+
+  const isScanningRef = useRef(false);
+  const scanPendingRef = useRef(false);
+
+  const checkBinariesStatus = useCallback(async (appSettings: AppSettings) => {
+    if (!window.electronAPI) return;
+    try {
+      const status = await window.electronAPI.checkBinaries({
+        ffmpegPath: appSettings.ffmpegPath,
+        whisperPath: appSettings.whisperPath,
+      });
+      setBinaryStatus({
+        ffmpegExists: status.ffmpegExists,
+        whisperExists: status.whisperExists,
+      });
+    } catch {}
+  }, []);
 
   // 1. Load Settings and History on Startup
   const loadInitialData = useCallback(async () => {
@@ -71,6 +93,7 @@ export const App: React.FC = () => {
     try {
       const appSettings = await window.electronAPI.getSettings();
       setSettings(appSettings);
+      checkBinariesStatus(appSettings);
 
       const watchHistory = await window.electronAPI.getAllPlaybackProgress();
       setHistory(watchHistory);
@@ -88,7 +111,7 @@ export const App: React.FC = () => {
     } finally {
       setLoading(false);
     }
-  }, []);
+  }, [checkBinariesStatus]);
 
   useEffect(() => {
     loadInitialData();
@@ -119,30 +142,40 @@ export const App: React.FC = () => {
     };
   }, [loadInitialData]);
 
-  // Refresh Library
+  // Refresh Library with concurrent scan protection
   const handleRefreshLibrary = useCallback(async () => {
     if (!window.electronAPI) return;
+    if (isScanningRef.current) {
+      scanPendingRef.current = true;
+      return;
+    }
+    isScanningRef.current = true;
     setLoading(true);
     try {
-      const watchHistory = await window.electronAPI.getAllPlaybackProgress();
-      setHistory(watchHistory);
+      do {
+        scanPendingRef.current = false;
+        const watchHistory = await window.electronAPI.getAllPlaybackProgress();
+        setHistory(watchHistory);
 
-      const scanned = await window.electronAPI.scanLibrary();
-      setFolders(scanned);
+        const scanned = await window.electronAPI.scanLibrary();
+        setFolders(scanned);
 
-      if (scanned.length > 0) {
-        // Keep current selected folder if still exists, or default to last watched anime
-        const exists = scanned.find((f) => f.folderPath === selectedFolder?.folderPath);
-        setSelectedFolder(exists || findLastWatchedFolder(scanned, watchHistory) || scanned[0]);
-      } else {
-        setSelectedFolder(null);
-      }
+        if (scanned.length > 0) {
+          setSelectedFolder((prev) => {
+            const exists = scanned.find((f) => f.folderPath === prev?.folderPath);
+            return exists || findLastWatchedFolder(scanned, watchHistory) || scanned[0];
+          });
+        } else {
+          setSelectedFolder(null);
+        }
+      } while (scanPendingRef.current);
     } catch (err) {
       console.error('Error refreshing library:', err);
     } finally {
+      isScanningRef.current = false;
       setLoading(false);
     }
-  }, [selectedFolder]);
+  }, []);
 
   // Find most recently watched episode across all anime folders
   const mostRecentWatched = useMemo(() => {
@@ -238,11 +271,21 @@ export const App: React.FC = () => {
     setCurrentTab('whisper');
   };
 
-  // Save Settings
+  // Save Settings - Only rescan library if libraryFolders changed
   const handleSaveSettings = async (newSettings: Partial<AppSettings>) => {
+    const prevFolders = settings.libraryFolders || (settings.defaultLibraryRoot ? [settings.defaultLibraryRoot] : []);
     const updated = await window.electronAPI.updateSettings(newSettings);
     setSettings(updated);
-    handleRefreshLibrary();
+    checkBinariesStatus(updated);
+
+    const newFolders = updated.libraryFolders || (updated.defaultLibraryRoot ? [updated.defaultLibraryRoot] : []);
+    const foldersChanged =
+      prevFolders.length !== newFolders.length ||
+      prevFolders.some((f, idx) => f !== newFolders[idx]);
+
+    if (foldersChanged) {
+      handleRefreshLibrary();
+    }
   };
 
   // Resolve current active anime folder for player
@@ -258,12 +301,36 @@ export const App: React.FC = () => {
     <div className="flex flex-col h-screen w-screen bg-[#0f0f12] text-zinc-100 overflow-hidden font-sans">
       {/* Top Navbar - Only rendered in Menu/Library/Whisper views */}
       {!activePlayerEpisode && (
-        <Navbar
-          currentTab={currentTab}
-          onSelectTab={setCurrentTab}
-          onOpenSettings={() => setSettingsOpen(true)}
-          isWhisperActive={isWhisperActive}
-        />
+        <>
+          <Navbar
+            currentTab={currentTab}
+            onSelectTab={setCurrentTab}
+            onOpenSettings={() => setSettingsOpen(true)}
+            isWhisperActive={isWhisperActive}
+          />
+
+          {/* Missing Binary Warning Banner */}
+          {(!binaryStatus.ffmpegExists || !binaryStatus.whisperExists) && (
+            <div className="bg-amber-500/10 border-b border-amber-500/20 px-6 py-2.5 flex items-center justify-between text-xs text-amber-300">
+              <div className="flex items-center space-x-2">
+                <AlertCircle className="w-4 h-4 text-amber-400 shrink-0" />
+                <span>
+                  {!binaryStatus.ffmpegExists && !binaryStatus.whisperExists
+                    ? 'FFmpeg and Whisper binaries not found. Configure tool paths in Settings to enable video playback and AI subtitles.'
+                    : !binaryStatus.ffmpegExists
+                    ? 'FFmpeg binary not found. Video transcoding and playback will not function.'
+                    : 'Faster-Whisper binary not found. AI subtitle generation will not function.'}
+                </span>
+              </div>
+              <button
+                onClick={() => setSettingsOpen(true)}
+                className="px-3 py-1 rounded-lg bg-amber-500/20 hover:bg-amber-500/30 text-amber-200 border border-amber-500/30 font-semibold transition-colors"
+              >
+                Open Settings
+              </button>
+            </div>
+          )}
+        </>
       )}
 
       {/* Main Content Area - Persists tab states without destroying components */}
@@ -313,6 +380,7 @@ export const App: React.FC = () => {
           <WhisperStudio
             initialFolder={selectedFolder}
             onRefreshLibrary={handleRefreshLibrary}
+            onOpenSettings={() => setSettingsOpen(true)}
           />
         </div>
       </main>

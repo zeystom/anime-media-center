@@ -115,7 +115,21 @@ export function parseSrt(content: string): SubtitleCue[] {
   return cues;
 }
 
+import { findExternalSubtitles } from './subtitles';
+
 const probeCache = new Map<string, VideoMetadata>();
+
+export function invalidateProbeCache(filePath?: string): void {
+  if (!filePath) {
+    probeCache.clear();
+    return;
+  }
+  for (const key of Array.from(probeCache.keys())) {
+    if (key.startsWith(filePath + ':') || key === filePath) {
+      probeCache.delete(key);
+    }
+  }
+}
 
 /**
  * Fast EBML reader that inspects the first 64KB of a Matroska (.mkv) file
@@ -170,36 +184,85 @@ export function readMkvEmbeddedTitle(filePath: string): string | null {
 }
 
 export async function probeMkv(filePath: string, ffmpegPath: string): Promise<VideoMetadata> {
-  const cached = probeCache.get(filePath);
-  if (cached) return cached;
+  let stat: fs.Stats | null = null;
+  try {
+    stat = fs.statSync(filePath);
+  } catch {}
 
-  return new Promise((resolve, reject) => {
-    const args = ['-hide_banner', '-i', filePath];
-    const child = spawn(ffmpegPath, args, { windowsHide: true });
+  const cacheKey = stat ? `${filePath}:${stat.mtimeMs}:${stat.size}` : filePath;
+  let containerMeta = probeCache.get(cacheKey);
 
-    let stderr = '';
-    child.stderr.on('data', (data) => {
-      stderr += data.toString();
+  if (!containerMeta) {
+    containerMeta = await new Promise<VideoMetadata>((resolve, reject) => {
+      const args = ['-hide_banner', '-i', filePath];
+      const child = spawn(ffmpegPath, args, { windowsHide: true });
+
+      let stderr = '';
+      child.stderr.on('data', (data) => {
+        stderr += data.toString();
+      });
+
+      child.on('error', (err) => {
+        reject(new Error(`Failed to spawn ffmpeg: ${err.message}`));
+      });
+
+      child.on('close', () => {
+        try {
+          const metadata = parseFfmpegProbeOutput(filePath, stderr);
+          probeCache.set(cacheKey, metadata);
+          resolve(metadata);
+        } catch (err: any) {
+          reject(err);
+        }
+      });
     });
+  }
 
-    child.on('error', (err) => {
-      reject(new Error(`Failed to spawn ffmpeg: ${err.message}`));
-    });
+  // Always search for external subtitles anew to attach on top of cached container info (never mutate cache)
+  const externalMatches = findExternalSubtitles(filePath);
+  const externalTracks: SubtitleTrack[] = externalMatches.map((found) => ({
+    id: `ext-${crypto.createHash('md5').update(found.fileName).digest('hex').slice(0, 8)}`,
+    index: null,
+    type: 'external',
+    filePath: found.filePath,
+    language: 'eng',
+    languageName: 'English',
+    codec: 'subrip',
+    title: found.isWhisper ? 'AI (Whisper)' : `External: ${found.fileName}`,
+    isDefault: false,
+    isForced: found.isForced,
+    isSigns: found.isSigns,
+    isDubtitle: found.isWhisper,
+  }));
 
-    child.on('close', () => {
-      try {
-        const metadata = parseFfmpegProbeOutput(filePath, stderr);
-        probeCache.set(filePath, metadata);
-        resolve(metadata);
-      } catch (err: any) {
-        reject(err);
-      }
-    });
-  });
+  // Default track selection:
+  // Choose .whisper.srt if present, otherwise first non-forced external track
+  const whisperTrack = externalTracks.find((t) => t.isDubtitle);
+  const firstRegularExt = externalTracks.find((t) => !t.isForced && !t.isSigns);
+  const chosenDefault = whisperTrack || firstRegularExt;
+
+  const embeddedTracks = containerMeta.subtitleTracks.map((t) => ({
+    ...t,
+    isDefault: chosenDefault ? false : t.isDefault,
+  }));
+
+  if (chosenDefault) {
+    chosenDefault.isDefault = true;
+  }
+
+  const combinedSubtitles = [...externalTracks, ...embeddedTracks];
+
+  return {
+    ...containerMeta,
+    subtitleTracks: combinedSubtitles,
+    hasExternalSrt: externalTracks.length > 0,
+    externalSrtPath: externalTracks[0]?.filePath,
+  };
 }
 
 function parseFfmpegProbeOutput(filePath: string, stderr: string): VideoMetadata {
   const fileName = path.basename(filePath);
+  const baseNameWithoutExt = path.parse(filePath).name;
   const folder = path.dirname(filePath);
 
   // 1. Duration
@@ -295,42 +358,6 @@ function parseFfmpegProbeOutput(filePath: string, stderr: string): VideoMetadata
       !s.isSigns
   );
 
-  // 3. Check for external .srt files in the same directory
-  const baseNameWithoutExt = path.parse(fileName).name;
-  let hasExternalSrt = false;
-  let externalSrtPath: string | undefined;
-
-  try {
-    const files = fs.readdirSync(folder);
-    for (const f of files) {
-      if (!f.toLowerCase().endsWith('.srt')) continue;
-      const fBase = path.parse(f).name;
-
-      if (fBase === baseNameWithoutExt || fBase.startsWith(baseNameWithoutExt)) {
-        hasExternalSrt = true;
-        externalSrtPath = path.join(folder, f);
-
-        // Add external subtitle track at the top
-        subtitleTracks.unshift({
-          id: `ext-${crypto.createHash('md5').update(f).digest('hex').slice(0, 8)}`,
-          index: null,
-          type: 'external',
-          filePath: externalSrtPath,
-          language: 'eng',
-          languageName: 'English (Whisper / External)',
-          title: `External: ${f}`,
-          isForced: false,
-          isDefault: true,
-          isSigns: false,
-          isDubtitle: true,
-        });
-        break;
-      }
-    }
-  } catch (e) {
-    console.error('Failed to scan folder for external srt:', e);
-  }
-
   // 3. Chapters
   const chapters: VideoChapter[] = [];
   const chapterRegex = /Chapter #0:(\d+):\s*start\s+([\d.]+),\s*end\s+([\d.]+)(?:[\r\n\s]+Metadata:[\r\n\s]+title\s*:\s*([^\r\n]+))?/gi;
@@ -352,8 +379,7 @@ function parseFfmpegProbeOutput(filePath: string, stderr: string): VideoMetadata
     audioTracks,
     subtitleTracks,
     chapters,
-    hasExternalSrt,
-    externalSrtPath,
+    hasExternalSrt: false,
     hasEmbeddedDubtitles,
   };
 }
@@ -367,7 +393,14 @@ export async function extractEmbeddedSubtitle(
   ffmpegPath: string
 ): Promise<string> {
   const cacheDir = storage.getSubtitleCacheDir();
-  const fileHash = crypto.createHash('md5').update(`${filePath}:${streamIndex}`).digest('hex');
+  let mtime = 0;
+  let size = 0;
+  try {
+    const st = fs.statSync(filePath);
+    mtime = Math.round(st.mtimeMs);
+    size = st.size;
+  } catch {}
+  const fileHash = crypto.createHash('md5').update(`${filePath}:${mtime}:${size}:${streamIndex}`).digest('hex');
   const cacheFile = path.join(cacheDir, `${fileHash}.srt`);
 
   if (fs.existsSync(cacheFile)) {
@@ -436,7 +469,14 @@ export async function extractEmbeddedAss(
   ffmpegPath: string
 ): Promise<string> {
   const cacheDir = storage.getSubtitleCacheDir();
-  const fileHash = crypto.createHash('md5').update(`${filePath}:${streamIndex}`).digest('hex');
+  let mtime = 0;
+  let size = 0;
+  try {
+    const st = fs.statSync(filePath);
+    mtime = Math.round(st.mtimeMs);
+    size = st.size;
+  } catch {}
+  const fileHash = crypto.createHash('md5').update(`${filePath}:${mtime}:${size}:${streamIndex}`).digest('hex');
   const cacheFile = path.join(cacheDir, `${fileHash}.ass`);
 
   if (fs.existsSync(cacheFile)) {
@@ -782,5 +822,40 @@ export async function findPrecedingKeyframe(
       resolve(targetTime);
     });
   });
+}
+
+/**
+ * Periodically deletes cache files older than 60 days in background to keep disk usage light.
+ */
+export function cleanupOldCaches(): void {
+  const sixtyDaysAgo = Date.now() - 60 * 24 * 60 * 60 * 1000;
+  const dirs = [storage.getThumbnailDir(), storage.getSubtitleCacheDir()];
+
+  function cleanDir(dirPath: string) {
+    if (!fs.existsSync(dirPath)) return;
+    try {
+      const entries = fs.readdirSync(dirPath, { withFileTypes: true });
+      for (const entry of entries) {
+        const fullPath = path.join(dirPath, entry.name);
+        try {
+          if (entry.isDirectory()) {
+            cleanDir(fullPath);
+            if (fs.readdirSync(fullPath).length === 0) {
+              fs.rmdirSync(fullPath);
+            }
+          } else if (entry.isFile()) {
+            const stat = fs.statSync(fullPath);
+            if (stat.mtimeMs < sixtyDaysAgo) {
+              fs.unlinkSync(fullPath);
+            }
+          }
+        } catch {}
+      }
+    } catch {}
+  }
+
+  for (const dir of dirs) {
+    cleanDir(dir);
+  }
 }
 

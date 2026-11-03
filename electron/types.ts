@@ -66,6 +66,7 @@ export interface Episode {
   size: number;
   duration?: number;
   hasExternalSrt: boolean;
+  hasWhisperSrt?: boolean;
   externalSrtPath?: string;
   hasEmbeddedDubtitles?: boolean;
   thumbnailUrl?: string;
@@ -79,6 +80,8 @@ export interface AnimeFolder {
   folderName: string;
   episodes: Episode[];
   hasSubtitlesCount: number;
+  hasWhisperCount?: number;
+  hasExtSubCount?: number;
   hasDubtitlesCount?: number;
   hasEmbeddedDubtitles?: boolean;
   totalEpisodes: number;
@@ -125,7 +128,7 @@ export interface WhisperQueueItem {
   filePath: string;
   fileName: string;
   duration?: number;
-  status: 'pending' | 'processing' | 'completed' | 'failed' | 'skipped';
+  status: 'pending' | 'processing' | 'completed' | 'failed' | 'skipped' | 'cancelled';
   progress: number;
   speed?: string;
   error?: string;

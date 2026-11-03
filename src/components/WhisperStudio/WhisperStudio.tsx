@@ -7,6 +7,7 @@ import {
   Play,
   CheckCircle2,
   Check,
+  AlertCircle,
 } from 'lucide-react';
 import { AnimeFolder, Episode, AudioTrack, WhisperLogMessage, WhisperQueueItem } from '../../types';
 import { cleanSeriesTitle, cleanEpisodeTitle } from '../../utils/format';
@@ -15,11 +16,13 @@ import { TerminalLog } from './TerminalLog';
 interface WhisperStudioProps {
   initialFolder?: AnimeFolder | null;
   onRefreshLibrary: () => void;
+  onOpenSettings?: () => void;
 }
 
 export const WhisperStudio: React.FC<WhisperStudioProps> = ({
   initialFolder,
   onRefreshLibrary,
+  onOpenSettings,
 }) => {
   const [selectedFolder, setSelectedFolder] = useState<string>(initialFolder?.folderPath || '');
   const [episodes, setEpisodes] = useState<Episode[]>(initialFolder?.episodes || []);
@@ -27,6 +30,7 @@ export const WhisperStudio: React.FC<WhisperStudioProps> = ({
   const [selectedAudioTrackNum, setSelectedAudioTrackNum] = useState<number>(1);
   const [skipExistingSrt, setSkipExistingSrt] = useState<boolean>(true);
   const [probing, setProbing] = useState<boolean>(false);
+  const [whisperExists, setWhisperExists] = useState<boolean>(true);
 
   // Whisper Queue & Execution State
   const [isProcessing, setIsProcessing] = useState<boolean>(false);
@@ -64,6 +68,11 @@ export const WhisperStudio: React.FC<WhisperStudioProps> = ({
       } catch (err) {
         console.error('Failed to get whisper status on mount:', err);
       }
+
+      try {
+        const binStatus = await window.electronAPI.checkBinaries();
+        setWhisperExists(binStatus.whisperExists);
+      } catch {}
     })();
   }, []);
 
@@ -153,6 +162,10 @@ export const WhisperStudio: React.FC<WhisperStudioProps> = ({
 
   const handleStartSeason = async () => {
     if (!selectedFolder) return;
+    if (!whisperExists) {
+      if (onOpenSettings) onOpenSettings();
+      return;
+    }
     setIsProcessing(true);
     setLogs((prev) => [
       ...prev,
@@ -195,7 +208,7 @@ export const WhisperStudio: React.FC<WhisperStudioProps> = ({
     ]);
   };
 
-  const existingSrtCount = episodes.filter((e) => e.hasExternalSrt).length;
+  const existingWhisperCount = episodes.filter((e) => e.hasWhisperSrt).length;
   const cleanTitle = useMemo(() => cleanSeriesTitle(selectedFolder), [selectedFolder]);
 
   return (
@@ -230,7 +243,7 @@ export const WhisperStudio: React.FC<WhisperStudioProps> = ({
           ) : (
             <button
               onClick={handleStartSeason}
-              disabled={!selectedFolder || episodes.length === 0 || probing}
+              disabled={!selectedFolder || episodes.length === 0 || probing || !whisperExists}
               className="flex items-center space-x-2 px-6 py-2.5 rounded-xl bg-gradient-to-r from-red-600 to-indigo-600 hover:from-red-500 hover:to-indigo-500 text-white font-bold text-xs shadow-lg shadow-indigo-600/20 transition-all hover:scale-[1.02] active:scale-[0.98] disabled:opacity-50 disabled:cursor-not-allowed"
             >
               <Play className="w-4 h-4 fill-white" />
@@ -239,6 +252,24 @@ export const WhisperStudio: React.FC<WhisperStudioProps> = ({
           )}
         </div>
       </div>
+
+      {/* Missing Whisper Binary Alert */}
+      {!whisperExists && (
+        <div className="p-3.5 rounded-xl bg-amber-500/10 border border-amber-500/30 flex items-center justify-between text-xs text-amber-300">
+          <div className="flex items-center space-x-2.5">
+            <AlertCircle className="w-4 h-4 text-amber-400 shrink-0" />
+            <span>Faster-Whisper executable is not configured or not found. Please set the path in Settings to transcribe subtitles.</span>
+          </div>
+          {onOpenSettings && (
+            <button
+              onClick={onOpenSettings}
+              className="px-3 py-1 rounded-lg bg-amber-500/20 hover:bg-amber-500/30 text-amber-200 border border-amber-500/30 font-semibold transition-colors shrink-0"
+            >
+              Open Settings
+            </button>
+          )}
+        </div>
+      )}
 
       {/* Main Grid: Left Controls (1/3) & Right Live Terminal (2/3) */}
       <div className="flex-1 grid grid-cols-1 lg:grid-cols-12 gap-6 min-h-0">
@@ -281,7 +312,7 @@ export const WhisperStudio: React.FC<WhisperStudioProps> = ({
                 <div className="flex items-center justify-between">
                   <span>{episodes.length} MKV episodes detected</span>
                   <span className="text-emerald-400 font-semibold">
-                    {existingSrtCount} already have .srt
+                    {existingWhisperCount} already have .whisper.srt
                   </span>
                 </div>
                 {episodes.some((e) => e.hasEmbeddedDubtitles) && (
@@ -374,7 +405,7 @@ export const WhisperStudio: React.FC<WhisperStudioProps> = ({
             <div className="text-[11px] text-zinc-500 space-y-1 pt-1 font-mono">
               <div>• Model: large-v3-turbo (faster-whisper)</div>
               <div>• Sentence alignment: --sentence --ff_sync</div>
-              <div>• Auto-mode: Transcribe (ENG) / Translate (JPN)</div>
+              <div>• Mode: Transcribe (ENG)</div>
               <div>• Max lines: 2 | Max width: 42 chars</div>
             </div>
           </div>
@@ -448,6 +479,9 @@ export const WhisperStudio: React.FC<WhisperStudioProps> = ({
                           )}
                           {item.status === 'pending' && (
                             <span className="text-zinc-500 text-[11px]">Queued</span>
+                          )}
+                          {item.status === 'cancelled' && (
+                            <span className="text-amber-400 text-[11px]">Cancelled</span>
                           )}
                           {item.status === 'failed' && (
                             <span className="text-red-400 text-[11px]">{item.error || 'Failed'}</span>

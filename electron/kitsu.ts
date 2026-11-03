@@ -23,7 +23,9 @@ export interface KitsuAnimeCache {
   fetchedAt: number;
 }
 
-const memoryCache = new Map<string, KitsuAnimeCache | null>();
+const memoryCache = new Map<string, KitsuAnimeCache>();
+const notFoundCache = new Map<string, number>(); // cacheKey -> expiresAt timestamp (1 hour TTL)
+const inFlightRequests = new Map<string, Promise<KitsuAnimeCache | null>>();
 
 export interface AnimeSearchQueries {
   primary: string;
@@ -186,86 +188,92 @@ async function fetchAniListMetadata(
     }
   `;
 
-  try {
-    const res = await fetch('https://graphql.anilist.co', {
-      method: 'POST',
-      headers: {
-        'Content-Type': 'application/json',
-        Accept: 'application/json',
-        'User-Agent': 'AnimeMediaCenter/1.0',
-      },
-      body: JSON.stringify({
-        query: gqlQuery,
-        variables: { search: query },
-      }),
-      signal: AbortSignal.timeout(5000),
-    });
+  const res = await fetch('https://graphql.anilist.co', {
+    method: 'POST',
+    headers: {
+      'Content-Type': 'application/json',
+      Accept: 'application/json',
+      'User-Agent': 'AnimeMediaCenter/1.0',
+    },
+    body: JSON.stringify({
+      query: gqlQuery,
+      variables: { search: query },
+    }),
+    signal: AbortSignal.timeout(5000),
+  });
 
-    if (!res.ok) return null;
-    const json = await res.json();
-    const mediaList: any[] = json.data?.Page?.media;
-    if (!Array.isArray(mediaList) || mediaList.length === 0) return null;
-
-    // Pick best matching media candidate according to target season
-    let media = mediaList[0];
-    if (mediaList.length > 1) {
-      if (targetSeason === 1 || targetSeason === null) {
-        const nonSequel = mediaList.find((m) => {
-          const t = m.title?.english || m.title?.romaji || '';
-          return !isSequelTitle(t);
-        });
-        if (nonSequel) media = nonSequel;
-      } else if (typeof targetSeason === 'number' && targetSeason >= 2) {
-        const matching = mediaList.find((m) => {
-          const t = m.title?.english || m.title?.romaji || '';
-          return (
-            new RegExp(`\\b(?:Season\\s*0*${targetSeason}|${targetSeason}(?:nd|rd|th)\\s*Season)\\b`, 'i').test(t) ||
-            (targetSeason === 2 && /\b(?:II|Second\s*Season)\b/i.test(t)) ||
-            (targetSeason === 3 && /\b(?:III|Third\s*Season)\b/i.test(t)) ||
-            (targetSeason === 4 && /\b(?:IV|Fourth\s*Season)\b/i.test(t))
-          );
-        });
-        if (matching) media = matching;
-      }
-    }
-
-    const malId = media.idMal || null;
-    const canonicalTitle = media.title?.english || media.title?.romaji || query;
-    const posterUrl = media.coverImage?.extraLarge || media.coverImage?.large || null;
-    const bannerUrl = media.bannerImage || null;
-    const synopsis = media.description ? media.description.replace(/<[^>]+>/g, '').trim() : null;
-    const genres = Array.isArray(media.genres) ? media.genres : [];
-    const averageScore = typeof media.averageScore === 'number' ? media.averageScore : null;
-    const episodes: Record<number, KitsuEpisodeInfo> = {};
-
-    if (Array.isArray(media.streamingEpisodes)) {
-      for (const ep of media.streamingEpisodes) {
-        if (!ep.title) continue;
-        const parsed = parseAniListEpisodeTitle(ep.title);
-        if (parsed) {
-          episodes[parsed.number] = {
-            number: parsed.number,
-            title: parsed.title,
-            thumbnailUrl: ep.thumbnail || null,
-            synopsis: null,
-          };
-        }
-      }
-    }
-
-    return {
-      malId,
-      canonicalTitle,
-      posterUrl,
-      bannerUrl,
-      synopsis,
-      genres,
-      averageScore,
-      episodes,
-    };
-  } catch {
-    return null;
+  if (res.status === 429) {
+    const retryAfter = res.headers.get('Retry-After');
+    const delay = retryAfter ? parseInt(retryAfter, 10) * 1000 : 2000;
+    await new Promise((r) => setTimeout(r, Math.min(delay, 5000)));
+    throw new Error('AniList rate limited (429)');
   }
+
+  if (!res.ok) {
+    throw new Error(`AniList returned HTTP ${res.status}`);
+  }
+
+  const json = await res.json();
+  const mediaList: any[] = json.data?.Page?.media;
+  if (!Array.isArray(mediaList) || mediaList.length === 0) return null;
+
+  // Pick best matching media candidate according to target season
+  let media = mediaList[0];
+  if (mediaList.length > 1) {
+    if (targetSeason === 1 || targetSeason === null) {
+      const nonSequel = mediaList.find((m) => {
+        const t = m.title?.english || m.title?.romaji || '';
+        return !isSequelTitle(t);
+      });
+      if (nonSequel) media = nonSequel;
+    } else if (typeof targetSeason === 'number' && targetSeason >= 2) {
+      const matching = mediaList.find((m) => {
+        const t = m.title?.english || m.title?.romaji || '';
+        return (
+          new RegExp(`\\b(?:Season\\s*0*${targetSeason}|${targetSeason}(?:nd|rd|th)\\s*Season)\\b`, 'i').test(t) ||
+          (targetSeason === 2 && /\b(?:II|Second\s*Season)\b/i.test(t)) ||
+          (targetSeason === 3 && /\b(?:III|Third\s*Season)\b/i.test(t)) ||
+          (targetSeason === 4 && /\b(?:IV|Fourth\s*Season)\b/i.test(t))
+        );
+      });
+      if (matching) media = matching;
+    }
+  }
+
+  const malId = media.idMal || null;
+  const canonicalTitle = media.title?.english || media.title?.romaji || query;
+  const posterUrl = media.coverImage?.extraLarge || media.coverImage?.large || null;
+  const bannerUrl = media.bannerImage || null;
+  const synopsis = media.description ? media.description.replace(/<[^>]+>/g, '').trim() : null;
+  const genres = Array.isArray(media.genres) ? media.genres : [];
+  const averageScore = typeof media.averageScore === 'number' ? media.averageScore : null;
+  const episodes: Record<number, KitsuEpisodeInfo> = {};
+
+  if (Array.isArray(media.streamingEpisodes)) {
+    for (const ep of media.streamingEpisodes) {
+      if (!ep.title) continue;
+      const parsed = parseAniListEpisodeTitle(ep.title);
+      if (parsed) {
+        episodes[parsed.number] = {
+          number: parsed.number,
+          title: parsed.title,
+          thumbnailUrl: ep.thumbnail || null,
+          synopsis: null,
+        };
+      }
+    }
+  }
+
+  return {
+    malId,
+    canonicalTitle,
+    posterUrl,
+    bannerUrl,
+    synopsis,
+    genres,
+    averageScore,
+    episodes,
+  };
 }
 
 /**
@@ -280,97 +288,112 @@ async function fetchKitsuMetadata(
   posterUrl: string | null;
   episodes: Record<number, KitsuEpisodeInfo>;
 } | null> {
-  try {
-    const searchUrl = `https://kitsu.io/api/edge/anime?filter[text]=${encodeURIComponent(query)}&page[limit]=5`;
-    const searchRes = await fetch(searchUrl, {
-      headers: {
-        Accept: 'application/vnd.api+json',
-        'User-Agent': 'AnimeMediaCenter/1.0',
-      },
-      signal: AbortSignal.timeout(5000),
-    });
+  const searchUrl = `https://kitsu.io/api/edge/anime?filter[text]=${encodeURIComponent(query)}&page[limit]=5`;
+  const searchRes = await fetch(searchUrl, {
+    headers: {
+      Accept: 'application/vnd.api+json',
+      'User-Agent': 'AnimeMediaCenter/1.0',
+    },
+    signal: AbortSignal.timeout(5000),
+  });
 
-    if (!searchRes.ok) return null;
-    const searchJson = await searchRes.json();
-    if (!searchJson.data || searchJson.data.length === 0) return null;
+  if (searchRes.status === 429) {
+    const retryAfter = searchRes.headers.get('Retry-After');
+    const delay = retryAfter ? parseInt(retryAfter, 10) * 1000 : 2000;
+    await new Promise((r) => setTimeout(r, Math.min(delay, 5000)));
+    throw new Error('Kitsu rate limited (429)');
+  }
 
-    let animeItem = searchJson.data[0];
-    if (searchJson.data.length > 1) {
-      if (targetSeason === 1 || targetSeason === null) {
-        const nonSequel = searchJson.data.find((item: any) => {
-          const t = item.attributes?.canonicalTitle || '';
-          return !isSequelTitle(t);
-        });
-        if (nonSequel) animeItem = nonSequel;
-      } else if (typeof targetSeason === 'number' && targetSeason >= 2) {
-        const matching = searchJson.data.find((item: any) => {
-          const t = item.attributes?.canonicalTitle || '';
-          return (
-            new RegExp(`\\b(?:Season\\s*0*${targetSeason}|${targetSeason}(?:nd|rd|th)\\s*Season)\\b`, 'i').test(t) ||
-            (targetSeason === 2 && /\b(?:II|Second\s*Season)\b/i.test(t)) ||
-            (targetSeason === 3 && /\b(?:III|Third\s*Season)\b/i.test(t)) ||
-            (targetSeason === 4 && /\b(?:IV|Fourth\s*Season)\b/i.test(t))
-          );
-        });
-        if (matching) animeItem = matching;
-      }
+  if (!searchRes.ok) {
+    throw new Error(`Kitsu returned HTTP ${searchRes.status}`);
+  }
+
+  const searchJson = await searchRes.json();
+  if (!searchJson.data || searchJson.data.length === 0) return null;
+
+  let animeItem = searchJson.data[0];
+  if (searchJson.data.length > 1) {
+    if (targetSeason === 1 || targetSeason === null) {
+      const nonSequel = searchJson.data.find((item: any) => {
+        const t =
+          item.attributes?.titles?.en ||
+          item.attributes?.titles?.en_jp ||
+          item.attributes?.canonicalTitle ||
+          '';
+        return !isSequelTitle(t);
+      });
+      if (nonSequel) animeItem = nonSequel;
+    } else if (typeof targetSeason === 'number' && targetSeason >= 2) {
+      const matching = searchJson.data.find((item: any) => {
+        const t =
+          item.attributes?.titles?.en ||
+          item.attributes?.titles?.en_jp ||
+          item.attributes?.canonicalTitle ||
+          '';
+        return (
+          new RegExp(`\\b(?:Season\\s*0*${targetSeason}|${targetSeason}(?:nd|rd|th)\\s*Season)\\b`, 'i').test(t) ||
+          (targetSeason === 2 && /\b(?:II|Second\s*Season)\b/i.test(t)) ||
+          (targetSeason === 3 && /\b(?:III|Third\s*Season)\b/i.test(t)) ||
+          (targetSeason === 4 && /\b(?:IV|Fourth\s*Season)\b/i.test(t))
+        );
+      });
+      if (matching) animeItem = matching;
     }
+  }
 
-    const animeId = String(animeItem.id);
-    const canonicalTitle = animeItem.attributes?.canonicalTitle || query;
-    const posterUrl = animeItem.attributes?.posterImage?.original || null;
-    const episodes: Record<number, KitsuEpisodeInfo> = {};
+  const animeId = animeItem.id;
+  const canonicalTitle =
+    animeItem.attributes?.titles?.en ||
+    animeItem.attributes?.canonicalTitle ||
+    animeItem.attributes?.titles?.en_jp ||
+    query;
 
-    const epUrl1 = `https://kitsu.io/api/edge/episodes?filter[mediaId]=${animeId}&filter[mediaType]=Anime&page[limit]=50&page[offset]=0&sort=number`;
-    const epRes1 = await fetch(epUrl1, {
-      headers: {
-        Accept: 'application/vnd.api+json',
-        'User-Agent': 'AnimeMediaCenter/1.0',
-      },
-      signal: AbortSignal.timeout(5000),
-    });
+  const posterUrl =
+    animeItem.attributes?.posterImage?.large ||
+    animeItem.attributes?.posterImage?.original ||
+    null;
 
-    if (epRes1.ok) {
-      const epJson1 = await epRes1.json();
-      if (Array.isArray(epJson1.data)) {
-        for (const ep of epJson1.data) {
-          const num = ep.attributes?.number;
-          if (typeof num === 'number') {
-            const thumb =
-              ep.attributes?.thumbnail?.original ||
-              ep.attributes?.thumbnail?.large ||
-              ep.attributes?.thumbnail?.medium ||
-              null;
-            const title =
-              ep.attributes?.canonicalTitle ||
-              ep.attributes?.titles?.en ||
-              ep.attributes?.titles?.en_jp ||
-              null;
-            episodes[num] = {
-              number: num,
-              title: title && !/^(?:Episode|Ep)\s*\d+$/i.test(title) ? title : null,
-              synopsis: ep.attributes?.synopsis || null,
-              thumbnailUrl: thumb,
-            };
-          }
+  // Fetch episodes from Kitsu
+  const epUrl = `https://kitsu.io/api/edge/anime/${animeId}/episodes?page[limit]=50&sort=number`;
+  const epRes = await fetch(epUrl, {
+    headers: {
+      Accept: 'application/vnd.api+json',
+      'User-Agent': 'AnimeMediaCenter/1.0',
+    },
+    signal: AbortSignal.timeout(5000),
+  });
+
+  const episodes: Record<number, KitsuEpisodeInfo> = {};
+  if (epRes.ok) {
+    const epJson = await epRes.json();
+    if (Array.isArray(epJson.data)) {
+      for (const item of epJson.data) {
+        const attrs = item.attributes;
+        const num = attrs.number;
+        if (num) {
+          episodes[num] = {
+            number: num,
+            title: attrs.canonicalTitle || attrs.titles?.en_us || attrs.titles?.en_jp || null,
+            synopsis: attrs.synopsis || null,
+            thumbnailUrl: attrs.thumbnail?.original || attrs.thumbnail?.large || null,
+          };
         }
       }
     }
-
-    return {
-      animeId,
-      canonicalTitle,
-      posterUrl,
-      episodes,
-    };
-  } catch {
-    return null;
   }
+
+  return {
+    animeId,
+    canonicalTitle,
+    posterUrl,
+    episodes,
+  };
 }
 
 /**
  * Searches AniList & Kitsu for official English episode titles and high-res stills.
- * Caches results locally on disk for 14 days.
+ * Caches results locally on disk for 14 days (including movies/OVAs without episodes).
+ * Deduplicates concurrent requests and manages negative cache (1 hour).
  */
 export async function getKitsuMetadata(rawSeriesName: string): Promise<KitsuAnimeCache | null> {
   const { primary, fallback, targetSeason } = buildAnimeSearchQueries(rawSeriesName);
@@ -378,109 +401,143 @@ export async function getKitsuMetadata(rawSeriesName: string): Promise<KitsuAnim
 
   const cacheKey = crypto.createHash('md5').update(primary.toLowerCase()).digest('hex').slice(0, 16);
 
+  // 1. In-memory positive cache
   if (memoryCache.has(cacheKey)) {
-    return memoryCache.get(cacheKey) || null;
+    return memoryCache.get(cacheKey)!;
   }
 
+  // 2. In-memory negative cache (1 hour TTL for verified 0-result)
+  const notFoundExpires = notFoundCache.get(cacheKey);
+  if (notFoundExpires && Date.now() < notFoundExpires) {
+    return null;
+  }
+
+  // 3. Disk cache (valid for 14 days, including records without episode data such as movies and OVAs)
   const cacheDir = storage.getMetadataCacheDir();
   const cacheFile = path.join(cacheDir, `kitsu_${cacheKey}.json`);
 
-  // Check disk cache (valid for 14 days if it has non-empty episode data)
   if (fs.existsSync(cacheFile)) {
     try {
       const data = JSON.parse(fs.readFileSync(cacheFile, 'utf-8')) as KitsuAnimeCache;
-      const hasEpisodeData = data.episodes && Object.keys(data.episodes).length > 0;
-      if (hasEpisodeData && Date.now() - data.fetchedAt < 14 * 24 * 60 * 60 * 1000) {
+      if (data.fetchedAt && Date.now() - data.fetchedAt < 14 * 24 * 60 * 60 * 1000) {
         memoryCache.set(cacheKey, data);
         return data;
       }
     } catch {}
   }
 
-  try {
-    // 1. Try primary search query
-    let [aniListResult, kitsuResult] = await Promise.allSettled([
-      fetchAniListMetadata(primary, targetSeason),
-      fetchKitsuMetadata(primary, targetSeason),
-    ]);
+  // 4. Request deduplication for concurrent lookups
+  if (inFlightRequests.has(cacheKey)) {
+    return inFlightRequests.get(cacheKey)!;
+  }
 
-    let aniList = aniListResult.status === 'fulfilled' ? aniListResult.value : null;
-    let kitsu = kitsuResult.status === 'fulfilled' ? kitsuResult.value : null;
+  const fetchPromise = (async () => {
+    try {
+      let aniListSuccess = false;
+      let kitsuSuccess = false;
 
-    // 2. If primary query found nothing and we have an alternative/fallback query, try fallback
-    if (!aniList && !kitsu && fallback && fallback.toLowerCase() !== primary.toLowerCase()) {
-      [aniListResult, kitsuResult] = await Promise.allSettled([
-        fetchAniListMetadata(fallback, targetSeason),
-        fetchKitsuMetadata(fallback, targetSeason),
+      // Primary query
+      const [aniListResult, kitsuResult] = await Promise.allSettled([
+        fetchAniListMetadata(primary, targetSeason),
+        fetchKitsuMetadata(primary, targetSeason),
       ]);
-      aniList = aniListResult.status === 'fulfilled' ? aniListResult.value : null;
-      kitsu = kitsuResult.status === 'fulfilled' ? kitsuResult.value : null;
-    }
 
-    if (!aniList && !kitsu) {
-      memoryCache.set(cacheKey, null);
+      let aniList = null;
+      let kitsu = null;
+
+      if (aniListResult.status === 'fulfilled') {
+        aniList = aniListResult.value;
+        aniListSuccess = true;
+      }
+      if (kitsuResult.status === 'fulfilled') {
+        kitsu = kitsuResult.value;
+        kitsuSuccess = true;
+      }
+
+      // Fallback query if primary produced no matches
+      if (!aniList && !kitsu && fallback && fallback.toLowerCase() !== primary.toLowerCase()) {
+        const [aniListFb, kitsuFb] = await Promise.allSettled([
+          fetchAniListMetadata(fallback, targetSeason),
+          fetchKitsuMetadata(fallback, targetSeason),
+        ]);
+        if (aniListFb.status === 'fulfilled') {
+          aniList = aniListFb.value;
+          aniListSuccess = true;
+        }
+        if (kitsuFb.status === 'fulfilled') {
+          kitsu = kitsuFb.value;
+          kitsuSuccess = true;
+        }
+      }
+
+      // If both completed with 200 OK without errors but returned 0 results:
+      if (!aniList && !kitsu) {
+        if (aniListSuccess || kitsuSuccess) {
+          notFoundCache.set(cacheKey, Date.now() + 60 * 60 * 1000); // 1 hour negative cache
+        }
+        return null;
+      }
+
+      const animeId = kitsu?.animeId || 'anilist';
+      const canonicalTitle = aniList?.canonicalTitle || kitsu?.canonicalTitle || primary;
+      const posterUrl = aniList?.posterUrl || kitsu?.posterUrl || null;
+
+      // Merge episodes
+      const mergedEpisodes: Record<number, KitsuEpisodeInfo> = {};
+      const allEpNumbers = new Set<number>([
+        ...Object.keys(aniList?.episodes || {}).map(Number),
+        ...Object.keys(kitsu?.episodes || {}).map(Number),
+      ]);
+
+      for (const epNum of allEpNumbers) {
+        const aniEp = aniList?.episodes[epNum];
+        const kitEp = kitsu?.episodes[epNum];
+
+        mergedEpisodes[epNum] = {
+          number: epNum,
+          title: aniEp?.title || kitEp?.title || null,
+          thumbnailUrl: kitEp?.thumbnailUrl || aniEp?.thumbnailUrl || null,
+          synopsis: kitEp?.synopsis || aniEp?.synopsis || null,
+        };
+      }
+
+      const malId = aniList?.malId || null;
+      const bannerUrl = aniList?.bannerUrl || null;
+      const synopsis = aniList?.synopsis || null;
+      const genres = aniList?.genres || [];
+      const averageScore = aniList?.averageScore || null;
+
+      const result: KitsuAnimeCache = {
+        animeId,
+        malId,
+        canonicalTitle,
+        posterUrl,
+        bannerUrl,
+        synopsis,
+        genres,
+        averageScore,
+        episodes: mergedEpisodes,
+        fetchedAt: Date.now(),
+      };
+
+      // Persist to disk cache
+      try {
+        fs.writeFileSync(cacheFile, JSON.stringify(result, null, 2), 'utf-8');
+      } catch {}
+
+      memoryCache.set(cacheKey, result);
+      return result;
+    } catch {
+      // On network failure or abort, do not cache null
       return null;
     }
+  })();
 
-    const animeId = kitsu?.animeId || 'anilist';
-    const canonicalTitle = aniList?.canonicalTitle || kitsu?.canonicalTitle || primary;
-    const posterUrl = aniList?.posterUrl || kitsu?.posterUrl || null;
-
-    // Merge episodes:
-    // - Title: AniList English streaming title preferred, fallback to Kitsu title
-    // - Thumbnail: Kitsu community still preferred (clean HD capture), fallback to AniList thumbnail
-    const mergedEpisodes: Record<number, KitsuEpisodeInfo> = {};
-
-    const allEpNumbers = new Set<number>([
-      ...Object.keys(aniList?.episodes || {}).map(Number),
-      ...Object.keys(kitsu?.episodes || {}).map(Number),
-    ]);
-
-    for (const epNum of allEpNumbers) {
-      const aniEp = aniList?.episodes[epNum];
-      const kitEp = kitsu?.episodes[epNum];
-
-      const chosenTitle = aniEp?.title || kitEp?.title || null;
-      const chosenThumb = kitEp?.thumbnailUrl || aniEp?.thumbnailUrl || null;
-      const chosenSynopsis = kitEp?.synopsis || aniEp?.synopsis || null;
-
-      mergedEpisodes[epNum] = {
-        number: epNum,
-        title: chosenTitle,
-        thumbnailUrl: chosenThumb,
-        synopsis: chosenSynopsis,
-      };
-    }
-
-    const malId = aniList?.malId || null;
-    const bannerUrl = aniList?.bannerUrl || null;
-    const synopsis = aniList?.synopsis || null;
-    const genres = aniList?.genres || [];
-    const averageScore = aniList?.averageScore || null;
-
-    const result: KitsuAnimeCache = {
-      animeId,
-      malId,
-      canonicalTitle,
-      posterUrl,
-      bannerUrl,
-      synopsis,
-      genres,
-      averageScore,
-      episodes: mergedEpisodes,
-      fetchedAt: Date.now(),
-    };
-
-    // Save to disk cache
-    try {
-      fs.writeFileSync(cacheFile, JSON.stringify(result, null, 2), 'utf-8');
-    } catch {}
-
-    memoryCache.set(cacheKey, result);
-    return result;
-  } catch (err) {
-    // Network failure or timeout - silently return null for local fallback
-    return null;
+  inFlightRequests.set(cacheKey, fetchPromise);
+  try {
+    return await fetchPromise;
+  } finally {
+    inFlightRequests.delete(cacheKey);
   }
 }
 
