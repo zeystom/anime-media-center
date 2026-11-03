@@ -144,6 +144,55 @@ export function autoDetectLibraryRoots(): string[] {
   return [];
 }
 
+export function renameSyncWithRetry(src: string, dest: string, maxRetries = 5): void {
+  let lastError: any = null;
+  for (let attempt = 0; attempt < maxRetries; attempt++) {
+    try {
+      fs.renameSync(src, dest);
+      return;
+    } catch (err: any) {
+      lastError = err;
+      if (err.code === 'EPERM' || err.code === 'EBUSY' || err.code === 'EACCES') {
+        const delayMs = (attempt + 1) * 30;
+        const start = Date.now();
+        while (Date.now() - start < delayMs) {
+          // brief synchronous spin wait
+        }
+      } else {
+        throw err;
+      }
+    }
+  }
+
+  // Fallback if rename continues failing after retries on Windows NTFS:
+  // copy and unlink tmp file
+  try {
+    fs.copyFileSync(src, dest);
+    try {
+      fs.unlinkSync(src);
+    } catch {}
+  } catch (copyErr) {
+    throw lastError || copyErr;
+  }
+}
+
+export function saveJsonSync(targetFile: string, data: any): void {
+  const tmpFile = `${targetFile}.${Date.now()}.${Math.random().toString(36).slice(2, 6)}.tmp`;
+  try {
+    fs.writeFileSync(tmpFile, JSON.stringify(data, null, 2), 'utf-8');
+    renameSyncWithRetry(tmpFile, targetFile, 5);
+  } catch (e) {
+    console.error(`Failed to atomic write to ${targetFile}:`, e);
+    throw e;
+  } finally {
+    try {
+      if (fs.existsSync(tmpFile)) {
+        fs.unlinkSync(tmpFile);
+      }
+    } catch {}
+  }
+}
+
 export class StorageService {
   private baseDir: string;
   private settingsFile: string;
@@ -154,6 +203,7 @@ export class StorageService {
   private settingsMtime: number = 0;
 
   private historyCache: Record<string, PlaybackProgress> | null = null;
+  private seasonRulesCache: Record<string, SeasonPreference> | null = null;
   private historySaveTimer: NodeJS.Timeout | null = null;
   private historyDirty: boolean = false;
 
@@ -234,8 +284,13 @@ export class StorageService {
           defaultLibraryRoot,
           libraryFolders,
           autoPlayNext: parsed.autoPlayNext ?? true,
-          subtitlesFontSize: parsed.subtitlesFontSize ?? 28,
-          subtitlesOutline: parsed.subtitlesOutline ?? true,
+          subtitlesFontSize: parsed.subtitlesFontSize ?? 38,
+          subtitlesOutline: true,
+          subtitlesTextColor: parsed.subtitlesTextColor || '#ffffff',
+          subtitlesFontFamily: parsed.subtitlesFontFamily || 'sans',
+          subtitlesBgStyle: parsed.subtitlesBgStyle || 'none',
+          subtitlesOutlineWidth: parsed.subtitlesOutlineWidth || 'thick',
+          subtitlesOutlineColor: parsed.subtitlesOutlineColor || '#000000',
           hideDownloadingAnime: parsed.hideDownloadingAnime ?? false,
         };
 
@@ -257,8 +312,13 @@ export class StorageService {
       defaultLibraryRoot: roots[0] || '',
       libraryFolders: roots,
       autoPlayNext: true,
-      subtitlesFontSize: 28,
+      subtitlesFontSize: 38,
       subtitlesOutline: true,
+      subtitlesTextColor: '#ffffff',
+      subtitlesFontFamily: 'sans',
+      subtitlesBgStyle: 'none',
+      subtitlesOutlineWidth: 'thick',
+      subtitlesOutlineColor: '#000000',
       hideDownloadingAnime: false,
     };
     this.cachedSettings = defaults;
@@ -274,18 +334,13 @@ export class StorageService {
       updated.defaultLibraryRoot = '';
     }
 
-    const tmpFile = `${this.settingsFile}.${Date.now()}.tmp`;
     try {
-      fs.writeFileSync(tmpFile, JSON.stringify(updated, null, 2), 'utf-8');
-      fs.renameSync(tmpFile, this.settingsFile);
+      saveJsonSync(this.settingsFile, updated);
       const stat = fs.statSync(this.settingsFile);
       this.settingsMtime = stat.mtimeMs;
       this.cachedSettings = updated;
     } catch (e) {
       console.error('Failed to write settings:', e);
-      try {
-        if (fs.existsSync(tmpFile)) fs.unlinkSync(tmpFile);
-      } catch {}
     }
     return updated;
   }
@@ -303,7 +358,7 @@ export class StorageService {
       } catch (e) {
         console.error('Corrupted history.json, archiving to history.json.bak:', e);
         try {
-          fs.renameSync(this.historyFile, `${this.historyFile}.bak`);
+          renameSyncWithRetry(this.historyFile, `${this.historyFile}.bak`, 3);
         } catch {}
         this.historyCache = {};
         return this.historyCache;
@@ -334,49 +389,46 @@ export class StorageService {
 
     if (!this.historyDirty || !this.historyCache) return;
 
-    const tmpFile = `${this.historyFile}.${Date.now()}.tmp`;
     try {
-      fs.writeFileSync(tmpFile, JSON.stringify(this.historyCache, null, 2), 'utf-8');
-      fs.renameSync(tmpFile, this.historyFile);
+      saveJsonSync(this.historyFile, this.historyCache);
       this.historyDirty = false;
     } catch (e) {
       console.error('Failed to write history:', e);
-      try {
-        if (fs.existsSync(tmpFile)) fs.unlinkSync(tmpFile);
-      } catch {}
     }
   }
 
   getSeasonPreference(folderPath: string): SeasonPreference | null {
+    if (this.seasonRulesCache !== null) {
+      return this.seasonRulesCache[folderPath] || null;
+    }
     try {
       if (fs.existsSync(this.seasonRulesFile)) {
         const raw = fs.readFileSync(this.seasonRulesFile, 'utf-8');
-        const rules = JSON.parse(raw);
-        return rules[folderPath] || null;
+        this.seasonRulesCache = JSON.parse(raw);
+        return this.seasonRulesCache![folderPath] || null;
       }
     } catch (e) {
       console.error('Failed to read season rules:', e);
     }
+    this.seasonRulesCache = {};
     return null;
   }
 
   saveSeasonPreference(folderPath: string, pref: SeasonPreference): void {
-    const tmpFile = `${this.seasonRulesFile}.${Date.now()}.tmp`;
     try {
       let rules: Record<string, SeasonPreference> = {};
-      if (fs.existsSync(this.seasonRulesFile)) {
+      if (this.seasonRulesCache !== null) {
+        rules = { ...this.seasonRulesCache };
+      } else if (fs.existsSync(this.seasonRulesFile)) {
         try {
           rules = JSON.parse(fs.readFileSync(this.seasonRulesFile, 'utf-8'));
         } catch {}
       }
       rules[folderPath] = pref;
-      fs.writeFileSync(tmpFile, JSON.stringify(rules, null, 2), 'utf-8');
-      fs.renameSync(tmpFile, this.seasonRulesFile);
+      saveJsonSync(this.seasonRulesFile, rules);
+      this.seasonRulesCache = rules;
     } catch (e) {
       console.error('Failed to write season rules:', e);
-      try {
-        if (fs.existsSync(tmpFile)) fs.unlinkSync(tmpFile);
-      } catch {}
     }
   }
 }

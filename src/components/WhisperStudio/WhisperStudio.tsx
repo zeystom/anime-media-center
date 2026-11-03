@@ -251,10 +251,10 @@ export const WhisperStudio: React.FC<WhisperStudioProps> = ({
 
       {/* Missing Whisper Binary Alert */}
       {!whisperExists && (
-        <div className="p-3.5 rounded-xl bg-amber-500/10 border border-amber-500/30 flex items-center justify-between text-xs text-amber-300">
+        <div className="p-3.5 rounded-2xl bg-amber-500/10 border border-amber-500/30 flex items-center justify-between text-xs text-amber-300 shadow-sm">
           <div className="flex items-center space-x-2.5">
             <AlertCircle className="w-4 h-4 text-amber-400 shrink-0" />
-            <span>Faster-Whisper executable is not configured or not found. Please set the path in Settings to transcribe subtitles.</span>
+            <span>Faster-Whisper executable is not configured. Configure the tool path in Settings to transcribe subtitles.</span>
           </div>
           {onOpenSettings && (
             <button
@@ -272,7 +272,7 @@ export const WhisperStudio: React.FC<WhisperStudioProps> = ({
         {/* Left Column: Configuration & Audio Selector */}
         <div className="lg:col-span-5 flex flex-col space-y-4 overflow-y-auto pr-1 scrollbar-thin">
           {/* 1. Folder Selection Card */}
-          <div className="p-4 rounded-xl bg-[#141418] border border-zinc-800 space-y-3">
+          <div className="p-4 rounded-2xl bg-[#141418] border border-white/10 space-y-3 shadow-md">
             <div className="flex items-center justify-between">
               <span className="text-xs font-bold uppercase tracking-wider text-zinc-400 block">
                 1. Target Anime Season Folder
@@ -322,7 +322,7 @@ export const WhisperStudio: React.FC<WhisperStudioProps> = ({
           </div>
 
           {/* 2. Audio Track Selection Card */}
-          <div className="p-4 rounded-xl bg-[#141418] border border-zinc-800 space-y-3">
+          <div className="p-4 rounded-2xl bg-[#141418] border border-white/10 space-y-3 shadow-md">
             <div className="flex items-center justify-between">
               <span className="text-xs font-bold uppercase tracking-wider text-zinc-400 flex items-center space-x-1.5">
                 <Volume2 className="w-4 h-4 text-indigo-400" />
@@ -383,7 +383,7 @@ export const WhisperStudio: React.FC<WhisperStudioProps> = ({
           </div>
 
           {/* 3. Transcription Options */}
-          <div className="p-4 rounded-xl bg-[#141418] border border-zinc-800 space-y-3">
+          <div className="p-4 rounded-2xl bg-[#141418] border border-white/10 space-y-3 shadow-md">
             <span className="text-xs font-bold uppercase tracking-wider text-zinc-400 block">
               3. Processing Options
             </span>
@@ -401,17 +401,26 @@ export const WhisperStudio: React.FC<WhisperStudioProps> = ({
               </span>
             </label>
 
-            <div className="text-[11px] text-zinc-500 space-y-1 pt-1 font-mono">
-              <div>• Model: large-v3-turbo (faster-whisper)</div>
-              <div>• Sentence alignment: --sentence --ff_sync</div>
-              <div>• Mode: Transcribe (ENG)</div>
-              <div>• Max lines: 2 | Max width: 42 chars</div>
+            <div className="pt-2 flex flex-wrap gap-1.5 text-[11px]">
+              <span className="inline-flex items-center space-x-1 px-2.5 py-1 rounded-lg bg-white/5 text-zinc-300 border border-white/10 font-medium">
+                <Sparkles className="w-3 h-3 text-indigo-400" />
+                <span>large-v3-turbo</span>
+              </span>
+              <span className="inline-flex items-center space-x-1 px-2.5 py-1 rounded-lg bg-white/5 text-zinc-300 border border-white/10 font-medium">
+                <span>Accurate Timestamps</span>
+              </span>
+              <span className="inline-flex items-center space-x-1 px-2.5 py-1 rounded-lg bg-white/5 text-zinc-300 border border-white/10 font-medium">
+                <span>English Dialogue</span>
+              </span>
+              <span className="inline-flex items-center space-x-1 px-2.5 py-1 rounded-lg bg-white/5 text-zinc-300 border border-white/10 font-medium">
+                <span>Standard 2-Line</span>
+              </span>
             </div>
           </div>
 
           {/* Queue Status List if active */}
           {queue.length > 0 && (
-            <div className="p-4 rounded-xl bg-[#141418] border border-zinc-800 space-y-2 flex-1 min-h-[160px] overflow-y-auto scrollbar-thin">
+            <div className="p-4 rounded-2xl bg-[#141418] border border-white/10 space-y-2 flex-1 min-h-[160px] overflow-y-auto scrollbar-thin shadow-md">
               <div className="flex items-center justify-between text-xs font-bold uppercase text-zinc-400 pb-1 border-b border-zinc-800/80">
                 <span>Season Queue ({queue.length})</span>
                 <span className="text-indigo-400">

@@ -37,6 +37,7 @@ export interface ElectronAPI {
   onWhisperProgress: (callback: (data: { currentFile: string; progress: number; queue: import('../../electron/types').WhisperQueueItem[] }) => void) => () => void;
   onWhisperDone: (callback: (result: { completedCount: number; failedCount: number }) => void) => () => void;
   openFolderInExplorer: (folderPath: string) => Promise<void>;
+  checkDownloadProgress: (filePaths: string[]) => Promise<Record<string, { isDownloading: boolean; downloadProgress?: number }>>;
   setFullScreen: (flag: boolean) => Promise<boolean>;
   isFullScreen: () => Promise<boolean>;
   onFullScreenChange: (callback: (isFull: boolean) => void) => () => void;

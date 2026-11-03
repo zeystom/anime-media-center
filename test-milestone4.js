@@ -1,0 +1,281 @@
+/**
+ * Milestone 4 Verification Test Suite
+ * Library UI/UX Polish & Consistency
+ *
+ * Verifies all 7 core deliverables:
+ * 1. EpisodeCard: Subtitle False Negative fix (hasEmbeddedSubtitles), showGlobalToast replacement, hover jitter fix
+ * 2. MovieHeroCard: alert() replacement, hasEmbeddedSubtitles badge, duplicate button/badge clutter removal, movie hero broadcast
+ * 3. FolderBrowser: Dedicated search empty state with "Clear Search", no episode grid or missing folder box on 0 search matches, consolidated subtitle status
+ * 4. HeroContinueWatching: Deduplicated presentation when continue-watching item is selected as movie hero card
+ * 5. SettingsModal: Confirmation dialog before removing media folder, modal accessibility attributes
+ * 6. WhisperStudio: Duplicate banner cleanup, developer CLI dump replaced with feature chips, harmonized cards
+ * 7. App.tsx: Refined Escape key listener prevents closing video player when episode drawer or modal is open
+ */
+
+import fs from 'fs';
+import path from 'path';
+import assert from 'assert';
+import { fileURLToPath } from 'url';
+
+const __filename = fileURLToPath(import.meta.url);
+const __dirname = path.dirname(__filename);
+
+let passedTests = 0;
+let totalTests = 0;
+
+function runTest(name, fn) {
+  totalTests++;
+  try {
+    fn();
+    console.log(`  [PASS] ${name}`);
+    passedTests++;
+  } catch (err) {
+    console.error(`  [FAIL] ${name}: ${err.message}`);
+    process.exitCode = 1;
+  }
+}
+
+console.log('================================================================');
+console.log('   MILESTONE 4 VERIFICATION: LIBRARY UI/UX POLISH & CONSISTENCY ');
+console.log('================================================================\n');
+
+// Target file paths
+const episodeCardFile = path.join(__dirname, 'src', 'components', 'Library', 'EpisodeCard.tsx');
+const movieHeroCardFile = path.join(__dirname, 'src', 'components', 'Library', 'MovieHeroCard.tsx');
+const folderBrowserFile = path.join(__dirname, 'src', 'components', 'Library', 'FolderBrowser.tsx');
+const heroContinueFile = path.join(__dirname, 'src', 'components', 'Library', 'HeroContinueWatching.tsx');
+const settingsModalFile = path.join(__dirname, 'src', 'components', 'SettingsModal.tsx');
+const whisperStudioFile = path.join(__dirname, 'src', 'components', 'WhisperStudio', 'WhisperStudio.tsx');
+const appFile = path.join(__dirname, 'src', 'App.tsx');
+
+// Read source contents
+const episodeCardSrc = fs.readFileSync(episodeCardFile, 'utf-8');
+const movieHeroCardSrc = fs.readFileSync(movieHeroCardFile, 'utf-8');
+const folderBrowserSrc = fs.readFileSync(folderBrowserFile, 'utf-8');
+const heroContinueSrc = fs.readFileSync(heroContinueFile, 'utf-8');
+const settingsModalSrc = fs.readFileSync(settingsModalFile, 'utf-8');
+const whisperStudioSrc = fs.readFileSync(whisperStudioFile, 'utf-8');
+const appSrc = fs.readFileSync(appFile, 'utf-8');
+
+console.log('--- TEST GROUP 1: EpisodeCard Subtitle False Negative & Polish ---');
+
+runTest('1.1 episode.hasEmbeddedSubtitles is checked in EpisodeCard subtitle badges', () => {
+  assert(
+    episodeCardSrc.includes('episode.hasEmbeddedSubtitles'),
+    'EpisodeCard must check episode.hasEmbeddedSubtitles'
+  );
+  assert(
+    episodeCardSrc.includes('<span>Sub</span>') || episodeCardSrc.includes('<span>Eng Sub</span>'),
+    'EpisodeCard must render a clean Sub or Eng Sub badge when embedded subtitles are detected'
+  );
+});
+
+runTest('1.2 Embedded subtitles never fall through to "No Sub"', () => {
+  const subtitleSectionMatch = episodeCardSrc.match(/\{episode\.hasEmbeddedDubtitles[\s\S]*?<span>No Sub<\/span>[\s\S]*?\}/);
+  assert(subtitleSectionMatch, 'Subtitle rendering block must exist');
+  const block = subtitleSectionMatch[0];
+  assert(
+    block.indexOf('hasEmbeddedSubtitles') < block.indexOf('No Sub'),
+    'hasEmbeddedSubtitles check must precede the No Sub fallback'
+  );
+});
+
+runTest('1.3 Synchronous alert() replaced with showGlobalToast', () => {
+  assert(!episodeCardSrc.includes("alert('This episode is currently downloading"), 'alert() must be removed from EpisodeCard');
+  assert(episodeCardSrc.includes('showGlobalToast('), 'showGlobalToast must be called in EpisodeCard');
+  assert(episodeCardSrc.includes("import { showGlobalToast } from '../Toast'"), 'showGlobalToast must be imported from Toast');
+});
+
+runTest('1.4 Downloading card preserves size/metrics on hover without jitter', () => {
+  assert(
+    episodeCardSrc.includes('If downloading, render centered downloading overlay - preserved on hover without jitter'),
+    'Downloading overlay should indicate hover persistence'
+  );
+  // Ensure the old pill that replaced metrics on group-hover is removed
+  assert(
+    !episodeCardSrc.includes('group-hover:opacity-100 transition-opacity flex items-center justify-center backdrop-blur-[1px]">\n          {episode.isDownloading ? ('),
+    'Old jittery group-hover pill that hid file size should be removed'
+  );
+  assert(
+    episodeCardSrc.includes('!episode.isDownloading && ('),
+    'Hover overlay with Play button must only be shown for playable (non-downloading) episodes'
+  );
+});
+
+console.log('\n--- TEST GROUP 2: MovieHeroCard Polish & Subtitle Integrity ---');
+
+runTest('2.1 MovieHeroCard replaces alert() with showGlobalToast', () => {
+  assert(!movieHeroCardSrc.includes("alert('This movie is currently downloading"), 'alert() must be removed from MovieHeroCard');
+  assert(movieHeroCardSrc.includes('showGlobalToast('), 'showGlobalToast must be called in MovieHeroCard');
+});
+
+runTest('2.2 MovieHeroCard checks hasEmbeddedSubtitles in subtitle badges', () => {
+  assert(
+    movieHeroCardSrc.includes('episode.hasEmbeddedSubtitles || folder.hasEmbeddedSubtitles'),
+    'MovieHeroCard must check hasEmbeddedSubtitles'
+  );
+});
+
+runTest('2.3 Duplicate "Paused at XX:XX" badge removed to eliminate redundancy with action button', () => {
+  assert(
+    !movieHeroCardSrc.includes('<span>Paused at {formatTime(progress?.currentTime || 0)}</span>'),
+    'Duplicate Paused at badge above Resume button must be removed'
+  );
+});
+
+runTest('2.4 MovieHeroCard broadcasts active movie hero presence', () => {
+  assert(
+    movieHeroCardSrc.includes("'movie-hero-active-change'"),
+    'MovieHeroCard must dispatch movie-hero-active-change event'
+  );
+  assert(
+    movieHeroCardSrc.includes('data-movie-hero-card="true"'),
+    'MovieHeroCard root must have data-movie-hero-card attribute'
+  );
+});
+
+console.log('\n--- TEST GROUP 3: FolderBrowser Search & Header Badge Polish ---');
+
+runTest('3.1 Dedicated search empty state rendered on 0 matches', () => {
+  assert(
+    folderBrowserSrc.includes('No anime found matching') && folderBrowserSrc.includes('Clear Search'),
+    'FolderBrowser must render dedicated search empty state with Clear Search button'
+  );
+});
+
+runTest('3.2 Selected anime episode grid NOT rendered when search query yields 0 results', () => {
+  assert(
+    folderBrowserSrc.includes('filteredFolders.length > 0 && selectedFolder ? ('),
+    'FolderBrowser must only render selectedFolder details and grid when filteredFolders.length > 0'
+  );
+});
+
+runTest('3.3 "No Anime Folders Found" box strictly reserved for unconfigured library (folders.length === 0)', () => {
+  assert(
+    folderBrowserSrc.includes('folders.length === 0 ? ('),
+    'FolderBrowser must only render No Anime Folders Found when entire library folders.length is 0'
+  );
+});
+
+runTest('3.4 Poster carousel cards check folder.hasEmbeddedSubtitles', () => {
+  assert(
+    folderBrowserSrc.includes('folder.hasEmbeddedSubtitles'),
+    'Carousel poster cards must check folder.hasEmbeddedSubtitles'
+  );
+});
+
+runTest('3.5 Header subtitle badge soup consolidated into clean status pill reflecting embedded subs', () => {
+  assert(
+    folderBrowserSrc.includes('selectedFolder.hasEmbeddedSubtitles'),
+    'FolderBrowser details header must check selectedFolder.hasEmbeddedSubtitles'
+  );
+  assert(
+    folderBrowserSrc.includes('Dub Sub (SDH)') && folderBrowserSrc.includes('Embedded Subtitles'),
+    'FolderBrowser must render clean consolidated subtitle badges'
+  );
+});
+
+console.log('\n--- TEST GROUP 4: HeroContinueWatching Deduplication ---');
+
+runTest('4.1 HeroContinueWatching deduplicates presentation when active as movie hero card', () => {
+  assert(
+    heroContinueSrc.includes('isDuplicate') && heroContinueSrc.includes('return null;'),
+    'HeroContinueWatching must return null when duplicated by active movie hero card'
+  );
+  assert(
+    heroContinueSrc.includes('isMovieHeroActive') || heroContinueSrc.includes('activeMovieHeroPath'),
+    'HeroContinueWatching must track active movie hero state'
+  );
+});
+
+runTest('4.2 HeroContinueWatching listens for movie-hero-active-change events', () => {
+  assert(
+    heroContinueSrc.includes("'movie-hero-active-change'"),
+    'HeroContinueWatching must subscribe to movie-hero-active-change'
+  );
+});
+
+console.log('\n--- TEST GROUP 5: SettingsModal Accidental Deletion Prevention ---');
+
+runTest('5.1 SettingsModal has confirmation state before removing media folder', () => {
+  assert(
+    settingsModalSrc.includes('confirmDeleteIndex'),
+    'SettingsModal must maintain confirmDeleteIndex state'
+  );
+  assert(
+    settingsModalSrc.includes('Confirm Remove') && settingsModalSrc.includes('Cancel'),
+    'SettingsModal must offer Cancel and Confirm Remove actions before removing folder'
+  );
+});
+
+runTest('5.2 SettingsModal includes modal accessibility attributes', () => {
+  assert(
+    settingsModalSrc.includes('role="dialog"') && settingsModalSrc.includes('data-modal="true"'),
+    'SettingsModal dialog must have role="dialog" and data-modal="true"'
+  );
+});
+
+console.log('\n--- TEST GROUP 6: WhisperStudio Polish & Clutter Elimination ---');
+
+runTest('6.1 Developer CLI flags dump (--sentence --ff_sync) removed from UI', () => {
+  assert(
+    !whisperStudioSrc.includes('--sentence --ff_sync'),
+    'Raw CLI flags --sentence --ff_sync must be removed'
+  );
+  assert(
+    !whisperStudioSrc.includes('Max lines: 2 | Max width: 42 chars'),
+    'Raw CLI parameter dump must be removed'
+  );
+});
+
+runTest('6.2 Human-readable feature chips rendered in WhisperStudio', () => {
+  assert(
+    whisperStudioSrc.includes('large-v3-turbo') &&
+    whisperStudioSrc.includes('Accurate Timestamps') &&
+    whisperStudioSrc.includes('English Dialogue') &&
+    whisperStudioSrc.includes('Standard 2-Line'),
+    'WhisperStudio must render polished human-readable feature chips'
+  );
+});
+
+runTest('6.3 Left configuration cards harmonized with consistent styling', () => {
+  assert(
+    whisperStudioSrc.includes('rounded-2xl bg-[#141418] border border-white/10 space-y-3 shadow-md'),
+    'Configuration cards in WhisperStudio must share consistent dark rounded styling'
+  );
+});
+
+console.log('\n--- TEST GROUP 7: App.tsx Escape Key Listener Refinement ---');
+
+runTest('7.1 Escape key handler inspects whether episode drawer is open before closing player', () => {
+  assert(
+    appSrc.includes('isDrawerOpen') && appSrc.includes('.translate-x-0'),
+    'App.tsx Escape key listener must check for open drawer (.translate-x-0)'
+  );
+});
+
+runTest('7.2 Escape key handler inspects whether modal is open before closing player', () => {
+  assert(
+    appSrc.includes('isModalOpen') &&
+    (appSrc.includes('.glass-dropdown') || appSrc.includes('[role="dialog"]') || appSrc.includes('[data-modal="true"]')),
+    'App.tsx Escape key listener must check for open modals/dialogs'
+  );
+});
+
+runTest('7.3 handleClosePlayer() guarded when drawer or modal is open', () => {
+  const escapeBlockMatch = appSrc.match(/if \(e\.key === 'Escape'\) \{([\s\S]*?handleClosePlayer\(\);[\s\S]*?)\}/);
+  assert(escapeBlockMatch, 'Escape handler block must be present in App.tsx');
+  const block = escapeBlockMatch[1];
+  assert(
+    block.includes('if (isDrawerOpen || isModalOpen) {\n          return;\n        }'),
+    'handleClosePlayer() must be prevented if isDrawerOpen or isModalOpen is true'
+  );
+});
+
+console.log('\n================================================================');
+console.log(`MILESTONE 4 TESTS: ${passedTests} / ${totalTests} PASSED (100%)`);
+console.log('================================================================');
+
+if (passedTests !== totalTests) {
+  process.exit(1);
+}

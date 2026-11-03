@@ -7,3 +7,8 @@ dist-build
 Thumbs.db
 Anime Media Center.exe
 whisper_tmp
+.agents
+.test_*
+test_tmp
+
+

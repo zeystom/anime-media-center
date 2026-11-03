@@ -67,7 +67,7 @@ export function buildAnimeSearchQueries(raw: string): AnimeSearchQueries {
 
   // 4. Cut off at standard scene junk tokens
   const junkPattern =
-    /\b(2160p|4k|1080p|720p|576p|480p|bluray|bdrip|remux|web-dl|webrip|web|dvdrip|dvd|hevc|x265|x264|h264|h265|avc|repack|dual-?audio)\b/i;
+    /\b(2160p|4k|1080p|720p|576p|480p|bluray|bdrip|remux|web-dl|webrip|web|dvdrip|dvd|hevc|x265|x264|h264|h265|avc|repack|dual-?audio|multi-?audio|dolby|truehd|atmos|dts|ddp\d*|flac|aac|opus)\b/i;
   const match = str.match(junkPattern);
   if (match && match.index !== undefined) {
     str = str.substring(0, match.index);
@@ -353,20 +353,27 @@ async function fetchKitsuMetadata(
     animeItem.attributes?.posterImage?.original ||
     null;
 
-  // Fetch episodes from Kitsu
-  const epUrl = `https://kitsu.io/api/edge/anime/${animeId}/episodes?page[limit]=50&sort=number`;
-  const epRes = await fetch(epUrl, {
-    headers: {
-      Accept: 'application/vnd.api+json',
-      'User-Agent': 'AnimeMediaCenter/1.0',
-    },
-    signal: AbortSignal.timeout(5000),
-  });
-
+  // Fetch episodes from Kitsu with pagination loop (so series with >50 episodes get complete metadata)
   const episodes: Record<number, KitsuEpisodeInfo> = {};
-  if (epRes.ok) {
-    const epJson = await epRes.json();
-    if (Array.isArray(epJson.data)) {
+  let offset = 0;
+  const limit = 50;
+  const maxEpisodes = 1500;
+
+  while (offset < maxEpisodes) {
+    try {
+      const epUrl = `https://kitsu.io/api/edge/anime/${animeId}/episodes?page[limit]=${limit}&page[offset]=${offset}&sort=number`;
+      const epRes = await fetch(epUrl, {
+        headers: {
+          Accept: 'application/vnd.api+json',
+          'User-Agent': 'AnimeMediaCenter/1.0',
+        },
+        signal: AbortSignal.timeout(6000),
+      });
+
+      if (!epRes.ok) break;
+      const epJson = await epRes.json();
+      if (!Array.isArray(epJson.data) || epJson.data.length === 0) break;
+
       for (const item of epJson.data) {
         const attrs = item.attributes;
         const num = attrs.number;
@@ -379,6 +386,13 @@ async function fetchKitsuMetadata(
           };
         }
       }
+
+      if (epJson.data.length < limit || !epJson.links?.next) {
+        break;
+      }
+      offset += limit;
+    } catch {
+      break;
     }
   }
 

@@ -1,5 +1,5 @@
 import React, { useState, useEffect, useCallback, useMemo, useRef } from 'react';
-import { AlertCircle } from 'lucide-react';
+import { AlertCircle, X } from 'lucide-react';
 import { Navbar } from './components/Navbar';
 import { HeroContinueWatching } from './components/Library/HeroContinueWatching';
 import { FolderBrowser } from './components/Library/FolderBrowser';
@@ -7,6 +7,8 @@ import { VideoPlayer } from './components/Player/VideoPlayer';
 import { WhisperStudio } from './components/WhisperStudio/WhisperStudio';
 import { SettingsModal } from './components/SettingsModal';
 import { AnimeFolder, Episode, AppSettings, PlaybackProgress } from './types';
+import { ToastProvider, showGlobalToast } from './components/Toast';
+import { getPathBasename, getPathDirname } from './utils/format';
 
 function findLastWatchedFolder(
   folders: AnimeFolder[],
@@ -53,8 +55,13 @@ export const App: React.FC = () => {
     defaultLibraryRoot: '',
     libraryFolders: [],
     autoPlayNext: true,
-    subtitlesFontSize: 28,
+    subtitlesFontSize: 38,
     subtitlesOutline: true,
+    subtitlesTextColor: '#ffffff',
+    subtitlesFontFamily: 'sans',
+    subtitlesBgStyle: 'none',
+    subtitlesOutlineWidth: 'thick',
+    subtitlesOutlineColor: '#000000',
   });
 
   const [folders, setFolders] = useState<AnimeFolder[]>([]);
@@ -79,6 +86,7 @@ export const App: React.FC = () => {
     ffmpegExists: true,
     whisperExists: true,
   });
+  const [bannerDismissed, setBannerDismissed] = useState<boolean>(false);
 
   const isScanningRef = useRef(false);
   const scanPendingRef = useRef(false);
@@ -191,6 +199,123 @@ export const App: React.FC = () => {
     }
   }, []);
 
+  // Active Download Watcher: polls active torrents every 1.5 seconds while downloading
+  // so progress percentage updates smoothly in real-time, and playback unlocks instantly when complete!
+  useEffect(() => {
+    if (!window.electronAPI?.checkDownloadProgress) return;
+
+    // Check if any episode in any folder has isDownloading: true
+    const downloadingEpisodes = folders
+      .flatMap((f) => f.episodes)
+      .filter((e) => e.isDownloading);
+
+    if (downloadingEpisodes.length === 0) return;
+
+    const activePaths = downloadingEpisodes.map((e) => e.filePath);
+
+    const interval = setInterval(async () => {
+      try {
+        const statuses = await window.electronAPI.checkDownloadProgress(activePaths);
+        let hasChanges = false;
+
+        setFolders((prevFolders) => {
+          let anyFolderUpdated = false;
+          const nextFolders = prevFolders.map((folder) => {
+            let epUpdated = false;
+            const nextEpisodes = folder.episodes.map((ep) => {
+              const status = statuses[ep.filePath];
+              if (
+                status &&
+                (status.isDownloading !== ep.isDownloading ||
+                  status.downloadProgress !== ep.downloadProgress)
+              ) {
+                epUpdated = true;
+                anyFolderUpdated = true;
+                hasChanges = true;
+                return {
+                  ...ep,
+                  isDownloading: status.isDownloading,
+                  downloadProgress: status.downloadProgress,
+                };
+              }
+              return ep;
+            });
+
+            if (!epUpdated) return folder;
+
+            // Recalculate folder-level download status
+            const isSingleMovie = nextEpisodes.length === 1;
+            let folderIsDl = false;
+            let folderProg: number | undefined = undefined;
+
+            if (isSingleMovie) {
+              folderIsDl = Boolean(nextEpisodes[0].isDownloading);
+              folderProg = nextEpisodes[0].downloadProgress;
+            } else {
+              folderIsDl = nextEpisodes.every((e) => e.isDownloading);
+              if (folderIsDl) {
+                const total = nextEpisodes.reduce((acc, e) => acc + (e.downloadProgress || 0), 0);
+                folderProg = Math.round(total / nextEpisodes.length);
+              }
+            }
+
+            return {
+              ...folder,
+              episodes: nextEpisodes,
+              isDownloading: folderIsDl,
+              downloadProgress: folderProg,
+            };
+          });
+
+          return anyFolderUpdated ? nextFolders : prevFolders;
+        });
+
+        // Keep selectedFolder strictly in sync with the updated episodes
+        if (hasChanges) {
+          setSelectedFolder((prev) => {
+            if (!prev) return prev;
+            let changed = false;
+            const nextEpisodes = prev.episodes.map((ep) => {
+              const st = statuses[ep.filePath];
+              if (
+                st &&
+                (st.isDownloading !== ep.isDownloading ||
+                  st.downloadProgress !== ep.downloadProgress)
+              ) {
+                changed = true;
+                return {
+                  ...ep,
+                  isDownloading: st.isDownloading,
+                  downloadProgress: st.downloadProgress,
+                };
+              }
+              return ep;
+            });
+
+            if (!changed) return prev;
+
+            const isMovie = nextEpisodes.length === 1;
+            const isDl = isMovie
+              ? Boolean(nextEpisodes[0].isDownloading)
+              : nextEpisodes.every((e) => e.isDownloading);
+            const prog = isMovie ? nextEpisodes[0].downloadProgress : undefined;
+
+            return {
+              ...prev,
+              episodes: nextEpisodes,
+              isDownloading: isDl,
+              downloadProgress: prog,
+            };
+          });
+        }
+      } catch (err) {
+        console.error('Error polling download progress:', err);
+      }
+    }, 1500);
+
+    return () => clearInterval(interval);
+  }, [folders]);
+
   // Find most recently watched episode across all anime folders
   const mostRecentWatched = useMemo(() => {
     const list = Object.values(history).filter(
@@ -243,6 +368,13 @@ export const App: React.FC = () => {
 
   // Play Episode
   const handlePlayEpisode = (episode: Episode, startAt = 0) => {
+    if (episode.isDownloading) {
+      showGlobalToast(
+        'This media is currently downloading in your torrent client and cannot be played yet.',
+        'warning'
+      );
+      return;
+    }
     const parentFolder = folders.find((f) => f.episodes.some((e) => e.filePath === episode.filePath));
     if (parentFolder) {
       setSelectedFolder(parentFolder);
@@ -302,17 +434,70 @@ export const App: React.FC = () => {
     }
   };
 
-  // Resolve current active anime folder for player
-  const currentPlayingFolder = useMemo(() => {
+  // Resolve current active anime folder for player (with fallback for BUG-01)
+  const currentPlayingFolder = useMemo<AnimeFolder | null>(() => {
     if (!activePlayerEpisode) return null;
-    return (
-      folders.find((f) => f.episodes.some((e) => e.filePath === activePlayerEpisode.filePath)) ||
-      selectedFolder
+    const found = folders.find((f) =>
+      f.episodes.some((e) => e.filePath === activePlayerEpisode.filePath)
     );
+    if (found) return found;
+    if (selectedFolder) return selectedFolder;
+
+    // Fallback AnimeFolder so VideoPlayer always mounts cleanly and never locks the UI
+    const folderPath = getPathDirname(activePlayerEpisode.filePath) || '';
+    const folderName = getPathBasename(folderPath) || activePlayerEpisode.title || 'Playing Media';
+    return {
+      folderPath,
+      folderName,
+      canonicalTitle: activePlayerEpisode.title || folderName,
+      episodes: [activePlayerEpisode],
+      totalEpisodes: 1,
+      hasSubtitlesCount:
+        activePlayerEpisode.hasExternalSrt ||
+        activePlayerEpisode.hasEmbeddedSubtitles ||
+        activePlayerEpisode.hasEmbeddedDubtitles ||
+        activePlayerEpisode.hasWhisperSrt
+          ? 1
+          : 0,
+      isDownloading: false,
+    };
   }, [activePlayerEpisode, folders, selectedFolder]);
 
+  // Global Escape key listener: rescues the user if player unmounted, errored, or lost focus
+  useEffect(() => {
+    if (!activePlayerEpisode) return;
+    const handleGlobalKeyDown = (e: KeyboardEvent) => {
+      if (e.key === 'Escape') {
+        if (e.defaultPrevented) return;
+
+        // Ensure pressing Escape when an episode drawer or modal is open
+        // does not close the entire video player prematurely.
+        const isDrawerOpen = Boolean(
+          document.querySelector('.translate-x-0') ||
+          document.querySelector('[aria-label="Close Episodes Drawer"]')
+            ?.closest('.pointer-events-auto')
+        );
+
+        const isModalOpen = Boolean(
+          document.querySelector('.glass-dropdown') ||
+          document.querySelector('[role="dialog"]') ||
+          document.querySelector('[data-modal="true"]')
+        );
+
+        if (isDrawerOpen || isModalOpen) {
+          return;
+        }
+
+        handleClosePlayer();
+      }
+    };
+    window.addEventListener('keydown', handleGlobalKeyDown);
+    return () => window.removeEventListener('keydown', handleGlobalKeyDown);
+  }, [activePlayerEpisode, handleClosePlayer]);
+
   return (
-    <div className="flex flex-col h-screen w-screen bg-[#0f0f12] text-zinc-100 overflow-hidden font-sans">
+    <ToastProvider>
+      <div className="flex flex-col h-screen w-screen bg-[#0f0f12] text-zinc-100 overflow-hidden font-sans">
       {/* Top Navbar - Only rendered in Menu/Library/Whisper views */}
       {!activePlayerEpisode && (
         <>
@@ -324,26 +509,37 @@ export const App: React.FC = () => {
           />
 
           {/* Missing Binary Warning Banner */}
-          {(!binaryStatus.ffmpegExists || !binaryStatus.whisperExists) && (
-            <div className="bg-amber-500/10 border-b border-amber-500/20 px-6 py-2.5 flex items-center justify-between text-xs text-amber-300">
-              <div className="flex items-center space-x-2">
-                <AlertCircle className="w-4 h-4 text-amber-400 shrink-0" />
-                <span>
-                  {!binaryStatus.ffmpegExists && !binaryStatus.whisperExists
-                    ? 'FFmpeg and Whisper binaries not found. Configure tool paths in Settings to enable video playback and AI subtitles.'
-                    : !binaryStatus.ffmpegExists
-                    ? 'FFmpeg binary not found. Video transcoding and playback will not function.'
-                    : 'Faster-Whisper binary not found. AI subtitle generation will not function.'}
-                </span>
+          {(!binaryStatus.ffmpegExists || !binaryStatus.whisperExists) &&
+            !bannerDismissed &&
+            currentTab !== 'whisper' && (
+              <div className="bg-amber-500/10 border-b border-amber-500/20 px-6 py-2.5 flex items-center justify-between text-xs text-amber-300">
+                <div className="flex items-center space-x-2">
+                  <AlertCircle className="w-4 h-4 text-amber-400 shrink-0" />
+                  <span>
+                    {!binaryStatus.ffmpegExists && !binaryStatus.whisperExists
+                      ? 'FFmpeg and Whisper binaries not found. Configure tool paths in Settings to enable video playback and AI subtitles.'
+                      : !binaryStatus.ffmpegExists
+                      ? 'FFmpeg binary not found. Video transcoding and playback will not function.'
+                      : 'Faster-Whisper binary not found. AI subtitle generation will not function.'}
+                  </span>
+                </div>
+                <div className="flex items-center space-x-2">
+                  <button
+                    onClick={() => setSettingsOpen(true)}
+                    className="px-3 py-1 rounded-lg bg-amber-500/20 hover:bg-amber-500/30 text-amber-200 border border-amber-500/30 font-semibold transition-colors"
+                  >
+                    Open Settings
+                  </button>
+                  <button
+                    onClick={() => setBannerDismissed(true)}
+                    className="p-1 rounded-lg text-amber-400/80 hover:text-amber-200 hover:bg-amber-500/20 transition-colors"
+                    title="Dismiss warning"
+                  >
+                    <X className="w-4 h-4" />
+                  </button>
+                </div>
               </div>
-              <button
-                onClick={() => setSettingsOpen(true)}
-                className="px-3 py-1 rounded-lg bg-amber-500/20 hover:bg-amber-500/30 text-amber-200 border border-amber-500/30 font-semibold transition-colors"
-              >
-                Open Settings
-              </button>
-            </div>
-          )}
+            )}
         </>
       )}
 
@@ -372,7 +568,7 @@ export const App: React.FC = () => {
             <FolderBrowser
               libraryRoot={
                 settings.libraryFolders && settings.libraryFolders.length > 1
-                  ? `${settings.libraryFolders.length} folders (${settings.libraryFolders.map((f) => f.split('\\').pop() || f).join(', ')})`
+                  ? `${settings.libraryFolders.length} folders (${settings.libraryFolders.map((f) => getPathBasename(f)).join(', ')})`
                   : settings.defaultLibraryRoot
               }
               folders={visibleFolders}
@@ -400,19 +596,37 @@ export const App: React.FC = () => {
         </div>
       </main>
 
-      {/* Fullscreen Video Player Modal */}
-      {activePlayerEpisode && currentPlayingFolder && (
-        <VideoPlayer
-          episode={activePlayerEpisode}
-          seasonEpisodes={currentPlayingFolder.episodes}
-          folderPath={currentPlayingFolder.folderPath}
-          initialTime={playerInitialTime}
-          settings={settings}
-          history={history}
-          onClose={handleClosePlayer}
-          onEpisodeChange={handlePlayerEpisodeChange}
-        />
-      )}
+      {/* Fullscreen Video Player Modal or Safe Recovery Screen (BUG-01) */}
+      {activePlayerEpisode &&
+        (currentPlayingFolder ? (
+          <VideoPlayer
+            episode={activePlayerEpisode}
+            seasonEpisodes={currentPlayingFolder.episodes}
+            folderPath={currentPlayingFolder.folderPath}
+            initialTime={playerInitialTime}
+            settings={settings}
+            onUpdateSettings={(updated) => setSettings((prev) => ({ ...prev, ...updated }))}
+            history={history}
+            onClose={handleClosePlayer}
+            onEpisodeChange={handlePlayerEpisodeChange}
+          />
+        ) : (
+          <div className="fixed inset-0 z-50 bg-[#0f0f12] flex flex-col items-center justify-center p-6 text-center">
+            <div className="bg-zinc-900 border border-zinc-800 rounded-2xl p-8 max-w-md shadow-2xl flex flex-col items-center">
+              <AlertCircle className="w-12 h-12 text-rose-500 mb-4 animate-pulse" />
+              <h2 className="text-xl font-bold text-zinc-100 mb-2">Playback Initialization Error</h2>
+              <p className="text-sm text-zinc-400 mb-6">
+                Unable to locate library metadata for this episode.
+              </p>
+              <button
+                onClick={handleClosePlayer}
+                className="px-6 py-2.5 bg-rose-600 hover:bg-rose-500 text-white font-medium rounded-xl transition-colors shadow-lg shadow-rose-900/30"
+              >
+                Return to Library (Esc)
+              </button>
+            </div>
+          </div>
+        ))}
 
       {/* Settings Modal */}
       <SettingsModal
@@ -422,5 +636,6 @@ export const App: React.FC = () => {
         onSave={handleSaveSettings}
       />
     </div>
+    </ToastProvider>
   );
 };

@@ -56,6 +56,7 @@ export interface VideoMetadata {
   hasExternalSrt: boolean;
   externalSrtPath?: string;
   hasEmbeddedDubtitles?: boolean;
+  hasEmbeddedSubtitles?: boolean;
 }
 
 export interface Episode {
@@ -69,11 +70,13 @@ export interface Episode {
   hasWhisperSrt?: boolean;
   externalSrtPath?: string;
   hasEmbeddedDubtitles?: boolean;
+  hasEmbeddedSubtitles?: boolean;
   thumbnailUrl?: string;
   kitsuThumbnail?: string | null;
   kitsuTitle?: string | null;
   episodeTitle?: string | null;
   isDownloading?: boolean;
+  downloadProgress?: number;
 }
 
 export interface AnimeFolder {
@@ -81,11 +84,13 @@ export interface AnimeFolder {
   folderName: string;
   episodes: Episode[];
   isDownloading?: boolean;
+  downloadProgress?: number;
   hasSubtitlesCount: number;
   hasWhisperCount?: number;
   hasExtSubCount?: number;
   hasDubtitlesCount?: number;
   hasEmbeddedDubtitles?: boolean;
+  hasEmbeddedSubtitles?: boolean;
   totalEpisodes: number;
   posterUrl?: string | null;
   bannerUrl?: string | null;
@@ -109,8 +114,8 @@ export interface PlaybackProgress {
 export interface SeasonPreference {
   preferredAudioLanguage: string; // default 'eng'
   preferredAudioIndex?: number;
-  mainSubtitleTrackId?: string;   // default prioritizes external or dialogue
-  topSubtitleTrackId?: string;    // default signs/forced or null
+  mainSubtitleTrackId?: string | null;   // null means explicitly OFF
+  topSubtitleTrackId?: string | null;    // null means explicitly OFF
   topSubEnabled: boolean;
   subSyncOffset: number;          // in seconds (-0.5, 0.5, etc.)
 }
@@ -123,6 +128,11 @@ export interface AppSettings {
   autoPlayNext: boolean;
   subtitlesFontSize: number;
   subtitlesOutline: boolean;
+  subtitlesTextColor?: string;
+  subtitlesFontFamily?: 'sans' | 'trebuchet' | 'rounded' | 'serif' | 'mono';
+  subtitlesBgStyle?: 'none' | 'translucent' | 'semi' | 'solid';
+  subtitlesOutlineWidth?: 'thin' | 'medium' | 'thick' | 'heavy' | 'none';
+  subtitlesOutlineColor?: string;
   hideDownloadingAnime?: boolean;
 }
 

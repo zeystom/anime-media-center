@@ -5,7 +5,8 @@ import path from 'path';
 import crypto from 'crypto';
 import { spawn, ChildProcess } from 'child_process';
 import { storage } from './storage';
-import { generateSingleThumbnail } from './ffmpeg';
+import { generateSingleThumbnail, readMkvDuration } from './ffmpeg';
+import { isEpisodeDownloading } from './torrents';
 
 interface VideoFormatInfo {
   codec: string;
@@ -17,56 +18,67 @@ let hasNvencCache: boolean | null = null;
 
 async function checkNvencSupport(ffmpegPath: string): Promise<boolean> {
   if (hasNvencCache !== null) return hasNvencCache;
+  if (!ffmpegPath) return false;
   return new Promise((resolve) => {
-    const p = spawn(ffmpegPath, [
-      '-hide_banner',
-      '-f', 'lavfi',
-      '-i', 'color=c=black:s=320x240:d=0.1',
-      '-c:v', 'h264_nvenc',
-      '-pix_fmt', 'yuv420p',
-      '-f', 'null',
-      '-',
-    ], { windowsHide: true });
-    p.on('close', (code) => {
-      hasNvencCache = code === 0;
-      resolve(hasNvencCache);
-    });
-    p.on('error', () => {
+    try {
+      const p = spawn(ffmpegPath, [
+        '-hide_banner',
+        '-f', 'lavfi',
+        '-i', 'color=c=black:s=320x240:d=0.1',
+        '-c:v', 'h264_nvenc',
+        '-pix_fmt', 'yuv420p',
+        '-f', 'null',
+        '-',
+      ], { windowsHide: true });
+      p.on('close', (code) => {
+        hasNvencCache = code === 0;
+        resolve(hasNvencCache);
+      });
+      p.on('error', () => {
+        hasNvencCache = false;
+        resolve(false);
+      });
+    } catch {
       hasNvencCache = false;
       resolve(false);
-    });
+    }
   });
 }
 
 async function getVideoFormat(filePath: string, ffmpegPath: string): Promise<VideoFormatInfo> {
   const cached = codecCache.get(filePath);
   if (cached) return cached;
+  if (!ffmpegPath) return { codec: 'hevc', canDirectStream: false };
 
   return new Promise((resolve) => {
-    const p = spawn(ffmpegPath, ['-hide_banner', '-i', filePath], {
-      windowsHide: true,
-      stdio: ['ignore', 'ignore', 'pipe'],
-    });
-    let stderr = '';
-    p.stderr?.on('data', (d) => {
-      stderr += d.toString();
-    });
-    p.on('close', () => {
-      // Example: Stream #0:0(jpn): Video: hevc (Main 10), yuv420p10le...
-      // Or:      Stream #0:0(jpn): Video: h264 (High), yuv420p...
-      const match = stderr.match(/Stream #0:\d+.*?: Video: ([a-zA-Z0-9_-]+)(?:.*?, ([a-zA-Z0-9_]+))?/i);
-      const codec = match ? match[1].toLowerCase() : 'hevc';
-      const pixFmt = match && match[2] ? match[2].toLowerCase() : '';
-      const is10Bit = /10|12|p10|p12/i.test(pixFmt) || /10/i.test(stderr.split('Video:')[1]?.split(',')[0] || '');
-      const isH264 = /h264|avc/i.test(codec);
-      // Chromium can direct-play standard 8-bit H.264 with zero-transcode copy.
-      // 10-bit HEVC/H.264 or other codecs must be transcoded to 8-bit H.264.
-      const canDirectStream = isH264 && !is10Bit;
-      const info: VideoFormatInfo = { codec, canDirectStream };
-      codecCache.set(filePath, info);
-      resolve(info);
-    });
-    p.on('error', () => resolve({ codec: 'hevc', canDirectStream: false }));
+    try {
+      const p = spawn(ffmpegPath, ['-hide_banner', '-i', filePath], {
+        windowsHide: true,
+        stdio: ['ignore', 'ignore', 'pipe'],
+      });
+      let stderr = '';
+      p.stderr?.on('data', (d) => {
+        stderr += d.toString();
+      });
+      p.on('close', () => {
+        // Example: Stream #0:0(jpn): Video: hevc (Main 10), yuv420p10le...
+        // Or:      Stream #0:0(jpn): Video: h264 (High), yuv420p...
+        const match = stderr.match(/Stream #0:\d+.*?: Video: ([a-zA-Z0-9_-]+)(?:.*?, ([a-zA-Z0-9_]+))?/i);
+        const codec = match ? match[1].toLowerCase() : 'hevc';
+        const pixFmt = match && match[2] ? match[2].toLowerCase() : '';
+        const is10Bit = /10|12|p10|p12/i.test(pixFmt) || /10/i.test(stderr.split('Video:')[1]?.split(',')[0] || '');
+        const isH264 = /h264|avc/i.test(codec);
+        // Chromium can direct-play standard 8-bit H.264 with zero-transcode copy.
+        // 10-bit HEVC/H.264 or other codecs must be transcoded to 8-bit H.264.
+        const canDirectStream = isH264 && !is10Bit;
+        const info: VideoFormatInfo = { codec, canDirectStream };
+        codecCache.set(filePath, info);
+        resolve(info);
+      });
+      p.on('error', () => resolve({ codec: 'hevc', canDirectStream: false }));
+    } catch {
+      resolve({ codec: 'hevc', canDirectStream: false });
+    }
   });
 }
 
@@ -203,7 +215,15 @@ export class LocalStreamServer {
     const pathname = parsedUrl.pathname;
 
     if (pathname === '/stream') {
-      this.handleStream(req, res, parsedUrl.query);
+      this.handleStream(req, res, parsedUrl.query).catch((err) => {
+        console.error('[StreamServer] handleStream unhandled rejection:', err);
+        if (!res.headersSent && !res.destroyed && !res.writableEnded) {
+          try {
+            res.writeHead(500, { 'Content-Type': 'text/plain' });
+            res.end(`Internal Server Error: ${err?.message || 'Streaming failed'}`);
+          } catch {}
+        }
+      });
     } else if (pathname === '/thumb') {
       this.handleThumb(req, res, parsedUrl.query);
     } else if (pathname?.startsWith('/font/')) {
@@ -218,138 +238,170 @@ export class LocalStreamServer {
   }
 
   private async handleStream(req: http.IncomingMessage, res: http.ServerResponse, query: any) {
-    const filePath = query.file as string;
-    const audioTrackStr = (query.audioTrack as string) || '0';
-    const startTimeStr = (query.startTime as string) || '0';
+    try {
+      const filePath = query.file as string;
+      const audioTrackStr = (query.audioTrack as string) || '0';
+      const startTimeStr = (query.startTime as string) || '0';
 
-    if (!filePath || !isAllowedFilePath(filePath) || !fs.existsSync(filePath)) {
-      res.writeHead(403, { 'Content-Type': 'text/plain' });
-      res.end('Access denied or file not found');
-      return;
-    }
+      if (!filePath || !isAllowedFilePath(filePath) || !fs.existsSync(filePath)) {
+        res.writeHead(403, { 'Content-Type': 'text/plain' });
+        res.end('Access denied or file not found');
+        return;
+      }
 
-    const settings = storage.getSettings();
-    const ffmpegPath = settings.ffmpegPath;
-    const startTime = Math.max(0, parseFloat(startTimeStr) || 0);
-    const audioTrack = parseInt(audioTrackStr, 10) || 0;
-
-    console.log(`[StreamServer] Streaming: "${filePath}" audioIndex:${audioTrack} startTime:${startTime}s`);
-
-    // Check NVENC hardware encoder and video profile
-    const videoFormat = await getVideoFormat(filePath, ffmpegPath);
-    const hasNvenc = await checkNvencSupport(ffmpegPath);
-
-    // Kill any previous stream processes to free up CPU, file handles, and memory
-    this.stopActiveStreams();
-
-    // Stream FFmpeg Fragmented MP4 (fMP4) directly to pipe:
-    // Chromium natively supports hardware-accelerated H.264 with 100% rock-solid stability.
-    // Fragmented MP4 with frag_keyframe+empty_moov+default_base_moof writes an initialization 'moov' atom at byte 0,
-    // allowing Chromium to immediately initialize the video decoder with 0ms lag.
-    // -map_chapters -1, -dn, -sn strictly prevent chapter/data/subtitle text streams from being muxed into MP4,
-    // which otherwise triggers Chromium's 'ffmpeg_common.cc: Unsupported pixel format: -1' error!
-    // -g 24 -forced-idr 1 ensures keyframe fragments are generated immediately every 1s, preventing FFmpeg
-    // from buffering dozens of seconds of video in memory before flushing!
-    const args = [
-      '-hide_banner',
-      '-ss', startTime.toString(),
-      '-i', filePath,
-      '-map', '0:v:0',
-      '-map', `0:a:${audioTrack}?`,
-    ];
-
-    if (hasNvenc) {
-      // Hardware NVENC encode: runs on NVIDIA ASIC at 500+ FPS with ~0% CPU usage.
-      // Re-encodes frames with exact PTS starting at 0, fixes negative DTS desync,
-      // generates clean IDR keyframes every 1s, and guarantees zero audio lag!
-      args.push(
-        '-c:v', 'h264_nvenc',
-        '-pix_fmt', 'yuv420p',
-        '-preset', 'p1',
-        '-tune', 'll',
-        '-cq', '19',
-        '-g', '24',
-        '-forced-idr', '1'
-      );
-    } else if (!videoFormat.canDirectStream) {
-      // CPU fallback: ultrafast libx264
-      args.push(
-        '-c:v', 'libx264',
-        '-pix_fmt', 'yuv420p',
-        '-preset', 'ultrafast',
-        '-tune', 'zerolatency',
-        '-crf', '20',
-        '-g', '24'
-      );
-    } else {
-      // Native 8-bit H.264 input is copied directly with 0% CPU
-      args.push('-c:v', 'copy');
-    }
-
-    args.push(
-      '-c:a', 'aac',
-      '-ac', '2',
-      '-b:a', '256k',
-      '-af', 'aresample=async=1:first_pts=0',
-      '-avoid_negative_ts', 'make_zero',
-      '-map_chapters', '-1',
-      '-dn',
-      '-sn',
-      '-flush_packets', '1',
-      '-f', 'mp4',
-      '-movflags', 'frag_keyframe+empty_moov+default_base_moof',
-      'pipe:1'
-    );
-
-    // Important: stdio: ['ignore', 'pipe', 'ignore'] prevents the Windows OS pipe buffer from
-    // filling up with FFmpeg progress text on stderr, which would cause FFmpeg to deadlock/freeze!
-    const ffmpeg = spawn(ffmpegPath, args, {
-      windowsHide: true,
-      stdio: ['ignore', 'pipe', 'ignore'],
-    });
-
-    this.currentStreamProcess = ffmpeg;
-    this.currentStreamResponse = res;
-    this.activeStreams.add(ffmpeg);
-
-    res.writeHead(200, {
-      'Content-Type': 'video/mp4',
-      'Transfer-Encoding': 'chunked',
-      'Accept-Ranges': 'none',
-      'Cache-Control': 'no-cache, no-store',
-      'Connection': 'close',
-    });
-
-    ffmpeg.stdout.pipe(res);
-
-    let killed = false;
-    const cleanup = () => {
-      if (!killed) {
-        killed = true;
-        this.activeStreams.delete(ffmpeg);
-        if (this.currentStreamProcess === ffmpeg) {
-          this.currentStreamProcess = null;
+      // Guard against streaming partially downloaded or sparse torrent files
+      try {
+        const dir = path.dirname(filePath);
+        const filesInDir = new Set(fs.readdirSync(dir).map((f) => f.toLowerCase()));
+        const stat = fs.statSync(filePath);
+        if (isEpisodeDownloading(filePath, filesInDir, stat)) {
+          res.writeHead(423, { 'Content-Type': 'text/plain' });
+          res.end('File is currently downloading in torrent client and cannot be streamed yet.');
+          return;
         }
-        if (this.currentStreamResponse === res) {
-          this.currentStreamResponse = null;
+      } catch {}
+
+      const settings = storage.getSettings();
+      const ffmpegPath = settings.ffmpegPath;
+      const startTime = Math.max(0, parseFloat(startTimeStr) || 0);
+      const audioTrack = parseInt(audioTrackStr, 10) || 0;
+
+      console.log(`[StreamServer] Streaming: "${filePath}" audioIndex:${audioTrack} startTime:${startTime}s`);
+
+      // Check NVENC hardware encoder and video profile
+      const videoFormat = await getVideoFormat(filePath, ffmpegPath);
+      const hasNvenc = await checkNvencSupport(ffmpegPath);
+
+      // Kill any previous stream processes to free up CPU, file handles, and memory
+      this.stopActiveStreams();
+
+      // Stream FFmpeg Fragmented MP4 (fMP4) directly to pipe:
+      // Chromium natively supports hardware-accelerated H.264 with 100% rock-solid stability.
+      // Fragmented MP4 with frag_keyframe+empty_moov+default_base_moof writes an initialization 'moov' atom at byte 0,
+      // allowing Chromium to immediately initialize the video decoder with 0ms lag.
+      // -map_chapters -1, -dn, -sn strictly prevent chapter/data/subtitle text streams from being muxed into MP4,
+      // which otherwise triggers Chromium's 'ffmpeg_common.cc: Unsupported pixel format: -1' error!
+      // -g 24 -forced-idr 1 ensures keyframe fragments are generated immediately every 1s, preventing FFmpeg
+      // from buffering dozens of seconds of video in memory before flushing!
+      const args = [
+        '-hide_banner',
+        '-ss', startTime.toString(),
+        '-i', filePath,
+        '-map', '0:v:0',
+        '-map', `0:a:${audioTrack}?`,
+      ];
+
+      if (hasNvenc) {
+        // Hardware NVENC encode: runs on NVIDIA ASIC at 500+ FPS with ~0% CPU usage.
+        // Re-encodes frames with exact PTS starting at 0, fixes negative DTS desync,
+        // generates clean IDR keyframes every 1s, and guarantees zero audio lag!
+        args.push(
+          '-c:v', 'h264_nvenc',
+          '-pix_fmt', 'yuv420p',
+          '-preset', 'p1',
+          '-tune', 'll',
+          '-cq', '19',
+          '-g', '24',
+          '-forced-idr', '1'
+        );
+      } else if (!videoFormat.canDirectStream) {
+        // CPU fallback: ultrafast libx264
+        args.push(
+          '-c:v', 'libx264',
+          '-pix_fmt', 'yuv420p',
+          '-preset', 'ultrafast',
+          '-tune', 'zerolatency',
+          '-crf', '20',
+          '-g', '24'
+        );
+      } else {
+        // Native 8-bit H.264 input is copied directly with 0% CPU
+        args.push('-c:v', 'copy');
+      }
+
+      args.push(
+        '-c:a', 'aac',
+        '-ac', '2',
+        '-b:a', '256k',
+        '-af', 'aresample=async=1:first_pts=0',
+        '-avoid_negative_ts', 'make_zero',
+        '-map_chapters', '-1',
+        '-dn',
+        '-sn',
+        '-flush_packets', '1',
+        '-f', 'mp4',
+        '-movflags', 'frag_keyframe+empty_moov+default_base_moof',
+        'pipe:1'
+      );
+
+      // Important: stdio: ['ignore', 'pipe', 'ignore'] prevents the Windows OS pipe buffer from
+      // filling up with FFmpeg progress text on stderr, which would cause FFmpeg to deadlock/freeze!
+      let ffmpeg: ChildProcess;
+      try {
+        ffmpeg = spawn(ffmpegPath, args, {
+          windowsHide: true,
+          stdio: ['ignore', 'pipe', 'ignore'],
+        });
+      } catch (spawnErr: any) {
+        console.error('[StreamServer] Failed to spawn FFmpeg:', spawnErr);
+        if (!res.headersSent && !res.destroyed && !res.writableEnded) {
+          res.writeHead(500, { 'Content-Type': 'text/plain' });
+          res.end(`Failed to spawn FFmpeg: ${spawnErr.message}`);
         }
+        return;
+      }
+
+      this.currentStreamProcess = ffmpeg;
+      this.currentStreamResponse = res;
+      this.activeStreams.add(ffmpeg);
+
+      res.writeHead(200, {
+        'Content-Type': 'video/mp4',
+        'Transfer-Encoding': 'chunked',
+        'Accept-Ranges': 'none',
+        'Cache-Control': 'no-cache, no-store',
+        'Connection': 'close',
+      });
+
+      ffmpeg.stdout?.pipe(res);
+
+      let killed = false;
+      const cleanup = () => {
+        if (!killed) {
+          killed = true;
+          this.activeStreams.delete(ffmpeg);
+          if (this.currentStreamProcess === ffmpeg) {
+            this.currentStreamProcess = null;
+          }
+          if (this.currentStreamResponse === res) {
+            this.currentStreamResponse = null;
+          }
+          try {
+            ffmpeg.stdout?.unpipe();
+            ffmpeg.stdout?.destroy();
+          } catch {}
+          try {
+            ffmpeg.kill();
+          } catch {}
+        }
+      };
+
+      req.on('close', cleanup);
+      res.on('close', cleanup);
+      ffmpeg.on('close', cleanup);
+      ffmpeg.on('error', (err) => {
+        console.error('[StreamServer] FFmpeg process error:', err);
+        cleanup();
+      });
+    } catch (err: any) {
+      console.error('[StreamServer] Stream handling error:', err);
+      if (!res.headersSent && !res.destroyed && !res.writableEnded) {
         try {
-          ffmpeg.stdout?.unpipe();
-          ffmpeg.stdout?.destroy();
-        } catch {}
-        try {
-          ffmpeg.kill();
+          res.writeHead(500, { 'Content-Type': 'text/plain' });
+          res.end(`Streaming error: ${err.message || 'Stream processing failed'}`);
         } catch {}
       }
-    };
-
-    req.on('close', cleanup);
-    res.on('close', cleanup);
-    ffmpeg.on('close', cleanup);
-    ffmpeg.on('error', (err) => {
-      console.error('[StreamServer] FFmpeg process error:', err);
-      cleanup();
-    });
+    }
   }
 
   private async handleThumb(req: http.IncomingMessage, res: http.ServerResponse, query: any) {
@@ -376,13 +428,46 @@ export class LocalStreamServer {
       ];
       for (const cand of candidates) {
         if (fs.existsSync(cand)) {
-          res.writeHead(200, {
-            'Content-Type': cand.toLowerCase().endsWith('.png') ? 'image/png' : 'image/jpeg',
-            'Cache-Control': 'public, max-age=86400',
-          });
-          fs.createReadStream(cand).pipe(res);
+          if (!res.headersSent && !res.writableEnded && !res.destroyed) {
+            res.writeHead(200, {
+              'Content-Type': cand.toLowerCase().endsWith('.png') ? 'image/png' : 'image/jpeg',
+              'Cache-Control': 'public, max-age=86400',
+            });
+            const sidecarStream = fs.createReadStream(cand);
+            sidecarStream.on('error', () => {
+              try { sidecarStream.destroy(); } catch {}
+            });
+            sidecarStream.pipe(res);
+          }
           return;
         }
+      }
+    }
+
+    const queryDuration = parseFloat(query.duration as string);
+    let duration: number | undefined =
+      !isNaN(queryDuration) && queryDuration > 0
+        ? queryDuration
+        : storage.getAllPlaybackProgress()[filePath]?.duration;
+    if (!duration || duration <= 0) {
+      const mkvDur = readMkvDuration(filePath);
+      if (mkvDur && mkvDur > 0) {
+        duration = Math.round(mkvDur);
+      }
+    }
+
+    // Safe timestamp: for cards, default to 280 seconds (~4.5 minutes in) to avoid intro/OP; for scrubber, use requested time
+    const rawTargetTime = isCard
+      ? (timeStr && timeStr !== '60' && timeStr !== '0' ? parseFloat(timeStr) : 280)
+      : Math.floor((Math.max(0, parseFloat(timeStr) || 0)) / 5) * 5;
+
+    // Clamp seek time to duration so short videos (<280s) never seek past EOF and fail with 404
+    let targetTime = rawTargetTime;
+    if (duration && duration > 0) {
+      if (isCard) {
+        targetTime = Math.min(rawTargetTime, Math.max(1, duration * 0.2));
+      } else {
+        targetTime = Math.min(rawTargetTime, Math.max(0, duration - 1));
       }
     }
 
@@ -392,21 +477,22 @@ export class LocalStreamServer {
     // For cards: dedicated card_hq.jpg. For scrubber: quantized 5-second interval bucket
     const thumbFile = isCard
       ? path.join(thumbDir, 'card_hq.jpg')
-      : path.join(thumbDir, `thumb_${Math.floor((Math.max(0, parseFloat(timeStr) || 0)) / 5) * 5}.jpg`);
-
-    // Safe timestamp: for cards, default to 280 seconds (~4.5 minutes in) to avoid intro/OP; for scrubber, use requested time
-    const targetTime = isCard
-      ? (timeStr && timeStr !== '60' && timeStr !== '0' ? parseFloat(timeStr) : 280)
-      : Math.floor((Math.max(0, parseFloat(timeStr) || 0)) / 5) * 5;
+      : path.join(thumbDir, `thumb_${Math.floor(targetTime / 5) * 5}.jpg`);
 
     // 2. Fast Cache Hit (in-memory or disk)
     if (this.cachedThumbFiles.has(thumbFile) || fs.existsSync(thumbFile)) {
       this.cachedThumbFiles.add(thumbFile);
-      res.writeHead(200, {
-        'Content-Type': 'image/jpeg',
-        'Cache-Control': 'public, max-age=86400',
-      });
-      fs.createReadStream(thumbFile).pipe(res);
+      if (!res.headersSent && !res.writableEnded && !res.destroyed) {
+        res.writeHead(200, {
+          'Content-Type': 'image/jpeg',
+          'Cache-Control': 'public, max-age=86400',
+        });
+        const hitStream = fs.createReadStream(thumbFile);
+        hitStream.on('error', () => {
+          try { hitStream.destroy(); } catch {}
+        });
+        hitStream.pipe(res);
+      }
       return;
     }
 
@@ -436,25 +522,36 @@ export class LocalStreamServer {
 
       const generated = await thumbPromise;
 
-      if (res.writableEnded) {
+      if (res.writableEnded || res.destroyed || !res.socket?.writable) {
         return;
       }
 
       if (generated && fs.existsSync(generated)) {
         this.cachedThumbFiles.add(generated);
-        res.writeHead(200, {
-          'Content-Type': 'image/jpeg',
-          'Cache-Control': 'public, max-age=86400',
-        });
-        fs.createReadStream(generated).pipe(res);
+        if (!res.headersSent && !res.writableEnded && !res.destroyed) {
+          res.writeHead(200, {
+            'Content-Type': 'image/jpeg',
+            'Cache-Control': 'public, max-age=86400',
+          });
+          const genStream = fs.createReadStream(generated);
+          genStream.on('error', (err) => {
+            console.error('[StreamServer] Thumbnail stream pipe error:', err);
+            try { genStream.destroy(); } catch {}
+          });
+          genStream.pipe(res);
+        }
       } else {
-        res.writeHead(404);
-        res.end('Thumbnail not ready');
+        if (!res.headersSent && !res.writableEnded && !res.destroyed) {
+          res.writeHead(404);
+          res.end('Thumbnail not ready');
+        }
       }
     } catch (e) {
-      if (!res.writableEnded) {
-        res.writeHead(500);
-        res.end('Error generating thumbnail');
+      if (!res.headersSent && !res.writableEnded && !res.destroyed) {
+        try {
+          res.writeHead(500);
+          res.end('Error generating thumbnail');
+        } catch {}
       }
     }
   }

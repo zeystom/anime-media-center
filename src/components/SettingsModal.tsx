@@ -11,6 +11,7 @@ import {
   ExternalLink,
   CheckCircle2,
   AlertCircle,
+  AlertTriangle,
   HelpCircle,
   Cpu,
 } from 'lucide-react';
@@ -52,6 +53,7 @@ export const SettingsModal: React.FC<SettingsModalProps> = ({
 
   const [isDetecting, setIsDetecting] = useState(false);
   const [showSetupGuide, setShowSetupGuide] = useState(false);
+  const [confirmDeleteIndex, setConfirmDeleteIndex] = useState<number | null>(null);
 
   useEffect(() => {
     if (isOpen) {
@@ -237,6 +239,9 @@ export const SettingsModal: React.FC<SettingsModalProps> = ({
       onClick={handleClose}
     >
       <div
+        role="dialog"
+        aria-modal="true"
+        data-modal="true"
         className="w-full max-w-xl max-h-[90vh] flex flex-col bg-[#141418] border border-white/10 rounded-2xl text-zinc-100 shadow-2xl animate-in zoom-in-95 duration-150 overflow-hidden"
         onClick={(e) => e.stopPropagation()}
       >
@@ -285,35 +290,68 @@ export const SettingsModal: React.FC<SettingsModalProps> = ({
               </button>
             </div>
 
-            {/* Folder List */}
-            <div className="space-y-1.5 max-h-36 overflow-y-auto pr-1">
+            {/* Folder List with Removal Confirmation */}
+            <div className="space-y-1.5 max-h-40 overflow-y-auto pr-1">
               {libraryFolders.length === 0 ? (
                 <div className="p-3.5 rounded-xl border border-dashed border-zinc-800 bg-zinc-900/40 text-center">
                   <p className="text-xs text-zinc-500">No media folders added. Click "+ Add Folder" to choose a directory.</p>
                 </div>
               ) : (
-                libraryFolders.map((folder, index) => (
-                  <div
-                    key={`${folder}-${index}`}
-                    className="flex items-center justify-between gap-3 px-3 py-2 rounded-xl bg-zinc-900/90 border border-white/10 hover:border-zinc-700/80 transition-colors group"
-                  >
-                    <div className="flex items-center space-x-2.5 min-w-0 flex-1">
-                      <Folder className="w-3.5 h-3.5 text-zinc-400 shrink-0" />
-                      <span className="font-mono text-xs text-zinc-200 truncate select-all" title={folder}>
-                        {folder}
-                      </span>
-                    </div>
-
-                    <button
-                      type="button"
-                      onClick={() => handleRemoveFolder(index)}
-                      className="p-1 rounded-lg text-zinc-500 hover:text-red-400 hover:bg-red-500/10 transition-colors shrink-0"
-                      title="Remove folder from library"
+                libraryFolders.map((folder, index) =>
+                  confirmDeleteIndex === index ? (
+                    <div
+                      key={`${folder}-${index}-confirm`}
+                      className="flex items-center justify-between gap-3 px-3 py-2 rounded-xl bg-red-950/40 border border-red-500/40 animate-in fade-in duration-150"
                     >
-                      <Trash2 className="w-3.5 h-3.5" />
-                    </button>
-                  </div>
-                ))
+                      <div className="flex items-center space-x-2 text-xs text-red-200 min-w-0 flex-1">
+                        <AlertTriangle className="w-3.5 h-3.5 text-red-400 shrink-0" />
+                        <span className="truncate">
+                          Remove <span className="font-mono font-semibold text-white">{folder}</span>?
+                        </span>
+                      </div>
+                      <div className="flex items-center space-x-2 shrink-0">
+                        <button
+                          type="button"
+                          onClick={() => setConfirmDeleteIndex(null)}
+                          className="px-2.5 py-1 rounded-lg text-[11px] font-medium text-zinc-300 hover:text-white bg-zinc-800 hover:bg-zinc-700 transition-colors"
+                        >
+                          Cancel
+                        </button>
+                        <button
+                          type="button"
+                          onClick={() => {
+                            handleRemoveFolder(index);
+                            setConfirmDeleteIndex(null);
+                          }}
+                          className="px-2.5 py-1 rounded-lg text-[11px] font-bold text-white bg-red-600 hover:bg-red-500 transition-colors shadow-sm"
+                        >
+                          Confirm Remove
+                        </button>
+                      </div>
+                    </div>
+                  ) : (
+                    <div
+                      key={`${folder}-${index}`}
+                      className="flex items-center justify-between gap-3 px-3 py-2 rounded-xl bg-zinc-900/90 border border-white/10 hover:border-zinc-700/80 transition-colors group"
+                    >
+                      <div className="flex items-center space-x-2.5 min-w-0 flex-1">
+                        <Folder className="w-3.5 h-3.5 text-zinc-400 shrink-0" />
+                        <span className="font-mono text-xs text-zinc-200 truncate select-all" title={folder}>
+                          {folder}
+                        </span>
+                      </div>
+
+                      <button
+                        type="button"
+                        onClick={() => setConfirmDeleteIndex(index)}
+                        className="p-1 rounded-lg text-zinc-500 hover:text-red-400 hover:bg-red-500/10 transition-colors shrink-0"
+                        title="Remove folder from library"
+                      >
+                        <Trash2 className="w-3.5 h-3.5" />
+                      </button>
+                    </div>
+                  )
+                )
               )}
             </div>
 

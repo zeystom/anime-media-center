@@ -52,6 +52,7 @@ contextBridge.exposeInMainWorld('electronAPI', {
     return () => ipcRenderer.removeListener('whisper-done', handler);
   },
   openFolderInExplorer: (folderPath: string) => ipcRenderer.invoke('open-folder', folderPath),
+  checkDownloadProgress: (filePaths: string[]) => ipcRenderer.invoke('check-download-progress', filePaths),
   setFullScreen: (flag: boolean) => ipcRenderer.invoke('set-fullscreen', flag),
   isFullScreen: () => ipcRenderer.invoke('is-fullscreen'),
   onFullScreenChange: (callback: (isFull: boolean) => void) => {

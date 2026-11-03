@@ -31,25 +31,33 @@ export function findExternalSubtitles(videoPath: string): ExternalSubtitleMatch[
     return [];
   }
 
-  // Regex for <base>.srt or <base>.<suffix>.srt
+  // Regex for <base>.(srt|ass|ssa|vtt) or <base>.<suffix>.(srt|ass|ssa|vtt)
   // Escape base for regex safety
   const escapedBase = base.replace(/[.*+?^${}()|[\]\\]/g, '\\$&');
   // Token suffix: dot followed by characters containing letters, digits, hyphens or underscores
-  const pattern = new RegExp(`^${escapedBase}(\\.[a-zA-Z0-9_-]+)*\\.srt$`, 'i');
+  const pattern = new RegExp(`^${escapedBase}(\\.[a-zA-Z0-9_-]+)*\\.(srt|ass|ssa|vtt)$`, 'i');
 
   const matches: ExternalSubtitleMatch[] = [];
 
   for (const file of entries) {
-    if (!file.toLowerCase().endsWith('.srt')) continue;
+    const fileLower = file.toLowerCase();
+    const isSupportedExt =
+      fileLower.endsWith('.srt') ||
+      fileLower.endsWith('.ass') ||
+      fileLower.endsWith('.ssa') ||
+      fileLower.endsWith('.vtt');
+    if (!isSupportedExt) continue;
+
     if (pattern.test(file)) {
       const fullPath = path.join(dir, file);
-      const nameWithoutSrt = file.slice(0, -4);
-      const rawSuffix = nameWithoutSrt.slice(base.length); // e.g. ".whisper" or ".en.forced" or ""
+      const extDot = path.extname(file);
+      const nameWithoutExt = file.slice(0, -extDot.length);
+      const rawSuffix = nameWithoutExt.slice(base.length); // e.g. ".whisper" or ".en.forced" or ""
       const suffixTokens = rawSuffix.toLowerCase().split('.').filter(Boolean);
 
       const isWhisper =
         suffixTokens.includes('whisper') ||
-        file.toLowerCase() === `${base.toLowerCase()}.whisper.srt`;
+        fileLower === `${base.toLowerCase()}.whisper.srt`;
       const isForced = suffixTokens.includes('forced');
       const isSigns = suffixTokens.includes('signs') || suffixTokens.includes('sign');
 
@@ -78,6 +86,8 @@ export function findExternalSubtitles(videoPath: string): ExternalSubtitleMatch[
 
   return matches;
 }
+
+export const findSubtitlesForEpisode = findExternalSubtitles;
 
 export function hasWhisperSubtitle(videoPath: string): boolean {
   const subs = findExternalSubtitles(videoPath);

@@ -4,12 +4,13 @@ import fs from 'fs';
 import { fileURLToPath } from 'url';
 import { storage, autoDetectFfmpegPath, autoDetectWhisperPath } from './storage';
 import { streamServer } from './server';
-import { probeMkv, extractEmbeddedSubtitle, extractEmbeddedAss, extractEmbeddedFonts, filterFontsForAss, parseSrt, findPrecedingKeyframe, readMkvEmbeddedTitle, cleanupOldCaches } from './ffmpeg';
+import { probeMkv, extractEmbeddedSubtitle, extractEmbeddedAss, extractEmbeddedFonts, filterFontsForAss, parseSrt, findPrecedingKeyframe, readMkvEmbeddedTitle, readMkvDuration, cleanupOldCaches } from './ffmpeg';
 import { whisperManager } from './whisper';
 import { findExternalSubtitles } from './subtitles';
 import { AnimeFolder, Episode, PlaybackProgress, SeasonPreference } from './types';
 import { getKitsuMetadata, fetchAniSkipTimes } from './kitsu';
 import { extractEpisodeNumber } from './episodes';
+import { checkEpisodeDownloading, isFolderDownloading } from './torrents';
 
 const __filename = fileURLToPath(import.meta.url);
 const __dirname = path.dirname(__filename);
@@ -42,75 +43,68 @@ async function asyncPool<T, R>(poolLimit: number, array: T[], iteratorFn: (item:
   return Promise.all(ret);
 }
 
-const dubtitleFolderCache = new Map<string, boolean>();
+function getEffectiveAnimeFolderName(folderPath: string, rootPath?: string): string {
+  const base = path.basename(folderPath);
+  const parent = path.dirname(folderPath);
 
-function isEpisodeDownloading(fullPath: string, filesInDir: Set<string>, stat: fs.Stats): boolean {
-  const fileName = path.basename(fullPath).toLowerCase();
-  // 1. Companion torrent temp files: e.g. "episode.mkv.!qB", "episode.mkv.part", etc.
-  if (
-    filesInDir.has(`${fileName}.!qb`) ||
-    filesInDir.has(`${fileName}.!ut`) ||
-    filesInDir.has(`${fileName}.part`) ||
-    filesInDir.has(`${fileName}.crdownload`) ||
-    filesInDir.has(`${fileName}.downloading`)
-  ) {
-    return true;
+  // If directly under root, use base folder name
+  if (rootPath && path.resolve(parent) === path.resolve(rootPath)) {
+    return base;
   }
 
-  // 2. 0-byte file (pre-allocated or empty)
-  if (stat.size === 0) {
-    return true;
+  // If base folder name is generic (e.g. "Season 1", "Movie", "Specials", "OVA"), combine with parent
+  const isGeneric = /^(?:season\s*\d+|s\d+|part\s*\d+|cour\s*\d+|movie|movies|specials?|ova|oad|extra|bonus)$/i.test(base);
+  if (isGeneric) {
+    const parentBase = path.basename(parent);
+    return `${parentBase} ${base}`;
   }
 
-  // 3. Write-lock check by torrent client on Windows
-  if (process.platform === 'win32') {
-    try {
-      const fd = fs.openSync(fullPath, 'r+');
-      fs.closeSync(fd);
-    } catch (err: any) {
-      if (err && (err.code === 'EBUSY' || err.code === 'EPERM')) {
-        return true;
-      }
-    }
-  }
-
-  return false;
+  return base;
 }
 
-function isFolderDownloading(folderPath: string, files: string[], episodes: Episode[]): boolean {
-  // 1. Torrent temporary extension in folder
-  const tempRegex = /\.(?:!qb|!ut|part|crdownload|downloading)$/i;
-  if (files.some((f) => tempRegex.test(f))) {
-    return true;
-  }
-
-  // 2. Any episode in this folder is actively downloading or incomplete
-  if (episodes.some((e) => e.isDownloading)) {
-    return true;
-  }
-
-  return false;
+interface FolderSubtitleFlags {
+  hasDubtitles: boolean;
+  hasEmbeddedSubtitles: boolean;
 }
 
-async function checkFolderHasDubtitles(mkvFiles: string[], folderPath: string, ffmpegPath: string): Promise<boolean> {
-  if (dubtitleFolderCache.has(folderPath)) {
-    return dubtitleFolderCache.get(folderPath)!;
+const folderSubtitleCache = new Map<string, FolderSubtitleFlags>();
+
+async function checkFolderSubtitles(
+  mkvFiles: string[],
+  folderPath: string,
+  ffmpegPath: string
+): Promise<FolderSubtitleFlags> {
+  if (folderSubtitleCache.has(folderPath)) {
+    return folderSubtitleCache.get(folderPath)!;
   }
   const sample = mkvFiles.slice(0, 3);
+  let foundDub = false;
+  let foundSub = false;
+
   for (const file of sample) {
     try {
       const meta = await probeMkv(path.join(folderPath, file), ffmpegPath);
       if (meta.hasEmbeddedDubtitles) {
-        dubtitleFolderCache.set(folderPath, true);
-        return true;
+        foundDub = true;
       }
+      if (
+        meta.hasEmbeddedSubtitles ||
+        meta.subtitleTracks.some(
+          (s) => (s.language === 'eng' || s.language === 'en') && !s.isSigns
+        )
+      ) {
+        foundSub = true;
+      }
+      if (foundDub && foundSub) break;
     } catch {}
   }
-  dubtitleFolderCache.set(folderPath, false);
-  return false;
+
+  const result = { hasDubtitles: foundDub, hasEmbeddedSubtitles: foundSub };
+  folderSubtitleCache.set(folderPath, result);
+  return result;
 }
 
-async function scanFolderForEpisodes(folderPath: string, port: number): Promise<Episode[]> {
+async function scanFolderForEpisodes(folderPath: string, port: number, targetRoot?: string): Promise<Episode[]> {
   if (!fs.existsSync(folderPath)) return [];
 
   try {
@@ -125,12 +119,17 @@ async function scanFolderForEpisodes(folderPath: string, port: number): Promise<
     mkvFiles.sort((a, b) => a.localeCompare(b, undefined, { numeric: true, sensitivity: 'base' }));
 
     const settings = storage.getSettings();
-    const hasDubtitles = await checkFolderHasDubtitles(mkvFiles, folderPath, settings.ffmpegPath);
+    const { hasDubtitles, hasEmbeddedSubtitles } = await checkFolderSubtitles(
+      mkvFiles,
+      folderPath,
+      settings.ffmpegPath
+    );
 
-    // Attempt to fetch Kitsu anime metadata in parallel (or from local cache)
-    const folderName = path.basename(folderPath);
+    // Resolve canonical anime folder name (e.g. "Frieren Season 1" instead of "Season 1")
+    const folderName = getEffectiveAnimeFolderName(folderPath, targetRoot);
     const kitsuData = await getKitsuMetadata(folderName);
 
+    const history = storage.getAllPlaybackProgress();
     const episodes: Episode[] = [];
 
     for (const file of mkvFiles) {
@@ -138,7 +137,21 @@ async function scanFolderForEpisodes(folderPath: string, port: number): Promise<
       const stat = fs.statSync(fullPath);
       const baseName = path.parse(file).name;
       const { episodeNum, label: epNum } = extractEpisodeNumber(file);
-      const isDownloading = isEpisodeDownloading(fullPath, allFilesLower, stat);
+      const dlStatus = checkEpisodeDownloading(fullPath, allFilesLower, stat);
+
+      // Populate episode duration: history cached, or instant EBML duration
+      const cachedProgress = history[fullPath];
+      let duration: number | undefined =
+        cachedProgress?.duration && cachedProgress.duration > 0
+          ? cachedProgress.duration
+          : undefined;
+
+      if (!duration) {
+        const mkvDur = readMkvDuration(fullPath);
+        if (mkvDur && mkvDur > 0) {
+          duration = Math.round(mkvDur);
+        }
+      }
 
       // Check external subtitles using unified finder
       const extSubs = findExternalSubtitles(fullPath);
@@ -153,21 +166,30 @@ async function scanFolderForEpisodes(folderPath: string, port: number): Promise<
       const embeddedTitle = readMkvEmbeddedTitle(fullPath);
       const officialTitle = kitsuEp?.title || embeddedTitle || null;
 
+      // If standalone movie (1 file) or episode thumbnail missing, fall back to API banner or poster
+      const kitsuThumb =
+        kitsuEp?.thumbnailUrl ||
+        (mkvFiles.length === 1 ? kitsuData?.bannerUrl || kitsuData?.posterUrl : null) ||
+        null;
+
       episodes.push({
         filePath: fullPath,
         fileName: file,
         episodeNumber: epNum,
         title: baseName,
         size: stat.size,
+        duration,
         hasExternalSrt,
         hasWhisperSrt,
         externalSrtPath,
         hasEmbeddedDubtitles: hasDubtitles,
-        thumbnailUrl: `http://127.0.0.1:${port}/thumb?file=${encodeURIComponent(fullPath)}&type=card`,
-        kitsuThumbnail: kitsuEp?.thumbnailUrl || null,
+        hasEmbeddedSubtitles: hasEmbeddedSubtitles,
+        thumbnailUrl: `http://127.0.0.1:${port}/thumb?file=${encodeURIComponent(fullPath)}&type=card${duration ? `&duration=${duration}` : ''}`,
+        kitsuThumbnail: kitsuThumb,
         kitsuTitle: officialTitle,
         episodeTitle: officialTitle,
-        isDownloading,
+        isDownloading: dlStatus.isDownloading,
+        downloadProgress: dlStatus.downloadProgress,
       });
     }
 
@@ -179,6 +201,42 @@ async function scanFolderForEpisodes(folderPath: string, port: number): Promise<
     console.error(`Error scanning folder ${folderPath}:`, err);
     return [];
   }
+}
+
+function findMediaFolders(rootDir: string, maxDepth = 4): string[] {
+  const mediaDirs: string[] = [];
+  const visited = new Set<string>();
+  const ignoredPatterns = /^(?:\$recycle\.bin|system volume information|\.git|\.cache|node_modules|temp|tmp|\.idea|\.vscode)$/i;
+
+  function traverse(currentDir: string, depth: number) {
+    if (depth > maxDepth || visited.has(currentDir)) return;
+    visited.add(currentDir);
+
+    let entries: fs.Dirent[] = [];
+    try {
+      entries = fs.readdirSync(currentDir, { withFileTypes: true });
+    } catch {
+      return;
+    }
+
+    // Check if current directory contains any .mkv files
+    const hasMkv = entries.some((e) => e.isFile() && e.name.toLowerCase().endsWith('.mkv'));
+    if (hasMkv) {
+      mediaDirs.push(currentDir);
+    }
+
+    // Recursively check subdirectories
+    if (depth < maxDepth) {
+      for (const entry of entries) {
+        if (entry.isDirectory() && !ignoredPatterns.test(entry.name)) {
+          traverse(path.join(currentDir, entry.name), depth + 1);
+        }
+      }
+    }
+  }
+
+  traverse(rootDir, 0);
+  return mediaDirs;
 }
 
 async function createWindow() {
@@ -412,70 +470,44 @@ function setupIpcHandlers() {
       }
 
       try {
-        // 1. Check if the target root itself contains .mkv files
-        if (!visitedPaths.has(targetRoot)) {
-          const rootEpisodes = await scanFolderForEpisodes(targetRoot, port);
-          if (rootEpisodes.length > 0) {
-            visitedPaths.add(targetRoot);
-            const rootFiles = fs.readdirSync(targetRoot);
-            const rootDownloading = isFolderDownloading(targetRoot, rootFiles, rootEpisodes);
-            const hasDubtitlesCount = rootEpisodes.filter((e) => e.hasEmbeddedDubtitles).length;
-            const kitsuData = await getKitsuMetadata(path.basename(targetRoot));
-            animeFolders.push({
-              folderPath: targetRoot,
-              folderName: path.basename(targetRoot),
-              episodes: rootEpisodes,
-              isDownloading: rootDownloading,
-              hasSubtitlesCount: rootEpisodes.filter((e) => e.hasExternalSrt).length,
-              hasWhisperCount: rootEpisodes.filter((e) => e.hasWhisperSrt).length,
-              hasExtSubCount: rootEpisodes.filter((e) => e.hasExternalSrt && !e.hasWhisperSrt).length,
-              hasDubtitlesCount,
-              hasEmbeddedDubtitles: hasDubtitlesCount > 0,
-              totalEpisodes: rootEpisodes.length,
-              posterUrl: kitsuData?.posterUrl || null,
-              bannerUrl: kitsuData?.bannerUrl || null,
-              canonicalTitle: kitsuData?.canonicalTitle || null,
-              synopsis: kitsuData?.synopsis || null,
-              genres: kitsuData?.genres || [],
-              averageScore: kitsuData?.averageScore || null,
-            });
-          }
-        }
+        // Recursively find all media directories containing .mkv files up to 4 levels deep
+        const discoveredMediaDirs = findMediaFolders(targetRoot, 4);
 
-        // 2. Scan immediate subdirectories using concurrency pool of 3-4 tasks
-        const entries = fs.readdirSync(targetRoot, { withFileTypes: true });
-        const dirEntries = entries.filter((e) => e.isDirectory());
-        const resolved = await asyncPool(3, dirEntries, async (entry) => {
-          const subFolderPath = path.join(targetRoot, entry.name);
-          if (visitedPaths.has(subFolderPath)) return null;
+        const resolved = await asyncPool(3, discoveredMediaDirs, async (folderPath) => {
+          if (visitedPaths.has(folderPath)) return null;
+          visitedPaths.add(folderPath);
 
-          const episodes = await scanFolderForEpisodes(subFolderPath, port);
-          if (episodes.length > 0) {
-            visitedPaths.add(subFolderPath);
-            const subFiles = fs.readdirSync(subFolderPath);
-            const subDownloading = isFolderDownloading(subFolderPath, subFiles, episodes);
-            const hasDubtitlesCount = episodes.filter((e) => e.hasEmbeddedDubtitles).length;
-            const kitsuData = await getKitsuMetadata(entry.name);
-            return {
-              folderPath: subFolderPath,
-              folderName: entry.name,
-              episodes,
-              isDownloading: subDownloading,
-              hasSubtitlesCount: episodes.filter((e) => e.hasExternalSrt).length,
-              hasWhisperCount: episodes.filter((e) => e.hasWhisperSrt).length,
-              hasExtSubCount: episodes.filter((e) => e.hasExternalSrt && !e.hasWhisperSrt).length,
-              hasDubtitlesCount,
-              hasEmbeddedDubtitles: hasDubtitlesCount > 0,
-              totalEpisodes: episodes.length,
-              posterUrl: kitsuData?.posterUrl || null,
-              bannerUrl: kitsuData?.bannerUrl || null,
-              canonicalTitle: kitsuData?.canonicalTitle || null,
-              synopsis: kitsuData?.synopsis || null,
-              genres: kitsuData?.genres || [],
-              averageScore: kitsuData?.averageScore || null,
-            } as AnimeFolder;
-          }
-          return null;
+          const episodes = await scanFolderForEpisodes(folderPath, port, targetRoot);
+          if (episodes.length === 0) return null;
+
+          const folderFiles = fs.readdirSync(folderPath);
+          const folderDl = isFolderDownloading(folderPath, folderFiles, episodes);
+          const hasDubtitlesCount = episodes.filter((e) => e.hasEmbeddedDubtitles).length;
+          const hasEmbSubCount = episodes.filter((e) => e.hasEmbeddedSubtitles).length;
+
+          const effectiveName = getEffectiveAnimeFolderName(folderPath, targetRoot);
+          const kitsuData = await getKitsuMetadata(effectiveName);
+
+          return {
+            folderPath,
+            folderName: effectiveName,
+            episodes,
+            isDownloading: folderDl.isDownloading,
+            downloadProgress: folderDl.downloadProgress,
+            hasSubtitlesCount: episodes.filter((e) => e.hasExternalSrt).length,
+            hasWhisperCount: episodes.filter((e) => e.hasWhisperSrt).length,
+            hasExtSubCount: episodes.filter((e) => e.hasExternalSrt && !e.hasWhisperSrt).length,
+            hasDubtitlesCount,
+            hasEmbeddedDubtitles: hasDubtitlesCount > 0,
+            hasEmbeddedSubtitles: hasEmbSubCount > 0,
+            totalEpisodes: episodes.length,
+            posterUrl: kitsuData?.posterUrl || null,
+            bannerUrl: kitsuData?.bannerUrl || null,
+            canonicalTitle: kitsuData?.canonicalTitle || null,
+            synopsis: kitsuData?.synopsis || null,
+            genres: kitsuData?.genres || [],
+            averageScore: kitsuData?.averageScore || null,
+          } as AnimeFolder;
         });
 
         for (const item of resolved) {
@@ -498,6 +530,26 @@ function setupIpcHandlers() {
     return await scanFolderForEpisodes(folderPath, streamServer.getPort());
   });
 
+  ipcMain.handle('check-download-progress', async (_event, filePaths: string[]) => {
+    if (!Array.isArray(filePaths) || filePaths.length === 0) return {};
+    const results: Record<string, { isDownloading: boolean; downloadProgress?: number }> = {};
+    for (const filePath of filePaths) {
+      if (!fs.existsSync(filePath)) {
+        results[filePath] = { isDownloading: true, downloadProgress: 0 };
+        continue;
+      }
+      try {
+        const dir = path.dirname(filePath);
+        const filesInDir = new Set(fs.readdirSync(dir).map((f) => f.toLowerCase()));
+        const stat = fs.statSync(filePath);
+        results[filePath] = checkEpisodeDownloading(filePath, filesInDir, stat);
+      } catch {
+        results[filePath] = { isDownloading: true };
+      }
+    }
+    return results;
+  });
+
   ipcMain.handle('probe-video', async (_event, filePath) => {
     const settings = storage.getSettings();
     return await probeMkv(filePath, settings.ffmpegPath);
@@ -514,6 +566,18 @@ function setupIpcHandlers() {
 
     if (isExternal && externalPath && fs.existsSync(externalPath)) {
       const content = fs.readFileSync(externalPath, 'utf-8');
+      const ext = path.extname(externalPath).toLowerCase();
+      if (ext === '.ass' || ext === '.ssa') {
+        const rawFonts = await extractEmbeddedFonts(filePath, settings.ffmpegPath, port);
+        const fonts = filterFontsForAss(content, rawFonts);
+        return {
+          format: 'ass',
+          content,
+          fonts,
+          port,
+          cues: [],
+        };
+      }
       return {
         format: 'srt',
         port,

@@ -165,18 +165,19 @@ export const EpisodeDrawer: React.FC<EpisodeDrawerProps> = ({
   onSelectEpisode,
 }) => {
   const activeElementRef = useRef<HTMLDivElement | null>(null);
-  const leaveTimerRef = useRef<any>(null);
 
-  const handleMouseEnter = () => {
-    if (leaveTimerRef.current) clearTimeout(leaveTimerRef.current);
-  };
-
-  const handleMouseLeave = () => {
-    if (leaveTimerRef.current) clearTimeout(leaveTimerRef.current);
-    leaveTimerRef.current = setTimeout(() => {
-      onClose();
-    }, 280);
-  };
+  // Close drawer on Escape key when open
+  useEffect(() => {
+    if (!isOpen) return;
+    const handleKeyDown = (e: KeyboardEvent) => {
+      if (e.key === 'Escape') {
+        e.stopPropagation();
+        onClose();
+      }
+    };
+    window.addEventListener('keydown', handleKeyDown);
+    return () => window.removeEventListener('keydown', handleKeyDown);
+  }, [isOpen, onClose]);
 
   // Auto-scroll to current episode on drawer open
   useEffect(() => {
@@ -205,8 +206,6 @@ export const EpisodeDrawer: React.FC<EpisodeDrawerProps> = ({
       onClick={onClose}
     >
       <div
-        onMouseEnter={handleMouseEnter}
-        onMouseLeave={handleMouseLeave}
         className={`w-full sm:max-w-md md:max-w-[480px] h-full bg-[#101014]/95 backdrop-blur-2xl border-l border-white/10 p-6 flex flex-col shadow-[-25px_0_60px_rgba(0,0,0,0.85)] transition-transform duration-400 ease-[cubic-bezier(0.16,1,0.3,1)] transform ${
           isOpen ? 'translate-x-0' : 'translate-x-full'
         }`}

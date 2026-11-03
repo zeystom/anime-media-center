@@ -27,7 +27,7 @@ import { TimelineScrubber } from './TimelineScrubber';
 import { TrackControls } from './TrackControls';
 import { EpisodeDrawer } from './EpisodeDrawer';
 import { MagneticEpisodePeek } from './MagneticEpisodePeek';
-import { RippleIndicator } from './RippleIndicator';
+import { RippleIndicator, RippleType } from './RippleIndicator';
 import { formatTime, cleanEpisodeTitle, formatEpisodeDisplayTitle } from '../../utils/format';
 
 interface VideoPlayerProps {
@@ -36,6 +36,7 @@ interface VideoPlayerProps {
   folderPath: string;
   initialTime?: number;
   settings: AppSettings;
+  onUpdateSettings?: (updated: Partial<AppSettings>) => void;
   history: Record<string, any>;
   onClose: () => void;
   onEpisodeChange: (episode: Episode) => void;
@@ -256,6 +257,7 @@ export const VideoPlayer: React.FC<VideoPlayerProps> = ({
   folderPath,
   initialTime = 0,
   settings,
+  onUpdateSettings,
   history,
   onClose,
   onEpisodeChange,
@@ -310,8 +312,39 @@ export const VideoPlayer: React.FC<VideoPlayerProps> = ({
   const [selectedTopSubId, setSelectedTopSubId] = useState<string | null>(null);
   const [topSubEnabled, setTopSubEnabled] = useState<boolean>(false);
   const [syncOffset, setSyncOffset] = useState<number>(0);
-  const [fontSize, setFontSize] = useState<number>(settings.subtitlesFontSize || 28);
-  const [subtitlesOutline, setSubtitlesOutline] = useState<boolean>(settings.subtitlesOutline !== false);
+
+  // Subtitle Appearance & Style (defaults to 38px, White, Sans, Outline always active)
+  const [fontSize, setFontSize] = useState<number>(settings.subtitlesFontSize || 38);
+  const [textColor, setTextColor] = useState<string>(settings.subtitlesTextColor || '#ffffff');
+  const [fontFamily, setFontFamily] = useState<'sans' | 'trebuchet' | 'rounded' | 'serif' | 'mono'>(
+    settings.subtitlesFontFamily || 'sans'
+  );
+  const [bgStyle, setBgStyle] = useState<'none' | 'translucent' | 'semi' | 'solid'>(
+    settings.subtitlesBgStyle || 'none'
+  );
+  const [outlineWidth, setOutlineWidth] = useState<'thin' | 'medium' | 'thick' | 'heavy' | 'none'>(
+    settings.subtitlesOutlineWidth || 'thick'
+  );
+  const [outlineColor, setOutlineColor] = useState<string>(
+    settings.subtitlesOutlineColor || '#000000'
+  );
+
+  // Fetch freshest settings from disk on player mount to ensure zero resets
+  useEffect(() => {
+    if (window.electronAPI?.getSettings) {
+      window.electronAPI.getSettings().then((s) => {
+        if (s) {
+          if (s.subtitlesFontSize) setFontSize(s.subtitlesFontSize);
+          if (s.subtitlesTextColor) setTextColor(s.subtitlesTextColor);
+          if (s.subtitlesFontFamily) setFontFamily(s.subtitlesFontFamily);
+          if (s.subtitlesBgStyle) setBgStyle(s.subtitlesBgStyle);
+          if (s.subtitlesOutlineWidth) setOutlineWidth(s.subtitlesOutlineWidth);
+          if (s.subtitlesOutlineColor) setOutlineColor(s.subtitlesOutlineColor);
+        }
+      }).catch(() => {});
+    }
+  }, []);
+
   const [subtitlesLoading, setSubtitlesLoading] = useState<boolean>(false);
 
   // Parsed Subtitle Cues & Raw ASS for smart feature detection
@@ -426,20 +459,20 @@ export const VideoPlayer: React.FC<VideoPlayerProps> = ({
     currentAbsoluteTime < detectedOpening.end;
 
   // Ripple feedback
-  const [ripple, setRipple] = useState<{ type: any; text?: string } | null>(null);
+  const [ripple, setRipple] = useState<{ type: RippleType; text?: string } | null>(null);
   const rippleTimerRef = useRef<any>(null);
 
   // Controls auto-hide
   const [showControls, setShowControls] = useState<boolean>(true);
   const hideControlsTimerRef = useRef<any>(null);
 
-  const showRipple = (type: any, text?: string) => {
+  const showRipple = useCallback((type: RippleType, text?: string) => {
     if (rippleTimerRef.current) clearTimeout(rippleTimerRef.current);
     setRipple({ type, text });
     rippleTimerRef.current = setTimeout(() => {
       setRipple(null);
     }, 600);
-  };
+  }, []);
 
   const resetControlsTimer = useCallback(() => {
     setShowControls(true);
@@ -488,8 +521,27 @@ export const VideoPlayer: React.FC<VideoPlayerProps> = ({
         // When English Audio (Dub) is playing: prioritize English Dubtitles (SDH) / External Whisper SRT!
         // When Japanese Audio is playing: prioritize English translation dialogue (CR / full ASS)!
         let mainSubId: string | null = null;
-        if (seasonPref?.mainSubtitleTrackId !== undefined) {
-          mainSubId = seasonPref.mainSubtitleTrackId;
+        if (seasonPref && 'mainSubtitleTrackId' in seasonPref && seasonPref.mainSubtitleTrackId !== undefined) {
+          if (seasonPref.mainSubtitleTrackId === null) {
+            // User explicitly chose OFF (No Subtitles) for this season
+            mainSubId = null;
+          } else {
+            const targetId = seasonPref.mainSubtitleTrackId;
+            const exactMatch = meta.subtitleTracks.find((s) => s.id === targetId);
+            if (exactMatch) {
+              mainSubId = exactMatch.id;
+            } else if (targetId.startsWith('ext-')) {
+              // External Whisper / SRT track: find any external track in current episode
+              const ext = meta.subtitleTracks.find((s) => s.type === 'external');
+              if (ext) mainSubId = ext.id;
+            } else {
+              // Embedded track: find track with matching language & dialogue type
+              const matched = meta.subtitleTracks.find(
+                (s) => !s.isSigns && (s.language === 'eng' || s.language === 'en')
+              );
+              if (matched) mainSubId = matched.id;
+            }
+          }
         } else {
           const isEngAudio =
             selectedAudioTrack &&
@@ -512,11 +564,6 @@ export const VideoPlayer: React.FC<VideoPlayerProps> = ({
           );
 
           if (isEngAudio) {
-            // For English Dub:
-            // 1) Embedded Dubtitle / SDH
-            // 2) External Whisper SRT
-            // 3) Default English Subtitle
-            // 4) Other English Dialogue
             if (engDubtitle) {
               mainSubId = engDubtitle.id;
             } else if (extSub) {
@@ -527,11 +574,6 @@ export const VideoPlayer: React.FC<VideoPlayerProps> = ({
               mainSubId = engDialogue.id;
             }
           } else {
-            // For Japanese / other original languages:
-            // 1) Default English translation
-            // 2) External Whisper SRT
-            // 3) Other English dialogue
-            // 4) Embedded Dubtitle
             if (defaultEngSub) {
               mainSubId = defaultEngSub.id;
             } else if (extSub) {
@@ -550,9 +592,28 @@ export const VideoPlayer: React.FC<VideoPlayerProps> = ({
         let topSubId: string | null = null;
         let topEnabled = false;
 
-        if (seasonPref?.topSubtitleTrackId !== undefined) {
-          topSubId = seasonPref.topSubtitleTrackId;
-          topEnabled = seasonPref.topSubEnabled;
+        if (seasonPref && 'topSubtitleTrackId' in seasonPref && seasonPref.topSubtitleTrackId !== undefined) {
+          if (seasonPref.topSubtitleTrackId === null) {
+            topSubId = null;
+            topEnabled = false;
+          } else {
+            const exactTop = meta.subtitleTracks.find((s) => s.id === seasonPref.topSubtitleTrackId);
+            if (exactTop) {
+              topSubId = exactTop.id;
+              topEnabled = seasonPref.topSubEnabled;
+            } else {
+              const engSigns = meta.subtitleTracks.find(
+                (s) =>
+                  (s.language === 'eng' || s.language === 'en') &&
+                  (s.isSigns || s.isForced || /sign|song|forced/i.test(s.title)) &&
+                  s.id !== mainSubId
+              );
+              if (engSigns) {
+                topSubId = engSigns.id;
+                topEnabled = seasonPref.topSubEnabled;
+              }
+            }
+          }
         } else {
           const selectedMain = meta.subtitleTracks.find((s) => s.id === mainSubId);
           const isMainFull = selectedMain && /full|all/i.test(selectedMain.title);
@@ -820,20 +881,6 @@ export const VideoPlayer: React.FC<VideoPlayerProps> = ({
     };
   }, []);
 
-  // Keep the Chromium compositor awake during playback so video frames never freeze/blank
-  // when mouse is idle, UI is hidden, and no subtitles are on screen
-  useEffect(() => {
-    if (!isPlaying) return;
-    let animId: number;
-    const pulse = () => {
-      animId = requestAnimationFrame(pulse);
-    };
-    animId = requestAnimationFrame(pulse);
-    return () => {
-      if (animId) cancelAnimationFrame(animId);
-    };
-  }, [isPlaying]);
-
   // Save season preference whenever audio/sub selection changes
   const persistSeasonRule = useCallback(
     (
@@ -846,8 +893,8 @@ export const VideoPlayer: React.FC<VideoPlayerProps> = ({
       const pref: SeasonPreference = {
         preferredAudioLanguage: 'eng',
         preferredAudioIndex: audioIdx,
-        mainSubtitleTrackId: mainSub || undefined,
-        topSubtitleTrackId: topSub || undefined,
+        mainSubtitleTrackId: mainSub,
+        topSubtitleTrackId: topSub,
         topSubEnabled: topEnabled,
         subSyncOffset: offset,
       };
@@ -1026,7 +1073,7 @@ export const VideoPlayer: React.FC<VideoPlayerProps> = ({
     onEpisodeChange(nextEpisode);
   }, [nextEpisode, onEpisodeChange]);
 
-  // Contextual Skip Intro / Opening (accurate chapter/subtitle end or standard +88s TV opening skip)
+  // Contextual Skip Intro / Opening (accurate chapter/subtitle end or informative feedback)
   const handleSkipIntro = useCallback(() => {
     setIsIntroDismissed(true);
     // If inside or right before a detected opening range
@@ -1034,10 +1081,9 @@ export const VideoPlayer: React.FC<VideoPlayerProps> = ({
       handleSeek(detectedOpening.end);
       showRipple('forward', `Opening Skipped (${formatTime(detectedOpening.end)})`);
     } else {
-      // Standard TV anime opening duration is 88-90s
-      handleSkip(88, 'Opening Skipped (+88s)');
+      showRipple('info', 'No opening detected');
     }
-  }, [detectedOpening, currentAbsoluteTime, handleSeek, handleSkip]);
+  }, [detectedOpening, currentAbsoluteTime, handleSeek, showRipple]);
 
   // Auto-play Next Episode on end
   const handleEnded = useCallback(() => {
@@ -1171,27 +1217,62 @@ export const VideoPlayer: React.FC<VideoPlayerProps> = ({
   // Subtitle Font Size Change (Live in-player & persisted)
   const handleUpdateFontSize = useCallback(
     (newSize: number) => {
-      const clamped = Math.max(14, Math.min(newSize, 60));
+      const clamped = Math.max(14, Math.min(newSize, 64));
       setFontSize(clamped);
       showRipple('sync', `Sub Size: ${clamped}px`);
       if (window.electronAPI) {
         window.electronAPI.updateSettings({ subtitlesFontSize: clamped }).catch(() => {});
       }
+      onUpdateSettings?.({ subtitlesFontSize: clamped });
     },
-    [showRipple]
+    [showRipple, onUpdateSettings]
   );
 
-  // Subtitle Outline Toggle (Live in-player & persisted)
-  const handleToggleOutline = useCallback(() => {
-    setSubtitlesOutline((prev) => {
-      const next = !prev;
-      showRipple('sync', next ? 'Sub Outline: ON' : 'Sub Outline: OFF');
+  // Subtitle Styling Change (Live in-player & persisted)
+  const handleUpdateSubtitleStyle = useCallback(
+    (updates: {
+      fontSize?: number;
+      textColor?: string;
+      fontFamily?: 'sans' | 'trebuchet' | 'rounded' | 'serif' | 'mono';
+      bgStyle?: 'none' | 'translucent' | 'semi' | 'solid';
+      outlineWidth?: 'thin' | 'medium' | 'thick' | 'heavy' | 'none';
+      outlineColor?: string;
+    }) => {
+      if (updates.fontSize !== undefined) setFontSize(updates.fontSize);
+      if (updates.textColor !== undefined) setTextColor(updates.textColor);
+      if (updates.fontFamily !== undefined) setFontFamily(updates.fontFamily);
+      if (updates.bgStyle !== undefined) setBgStyle(updates.bgStyle);
+      if (updates.outlineWidth !== undefined) setOutlineWidth(updates.outlineWidth);
+      if (updates.outlineColor !== undefined) setOutlineColor(updates.outlineColor);
+
+      const partial: Partial<AppSettings> = {
+        ...(updates.fontSize !== undefined && { subtitlesFontSize: updates.fontSize }),
+        ...(updates.textColor !== undefined && { subtitlesTextColor: updates.textColor }),
+        ...(updates.fontFamily !== undefined && { subtitlesFontFamily: updates.fontFamily }),
+        ...(updates.bgStyle !== undefined && { subtitlesBgStyle: updates.bgStyle }),
+        ...(updates.outlineWidth !== undefined && { subtitlesOutlineWidth: updates.outlineWidth }),
+        ...(updates.outlineColor !== undefined && { subtitlesOutlineColor: updates.outlineColor }),
+      };
+
       if (window.electronAPI) {
-        window.electronAPI.updateSettings({ subtitlesOutline: next }).catch(() => {});
+        window.electronAPI.updateSettings(partial).catch(() => {});
       }
-      return next;
+      onUpdateSettings?.(partial);
+    },
+    [onUpdateSettings]
+  );
+
+  const handleResetSubtitleStyle = useCallback(() => {
+    handleUpdateSubtitleStyle({
+      fontSize: 38,
+      textColor: '#ffffff',
+      fontFamily: 'sans',
+      bgStyle: 'none',
+      outlineWidth: 'thick',
+      outlineColor: '#000000',
     });
-  }, [showRipple]);
+    showRipple('sync', 'Sub Style: Defaults Restored');
+  }, [handleUpdateSubtitleStyle, showRipple]);
 
   // Keyboard Shortcuts: YouTube & Desktop Grade
   useEffect(() => {
@@ -1228,11 +1309,16 @@ export const VideoPlayer: React.FC<VideoPlayerProps> = ({
           }
           break;
         case 'KeyS':
-          // Universal S shortcut: skips opening whenever active, or anywhere in first 70% of episode
-          if (isIntroActive || (duration > 0 && currentAbsoluteTime < duration * 0.7)) {
-            e.preventDefault();
+          e.preventDefault();
+          if (detectedOpening && currentAbsoluteTime < detectedOpening.end) {
             handleSkipIntro();
+          } else {
+            showRipple('info', 'No opening detected');
           }
+          break;
+        case 'KeyE':
+          e.preventDefault();
+          setIsEpisodeDrawerOpen((prev) => !prev);
           break;
         case 'KeyF':
           e.preventDefault();
@@ -1366,7 +1452,12 @@ export const VideoPlayer: React.FC<VideoPlayerProps> = ({
         topSubEnabled={topSubEnabled}
         syncOffset={syncOffset}
         fontSize={fontSize}
-        hasOutline={subtitlesOutline}
+        textColor={textColor}
+        fontFamily={fontFamily}
+        bgStyle={bgStyle}
+        outlineWidth={outlineWidth}
+        outlineColor={outlineColor}
+        hasOutline={true}
         controlsVisible={areControlsVisible}
       />
 
@@ -1524,12 +1615,23 @@ export const VideoPlayer: React.FC<VideoPlayerProps> = ({
             </div>
           </div>
 
-          {/* Right: Audio & Subtitles, Fullscreen */}
+          {/* Right: Episodes, Audio & Subtitles, Fullscreen */}
           <div className="flex items-center space-x-3">
+            {/* Episodes Drawer Toggle Button */}
+            <button
+              onClick={() => setIsEpisodeDrawerOpen((prev) => !prev)}
+              className="flex items-center space-x-2 px-3 py-1.5 rounded-xl bg-zinc-900/80 hover:bg-zinc-800 text-zinc-200 hover:text-white border border-white/15 text-xs font-medium transition-all shadow-sm cursor-pointer"
+              aria-label="Episodes (E)"
+              title="Episodes (E)"
+            >
+              <ListVideo className="w-3.5 h-3.5 text-red-500" />
+              <span>Episodes</span>
+            </button>
+
             {/* Audio & Subtitles Menu (formerly in top bar) */}
             <button
               onClick={() => setIsTrackControlsOpen(true)}
-              className="flex items-center space-x-2 px-3 py-1.5 rounded-xl bg-zinc-900/80 hover:bg-zinc-800 text-zinc-200 hover:text-white border border-white/15 text-xs font-medium transition-all shadow-sm"
+              className="flex items-center space-x-2 px-3 py-1.5 rounded-xl bg-zinc-900/80 hover:bg-zinc-800 text-zinc-200 hover:text-white border border-white/15 text-xs font-medium transition-all shadow-sm cursor-pointer"
               aria-label="Configure Audio Tracks & Subtitles"
               title="Audio & Subtitles"
             >
@@ -1540,7 +1642,7 @@ export const VideoPlayer: React.FC<VideoPlayerProps> = ({
             {/* Fullscreen Button */}
             <button
               onClick={toggleFullscreen}
-              className="p-2 rounded-xl text-zinc-300 hover:text-white transition-colors"
+              className="p-2 rounded-xl text-zinc-300 hover:text-white transition-colors cursor-pointer"
               aria-label={isFullscreen ? 'Exit Fullscreen [F]' : 'Fullscreen [F]'}
             >
               {isFullscreen ? <Minimize className="w-5 h-5" /> : <Maximize className="w-5 h-5" />}
@@ -1632,7 +1734,7 @@ export const VideoPlayer: React.FC<VideoPlayerProps> = ({
         onActivity={resetControlsTimer}
       />
 
-      {/* Track Controls Popover (3 Columns: Audio, Main Sub, Top Sub) */}
+      {/* Track Controls Popover (Tracks & Audio + Modern Subtitle Styling Customizer) */}
       <TrackControls
         isOpen={isTrackControlsOpen}
         onClose={() => setIsTrackControlsOpen(false)}
@@ -1651,8 +1753,17 @@ export const VideoPlayer: React.FC<VideoPlayerProps> = ({
         onResetSyncOffset={() => handleUpdateSyncOffset(-syncOffset)}
         fontSize={fontSize}
         onUpdateFontSize={handleUpdateFontSize}
-        hasOutline={subtitlesOutline}
-        onToggleOutline={handleToggleOutline}
+        textColor={textColor}
+        onUpdateTextColor={(col) => handleUpdateSubtitleStyle({ textColor: col })}
+        fontFamily={fontFamily}
+        onUpdateFontFamily={(font) => handleUpdateSubtitleStyle({ fontFamily: font })}
+        bgStyle={bgStyle}
+        onUpdateBgStyle={(bg) => handleUpdateSubtitleStyle({ bgStyle: bg })}
+        outlineWidth={outlineWidth}
+        onUpdateOutlineWidth={(w) => handleUpdateSubtitleStyle({ outlineWidth: w })}
+        outlineColor={outlineColor}
+        onUpdateOutlineColor={(c) => handleUpdateSubtitleStyle({ outlineColor: c })}
+        onResetSubtitleStyle={handleResetSubtitleStyle}
       />
 
       {/* Episode Drawer (In-Player Switcher) */}

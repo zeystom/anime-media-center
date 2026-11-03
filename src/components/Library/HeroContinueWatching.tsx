@@ -1,4 +1,4 @@
-import React, { useMemo } from 'react';
+import React, { useMemo, useState, useEffect } from 'react';
 import { Play, Clock, Sparkles } from 'lucide-react';
 import { Episode, PlaybackProgress } from '../../types';
 import { formatTime, cleanSeriesTitle, cleanEpisodeTitle, formatEpisodeDisplayTitle } from '../../utils/format';
@@ -9,6 +9,8 @@ interface HeroContinueWatchingProps {
   seasonName: string;
   posterUrl?: string | null;
   bannerUrl?: string | null;
+  isMovieHeroActive?: boolean;
+  selectedFolderPath?: string;
   onResume: (episode: Episode, startTime: number) => void;
 }
 
@@ -18,8 +20,37 @@ export const HeroContinueWatching: React.FC<HeroContinueWatchingProps> = ({
   seasonName,
   posterUrl,
   bannerUrl,
+  isMovieHeroActive,
+  selectedFolderPath,
   onResume,
 }) => {
+  const [activeMovieHeroPath, setActiveMovieHeroPath] = useState<string | null>(() => {
+    if (typeof document !== 'undefined') {
+      const activeEl = document.querySelector('[data-movie-hero-card="true"]');
+      return activeEl?.getAttribute('data-folder-path') || null;
+    }
+    return null;
+  });
+
+  useEffect(() => {
+    const handleMovieHeroChange = (e: Event) => {
+      const custom = e as CustomEvent<{ folderPath?: string; filePath?: string } | null>;
+      setActiveMovieHeroPath(custom.detail?.folderPath || null);
+    };
+    window.addEventListener('movie-hero-active-change', handleMovieHeroChange);
+    return () => window.removeEventListener('movie-hero-active-change', handleMovieHeroChange);
+  }, []);
+
+  const isDuplicate = Boolean(
+    isMovieHeroActive ||
+    (selectedFolderPath && selectedFolderPath === lastWatched.folderPath) ||
+    (activeMovieHeroPath && activeMovieHeroPath === lastWatched.folderPath)
+  );
+
+  // Suppress duplicate presentation when movie hero card is already active on screen
+  if (isDuplicate) {
+    return null;
+  }
   const percent = lastWatched.duration > 0
     ? Math.min(100, Math.round((lastWatched.currentTime / lastWatched.duration) * 100))
     : 0;

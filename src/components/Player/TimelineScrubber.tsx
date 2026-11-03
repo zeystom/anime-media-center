@@ -30,6 +30,7 @@ export const TimelineScrubber: React.FC<TimelineScrubberProps> = ({
   const tooltipRef = useRef<HTMLDivElement>(null);
   const arrowRef = useRef<HTMLDivElement>(null);
   const timestampRef = useRef<HTMLSpanElement>(null);
+  const opBadgeRef = useRef<HTMLSpanElement>(null);
   const ghostBarRef = useRef<HTMLDivElement>(null);
   const ghostKnobRef = useRef<HTMLDivElement>(null);
 
@@ -42,6 +43,7 @@ export const TimelineScrubber: React.FC<TimelineScrubberProps> = ({
   const activeBucketRef = useRef<number>(-1);
   const debounceTimerRef = useRef<any>(null);
   const rafIdRef = useRef<number | null>(null);
+  const dragListenersRef = useRef<{ onMove: (e: MouseEvent) => void; onUp: (e: MouseEvent) => void } | null>(null);
 
   // Clear cache when media file changes
   useEffect(() => {
@@ -184,8 +186,11 @@ export const TimelineScrubber: React.FC<TimelineScrubberProps> = ({
           arrowRef.current.style.left = `${arrowX}px`;
         }
         if (timestampRef.current) {
+          timestampRef.current.textContent = formatTime(time);
+        }
+        if (opBadgeRef.current) {
           const isInsideOp = openingRange && time >= openingRange.start && time <= openingRange.end;
-          timestampRef.current.textContent = isInsideOp ? `${formatTime(time)} • OP` : formatTime(time);
+          opBadgeRef.current.style.display = isInsideOp ? 'inline-flex' : 'none';
         }
         if (ghostBarRef.current) {
           ghostBarRef.current.style.width = `${fraction * 100}%`;
@@ -214,6 +219,13 @@ export const TimelineScrubber: React.FC<TimelineScrubberProps> = ({
       setIsHovering(true);
       updatePointerPosition(e.clientX);
 
+      // Clean up previous listeners if still registered
+      if (dragListenersRef.current) {
+        window.removeEventListener('mousemove', dragListenersRef.current.onMove);
+        window.removeEventListener('mouseup', dragListenersRef.current.onUp);
+        dragListenersRef.current = null;
+      }
+
       const onGlobalMouseMove = (moveEvent: MouseEvent) => {
         updatePointerPosition(moveEvent.clientX);
       };
@@ -224,18 +236,44 @@ export const TimelineScrubber: React.FC<TimelineScrubberProps> = ({
         onSeek(finalTime);
         window.removeEventListener('mousemove', onGlobalMouseMove);
         window.removeEventListener('mouseup', onGlobalMouseUp);
+        dragListenersRef.current = null;
       };
 
+      dragListenersRef.current = { onMove: onGlobalMouseMove, onUp: onGlobalMouseUp };
       window.addEventListener('mousemove', onGlobalMouseMove);
       window.addEventListener('mouseup', onGlobalMouseUp);
     },
     [calculateTimeFromX, onSeek, updatePointerPosition]
   );
 
+  // Guarantee strict cleanup of dragging listeners, RAF, and debounce timer on component unmount
+  useEffect(() => {
+    return () => {
+      if (dragListenersRef.current) {
+        window.removeEventListener('mousemove', dragListenersRef.current.onMove);
+        window.removeEventListener('mouseup', dragListenersRef.current.onUp);
+        dragListenersRef.current = null;
+      }
+      if (rafIdRef.current) {
+        cancelAnimationFrame(rafIdRef.current);
+      }
+      if (debounceTimerRef.current) {
+        clearTimeout(debounceTimerRef.current);
+      }
+    };
+  }, []);
+
   const progressPercent = duration > 0 ? (currentTime / duration) * 100 : 0;
   const opStartPct = openingRange && duration > 0 ? (openingRange.start / duration) * 100 : 0;
   const opEndPct = openingRange && duration > 0 ? (openingRange.end / duration) * 100 : 0;
   const opWidthPct = Math.max(0, opEndPct - opStartPct);
+
+  const hasPassedOp = openingRange && duration > 0 ? progressPercent >= opEndPct : false;
+  const isInsideOp = openingRange && duration > 0 ? progressPercent > opStartPct && progressPercent < opEndPct : false;
+  const opInnerProgressPct =
+    isInsideOp && opWidthPct > 0
+      ? Math.min(100, Math.max(0, ((progressPercent - opStartPct) / opWidthPct) * 100))
+      : 0;
 
   return (
     <div
@@ -259,37 +297,52 @@ export const TimelineScrubber: React.FC<TimelineScrubberProps> = ({
           style={{ width: '0%' }}
         />
 
-        {/* Opening Theme Segment Highlight (Amber / Golden accent with bright border markers) */}
-        {openingRange && duration > 0 && opWidthPct > 0 && (
-          <div
-            className="absolute top-0 bottom-0 bg-amber-400/50 group-hover:bg-amber-400/70 border-l border-r border-amber-300 shadow-[0_0_8px_rgba(251,191,36,0.35)] pointer-events-none transition-colors duration-150 z-[5]"
-            style={{
-              left: `${opStartPct}%`,
-              width: `${opWidthPct}%`,
-            }}
-            title={`Opening (${formatTime(openingRange.start)} - ${formatTime(openingRange.end)})`}
-          />
-        )}
-
-        {/* End of Opening Tick Notch (Crisp visual marker for exactly where OP finishes) */}
-        {openingRange && duration > 0 && opEndPct > 0 && opEndPct <= 100 && (
-          <div
-            className="absolute top-0 bottom-0 w-0.5 bg-amber-200/90 shadow-[0_0_4px_rgba(253,224,71,0.8)] pointer-events-none z-20"
-            style={{ left: `${opEndPct}%` }}
-          />
-        )}
-
         {/* Current Playback Progress Bar */}
         <div
           className="absolute left-0 top-0 bottom-0 bg-red-600 rounded-full shadow-sm shadow-red-600/50 z-10"
           style={{ width: `${progressPercent}%` }}
         />
+
+        {/* Opening Theme Segment Highlight (Amber / Golden accent - ALWAYS visible with crisp start/end tick notches) */}
+        {openingRange && duration > 0 && opWidthPct > 0 && (
+          <div
+            className="absolute top-0 bottom-0 pointer-events-none z-20"
+            style={{
+              left: `${opStartPct}%`,
+              width: `${opWidthPct}%`,
+            }}
+            title={`Opening (${formatTime(openingRange.start)} - ${formatTime(openingRange.end)})`}
+          >
+            {/* Base Fill (Opaque when passed to fully cover red bar underneath; semi-translucent when unplayed) */}
+            <div
+              className={`absolute inset-0 transition-colors duration-150 ${
+                hasPassedOp
+                  ? 'bg-amber-400 shadow-[0_0_10px_rgba(251,191,36,0.6)]'
+                  : 'bg-amber-500/50 group-hover:bg-amber-500/70 shadow-[0_0_6px_rgba(251,191,36,0.3)]'
+              }`}
+            />
+
+            {/* Active Played Fill when currently inside opening */}
+            {isInsideOp && opInnerProgressPct > 0 && (
+              <div
+                className="absolute left-0 top-0 bottom-0 bg-amber-400 shadow-[0_0_10px_rgba(251,191,36,0.8)]"
+                style={{ width: `${opInnerProgressPct}%` }}
+              />
+            )}
+
+            {/* Crisp Start of Opening Marker Notch */}
+            <div className="absolute left-0 top-0 bottom-0 w-[2px] bg-amber-100 shadow-[0_0_4px_rgba(0,0,0,0.8),0_0_6px_rgba(254,240,138,1)] z-30" />
+
+            {/* Crisp End of Opening Marker Notch */}
+            <div className="absolute right-0 top-0 bottom-0 w-[2px] bg-amber-100 shadow-[0_0_4px_rgba(0,0,0,0.8),0_0_6px_rgba(254,240,138,1)] z-30" />
+          </div>
+        )}
       </div>
 
       {/* Ghost Hover Knob Indicator on Track */}
       <div
         ref={ghostKnobRef}
-        className={`absolute w-3 h-3 bg-white/80 rounded-full shadow-md -translate-x-1/2 scale-0 group-hover:scale-100 pointer-events-none transition-transform duration-100 ${
+        className={`absolute w-3 h-3 bg-white/80 rounded-full shadow-md -translate-x-1/2 scale-0 group-hover:scale-100 pointer-events-none transition-transform duration-100 z-30 ${
           isHovering ? 'opacity-100' : 'opacity-0'
         }`}
         style={{ left: '0%' }}
@@ -297,14 +350,14 @@ export const TimelineScrubber: React.FC<TimelineScrubberProps> = ({
 
       {/* Scrubber Knob / Active Playhead */}
       <div
-        className="absolute w-3.5 h-3.5 bg-red-500 rounded-full shadow-lg shadow-black/80 -translate-x-1/2 scale-0 group-hover:scale-100 transition-transform duration-100 pointer-events-none ring-2 ring-white/20"
+        className="absolute w-3.5 h-3.5 bg-red-500 rounded-full shadow-lg shadow-black/80 -translate-x-1/2 scale-0 group-hover:scale-100 transition-transform duration-100 pointer-events-none ring-2 ring-white/30 z-30"
         style={{ left: `${progressPercent}%` }}
       />
 
       {/* Zero-Latency Floating Hover Preview Card (Centered directly above cursor) */}
       <div
         ref={tooltipRef}
-        className={`absolute bottom-9 left-0 pointer-events-none z-30 transition-opacity duration-150 ${
+        className={`absolute bottom-9 left-0 pointer-events-none z-40 transition-opacity duration-150 ${
           isHovering && duration > 0 ? 'opacity-100' : 'opacity-0'
         }`}
         style={{ willChange: 'transform', width: `${BOX_WIDTH}px` }}
@@ -326,13 +379,20 @@ export const TimelineScrubber: React.FC<TimelineScrubberProps> = ({
             )}
           </div>
 
-          {/* Time Badge */}
-          <div className="mt-1 px-3 py-0.5 rounded-lg bg-black/60 border border-white/5 flex items-center justify-center">
+          {/* Time Badge & Opening Pill (Fixed height to guarantee card size never jumps) */}
+          <div className="mt-1 px-2.5 h-[22px] rounded-lg bg-black/60 border border-white/5 flex items-center justify-center space-x-1.5 box-border">
             <span
               ref={timestampRef}
-              className="text-xs font-mono font-bold text-zinc-100 tracking-wider"
+              className="text-xs font-mono font-bold text-zinc-100 tracking-wider leading-none"
             >
               00:00
+            </span>
+            <span
+              ref={opBadgeRef}
+              style={{ display: 'none' }}
+              className="inline-flex items-center px-1.5 h-3.5 leading-none rounded text-[9px] font-bold font-mono tracking-wider bg-amber-500/20 text-amber-300 border border-amber-500/40 uppercase box-border"
+            >
+              Opening
             </span>
           </div>
 

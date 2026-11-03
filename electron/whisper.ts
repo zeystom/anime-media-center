@@ -152,37 +152,54 @@ export class WhisperManager {
             // Duration and audio track fallback to defaults
           }
 
-          // Check if file is actively being written by torrent or empty
-          let isLocked = false;
+          // Check if file is empty or an incomplete pre-allocated sparse torrent file
+          let isDownloadingOrIncomplete = false;
           try {
             const st = fs.statSync(item.filePath);
-            if (st.size === 0) isLocked = true;
-            if (process.platform === 'win32') {
-              const fd = fs.openSync(item.filePath, 'r+');
-              fs.closeSync(fd);
+            if (st.size === 0) {
+              isDownloadingOrIncomplete = true;
+            } else if (st.size > 5 * 1024 * 1024) {
+              const tailSize = Math.min(16384, st.size);
+              const buf = Buffer.alloc(tailSize);
+              // Safe read-only ('r') open that doesn't conflict with seeding or Read-Only flags
+              const fd = fs.openSync(item.filePath, 'r');
+              try {
+                fs.readSync(fd, buf, 0, tailSize, st.size - tailSize);
+              } finally {
+                fs.closeSync(fd);
+              }
+              let allZeros = true;
+              for (let b = 0; b < tailSize; b++) {
+                if (buf[b] !== 0) {
+                  allZeros = false;
+                  break;
+                }
+              }
+              if (allZeros) isDownloadingOrIncomplete = true;
             }
           } catch (e: any) {
-            if (e && (e.code === 'EBUSY' || e.code === 'EPERM')) {
-              isLocked = true;
-            }
+            // Unable to read file
           }
 
-          if (isLocked) {
+          if (isDownloadingOrIncomplete) {
             item.status = 'failed';
-            item.error = 'File is downloading or locked by torrent client';
+            item.error = 'File is still downloading or incomplete (sparse zero fill)';
             failedCount++;
             this.sendLog(mainWindow, 'error', `[${i + 1}/${this.queue.length}] ${item.fileName}: ${item.error}`);
             this.broadcastProgress(mainWindow);
             continue;
           }
 
-          if (effectiveTrack < 1 || effectiveTrack > 6) {
-            item.status = 'failed';
-            item.error = `Audio track number (${effectiveTrack}) exceeds maximum supported by Faster-Whisper-XXL (1-6)`;
-            failedCount++;
-            this.sendLog(mainWindow, 'error', `[${i + 1}/${this.queue.length}] ${item.fileName}: ${item.error}`);
-            this.broadcastProgress(mainWindow);
-            continue;
+          if (effectiveTrack < 1) {
+            effectiveTrack = 1;
+          }
+
+          if (effectiveTrack > 6) {
+            this.sendLog(
+              mainWindow,
+              'info',
+              `[${i + 1}/${this.queue.length}] Audio track (${effectiveTrack}) exceeds Faster-Whisper limit (6). Will extract via FFmpeg before transcribing.`
+            );
           }
 
           this.sendLog(
@@ -270,6 +287,45 @@ export class WhisperManager {
     }
   }
 
+  private async extractAudioTrack(
+    filePath: string,
+    audioIndex: number,
+    outputPath: string,
+    ffmpegPath: string
+  ): Promise<void> {
+    return new Promise((resolve, reject) => {
+      const args = [
+        '-hide_banner',
+        '-y',
+        '-i', filePath,
+        '-map', `0:a:${audioIndex}`,
+        '-vn',
+        '-acodec', 'pcm_s16le',
+        '-ar', '16000',
+        '-ac', '1',
+        outputPath,
+      ];
+      const child = spawn(ffmpegPath, args, { windowsHide: true });
+      this.activeProcess = child;
+      let stderr = '';
+      child.stderr.on('data', (d) => {
+        stderr += d.toString();
+      });
+      child.on('close', (code) => {
+        this.activeProcess = null;
+        if (code === 0 && fs.existsSync(outputPath)) {
+          resolve();
+        } else {
+          reject(new Error(`FFmpeg audio extraction failed (code ${code}): ${stderr.slice(-200)}`));
+        }
+      });
+      child.on('error', (err) => {
+        this.activeProcess = null;
+        reject(err);
+      });
+    });
+  }
+
   private async processSingleFile(
     item: WhisperQueueItem,
     whisperExe: string,
@@ -286,18 +342,34 @@ export class WhisperManager {
     const stderrLines: string[] = [];
 
     try {
+      const baseName = path.parse(item.filePath).name;
+      let inputPath = item.filePath;
+      const needExtract = audioTrackNum > 6;
+
+      if (needExtract) {
+        const settings = storage.getSettings();
+        const extractedWav = path.join(tmpDir, `${baseName}.wav`);
+        this.sendLog(mainWindow, 'info', `Extracting audio stream index ${audioTrackNum - 1} via FFmpeg...`);
+        await this.extractAudioTrack(item.filePath, audioTrackNum - 1, extractedWav, settings.ffmpegPath);
+        inputPath = extractedWav;
+      }
+
       await new Promise<void>((resolve, reject) => {
         const args = [
-          item.filePath,
+          inputPath,
           '--model',
           'large-v3-turbo',
           '--task',
           'transcribe',
           '--language',
           'en',
-          '--ff_track',
-          audioTrackNum.toString(),
-          '--ff_sync',
+        ];
+
+        if (!needExtract) {
+          args.push('--ff_track', audioTrackNum.toString(), '--ff_sync');
+        }
+
+        args.push(
           '--sentence',
           '--max_line_count',
           '2',
@@ -306,8 +378,8 @@ export class WhisperManager {
           '--output_format',
           'srt',
           '--output_dir',
-          tmpDir,
-        ];
+          tmpDir
+        );
 
         this.sendLog(mainWindow, 'info', `Executing: "${path.basename(whisperExe)}" ${args.slice(1).join(' ')}`);
 
@@ -357,7 +429,6 @@ export class WhisperManager {
       });
 
       // Verification: ensure output .srt exists and has size > 0
-      const baseName = path.parse(item.filePath).name;
       const producedSrt = path.join(tmpDir, `${baseName}.srt`);
 
       if (!fs.existsSync(producedSrt) || fs.statSync(producedSrt).size === 0) {

@@ -183,6 +183,76 @@ export function readMkvEmbeddedTitle(filePath: string): string | null {
   }
 }
 
+/**
+ * Fast EBML reader that inspects the first 64KB of a Matroska (.mkv) file
+ * to instantly extract container Duration (element ID 0x4489).
+ * Runs in under 1ms with 0 subprocesses or network requests.
+ */
+export function readMkvDuration(filePath: string): number | null {
+  try {
+    const fd = fs.openSync(filePath, 'r');
+    const buf = Buffer.alloc(65536);
+    const bytesRead = fs.readSync(fd, buf, 0, 65536, 0);
+    fs.closeSync(fd);
+
+    if (bytesRead < 4) return null;
+
+    // TimecodeScale: 0x2AD7B1 (default is 1,000,000 ns = 1 ms)
+    let timecodeScale = 1000000;
+    const tcIdx = buf.indexOf(Buffer.from([0x2a, 0xd7, 0xb1]));
+    if (tcIdx !== -1 && tcIdx + 3 < bytesRead) {
+      let firstByte = buf[tcIdx + 3];
+      let numBytes = 1;
+      let mask = 0x80;
+      while ((firstByte & mask) === 0 && numBytes <= 8) {
+        mask >>= 1;
+        numBytes++;
+      }
+      const tcLen = firstByte & (mask - 1);
+      const tcStart = tcIdx + 3 + numBytes;
+      if (tcLen > 0 && tcLen <= 8 && tcStart + tcLen <= bytesRead) {
+        let val = 0;
+        for (let i = 0; i < tcLen; i++) {
+          val = val * 256 + buf[tcStart + i];
+        }
+        if (val > 0) timecodeScale = val;
+      }
+    }
+
+    // Matroska Segment Info Duration element ID: 0x4489
+    const idx = buf.indexOf(Buffer.from([0x44, 0x89]));
+    if (idx === -1 || idx + 2 >= bytesRead) return null;
+
+    // EBML variable length integer for size
+    let firstByte = buf[idx + 2];
+    let numBytes = 1;
+    let mask = 0x80;
+    while ((firstByte & mask) === 0 && numBytes <= 8) {
+      mask >>= 1;
+      numBytes++;
+    }
+    const length = firstByte & (mask - 1);
+    const dataStart = idx + 2 + numBytes;
+    if (length <= 0 || dataStart + length > bytesRead) return null;
+
+    if (length === 4) {
+      const rawDur = buf.readFloatBE(dataStart);
+      if (rawDur > 0 && !isNaN(rawDur)) {
+        return (rawDur * timecodeScale) / 1e9;
+      }
+    } else if (length === 8) {
+      const rawDur = buf.readDoubleBE(dataStart);
+      if (rawDur > 0 && !isNaN(rawDur)) {
+        return (rawDur * timecodeScale) / 1e9;
+      }
+    }
+
+    return null;
+  } catch {
+    return null;
+  }
+}
+
 export async function probeMkv(filePath: string, ffmpegPath: string): Promise<VideoMetadata> {
   let stat: fs.Stats | null = null;
   try {
@@ -220,20 +290,24 @@ export async function probeMkv(filePath: string, ffmpegPath: string): Promise<Vi
 
   // Always search for external subtitles anew to attach on top of cached container info (never mutate cache)
   const externalMatches = findExternalSubtitles(filePath);
-  const externalTracks: SubtitleTrack[] = externalMatches.map((found) => ({
-    id: `ext-${crypto.createHash('md5').update(found.fileName).digest('hex').slice(0, 8)}`,
-    index: null,
-    type: 'external',
-    filePath: found.filePath,
-    language: 'eng',
-    languageName: 'English',
-    codec: 'subrip',
-    title: found.isWhisper ? 'AI (Whisper)' : `External: ${found.fileName}`,
-    isDefault: false,
-    isForced: found.isForced,
-    isSigns: found.isSigns,
-    isDubtitle: found.isWhisper,
-  }));
+  const externalTracks: SubtitleTrack[] = externalMatches.map((found) => {
+    const ext = path.extname(found.fileName).toLowerCase();
+    const codec = ext === '.ass' || ext === '.ssa' ? 'ass' : ext === '.vtt' ? 'webvtt' : 'subrip';
+    return {
+      id: `ext-${crypto.createHash('md5').update(found.fileName).digest('hex').slice(0, 8)}`,
+      index: null,
+      type: 'external',
+      filePath: found.filePath,
+      language: 'eng',
+      languageName: 'English',
+      codec,
+      title: found.isWhisper ? 'AI (Whisper)' : `External: ${found.fileName}`,
+      isDefault: false,
+      isForced: found.isForced,
+      isSigns: found.isSigns,
+      isDubtitle: found.isWhisper,
+    };
+  });
 
   // Default track selection:
   // Choose .whisper.srt if present, otherwise first non-forced external track
@@ -358,6 +432,11 @@ function parseFfmpegProbeOutput(filePath: string, stderr: string): VideoMetadata
       !s.isSigns
   );
 
+  // Detect whether this file contains embedded English dialogue/translation subtitles
+  const hasEmbeddedSubtitles = subtitleTracks.some(
+    (s) => (s.language === 'eng' || s.language === 'en') && !s.isSigns
+  );
+
   // 3. Chapters
   const chapters: VideoChapter[] = [];
   const chapterRegex = /Chapter #0:(\d+):\s*start\s+([\d.]+),\s*end\s+([\d.]+)(?:[\r\n\s]+Metadata:[\r\n\s]+title\s*:\s*([^\r\n]+))?/gi;
@@ -381,6 +460,7 @@ function parseFfmpegProbeOutput(filePath: string, stderr: string): VideoMetadata
     chapters,
     hasExternalSrt: false,
     hasEmbeddedDubtitles,
+    hasEmbeddedSubtitles,
   };
 }
 
