@@ -1,7 +1,7 @@
 import React, { useState, useEffect, useMemo } from 'react';
-import { Play, Subtitles, CheckCircle2 } from 'lucide-react';
+import { Play, Subtitles, CheckCircle2, ArrowDownToLine } from 'lucide-react';
 import { Episode, PlaybackProgress } from '../../types';
-import { formatTime, cleanEpisodeTitle, formatEpisodeDisplayTitle } from '../../utils/format';
+import { formatTime, formatFileSize, cleanEpisodeTitle, formatEpisodeDisplayTitle } from '../../utils/format';
 
 interface EpisodeCardProps {
   episode: Episode;
@@ -45,17 +45,37 @@ export const EpisodeCard: React.FC<EpisodeCardProps> = ({ episode, progress, onP
     [parsed.displayTitle, episode.kitsuTitle, episode.episodeTitle]
   );
 
+  const handleClick = () => {
+    if (episode.isDownloading) {
+      alert('This episode is currently downloading in your torrent client and cannot be played yet.');
+      return;
+    }
+    onPlay(episode);
+  };
+
   return (
     <div
-      onClick={() => onPlay(episode)}
-      className="group relative bg-[#18181c] hover:bg-[#202026] rounded-xl overflow-hidden border border-zinc-800/80 hover:border-zinc-700 transition-all duration-200 cursor-pointer flex flex-col shadow-sm hover:shadow-xl hover:shadow-black/40 hover:-translate-y-0.5"
+      onClick={handleClick}
+      className={`group relative bg-[#18181c] rounded-xl overflow-hidden border transition-all duration-200 flex flex-col shadow-sm ${
+        episode.isDownloading
+          ? 'border-amber-500/20 hover:border-amber-500/40 cursor-not-allowed opacity-90'
+          : 'hover:bg-[#202026] border-zinc-800/80 hover:border-zinc-700 cursor-pointer hover:shadow-xl hover:shadow-black/40 hover:-translate-y-0.5'
+      }`}
     >
       {/* Thumbnail Aspect Container (16:9) */}
       <div className="relative aspect-video w-full bg-zinc-950 overflow-hidden">
-        {!imgError && activeImgUrl ? (
+        {episode.isDownloading ? (
+          <div className="w-full h-full flex flex-col items-center justify-center bg-gradient-to-br from-zinc-900 to-zinc-950 p-4 text-center select-none">
+            <ArrowDownToLine className="w-7 h-7 text-amber-400 animate-pulse mb-1.5" />
+            <span className="text-xs font-bold text-amber-300">Downloading...</span>
+            <span className="text-[10px] text-zinc-500 font-mono mt-0.5">
+              {episode.size > 0 ? formatFileSize(episode.size) : 'Incomplete'}
+            </span>
+          </div>
+        ) : !imgError && activeImgUrl ? (
           <img
             src={activeImgUrl}
-            alt={episode.title}
+            alt=""
             onError={handleImgError}
             className="w-full h-full object-cover transition-transform duration-300 group-hover:scale-105"
             loading="lazy"
@@ -68,15 +88,22 @@ export const EpisodeCard: React.FC<EpisodeCardProps> = ({ episode, progress, onP
           </div>
         )}
 
-        {/* Hover Dark Overlay with Play Icon */}
-        <div className="absolute inset-0 bg-black/40 opacity-0 group-hover:opacity-100 transition-opacity flex items-center justify-center backdrop-blur-[1px]">
-          <div className="w-12 h-12 rounded-full bg-red-600/90 text-white flex items-center justify-center shadow-lg shadow-red-600/50 transform group-hover:scale-110 transition-transform">
-            <Play className="w-6 h-6 ml-1 fill-white" />
-          </div>
+        {/* Hover Overlay */}
+        <div className="absolute inset-0 bg-black/50 opacity-0 group-hover:opacity-100 transition-opacity flex items-center justify-center backdrop-blur-[1px]">
+          {episode.isDownloading ? (
+            <div className="flex items-center space-x-1.5 px-3 py-1.5 rounded-lg bg-amber-500/20 border border-amber-500/40 text-amber-300 text-xs font-bold shadow-lg">
+              <ArrowDownToLine className="w-4 h-4 text-amber-400 animate-pulse" />
+              <span>Downloading...</span>
+            </div>
+          ) : (
+            <div className="w-12 h-12 rounded-full bg-red-600/90 text-white flex items-center justify-center shadow-lg shadow-red-600/50 transform group-hover:scale-110 transition-transform">
+              <Play className="w-6 h-6 ml-1 fill-white" />
+            </div>
+          )}
         </div>
 
         {/* Bottom Progress Bar if watched */}
-        {progress && progress.currentTime > 0 && (
+        {progress && progress.currentTime > 0 && !episode.isDownloading && (
           <div className="absolute bottom-0 left-0 right-0 h-1.5 bg-zinc-800/80">
             <div
               className={`h-full ${progress.completed ? 'bg-emerald-500' : 'bg-red-600'}`}
@@ -98,9 +125,17 @@ export const EpisodeCard: React.FC<EpisodeCardProps> = ({ episode, progress, onP
         </div>
 
         <div className="mt-2.5 flex items-center justify-between text-[11px]">
-          {/* Subtitle / Dub Indicator (Lower-Left under Episode) */}
+          {/* Subtitle / Downloading Indicator (Lower-Left under Episode) */}
           <div>
-            {episode.hasEmbeddedDubtitles ? (
+            {episode.isDownloading ? (
+              <span
+                title="Episode is currently downloading via torrent"
+                className="inline-flex items-center space-x-1 px-1.5 py-0.5 rounded text-[10px] font-semibold bg-amber-500/20 text-amber-300 border border-amber-500/30"
+              >
+                <ArrowDownToLine className="w-3 h-3 text-amber-400" />
+                <span>Downloading</span>
+              </span>
+            ) : episode.hasEmbeddedDubtitles ? (
               <span
                 title="Embedded English Dubtitles (SDH) detected"
                 className="inline-flex items-center space-x-1 px-1.5 py-0.5 rounded text-[10px] font-semibold bg-purple-500/25 text-purple-300 border border-purple-500/40"

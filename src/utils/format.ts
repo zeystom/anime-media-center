@@ -93,7 +93,7 @@ export function cleanSeriesTitle(raw: string): string {
 
   // 6. Cut off at the first technical/scene junk token
   const junkPattern =
-    /\b(2160p|4k|1080p|720p|576p|480p|bluray|bdrip|remux|web-dl|webrip|web|dvdrip|dvd|hdtv|hevc|x265|x264|h264|h265|avc|codec|10-?bit|8-?bit|hi10p|dual-?audio|multi-?audio|flac|aac|opus|2xopus|dts|ddp|ac3|atmos|repack|proper|netflix|crunchyroll|cr|funimation)\b/i;
+    /\b(2160p|4k|1080p|720p|576p|480p|bluray|bdrip|remux|web-?dl|web-?rip|web|dvdrip|dvd|hdtv|hevc|x265|x264|h264|h265|avc|codec|10-?bit|8-?bit|hi10p|dual(?:-?audio)?|multi-?audio|flac|aac|opus|2xopus|dts|ddp\d*|ac3|atmos|repack\d*|proper|netflix|crunchyroll|cr|funimation)\b/i;
   const match = str.match(junkPattern);
   if (match && match.index !== undefined) {
     str = str.substring(0, match.index);
@@ -178,9 +178,11 @@ export function cleanEpisodeTitle(filename: string): ParsedEpisode {
 
   // 5. Handle scene-style dot naming (e.g. Clevatess.S01E01.REPACK...)
   name = name
-    .replace(/\b(h|x)\.26[45]\b/gi, 'codec')
+    .replace(/\b(h|x)\.?26[45]\b/gi, '')
     .replace(/\bflac\s*\d+\.\d+\b/gi, '')
-    .replace(/\baac\s*\d+\.\d+\b/gi, '');
+    .replace(/\baac\s*\d+\.\d+\b/gi, '')
+    .replace(/\bddp\s*\d+\.\d+\b/gi, '')
+    .replace(/\bddp\d*(?:\s*\d+)?\b/gi, '');
 
   const dotCount = (name.match(/\./g) || []).length;
   if (dotCount >= 2) {
@@ -199,7 +201,7 @@ export function cleanEpisodeTitle(filename: string): ParsedEpisode {
 
   // 7. Strip known technical tokens
   const junkTokensRegex =
-    /\b(2160p|4k|1080p|720p|576p|480p|bluray|bdrip|remux|web-dl|webrip|web|dvdrip|dvd|hdtv|hevc|x265|x264|h264|h265|avc|codec|10-?bit|8-?bit|hi10p|dual-?audio|multi-?audio|flac|aac|2xopus|opus|dts|ddp|ac3|repack|proper|cr|flac\d*|aac\d*|\d+ch|\d+\.\d+)\b/gi;
+    /\b(2160p|4k|1080p|720p|576p|480p|bluray|bdrip|remux|web-?dl|web-?rip|web|dvdrip|dvd|hdtv|hevc|x265|x264|h264|h265|avc|codec|10-?bit|8-?bit|hi10p|dual(?:-?audio)?|multi-?audio|flac|aac|2xopus|opus|dts|ddp\d*(?:\s*\d+)?|ac3|atmos|repack\d*|proper|cr|crunchyroll|netflix|funimation|\d+ch|\d+\.\d+)\b/gi;
   name = name.replace(junkTokensRegex, '');
 
   // 8. Clean up whitespace and stray dashes
@@ -220,7 +222,16 @@ export function cleanEpisodeTitle(filename: string): ParsedEpisode {
     episodeLabel = `S${String(season).padStart(2, '0')}E${String(episode).padStart(2, '0')}`;
     const idx = name.search(/s\d+\s*e\d+/i);
     series = name.substring(0, idx).trim().replace(/[-_–—\s]+$/, '');
-    epTitle = name.substring(idx + seMatch[0].length).trim().replace(/^[-_–—\s]+/, '');
+    const remainder = name.substring(idx + seMatch[0].length);
+    // In scene & web releases, an episode title only exists if explicitly delimited by a dash,
+    // e.g. "Show - S01E01 - Title" or "Show S01E01 - Title".
+    // Without a dash delimiter (e.g. "Show.S01E01.REPACK2.1080p..."), everything after S01E01 is scene technical metadata.
+    const titleMatch = remainder.match(/^\s*[-_–—:]\s*(.+)/);
+    if (titleMatch) {
+      epTitle = titleMatch[1].trim();
+    } else {
+      epTitle = '';
+    }
   } else {
     const dashMatch = name.match(/\s+-\s+(\d{1,4})(?:\s+-\s*|\s+|$)/);
     if (dashMatch) {
@@ -228,7 +239,18 @@ export function cleanEpisodeTitle(filename: string): ParsedEpisode {
       episodeLabel = `EP ${String(episode).padStart(2, '0')}`;
       const idx = name.indexOf(dashMatch[0]);
       series = name.substring(0, idx).trim();
-      epTitle = name.substring(idx + dashMatch[0].length).trim().replace(/^[-_–—\s]+/, '');
+      const remainder = name.substring(idx + dashMatch[0].length);
+      // If there was a trailing dash e.g. " - 01 - Episode Title"
+      if (dashMatch[0].trim().endsWith('-')) {
+        epTitle = remainder.trim();
+      } else {
+        const titleMatch = remainder.match(/^\s*[-_–—:]\s*(.+)/);
+        if (titleMatch) {
+          epTitle = titleMatch[1].trim();
+        } else {
+          epTitle = '';
+        }
+      }
     } else {
       const epMatch = name.match(/(?:ep|episode|e)\s*(\d+)/i);
       if (epMatch) {
@@ -236,7 +258,13 @@ export function cleanEpisodeTitle(filename: string): ParsedEpisode {
         episodeLabel = `EP ${String(episode).padStart(2, '0')}`;
         const idx = name.search(/(?:ep|episode|e)\s*\d+/i);
         series = name.substring(0, idx).trim().replace(/[-_–—\s]+$/, '');
-        epTitle = name.substring(idx + epMatch[0].length).trim().replace(/^[-_–—\s]+/, '');
+        const remainder = name.substring(idx + epMatch[0].length);
+        const titleMatch = remainder.match(/^\s*[-_–—:]\s*(.+)/);
+        if (titleMatch) {
+          epTitle = titleMatch[1].trim();
+        } else {
+          epTitle = '';
+        }
       } else {
         series = name;
         episodeLabel = 'EP';
@@ -245,8 +273,12 @@ export function cleanEpisodeTitle(filename: string): ParsedEpisode {
   }
 
   // 10. Secondary cleanup on epTitle
-  epTitle = epTitle.replace(/^[-_–—\s:]+|[-_–—\s:]+$/g, '').trim();
-  if (epTitle.length < 2 || /^(?:ep|e|s|part|\d+)$/i.test(epTitle)) {
+  epTitle = epTitle
+    .replace(junkTokensRegex, '')
+    .replace(/\b(repack\d*|proper|dual|ddp\d*|web|dl|rip|anozu|subsplease|erai-raws|judas)\b/gi, '')
+    .replace(/^[-_–—\s:]+|[-_–—\s:]+$/g, '')
+    .trim();
+  if (epTitle.length < 2 || /^(?:ep|e|s|part|\d+|dual|ddp|repack)$/i.test(epTitle) || !/[a-zA-Z]/.test(epTitle)) {
     epTitle = '';
   }
 

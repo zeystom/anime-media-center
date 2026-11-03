@@ -73,12 +73,14 @@ export interface Episode {
   kitsuThumbnail?: string | null;
   kitsuTitle?: string | null;
   episodeTitle?: string | null;
+  isDownloading?: boolean;
 }
 
 export interface AnimeFolder {
   folderPath: string;
   folderName: string;
   episodes: Episode[];
+  isDownloading?: boolean;
   hasSubtitlesCount: number;
   hasWhisperCount?: number;
   hasExtSubCount?: number;
@@ -121,6 +123,7 @@ export interface AppSettings {
   autoPlayNext: boolean;
   subtitlesFontSize: number;
   subtitlesOutline: boolean;
+  hideDownloadingAnime?: boolean;
 }
 
 export interface WhisperQueueItem {

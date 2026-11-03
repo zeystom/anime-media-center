@@ -236,6 +236,7 @@ export class StorageService {
           autoPlayNext: parsed.autoPlayNext ?? true,
           subtitlesFontSize: parsed.subtitlesFontSize ?? 28,
           subtitlesOutline: parsed.subtitlesOutline ?? true,
+          hideDownloadingAnime: parsed.hideDownloadingAnime ?? false,
         };
 
         this.cachedSettings = res;
@@ -258,6 +259,7 @@ export class StorageService {
       autoPlayNext: true,
       subtitlesFontSize: 28,
       subtitlesOutline: true,
+      hideDownloadingAnime: false,
     };
     this.cachedSettings = defaults;
     return defaults;

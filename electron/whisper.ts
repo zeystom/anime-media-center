@@ -152,6 +152,30 @@ export class WhisperManager {
             // Duration and audio track fallback to defaults
           }
 
+          // Check if file is actively being written by torrent or empty
+          let isLocked = false;
+          try {
+            const st = fs.statSync(item.filePath);
+            if (st.size === 0) isLocked = true;
+            if (process.platform === 'win32') {
+              const fd = fs.openSync(item.filePath, 'r+');
+              fs.closeSync(fd);
+            }
+          } catch (e: any) {
+            if (e && (e.code === 'EBUSY' || e.code === 'EPERM')) {
+              isLocked = true;
+            }
+          }
+
+          if (isLocked) {
+            item.status = 'failed';
+            item.error = 'File is downloading or locked by torrent client';
+            failedCount++;
+            this.sendLog(mainWindow, 'error', `[${i + 1}/${this.queue.length}] ${item.fileName}: ${item.error}`);
+            this.broadcastProgress(mainWindow);
+            continue;
+          }
+
           if (effectiveTrack < 1 || effectiveTrack > 6) {
             item.status = 'failed';
             item.error = `Audio track number (${effectiveTrack}) exceeds maximum supported by Faster-Whisper-XXL (1-6)`;

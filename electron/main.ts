@@ -44,6 +44,54 @@ async function asyncPool<T, R>(poolLimit: number, array: T[], iteratorFn: (item:
 
 const dubtitleFolderCache = new Map<string, boolean>();
 
+function isEpisodeDownloading(fullPath: string, filesInDir: Set<string>, stat: fs.Stats): boolean {
+  const fileName = path.basename(fullPath).toLowerCase();
+  // 1. Companion torrent temp files: e.g. "episode.mkv.!qB", "episode.mkv.part", etc.
+  if (
+    filesInDir.has(`${fileName}.!qb`) ||
+    filesInDir.has(`${fileName}.!ut`) ||
+    filesInDir.has(`${fileName}.part`) ||
+    filesInDir.has(`${fileName}.crdownload`) ||
+    filesInDir.has(`${fileName}.downloading`)
+  ) {
+    return true;
+  }
+
+  // 2. 0-byte file (pre-allocated or empty)
+  if (stat.size === 0) {
+    return true;
+  }
+
+  // 3. Write-lock check by torrent client on Windows
+  if (process.platform === 'win32') {
+    try {
+      const fd = fs.openSync(fullPath, 'r+');
+      fs.closeSync(fd);
+    } catch (err: any) {
+      if (err && (err.code === 'EBUSY' || err.code === 'EPERM')) {
+        return true;
+      }
+    }
+  }
+
+  return false;
+}
+
+function isFolderDownloading(folderPath: string, files: string[], episodes: Episode[]): boolean {
+  // 1. Torrent temporary extension in folder
+  const tempRegex = /\.(?:!qb|!ut|part|crdownload|downloading)$/i;
+  if (files.some((f) => tempRegex.test(f))) {
+    return true;
+  }
+
+  // 2. Any episode in this folder is actively downloading or incomplete
+  if (episodes.some((e) => e.isDownloading)) {
+    return true;
+  }
+
+  return false;
+}
+
 async function checkFolderHasDubtitles(mkvFiles: string[], folderPath: string, ffmpegPath: string): Promise<boolean> {
   if (dubtitleFolderCache.has(folderPath)) {
     return dubtitleFolderCache.get(folderPath)!;
@@ -73,6 +121,7 @@ async function scanFolderForEpisodes(folderPath: string, port: number): Promise<
     }
 
     const srtFiles = new Set(files.filter((f) => f.toLowerCase().endsWith('.srt')));
+    const allFilesLower = new Set(files.map((f) => f.toLowerCase()));
     mkvFiles.sort((a, b) => a.localeCompare(b, undefined, { numeric: true, sensitivity: 'base' }));
 
     const settings = storage.getSettings();
@@ -89,6 +138,7 @@ async function scanFolderForEpisodes(folderPath: string, port: number): Promise<
       const stat = fs.statSync(fullPath);
       const baseName = path.parse(file).name;
       const { episodeNum, label: epNum } = extractEpisodeNumber(file);
+      const isDownloading = isEpisodeDownloading(fullPath, allFilesLower, stat);
 
       // Check external subtitles using unified finder
       const extSubs = findExternalSubtitles(fullPath);
@@ -117,6 +167,7 @@ async function scanFolderForEpisodes(folderPath: string, port: number): Promise<
         kitsuThumbnail: kitsuEp?.thumbnailUrl || null,
         kitsuTitle: officialTitle,
         episodeTitle: officialTitle,
+        isDownloading,
       });
     }
 
@@ -366,12 +417,15 @@ function setupIpcHandlers() {
           const rootEpisodes = await scanFolderForEpisodes(targetRoot, port);
           if (rootEpisodes.length > 0) {
             visitedPaths.add(targetRoot);
+            const rootFiles = fs.readdirSync(targetRoot);
+            const rootDownloading = isFolderDownloading(targetRoot, rootFiles, rootEpisodes);
             const hasDubtitlesCount = rootEpisodes.filter((e) => e.hasEmbeddedDubtitles).length;
             const kitsuData = await getKitsuMetadata(path.basename(targetRoot));
             animeFolders.push({
               folderPath: targetRoot,
               folderName: path.basename(targetRoot),
               episodes: rootEpisodes,
+              isDownloading: rootDownloading,
               hasSubtitlesCount: rootEpisodes.filter((e) => e.hasExternalSrt).length,
               hasWhisperCount: rootEpisodes.filter((e) => e.hasWhisperSrt).length,
               hasExtSubCount: rootEpisodes.filter((e) => e.hasExternalSrt && !e.hasWhisperSrt).length,
@@ -398,12 +452,15 @@ function setupIpcHandlers() {
           const episodes = await scanFolderForEpisodes(subFolderPath, port);
           if (episodes.length > 0) {
             visitedPaths.add(subFolderPath);
+            const subFiles = fs.readdirSync(subFolderPath);
+            const subDownloading = isFolderDownloading(subFolderPath, subFiles, episodes);
             const hasDubtitlesCount = episodes.filter((e) => e.hasEmbeddedDubtitles).length;
             const kitsuData = await getKitsuMetadata(entry.name);
             return {
               folderPath: subFolderPath,
               folderName: entry.name,
               episodes,
+              isDownloading: subDownloading,
               hasSubtitlesCount: episodes.filter((e) => e.hasExternalSrt).length,
               hasWhisperCount: episodes.filter((e) => e.hasWhisperSrt).length,
               hasExtSubCount: episodes.filter((e) => e.hasExternalSrt && !e.hasWhisperSrt).length,

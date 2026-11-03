@@ -38,6 +38,9 @@ export const SettingsModal: React.FC<SettingsModalProps> = ({
       ? [settings.defaultLibraryRoot]
       : []
   );
+  const [hideDownloadingAnime, setHideDownloadingAnime] = useState<boolean>(
+    settings.hideDownloadingAnime ?? false
+  );
 
   const [binaryStatus, setBinaryStatus] = useState<{
     ffmpegExists: boolean;
@@ -61,6 +64,7 @@ export const SettingsModal: React.FC<SettingsModalProps> = ({
           ? [settings.defaultLibraryRoot]
           : []
       );
+      setHideDownloadingAnime(settings.hideDownloadingAnime ?? false);
 
       // Check existence of external binaries
       window.electronAPI
@@ -312,6 +316,21 @@ export const SettingsModal: React.FC<SettingsModalProps> = ({
                 ))
               )}
             </div>
+
+            {/* Filter option: hide downloading torrents */}
+            <label className="flex items-center space-x-2.5 pt-1.5 text-xs text-zinc-300 hover:text-zinc-100 cursor-pointer select-none transition-colors">
+              <input
+                type="checkbox"
+                checked={hideDownloadingAnime}
+                onChange={(e) => {
+                  const checked = e.target.checked;
+                  setHideDownloadingAnime(checked);
+                  onSave({ hideDownloadingAnime: checked });
+                }}
+                className="w-4 h-4 rounded border-zinc-700 bg-zinc-900 text-red-600 focus:ring-0 focus:ring-offset-0 cursor-pointer accent-red-600"
+              />
+              <span>Hide downloading / incomplete torrent releases from library</span>
+            </label>
           </div>
 
           {/* Section: External Tools & AI Engine */}

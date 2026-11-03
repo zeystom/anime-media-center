@@ -59,6 +59,20 @@ export const App: React.FC = () => {
 
   const [folders, setFolders] = useState<AnimeFolder[]>([]);
   const [selectedFolder, setSelectedFolder] = useState<AnimeFolder | null>(null);
+
+  // Filter folders if user enabled 'Hide downloading / incomplete releases'
+  const visibleFolders = useMemo(() => {
+    if (settings.hideDownloadingAnime) {
+      return folders.filter((f) => !f.isDownloading);
+    }
+    return folders;
+  }, [folders, settings.hideDownloadingAnime]);
+
+  useEffect(() => {
+    if (settings.hideDownloadingAnime && selectedFolder?.isDownloading) {
+      setSelectedFolder(visibleFolders[0] || null);
+    }
+  }, [settings.hideDownloadingAnime, selectedFolder, visibleFolders]);
   const [history, setHistory] = useState<Record<string, PlaybackProgress>>({});
   const [loading, setLoading] = useState<boolean>(true);
   const [binaryStatus, setBinaryStatus] = useState<{ ffmpegExists: boolean; whisperExists: boolean }>({
@@ -188,9 +202,9 @@ export const App: React.FC = () => {
     const top = list[0];
 
     // Find the corresponding Episode object
-    for (const folder of folders) {
+    for (const folder of visibleFolders) {
       const found = folder.episodes.find((e) => e.filePath === top.filePath);
-      if (found) {
+      if (found && !found.isDownloading) {
         return {
           progress: top,
           episode: found,
@@ -201,7 +215,7 @@ export const App: React.FC = () => {
     }
 
     return null;
-  }, [history, folders]);
+  }, [history, visibleFolders]);
 
   // Change Root Directory
   const handleChangeRoot = async () => {
@@ -361,7 +375,7 @@ export const App: React.FC = () => {
                   ? `${settings.libraryFolders.length} folders (${settings.libraryFolders.map((f) => f.split('\\').pop() || f).join(', ')})`
                   : settings.defaultLibraryRoot
               }
-              folders={folders}
+              folders={visibleFolders}
               selectedFolder={selectedFolder}
               history={history}
               loading={loading}

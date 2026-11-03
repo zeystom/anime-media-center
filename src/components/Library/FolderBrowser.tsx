@@ -1,5 +1,5 @@
 import React, { useState, useMemo } from 'react';
-import { RefreshCw, ExternalLink, Sparkles, Subtitles, Film, Search, Star, X } from 'lucide-react';
+import { RefreshCw, ExternalLink, Sparkles, Subtitles, Film, Search, Star, X, ArrowDownToLine } from 'lucide-react';
 import { AnimeFolder, Episode, PlaybackProgress } from '../../types';
 import { cleanSeriesTitle, extractReleaseTags } from '../../utils/format';
 import { EpisodeCard } from './EpisodeCard';
@@ -165,7 +165,12 @@ export const FolderBrowser: React.FC<FolderBrowserProps> = ({
 
                     {/* Top Badges: Subtitle Status & Episode Count */}
                     <div className="absolute top-2.5 left-2.5 right-2.5 flex items-center justify-between pointer-events-none z-10">
-                      {folder.hasEmbeddedDubtitles ? (
+                      {folder.isDownloading ? (
+                        <span className="px-2 py-0.5 rounded-md text-[10px] font-bold bg-amber-500/95 text-white backdrop-blur-md shadow-md border border-amber-400/40 flex items-center space-x-1">
+                          <ArrowDownToLine className="w-3 h-3 animate-pulse" />
+                          <span>Downloading</span>
+                        </span>
+                      ) : folder.hasEmbeddedDubtitles ? (
                         <span className="px-2 py-0.5 rounded-md text-[10px] font-bold bg-purple-600/90 text-white backdrop-blur-md shadow-md border border-purple-400/30">
                           Dub Sub
                         </span>
@@ -281,6 +286,17 @@ export const FolderBrowser: React.FC<FolderBrowserProps> = ({
 
                 {(() => {
                   const badges: React.ReactNode[] = [];
+                  if (selectedFolder.isDownloading) {
+                    badges.push(
+                      <span
+                        key="downloading"
+                        className="inline-flex items-center space-x-1.5 px-2 py-0.5 rounded bg-amber-500/15 border border-amber-500/30 text-amber-300 font-semibold"
+                      >
+                        <ArrowDownToLine className="w-3 h-3 text-amber-400 animate-pulse" />
+                        <span>Downloading in Progress</span>
+                      </span>
+                    );
+                  }
                   if (selectedFolder.hasEmbeddedDubtitles) {
                     badges.push(
                       <span
@@ -351,7 +367,13 @@ export const FolderBrowser: React.FC<FolderBrowserProps> = ({
               <div className="flex items-center space-x-2.5 shrink-0">
                 <button
                   onClick={() => onOpenWhisper(selectedFolder)}
-                  className="flex items-center space-x-2 px-4 py-2.5 rounded-xl bg-indigo-600/20 hover:bg-indigo-600/30 text-indigo-300 border border-indigo-500/40 text-xs font-bold transition-all hover:scale-[1.02] shadow-sm"
+                  disabled={selectedFolder.isDownloading}
+                  className={`flex items-center space-x-2 px-4 py-2.5 rounded-xl border text-xs font-bold transition-all shadow-sm ${
+                    selectedFolder.isDownloading
+                      ? 'bg-zinc-800/40 text-zinc-500 border-zinc-700/40 cursor-not-allowed opacity-60'
+                      : 'bg-indigo-600/20 hover:bg-indigo-600/30 text-indigo-300 border border-indigo-500/40 hover:scale-[1.02]'
+                  }`}
+                  title={selectedFolder.isDownloading ? 'Cannot transcribe while torrent is downloading' : 'Whisper Batch Subtitles'}
                 >
                   <Sparkles className="w-4 h-4 text-indigo-400" />
                   <span>Whisper Batch Subtitles</span>
