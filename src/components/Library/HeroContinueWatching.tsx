@@ -11,6 +11,7 @@ interface HeroContinueWatchingProps {
   bannerUrl?: string | null;
   isMovieHeroActive?: boolean;
   selectedFolderPath?: string;
+  isUpNext?: boolean;
   onResume: (episode: Episode, startTime: number) => void;
 }
 
@@ -22,6 +23,7 @@ export const HeroContinueWatching: React.FC<HeroContinueWatchingProps> = ({
   bannerUrl,
   isMovieHeroActive,
   selectedFolderPath,
+  isUpNext = false,
   onResume,
 }) => {
   const [activeMovieHeroPath, setActiveMovieHeroPath] = useState<string | null>(() => {
@@ -95,7 +97,7 @@ export const HeroContinueWatching: React.FC<HeroContinueWatchingProps> = ({
             <div className="flex items-center space-x-2">
               <span className="flex items-center space-x-1.5 px-2.5 py-1 rounded-full text-xs font-bold uppercase tracking-wider bg-red-500/20 text-red-400 border border-red-500/30">
                 <Sparkles className="w-3.5 h-3.5 text-red-400" />
-                <span>Continue Watching</span>
+                <span>{isUpNext || lastWatched.currentTime === 0 ? 'Up Next' : 'Continue Watching'}</span>
               </span>
               <span className="text-zinc-400 text-xs font-semibold px-2 py-0.5 rounded bg-zinc-800 border border-zinc-700/50">
                 {parsedEp.episodeLabel || lastWatched.episodeNumber}
@@ -117,32 +119,47 @@ export const HeroContinueWatching: React.FC<HeroContinueWatchingProps> = ({
             </div>
 
             {/* Time & Progress */}
-            <div className="space-y-1.5 pt-1 max-w-md">
-              <div className="flex items-center justify-between text-xs text-zinc-400 font-mono">
-                <span className="flex items-center space-x-1">
-                  <Clock className="w-3.5 h-3.5 text-zinc-500" />
-                  <span>{formatTime(lastWatched.currentTime)}</span>
+            {lastWatched.currentTime > 0 && !isUpNext ? (
+              <div className="space-y-1.5 pt-1 max-w-md">
+                <div className="flex items-center justify-between text-xs text-zinc-400 font-mono">
+                  <span className="flex items-center space-x-1">
+                    <Clock className="w-3.5 h-3.5 text-zinc-500" />
+                    <span>{formatTime(lastWatched.currentTime)}</span>
+                  </span>
+                  <span>{formatTime(lastWatched.duration)} ({percent}%)</span>
+                </div>
+                <div className="w-full h-2 rounded-full bg-zinc-800/80 overflow-hidden shadow-inner">
+                  <div
+                    className="h-full bg-gradient-to-r from-red-600 via-rose-500 to-indigo-500 rounded-full transition-all duration-300 shadow-sm"
+                    style={{ width: `${percent}%` }}
+                  />
+                </div>
+              </div>
+            ) : (
+              <div className="flex items-center space-x-2 pt-1 text-xs text-zinc-400 font-mono">
+                <span className="px-2 py-0.5 rounded bg-emerald-500/20 text-emerald-400 border border-emerald-500/30 font-semibold">
+                  Next Episode
                 </span>
-                <span>{formatTime(lastWatched.duration)} ({percent}%)</span>
+                {(lastWatched.duration > 0 || (episode.duration && episode.duration > 0)) && (
+                  <span>{formatTime(lastWatched.duration || episode.duration || 0)}</span>
+                )}
               </div>
-              <div className="w-full h-2 rounded-full bg-zinc-800/80 overflow-hidden shadow-inner">
-                <div
-                  className="h-full bg-gradient-to-r from-red-600 via-rose-500 to-indigo-500 rounded-full transition-all duration-300 shadow-sm"
-                  style={{ width: `${percent}%` }}
-                />
-              </div>
-            </div>
+            )}
           </div>
         </div>
 
         {/* Action Button */}
         <div className="flex items-center space-x-3 w-full md:w-auto shrink-0">
           <button
-            onClick={() => onResume(episode, lastWatched.currentTime)}
+            onClick={() => onResume(episode, isUpNext ? 0 : lastWatched.currentTime || 0)}
             className="w-full md:w-auto flex items-center justify-center space-x-3 px-8 py-3.5 rounded-2xl bg-red-600 hover:bg-red-500 text-white font-bold text-sm md:text-base shadow-xl shadow-red-600/30 hover:shadow-red-600/50 transition-all hover:scale-[1.02] active:scale-[0.98]"
           >
             <Play className="w-5 h-5 fill-white" />
-            <span>Resume from {formatTime(lastWatched.currentTime)}</span>
+            <span>
+              {isUpNext || lastWatched.currentTime === 0
+                ? `Play ${parsedEp.episodeLabel || lastWatched.episodeNumber || 'Episode'}`
+                : `Resume from ${formatTime(lastWatched.currentTime)}`}
+            </span>
           </button>
         </div>
       </div>

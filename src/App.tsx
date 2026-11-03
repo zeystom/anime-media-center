@@ -316,25 +316,87 @@ export const App: React.FC = () => {
     return () => clearInterval(interval);
   }, [folders]);
 
-  // Find most recently watched episode across all anime folders
+  // Find most recently watched episode or next up episode across all anime folders
   const mostRecentWatched = useMemo(() => {
-    const list = Object.values(history).filter(
-      (h) => h.currentTime > 5 && !h.completed
+    // Collect all valid history records sorted by lastWatchedAt descending
+    const allHistory = Object.values(history).filter(
+      (h) => (h.currentTime > 5 || h.completed) && h.lastWatchedAt && h.lastWatchedAt > 0
     );
-    if (list.length === 0) return null;
+    if (allHistory.length === 0) return null;
 
-    list.sort((a, b) => b.lastWatchedAt - a.lastWatchedAt);
-    const top = list[0];
+    allHistory.sort((a, b) => b.lastWatchedAt - a.lastWatchedAt);
 
-    // Find the corresponding Episode object
-    for (const folder of visibleFolders) {
-      const found = folder.episodes.find((e) => e.filePath === top.filePath);
-      if (found && !found.isDownloading) {
+    // 1. Try finding from the most recent history records:
+    for (const record of allHistory) {
+      // Find the folder corresponding to this history entry
+      const folder = visibleFolders.find((f) => f.folderPath === record.folderPath)
+        || visibleFolders.find((f) => f.episodes.some((e) => e.filePath === record.filePath));
+
+      if (!folder || folder.episodes.length === 0) continue;
+
+      const epIndex = folder.episodes.findIndex((e) => e.filePath === record.filePath);
+      if (epIndex === -1) continue;
+
+      const currentEp = folder.episodes[epIndex];
+
+      // CASE A: The episode is in-progress (not completed) and ready to play:
+      if (!record.completed && !currentEp.isDownloading) {
         return {
-          progress: top,
-          episode: found,
-          seasonName: folder.folderName,
+          progress: record,
+          episode: currentEp,
+          seasonName: folder.canonicalTitle || folder.folderName,
           folder,
+          isUpNext: false,
+        };
+      }
+
+      // CASE B: The episode was COMPLETED (reached ending or >90% watched)!
+      // Seamlessly advance to the NEXT unwatched episode in this same anime series:
+      if (record.completed) {
+        const nextEpisodes = folder.episodes.slice(epIndex + 1);
+        const nextEp = nextEpisodes.find((e) => {
+          const epHist = history[e.filePath];
+          return (!epHist || !epHist.completed) && !e.isDownloading;
+        });
+
+        if (nextEp) {
+          const nextProgress: PlaybackProgress = history[nextEp.filePath] || {
+            filePath: nextEp.filePath,
+            folderPath: folder.folderPath,
+            fileName: nextEp.fileName,
+            episodeNumber: nextEp.episodeNumber,
+            currentTime: 0,
+            duration: nextEp.duration || 0,
+            lastWatchedAt: record.lastWatchedAt,
+            completed: false,
+          };
+
+          return {
+            progress: nextProgress,
+            episode: nextEp,
+            seasonName: folder.canonicalTitle || folder.folderName,
+            folder,
+            isUpNext: true,
+          };
+        }
+        // If there are no further episodes in this season/folder, loop continues to previous history items
+      }
+    }
+
+    // 2. Fallback: If all watched episodes are completed and have no next episode,
+    // show the most recent completed episode so user can rewatch if desired.
+    for (const record of allHistory) {
+      const folder = visibleFolders.find((f) => f.folderPath === record.folderPath)
+        || visibleFolders.find((f) => f.episodes.some((e) => e.filePath === record.filePath));
+      if (!folder) continue;
+      const currentEp = folder.episodes.find((e) => e.filePath === record.filePath);
+      if (currentEp && !currentEp.isDownloading) {
+        return {
+          progress: record,
+          episode: currentEp,
+          seasonName: folder.canonicalTitle || folder.folderName,
+          folder,
+          isUpNext: false,
         };
       }
     }
@@ -560,6 +622,7 @@ export const App: React.FC = () => {
                 seasonName={mostRecentWatched.seasonName}
                 posterUrl={mostRecentWatched.folder?.posterUrl}
                 bannerUrl={mostRecentWatched.folder?.bannerUrl}
+                isUpNext={mostRecentWatched.isUpNext}
                 onResume={(ep, time) => handlePlayEpisode(ep, time)}
               />
             )}
