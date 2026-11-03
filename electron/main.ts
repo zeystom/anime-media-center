@@ -9,6 +9,7 @@ import { whisperManager } from './whisper';
 import { findExternalSubtitles } from './subtitles';
 import { AnimeFolder, Episode, PlaybackProgress, SeasonPreference } from './types';
 import { getKitsuMetadata, fetchAniSkipTimes } from './kitsu';
+import { extractEpisodeNumber } from './episodes';
 
 const __filename = fileURLToPath(import.meta.url);
 const __dirname = path.dirname(__filename);
@@ -39,63 +40,6 @@ async function asyncPool<T, R>(poolLimit: number, array: T[], iteratorFn: (item:
     }
   }
   return Promise.all(ret);
-}
-
-export function extractEpisodeNumber(fileName: string): { episodeNum: number | null; label: string } {
-  const withoutExt = fileName.replace(/\.[a-zA-Z0-9]+$/, '');
-  const cleaned = withoutExt.replace(/\[[^\]]*\]/g, ' ').replace(/\([^)]*\)/g, ' ').trim();
-
-  // 1. SxxExx e.g. S01E05
-  const sxxExxMatch = cleaned.match(/\bs(\d+)e(\d+)\b/i);
-  if (sxxExxMatch) {
-    const n = parseInt(sxxExxMatch[2], 10);
-    return {
-      episodeNum: n,
-      label: `S${sxxExxMatch[1].padStart(2, '0')}E${sxxExxMatch[2].padStart(2, '0')}`,
-    };
-  }
-
-  // 2. \b(?:ep|episode|e)[_.\s-]*(\d+)\b with word boundary
-  const epWordMatch = cleaned.match(/\b(?:ep|episode|e)[_.\s-]*(\d+)\b/i);
-  if (epWordMatch) {
-    const n = parseInt(epWordMatch[1], 10);
-    return {
-      episodeNum: n,
-      label: `E${n.toString().padStart(2, '0')}`,
-    };
-  }
-
-  // 3. NxNN e.g. 1x05
-  const nxMatch = cleaned.match(/\b\d+x(\d+)\b/i);
-  if (nxMatch) {
-    const n = parseInt(nxMatch[1], 10);
-    return {
-      episodeNum: n,
-      label: `E${n.toString().padStart(2, '0')}`,
-    };
-  }
-
-  // 4. Number after ' - ' with optional version: \s-\s(\d{1,4})(?:v\d+)?\b
-  const dashMatch = cleaned.match(/\s-\s(\d{1,4})(?:v\d+)?\b/i);
-  if (dashMatch) {
-    const n = parseInt(dashMatch[1], 10);
-    return {
-      episodeNum: n,
-      label: `E${n.toString().padStart(2, '0')}`,
-    };
-  }
-
-  // 5. Fallback: number bounded by separator
-  const fallbackMatch = cleaned.match(/[-_.\s](\d{1,3})(?:v\d+)?\b/);
-  if (fallbackMatch) {
-    const n = parseInt(fallbackMatch[1], 10);
-    return {
-      episodeNum: n,
-      label: `E${n.toString().padStart(2, '0')}`,
-    };
-  }
-
-  return { episodeNum: null, label: 'EP' };
 }
 
 const dubtitleFolderCache = new Map<string, boolean>();

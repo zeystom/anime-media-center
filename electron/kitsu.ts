@@ -472,7 +472,7 @@ export async function getKitsuMetadata(rawSeriesName: string): Promise<KitsuAnim
 
       // If both completed with 200 OK without errors but returned 0 results:
       if (!aniList && !kitsu) {
-        if (aniListSuccess || kitsuSuccess) {
+        if (aniListSuccess && kitsuSuccess) {
           notFoundCache.set(cacheKey, Date.now() + 60 * 60 * 1000); // 1 hour negative cache
         }
         return null;

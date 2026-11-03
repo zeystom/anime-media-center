@@ -84,16 +84,27 @@ export const SettingsModal: React.FC<SettingsModalProps> = ({
     }
   }, [isOpen, ffmpegPath, whisperPath]);
 
+  // Save any pending uncommitted path changes before closing
+  const handleClose = () => {
+    if (ffmpegPath !== settings.ffmpegPath || whisperPath !== settings.whisperPath) {
+      onSave({
+        ...(ffmpegPath !== settings.ffmpegPath ? { ffmpegPath } : {}),
+        ...(whisperPath !== settings.whisperPath ? { whisperPath } : {}),
+      });
+    }
+    onClose();
+  };
+
   // Handle Escape key to close
   useEffect(() => {
     const handleKeyDown = (e: KeyboardEvent) => {
       if (e.key === 'Escape' && isOpen) {
-        onClose();
+        handleClose();
       }
     };
     window.addEventListener('keydown', handleKeyDown);
     return () => window.removeEventListener('keydown', handleKeyDown);
-  }, [isOpen, onClose]);
+  }, [isOpen, ffmpegPath, whisperPath, settings, onClose]);
 
   if (!isOpen) return null;
 
@@ -149,13 +160,14 @@ export const SettingsModal: React.FC<SettingsModalProps> = ({
   };
 
   const handleFfmpegBlur = () => {
-    onSave({ ffmpegPath });
+    if (ffmpegPath !== settings.ffmpegPath) {
+      onSave({ ffmpegPath });
+    }
   };
 
   const handleFfmpegKeyDown = (e: React.KeyboardEvent<HTMLInputElement>) => {
     if (e.key === 'Enter') {
       (e.target as HTMLInputElement).blur();
-      onSave({ ffmpegPath });
     }
   };
 
@@ -164,13 +176,14 @@ export const SettingsModal: React.FC<SettingsModalProps> = ({
   };
 
   const handleWhisperBlur = () => {
-    onSave({ whisperPath });
+    if (whisperPath !== settings.whisperPath) {
+      onSave({ whisperPath });
+    }
   };
 
   const handleWhisperKeyDown = (e: React.KeyboardEvent<HTMLInputElement>) => {
     if (e.key === 'Enter') {
       (e.target as HTMLInputElement).blur();
-      onSave({ whisperPath });
     }
   };
 
@@ -217,7 +230,7 @@ export const SettingsModal: React.FC<SettingsModalProps> = ({
   return (
     <div
       className="fixed inset-0 z-50 flex items-center justify-center p-4 bg-black/80 animate-in fade-in duration-150"
-      onClick={onClose}
+      onClick={handleClose}
     >
       <div
         className="w-full max-w-xl max-h-[90vh] flex flex-col bg-[#141418] border border-white/10 rounded-2xl text-zinc-100 shadow-2xl animate-in zoom-in-95 duration-150 overflow-hidden"
@@ -236,7 +249,7 @@ export const SettingsModal: React.FC<SettingsModalProps> = ({
           </div>
 
           <button
-            onClick={onClose}
+            onClick={handleClose}
             className="p-1.5 rounded-lg text-zinc-400 hover:text-white hover:bg-zinc-800 transition-colors"
           >
             <X className="w-5 h-5" />
@@ -490,7 +503,7 @@ export const SettingsModal: React.FC<SettingsModalProps> = ({
 
           <button
             type="button"
-            onClick={onClose}
+            onClick={handleClose}
             className="px-5 py-2 rounded-xl bg-zinc-800 hover:bg-zinc-700 text-zinc-100 font-medium text-xs border border-white/10 transition-colors shadow-sm"
           >
             Done

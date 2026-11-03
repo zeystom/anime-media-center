@@ -52,9 +52,12 @@ export default defineConfig({
               name: 'force-cjs-preload',
               config(c) {
                 c.build = c.build || {};
-                c.build.lib = c.build.lib || {};
-                c.build.lib.formats = ['cjs'];
-                c.build.lib.fileName = () => 'preload.cjs';
+                const currentLib = typeof c.build.lib === 'object' && c.build.lib ? c.build.lib : { entry: '' };
+                c.build.lib = {
+                  ...currentLib,
+                  formats: ['cjs'],
+                  fileName: () => 'preload.cjs',
+                };
               },
               closeBundle() {
                 try {

@@ -95,14 +95,17 @@ class ThumbnailQueue {
   }
 }
 
-function isAllowedFilePath(targetPath: string): boolean {
-  if (!targetPath || typeof targetPath !== 'string') return false;
-  let resolved: string;
+export function isPathInside(child: string, root: string): boolean {
   try {
-    resolved = path.resolve(targetPath);
+    const rel = path.relative(path.resolve(root), path.resolve(child));
+    return rel === '' || (!rel.startsWith('..') && !path.isAbsolute(rel));
   } catch {
     return false;
   }
+}
+
+function isAllowedFilePath(targetPath: string): boolean {
+  if (!targetPath || typeof targetPath !== 'string') return false;
 
   const settings = storage.getSettings();
   const roots: string[] = [];
@@ -118,12 +121,9 @@ function isAllowedFilePath(targetPath: string): boolean {
 
   for (const root of roots) {
     if (!root) continue;
-    try {
-      const resolvedRoot = path.resolve(root);
-      if (resolved === resolvedRoot || resolved.startsWith(resolvedRoot + path.sep)) {
-        return true;
-      }
-    } catch {}
+    if (isPathInside(targetPath, root)) {
+      return true;
+    }
   }
   return false;
 }
@@ -178,9 +178,7 @@ export class LocalStreamServer {
     } else if (
       origin === 'null' ||
       origin.startsWith('file://') ||
-      (devServerUrl && (origin === devServerUrl || origin === devServerUrl.replace(/\/$/, ''))) ||
-      origin.startsWith('http://127.0.0.1:') ||
-      origin.startsWith('http://localhost:')
+      (devServerUrl && (origin === devServerUrl || origin === devServerUrl.replace(/\/$/, '')))
     ) {
       allowedOrigin = origin;
     } else {
@@ -504,7 +502,7 @@ export class LocalStreamServer {
     const resolvedFontPath = path.resolve(fontsBaseDir, fontName);
 
     // Verify resolved path is strictly within fontsBaseDir
-    if (!resolvedFontPath.startsWith(fontsBaseDir + path.sep)) {
+    if (!isPathInside(resolvedFontPath, fontsBaseDir)) {
       res.writeHead(403);
       res.end('Forbidden');
       return;

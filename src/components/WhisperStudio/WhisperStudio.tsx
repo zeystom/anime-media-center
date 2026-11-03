@@ -15,12 +15,14 @@ import { TerminalLog } from './TerminalLog';
 
 interface WhisperStudioProps {
   initialFolder?: AnimeFolder | null;
+  whisperExists?: boolean;
   onRefreshLibrary: () => void;
   onOpenSettings?: () => void;
 }
 
 export const WhisperStudio: React.FC<WhisperStudioProps> = ({
   initialFolder,
+  whisperExists = true,
   onRefreshLibrary,
   onOpenSettings,
 }) => {
@@ -30,7 +32,6 @@ export const WhisperStudio: React.FC<WhisperStudioProps> = ({
   const [selectedAudioTrackNum, setSelectedAudioTrackNum] = useState<number>(1);
   const [skipExistingSrt, setSkipExistingSrt] = useState<boolean>(true);
   const [probing, setProbing] = useState<boolean>(false);
-  const [whisperExists, setWhisperExists] = useState<boolean>(true);
 
   // Whisper Queue & Execution State
   const [isProcessing, setIsProcessing] = useState<boolean>(false);
@@ -68,11 +69,6 @@ export const WhisperStudio: React.FC<WhisperStudioProps> = ({
       } catch (err) {
         console.error('Failed to get whisper status on mount:', err);
       }
-
-      try {
-        const binStatus = await window.electronAPI.checkBinaries();
-        setWhisperExists(binStatus.whisperExists);
-      } catch {}
     })();
   }, []);
 
@@ -334,6 +330,9 @@ export const WhisperStudio: React.FC<WhisperStudioProps> = ({
               </span>
               {probing && <span className="text-[11px] text-zinc-500 animate-pulse">Probing tracks...</span>}
             </div>
+            <p className="text-[11px] text-zinc-500">
+              Auto-detected English track is used if present
+            </p>
 
             <div className="space-y-2">
               {sampleAudioTracks.length > 0 ? (
@@ -398,7 +397,7 @@ export const WhisperStudio: React.FC<WhisperStudioProps> = ({
                 className="w-4 h-4 rounded bg-zinc-900 border-zinc-700 text-red-600 focus:ring-0 cursor-pointer disabled:opacity-50"
               />
               <span className="text-xs font-medium text-zinc-200">
-                Skip episodes that already have .srt files
+                Skip episodes that already have .whisper.srt
               </span>
             </label>
 

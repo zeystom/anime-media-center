@@ -379,6 +379,7 @@ export const App: React.FC = () => {
         <div className={`h-full flex-1 min-h-0 ${currentTab === 'whisper' ? 'flex flex-col' : 'hidden'}`}>
           <WhisperStudio
             initialFolder={selectedFolder}
+            whisperExists={binaryStatus.whisperExists}
             onRefreshLibrary={handleRefreshLibrary}
             onOpenSettings={() => setSettingsOpen(true)}
           />

@@ -69,7 +69,7 @@ Watching English-dubbed anime with English subtitles is often frustrating. Most 
 | :--- | :--- |
 | `Space` / `Click` / `K` | Play / Pause |
 | `F` | Toggle fullscreen |
-| `S` | Skip opening / ending |
+| `S` | Skip opening |
 | `Left` / `Right` | Seek -5s / +5s |
 | `J` / `L` | Seek -10s / +10s |
 | `N` | Next episode |
@@ -140,7 +140,7 @@ To compile the root launcher executable `Anime Media Center.exe` from `launcher.
 C:\Windows\Microsoft.NET\Framework64\v4.0.30319\csc.exe /target:winexe /win32icon:app-icon.ico /out:"Anime Media Center.exe" launcher.cs
 ```
 
-Alternatively, run `install-shortcuts.ps1` to create Windows Start Menu and Desktop shortcuts for the application.
+Running `setup.bat` automatically handles this step. If `csc.exe` is not present, `setup.bat`, `install-shortcuts.ps1`, and `Launch Anime Media Center.vbs` automatically fall back to launching the local Electron binary (`node_modules\electron\dist\electron.exe`) seamlessly.
 
 ---
 

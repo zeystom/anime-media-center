@@ -5,8 +5,27 @@ $appDir = $PSScriptRoot
 if (-not $appDir) {
     $appDir = (Get-Location).Path
 }
+
 $exePath = Join-Path $appDir "Anime Media Center.exe"
+$electronExe = Join-Path $appDir "node_modules\electron\dist\electron.exe"
 $iconPath = Join-Path $appDir "app-icon.ico"
+
+$targetPath = ""
+$arguments = ""
+
+if (Test-Path $exePath) {
+    $targetPath = $exePath
+    $arguments = ""
+    Write-Host "Target: Standalone launcher ($exePath)"
+} elseif (Test-Path $electronExe) {
+    $targetPath = $electronExe
+    $arguments = "`"$appDir`""
+    Write-Host "Target: Local Electron ($electronExe `"$appDir`")"
+} else {
+    $targetPath = "npm.cmd"
+    $arguments = "start"
+    Write-Host "Target: npm start fallback"
+}
 
 $WshShell = New-Object -ComObject WScript.Shell
 
@@ -15,9 +34,14 @@ $startMenuDir = [Environment]::GetFolderPath('Programs')
 if ($startMenuDir -and (Test-Path $startMenuDir)) {
     $startMenuShortcutPath = Join-Path $startMenuDir "Anime Media Center.lnk"
     $startShortcut = $WshShell.CreateShortcut($startMenuShortcutPath)
-    $startShortcut.TargetPath = $exePath
+    $startShortcut.TargetPath = $targetPath
+    if ($arguments) {
+        $startShortcut.Arguments = $arguments
+    }
     $startShortcut.WorkingDirectory = $appDir
-    $startShortcut.IconLocation = "$iconPath,0"
+    if (Test-Path $iconPath) {
+        $startShortcut.IconLocation = "$iconPath,0"
+    }
     $startShortcut.Description = "Anime Media Center & Whisper Studio"
     $startShortcut.Save()
     Write-Host "Created Start Menu shortcut: $startMenuShortcutPath"
@@ -28,9 +52,14 @@ $desktopDir = [Environment]::GetFolderPath('Desktop')
 if ($desktopDir -and (Test-Path $desktopDir)) {
     $desktopShortcutPath = Join-Path $desktopDir "Anime Media Center.lnk"
     $desktopShortcut = $WshShell.CreateShortcut($desktopShortcutPath)
-    $desktopShortcut.TargetPath = $exePath
+    $desktopShortcut.TargetPath = $targetPath
+    if ($arguments) {
+        $desktopShortcut.Arguments = $arguments
+    }
     $desktopShortcut.WorkingDirectory = $appDir
-    $desktopShortcut.IconLocation = "$iconPath,0"
+    if (Test-Path $iconPath) {
+        $desktopShortcut.IconLocation = "$iconPath,0"
+    }
     $desktopShortcut.Description = "Anime Media Center & Whisper Studio"
     $desktopShortcut.Save()
     Write-Host "Created Desktop shortcut: $desktopShortcutPath"

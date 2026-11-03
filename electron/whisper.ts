@@ -101,11 +101,21 @@ export class WhisperManager {
       } skipped)`
     );
 
-    // Run version pre-check
-    await this.checkWhisperVersion(whisperExe, mainWindow);
+    const pendingItems = this.queue.filter((q) => q.status === 'pending');
+    if (pendingItems.length === 0) {
+      this.isRunning = false;
+      this.currentRunId = null;
+      this.broadcastProgress(mainWindow);
+      this.sendLog(mainWindow, 'info', 'Nothing to do: all episodes already have .whisper.srt');
+      if (mainWindow && !mainWindow.isDestroyed()) {
+        mainWindow.webContents.send('whisper-done', { completedCount: 0, failedCount: 0 });
+      }
+      return { success: true };
+    }
 
     // Run sequentially in background with promise guard
-    this.runPromise = (async () => {
+    const run = (async () => {
+      await Promise.resolve();
       let completedCount = 0;
       let failedCount = 0;
 
@@ -135,6 +145,8 @@ export class WhisperManager {
             );
             if (engTrack) {
               effectiveTrack = engTrack.audioIndex + 1; // 1-based index (1..6)
+            } else if (audioTrackNum >= 1 && audioTrackNum <= meta.audioTracks.length) {
+              effectiveTrack = audioTrackNum;
             }
           } catch (e) {
             // Duration and audio track fallback to defaults
@@ -179,7 +191,7 @@ export class WhisperManager {
             item.error = err.message || 'Unknown error';
             failedCount++;
             this.sendLog(mainWindow, 'error', `[${i + 1}/${this.queue.length}] Failed ${item.fileName}: ${err.message}`);
-            if (err.message && /invalid model/i.test(err.message)) {
+            if (err.message && /invalid model|unknown model|not a valid model|is not one of/i.test(err.message)) {
               this.sendLog(mainWindow, 'error', 'Update Faster-Whisper-XXL to r193.1 or newer.');
             }
           }
@@ -191,7 +203,6 @@ export class WhisperManager {
           this.isRunning = false;
           this.currentItem = null;
           this.activeProcess = null;
-          this.runPromise = null;
         }
 
         if (mainWindow && !mainWindow.isDestroyed()) {
@@ -204,6 +215,13 @@ export class WhisperManager {
         );
       }
     })();
+
+    this.runPromise = run;
+    run.finally(() => {
+      if (this.runPromise === run) {
+        this.runPromise = null;
+      }
+    });
 
     return { success: true };
   }
@@ -225,45 +243,6 @@ export class WhisperManager {
     if (this.currentItem) {
       this.currentItem.status = 'cancelled';
       this.currentItem.error = 'Cancelled by user';
-    }
-  }
-
-  private async checkWhisperVersion(whisperExe: string, mainWindow: BrowserWindow): Promise<void> {
-    try {
-      const helpOutput = await new Promise<string>((resolve, reject) => {
-        const child = spawn(whisperExe, ['--help'], { windowsHide: true });
-        let out = '';
-        const timer = setTimeout(() => {
-          try {
-            if (process.platform === 'win32' && child.pid) {
-              spawn('taskkill', ['/PID', child.pid.toString(), '/T', '/F'], { windowsHide: true });
-            }
-            child.kill();
-          } catch {}
-          reject(new Error('timeout'));
-        }, 5000);
-
-        child.stdout.on('data', (d) => { out += d.toString(); });
-        child.stderr.on('data', (d) => { out += d.toString(); });
-        child.on('close', () => {
-          clearTimeout(timer);
-          resolve(out);
-        });
-        child.on('error', (err) => {
-          clearTimeout(timer);
-          reject(err);
-        });
-      });
-
-      if (!helpOutput.toLowerCase().includes('turbo')) {
-        this.sendLog(
-          mainWindow,
-          'info',
-          'Notice: Update Faster-Whisper-XXL to r193.1 or newer for optimal large-v3-turbo support.'
-        );
-      }
-    } catch (err: any) {
-      this.sendLog(mainWindow, 'info', `Warning: Unable to verify Faster-Whisper-XXL version: ${err.message}`);
     }
   }
 
@@ -385,13 +364,28 @@ export class WhisperManager {
   }
 
   private parseProgress(item: WhisperQueueItem, output: string): void {
-    // 1. Check if model is currently downloading
-    const isDownloading = /hf|huggingface|download|\.bin|\.safetensors|\b\d+(?:\.\d+)?\s*(?:mb|gb|mib|gib)\b/i.test(
-      output
-    );
+    // 1. Check if model is currently downloading line-by-line
+    const lines = output.split(/[\r\n]+/);
+    const downloadRegex =
+      /huggingface|hf_hub|\bdownloading\b|model\.bin|\.safetensors|\d+(?:\.\d+)?\s*[KMG]i?B?\s*\/\s*\d+(?:\.\d+)?\s*[KMG]/i;
+
+    let isDownloading = false;
+    for (const line of lines) {
+      const trimmed = line.trim();
+      if (trimmed && downloadRegex.test(trimmed)) {
+        isDownloading = true;
+        break;
+      }
+    }
+
     if (isDownloading) {
       item.speed = 'Downloading model...';
       return;
+    }
+
+    // Reset download speed status when download completes and transcription starts
+    if (item.speed === 'Downloading model...') {
+      item.speed = undefined;
     }
 
     // 2. Direct percentage pattern (e.g. "45%" or " 45%|")

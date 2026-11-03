@@ -1,5 +1,14 @@
+Set fso = CreateObject("Scripting.FileSystemObject")
 Set WshShell = CreateObject("WScript.Shell")
-appDir = CreateObject("Scripting.FileSystemObject").GetParentFolderName(WScript.ScriptFullName)
+appDir = fso.GetParentFolderName(WScript.ScriptFullName)
 exePath = appDir & "\Anime Media Center.exe"
+electronExe = appDir & "\node_modules\electron\dist\electron.exe"
 WshShell.CurrentDirectory = appDir
-WshShell.Run """" & exePath & """", 0, False
+
+If fso.FileExists(exePath) Then
+    WshShell.Run """" & exePath & """", 0, False
+ElseIf fso.FileExists(electronExe) Then
+    WshShell.Run """" & electronExe & """ """ & appDir & """", 0, False
+Else
+    WshShell.Run "cmd /c npm start", 0, False
+End If

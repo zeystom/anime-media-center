@@ -279,43 +279,73 @@ export const FolderBrowser: React.FC<FolderBrowserProps> = ({
                   </p>
                 )}
 
-                <p className="text-xs text-zinc-400 pt-1 flex flex-wrap items-center gap-x-3 gap-y-1">
-                  <span>{selectedFolder.episodes.length} Episodes found</span>
-                  <span>•</span>
-                  {selectedFolder.hasEmbeddedDubtitles && (
-                    <span className="inline-flex items-center space-x-1 px-2 py-0.5 rounded bg-purple-500/15 border border-purple-500/30 text-purple-300 font-semibold">
-                      <Subtitles className="w-3 h-3 text-purple-400" />
-                      <span>Dub Sub Embedded</span>
-                    </span>
-                  )}
-                  {(selectedFolder.hasWhisperCount ?? 0) > 0 && (
-                    <>
-                      <span>•</span>
-                      <span className="inline-flex items-center space-x-1 px-2 py-0.5 rounded bg-indigo-500/15 border border-indigo-500/30 text-indigo-300 font-semibold">
+                {(() => {
+                  const badges: React.ReactNode[] = [];
+                  if (selectedFolder.hasEmbeddedDubtitles) {
+                    badges.push(
+                      <span
+                        key="dub"
+                        className="inline-flex items-center space-x-1 px-2 py-0.5 rounded bg-purple-500/15 border border-purple-500/30 text-purple-300 font-semibold"
+                      >
+                        <Subtitles className="w-3 h-3 text-purple-400" />
+                        <span>Dub Sub Embedded</span>
+                      </span>
+                    );
+                  }
+                  if ((selectedFolder.hasWhisperCount ?? 0) > 0) {
+                    badges.push(
+                      <span
+                        key="ai"
+                        className="inline-flex items-center space-x-1 px-2 py-0.5 rounded bg-indigo-500/15 border border-indigo-500/30 text-indigo-300 font-semibold"
+                      >
                         <Subtitles className="w-3 h-3 text-indigo-400" />
-                        <span>{selectedFolder.hasWhisperCount} / {selectedFolder.totalEpisodes} AI Sub</span>
+                        <span>
+                          {selectedFolder.hasWhisperCount} / {selectedFolder.totalEpisodes} AI Sub
+                        </span>
                       </span>
-                    </>
-                  )}
-                  {(selectedFolder.hasExtSubCount ?? 0) > 0 && (
-                    <>
-                      <span>•</span>
-                      <span className="inline-flex items-center space-x-1 px-2 py-0.5 rounded bg-blue-500/15 border border-blue-500/30 text-blue-300 font-semibold">
+                    );
+                  }
+                  if ((selectedFolder.hasExtSubCount ?? 0) > 0) {
+                    badges.push(
+                      <span
+                        key="ext"
+                        className="inline-flex items-center space-x-1 px-2 py-0.5 rounded bg-blue-500/15 border border-blue-500/30 text-blue-300 font-semibold"
+                      >
                         <Subtitles className="w-3 h-3 text-blue-400" />
-                        <span>{selectedFolder.hasExtSubCount} / {selectedFolder.totalEpisodes} Ext Sub</span>
+                        <span>
+                          {selectedFolder.hasExtSubCount} / {selectedFolder.totalEpisodes} Ext Sub
+                        </span>
                       </span>
-                    </>
-                  )}
-                  {!selectedFolder.hasEmbeddedDubtitles && (selectedFolder.hasWhisperCount ?? 0) === 0 && (selectedFolder.hasExtSubCount ?? 0) === 0 && (
-                    <>
-                      <span>•</span>
-                      <span className="inline-flex items-center space-x-1 px-2 py-0.5 rounded bg-zinc-800/80 text-zinc-400 border border-zinc-700/60 font-medium text-[11px]">
+                    );
+                  }
+                  if (badges.length === 0) {
+                    badges.push(
+                      <span
+                        key="none"
+                        className="inline-flex items-center space-x-1 px-2 py-0.5 rounded bg-zinc-800/80 text-zinc-400 border border-zinc-700/60 font-medium text-[11px]"
+                      >
                         <Subtitles className="w-3 h-3 text-zinc-500" />
                         <span>No Subtitles</span>
                       </span>
-                    </>
-                  )}
-                </p>
+                    );
+                  }
+
+                  const items: React.ReactNode[] = [
+                    <span key="count">{selectedFolder.episodes.length} Episodes found</span>,
+                    ...badges,
+                  ];
+
+                  return (
+                    <p className="text-xs text-zinc-400 pt-1 flex flex-wrap items-center gap-x-3 gap-y-1">
+                      {items.map((el, i) => (
+                        <React.Fragment key={i}>
+                          {i > 0 && <span className="text-zinc-600 select-none">•</span>}
+                          {el}
+                        </React.Fragment>
+                      ))}
+                    </p>
+                  );
+                })()}
               </div>
 
               <div className="flex items-center space-x-2.5 shrink-0">
