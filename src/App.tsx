@@ -1,12 +1,15 @@
 import React, { useState, useEffect, useCallback, useMemo, useRef } from 'react';
 import { AlertCircle, X } from 'lucide-react';
 import { Navbar } from './components/Navbar';
-import { HeroContinueWatching } from './components/Library/HeroContinueWatching';
+import { HomeView } from './components/Home/HomeView';
 import { FolderBrowser } from './components/Library/FolderBrowser';
+import { AnimeDetailView, DetailSource } from './components/AnimeDetail/AnimeDetailView';
+import { ScheduleView } from './components/Schedule/ScheduleView';
 import { VideoPlayer } from './components/Player/VideoPlayer';
 import { WhisperStudio } from './components/WhisperStudio/WhisperStudio';
 import { SettingsModal } from './components/SettingsModal';
-import { AnimeFolder, Episode, AppSettings, PlaybackProgress } from './types';
+import { AnimeFolder, Episode, AppSettings, PlaybackProgress, UserLibraryEntry } from './types';
+import { useLocalStatus } from './hooks/useLocalStatus';
 import { ToastProvider, showGlobalToast } from './components/Toast';
 import { getPathBasename, getPathDirname } from './utils/format';
 
@@ -42,11 +45,12 @@ function findLastWatchedFolder(
 
 export const App: React.FC = () => {
   // Navigation & View state
-  const [currentTab, setCurrentTab] = useState<'library' | 'whisper'>('library');
+  const [currentTab, setCurrentTab] = useState<'home' | 'library' | 'schedule' | 'whisper'>('home');
   const [activePlayerEpisode, setActivePlayerEpisode] = useState<Episode | null>(null);
   const [playerInitialTime, setPlayerInitialTime] = useState<number>(0);
   const [settingsOpen, setSettingsOpen] = useState<boolean>(false);
   const [isWhisperActive, setIsWhisperActive] = useState<boolean>(false);
+  const [detailSource, setDetailSource] = useState<DetailSource | null>(null);
 
   // Library & Data state
   const [settings, setSettings] = useState<AppSettings>({
@@ -81,6 +85,7 @@ export const App: React.FC = () => {
     }
   }, [settings.hideDownloadingAnime, selectedFolder, visibleFolders]);
   const [history, setHistory] = useState<Record<string, PlaybackProgress>>({});
+  const [userEntries, setUserEntries] = useState<Record<number, UserLibraryEntry>>({});
   const [loading, setLoading] = useState<boolean>(true);
   const [binaryStatus, setBinaryStatus] = useState<{ ffmpegExists: boolean; whisperExists: boolean }>({
     ffmpegExists: true,
@@ -105,6 +110,14 @@ export const App: React.FC = () => {
     } catch {}
   }, []);
 
+  const refreshUserEntries = useCallback(async () => {
+    if (!window.electronAPI) return;
+    try {
+      const entries = await window.electronAPI.getUserLibrary();
+      setUserEntries(entries || {});
+    } catch {}
+  }, []);
+
   // 1. Load Settings and History on Startup
   const loadInitialData = useCallback(async () => {
     if (!window.electronAPI) {
@@ -119,6 +132,7 @@ export const App: React.FC = () => {
 
       const watchHistory = await window.electronAPI.getAllPlaybackProgress();
       setHistory(watchHistory);
+      refreshUserEntries();
 
       // Scan all configured Library Roots
       const scannedFolders = await window.electronAPI.scanLibrary();
@@ -133,7 +147,7 @@ export const App: React.FC = () => {
     } finally {
       setLoading(false);
     }
-  }, [checkBinariesStatus]);
+  }, [checkBinariesStatus, refreshUserEntries]);
 
   useEffect(() => {
     loadInitialData();
@@ -404,6 +418,9 @@ export const App: React.FC = () => {
     return null;
   }, [history, visibleFolders]);
 
+  // Resolves catalog items (rails, schedule) against local library state for badges
+  const { statusFor } = useLocalStatus(visibleFolders, history, userEntries);
+
   // Change Root Directory
   const handleChangeRoot = async () => {
     if (!window.electronAPI) return;
@@ -461,6 +478,7 @@ export const App: React.FC = () => {
     setActivePlayerEpisode(null);
     const watchHistory = await window.electronAPI.getAllPlaybackProgress();
     setHistory(watchHistory);
+    refreshUserEntries();
   };
 
   // Switch episode inside Player
@@ -611,22 +629,33 @@ export const App: React.FC = () => {
           activePlayerEpisode ? 'hidden' : 'block'
         }`}
       >
+        {/* Home Tab View */}
+        <div className={`h-full overflow-y-auto ${currentTab === 'home' ? 'block' : 'hidden'}`}>
+          <HomeView
+            upNext={
+              mostRecentWatched
+                ? {
+                    progress: mostRecentWatched.progress,
+                    episode: mostRecentWatched.episode,
+                    seasonName: mostRecentWatched.seasonName,
+                    posterUrl: mostRecentWatched.folder?.posterUrl,
+                    bannerUrl: mostRecentWatched.folder?.bannerUrl,
+                    isUpNext: mostRecentWatched.isUpNext,
+                  }
+                : null
+            }
+            folders={visibleFolders}
+            history={history}
+            userEntries={userEntries}
+            onPlayEpisode={handlePlayEpisode}
+            onSelectCatalogItem={(item) => setDetailSource({ kind: 'catalog', item })}
+            onSelectLocalFolder={(folder) => setDetailSource({ kind: 'local', folder })}
+          />
+        </div>
+
         {/* Library Tab View */}
         <div className={`h-full overflow-y-auto ${currentTab === 'library' ? 'block' : 'hidden'}`}>
           <div className="max-w-7xl mx-auto px-6 py-6">
-            {/* Continue Watching Hero Section */}
-            {mostRecentWatched && (
-              <HeroContinueWatching
-                lastWatched={mostRecentWatched.progress}
-                episode={mostRecentWatched.episode}
-                seasonName={mostRecentWatched.seasonName}
-                posterUrl={mostRecentWatched.folder?.posterUrl}
-                bannerUrl={mostRecentWatched.folder?.bannerUrl}
-                isUpNext={mostRecentWatched.isUpNext}
-                onResume={(ep, time) => handlePlayEpisode(ep, time)}
-              />
-            )}
-
             {/* Folder Browser & Episode Grid */}
             <FolderBrowser
               libraryRoot={
@@ -644,8 +673,17 @@ export const App: React.FC = () => {
               onPlayEpisode={(ep) => handlePlayEpisode(ep)}
               onOpenWhisper={handleOpenWhisperForFolder}
               onOpenInExplorer={(p) => window.electronAPI.openFolderInExplorer(p)}
+              onOpenFolderDetails={(folder) => setDetailSource({ kind: 'local', folder })}
             />
           </div>
+        </div>
+
+        {/* Schedule Tab View */}
+        <div className={`h-full overflow-y-auto ${currentTab === 'schedule' ? 'block' : 'hidden'}`}>
+          <ScheduleView
+            onSelectItem={(item) => setDetailSource({ kind: 'catalog', item })}
+            statusFor={statusFor}
+          />
         </div>
 
         {/* Whisper Studio Tab View (Never unmounted so active jobs & terminal logs are preserved) */}
@@ -658,6 +696,25 @@ export const App: React.FC = () => {
           />
         </div>
       </main>
+
+      {/* Anime Detail Overlay (fixed z-40; the fullscreen player at z-50 stays above it).
+          Intentionally kept while detailSource is set: unmounts during playback and
+          re-appears right after the player closes. */}
+      {detailSource && !activePlayerEpisode && (
+        <AnimeDetailView
+          source={detailSource}
+          folders={visibleFolders}
+          history={history}
+          userEntries={userEntries}
+          onClose={() => setDetailSource(null)}
+          onPlayEpisode={handlePlayEpisode}
+          onOpenWhisper={(folder) => {
+            setSelectedFolder(folder);
+            setDetailSource(null);
+            setCurrentTab('whisper');
+          }}
+        />
+      )}
 
       {/* Fullscreen Video Player Modal or Safe Recovery Screen (BUG-01) */}
       {activePlayerEpisode &&

@@ -99,6 +99,7 @@ export interface AnimeFolder {
   posterUrl?: string | null;
   bannerUrl?: string | null;
   canonicalTitle?: string | null;
+  anilistId?: number | null;
   synopsis?: string | null;
   genres?: string[];
   averageScore?: number | null;

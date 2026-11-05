@@ -1,5 +1,5 @@
 import React, { useState, useMemo } from 'react';
-import { RefreshCw, ExternalLink, Sparkles, Subtitles, Film, Search, Star, X, ArrowDownToLine } from 'lucide-react';
+import { RefreshCw, ExternalLink, Sparkles, Subtitles, Film, Search, Star, X, ArrowDownToLine, Info } from 'lucide-react';
 import { AnimeFolder, Episode, PlaybackProgress } from '../../types';
 import { cleanSeriesTitle, extractReleaseTags, isFolderMovie } from '../../utils/format';
 import { EpisodeCard } from './EpisodeCard';
@@ -17,6 +17,7 @@ interface FolderBrowserProps {
   onPlayEpisode: (episode: Episode) => void;
   onOpenWhisper: (folder: AnimeFolder) => void;
   onOpenInExplorer: (folderPath: string) => void;
+  onOpenFolderDetails?: (folder: AnimeFolder) => void;
 }
 
 export const FolderBrowser: React.FC<FolderBrowserProps> = ({
@@ -31,6 +32,7 @@ export const FolderBrowser: React.FC<FolderBrowserProps> = ({
   onPlayEpisode,
   onOpenWhisper,
   onOpenInExplorer,
+  onOpenFolderDetails,
 }) => {
   const [searchQuery, setSearchQuery] = useState<string>('');
 
@@ -209,6 +211,22 @@ export const FolderBrowser: React.FC<FolderBrowserProps> = ({
                         </span>
                       )}
                     </div>
+
+                    {/* Hover Info Button: opens the unified detail page without selecting the folder.
+                        Sits under the top-right badge chip so it never overlaps it. */}
+                    {onOpenFolderDetails && (
+                      <button
+                        type="button"
+                        onClick={(e) => {
+                          e.stopPropagation();
+                          onOpenFolderDetails(folder);
+                        }}
+                        title="View title details"
+                        className="absolute top-9 right-2.5 z-20 hidden group-hover:flex h-6 w-6 items-center justify-center rounded-md bg-black/70 hover:bg-black/90 text-zinc-200 hover:text-white border border-white/15 backdrop-blur-md shadow-md transition-colors"
+                      >
+                        <Info className="w-3.5 h-3.5" />
+                      </button>
+                    )}
 
                     {/* Bottom Text & Score - Razor sharp typography without blur */}
                     <div className="absolute bottom-0 left-0 right-0 p-3 pointer-events-none z-10 flex flex-col justify-end space-y-1">

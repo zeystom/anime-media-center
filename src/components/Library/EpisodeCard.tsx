@@ -1,5 +1,5 @@
 import React, { useState, useEffect, useMemo } from 'react';
-import { Play, Subtitles, CheckCircle2, ArrowDownToLine } from 'lucide-react';
+import { Play, Subtitles, CheckCircle2, ArrowDownToLine, Check } from 'lucide-react';
 import { Episode, PlaybackProgress } from '../../types';
 import { formatTime, formatFileSize, cleanEpisodeTitle, formatEpisodeDisplayTitle } from '../../utils/format';
 import { showGlobalToast } from '../Toast';
@@ -111,6 +111,16 @@ export const EpisodeCard: React.FC<EpisodeCardProps> = ({ episode, progress, onP
             <div className="w-12 h-12 rounded-full bg-red-600/90 text-white flex items-center justify-center shadow-lg shadow-red-600/50 transform group-hover:scale-110 transition-transform">
               <Play className="w-6 h-6 ml-1 fill-white" />
             </div>
+          </div>
+        )}
+
+        {/* Watched Indicator (Top-Right of Thumb) */}
+        {progress?.completed && !episode.isDownloading && (
+          <div
+            title="Watched"
+            className="absolute top-2 right-2 z-20 flex h-6 w-6 items-center justify-center rounded-full bg-emerald-600/95 text-white shadow-md border border-emerald-300/40 backdrop-blur-sm"
+          >
+            <Check className="w-3.5 h-3.5" />
           </div>
         )}
 

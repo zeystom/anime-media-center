@@ -1,9 +1,11 @@
 import React from 'react';
-import { Film, Sparkles, Settings as SettingsIcon, Terminal, Clapperboard } from 'lucide-react';
+import { House, Film, CalendarDays, Sparkles, Settings as SettingsIcon, Terminal, Clapperboard } from 'lucide-react';
+
+export type AppTab = 'home' | 'library' | 'schedule' | 'whisper';
 
 interface NavbarProps {
-  currentTab: 'library' | 'whisper';
-  onSelectTab: (tab: 'library' | 'whisper') => void;
+  currentTab: AppTab;
+  onSelectTab: (tab: AppTab) => void;
   onOpenSettings: () => void;
   isWhisperActive: boolean;
 }
@@ -17,7 +19,7 @@ export const Navbar: React.FC<NavbarProps> = ({
   return (
     <header className="h-14 border-b border-zinc-800/80 bg-[#121216] px-6 flex items-center justify-between z-30 select-none">
       {/* Brand Logo & Name */}
-      <div className="flex items-center space-x-3 cursor-pointer" onClick={() => onSelectTab('library')}>
+      <div className="flex items-center space-x-3 cursor-pointer" onClick={() => onSelectTab('home')}>
         <div className="w-8 h-8 rounded-lg bg-gradient-to-tr from-red-600 to-indigo-600 flex items-center justify-center shadow-lg shadow-red-600/20">
           <Clapperboard className="w-4 h-4 text-white" />
         </div>
@@ -31,6 +33,18 @@ export const Navbar: React.FC<NavbarProps> = ({
       {/* Main Navigation Tabs */}
       <nav className="flex items-center space-x-1 bg-zinc-900/80 p-1 rounded-lg border border-zinc-800">
         <button
+          onClick={() => onSelectTab('home')}
+          className={`flex items-center space-x-2 px-4 py-1.5 rounded-md text-sm font-medium transition-all ${
+            currentTab === 'home'
+              ? 'bg-zinc-800 text-white shadow-sm'
+              : 'text-zinc-400 hover:text-zinc-200 hover:bg-zinc-800/50'
+          }`}
+        >
+          <House className="w-4 h-4" />
+          <span>Home</span>
+        </button>
+
+        <button
           onClick={() => onSelectTab('library')}
           className={`flex items-center space-x-2 px-4 py-1.5 rounded-md text-sm font-medium transition-all ${
             currentTab === 'library'
@@ -40,6 +54,18 @@ export const Navbar: React.FC<NavbarProps> = ({
         >
           <Film className="w-4 h-4" />
           <span>Library</span>
+        </button>
+
+        <button
+          onClick={() => onSelectTab('schedule')}
+          className={`flex items-center space-x-2 px-4 py-1.5 rounded-md text-sm font-medium transition-all ${
+            currentTab === 'schedule'
+              ? 'bg-zinc-800 text-white shadow-sm'
+              : 'text-zinc-400 hover:text-zinc-200 hover:bg-zinc-800/50'
+          }`}
+        >
+          <CalendarDays className="w-4 h-4" />
+          <span>Schedule</span>
         </button>
 
         <button

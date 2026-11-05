@@ -3,7 +3,10 @@
  * Target: Library UI/UX Polish & Consistency
  *
  * Verifies:
- * 1. HeroContinueWatching & MovieHeroCard deduplication, custom event lifecycle, unmount cleanup, unexpected payloads
+ * 1. UpNextWidget (Home tab UP NEXT banner, the Phase 3 UI refactor replacement for the deleted
+ *    Phase 2 hero resume banner): SSR render verification against adversarial payloads
+ *    (duration 0 / currentTime 0, chip switching, poster/banner fallbacks, empty episode numbers,
+ *    render storm) plus the MovieHeroCard broadcast vestige.
  * 2. App.tsx Global Escape key listener: drawer presence (.translate-x-0), dialog presence ([role="dialog"], [data-modal="true"]), e.defaultPrevented, normal close
  * 3. WhisperStudio visual cleanup: no raw CLI flags, chip rendering, card styling
  * 4. SettingsModal inline confirmation state machine & accessibility
@@ -51,7 +54,7 @@ const tempDir = path.join(__dirname, 'temp-challenger2-m4-bundle');
 
 await esbuild.build({
   entryPoints: {
-    HeroContinueWatching: './src/components/Library/HeroContinueWatching.tsx',
+    UpNextWidget: './src/components/Home/UpNextWidget.tsx',
     WhisperStudio: './src/components/WhisperStudio/WhisperStudio.tsx',
   },
   bundle: true,
@@ -61,7 +64,7 @@ await esbuild.build({
   external: ['react', 'react-dom', 'react-dom/server', 'react/jsx-runtime', 'lucide-react', 'electron'],
 });
 
-const { HeroContinueWatching } = await import(`file://${path.join(tempDir, 'HeroContinueWatching.js').replace(/\\/g, '/')}`);
+const { UpNextWidget } = await import(`file://${path.join(tempDir, 'UpNextWidget.js').replace(/\\/g, '/')}`);
 const { WhisperStudio } = await import(`file://${path.join(tempDir, 'WhisperStudio.js').replace(/\\/g, '/')}`);
 
 // Cleanup bundle artifacts
@@ -70,11 +73,11 @@ try {
 } catch {}
 
 // ===========================================================================
-// CHALLENGE GROUP 1: HeroContinueWatching & MovieHeroCard Deduplication
+// CHALLENGE GROUP 1: UP NEXT Widget SSR Rendering & Adversarial Payloads
 // ===========================================================================
-console.log('--- CHALLENGE GROUP 1: Hero Card Deduplication & Event Lifecycle ---');
+console.log('--- CHALLENGE GROUP 1: UpNextWidget Rendering & Adversarial Payloads ---');
 
-// Mock Window & DOM Environment for Hero Card Deduplication
+// Mock Window & DOM Environment (used by the Group 2 App escape-key harness)
 class MockDOMWindow {
   constructor() {
     this.listeners = new Map();
@@ -124,6 +127,8 @@ class MockDOMWindow {
 }
 
 // 1.1 MovieHeroCard Broadcast on Mount & Cleanup on Unmount
+// NOTE (Phase 3 UI refactor): UpNextWidget now lives on the separate Home tab, so nothing listens
+// to this channel anymore; the dispatch remains in MovieHeroCard as a harmless vestige we keep covered.
 runTest('1.1 MovieHeroCard dispatches active detail on mount and null on unmount', () => {
   const movieHeroCardSrc = fs.readFileSync(
     path.join(__dirname, 'src', 'components', 'Library', 'MovieHeroCard.tsx'),
@@ -153,223 +158,140 @@ runTest('1.1 MovieHeroCard dispatches active detail on mount and null on unmount
   );
 });
 
-// 1.2 HeroContinueWatching Event Listener Lifecycle & Unmount Cleanup
-runTest('1.2 HeroContinueWatching attaches and properly detaches movie-hero-active-change listener', () => {
-  const mockWindow = new MockDOMWindow();
+// ---------------------------------------------------------------------------
+// UpNextWidget SSR harness: UpNextWidget uses framer-motion (motion.div), which
+// renders fine under react-dom/server's renderToString (static markup with
+// initial styles) — the same empirical approach used for WhisperStudio below.
+// React SSR inserts <!-- --> separators between adjacent text nodes; we strip
+// them so assertions match the user-visible text.
+// ---------------------------------------------------------------------------
+function renderUpNext(data) {
+  return renderToString(React.createElement(UpNextWidget, { data, onPlay: () => {} }));
+}
 
-  // Emulate HeroContinueWatching state machine logic
-  class HeroContinueStateHarness {
-    constructor(lastWatched, isMovieHeroActive, selectedFolderPath) {
-      this.lastWatched = lastWatched;
-      this.isMovieHeroActive = isMovieHeroActive;
-      this.selectedFolderPath = selectedFolderPath;
-      this.activeMovieHeroPath = null;
-      this.mounted = false;
+function cleanSsr(html) {
+  return html.replace(/<!-- -->/g, '');
+}
 
-      this.handleMovieHeroChange = (e) => {
-        const custom = e;
-        this.activeMovieHeroPath = custom.detail?.folderPath || null;
-      };
-    }
+function upNextPayload({ progress = {}, episode = {}, ...rest } = {}) {
+  return {
+    progress: {
+      filePath: 'C:/Anime/Frieren/ep01.mkv',
+      folderPath: 'C:/Anime/Frieren',
+      fileName: 'ep01.mkv',
+      currentTime: 240,
+      duration: 1440,
+      lastWatchedAt: 1,
+      completed: false,
+      ...progress,
+    },
+    episode: {
+      fileName: 'ep01.mkv',
+      filePath: 'C:/Anime/Frieren/ep01.mkv',
+      episodeNumber: 1,
+      hasExternalSrt: false,
+      hasWhisperSrt: false,
+      hasEmbeddedSubtitles: true,
+      hasEmbeddedDubtitles: false,
+      ...episode,
+    },
+    seasonName: "Frieren: Beyond Journey's End",
+    posterUrl: 'https://example.com/frieren-poster.jpg',
+    bannerUrl: 'https://example.com/frieren-banner.jpg',
+    isUpNext: false,
+    ...rest,
+  };
+}
 
-    mount(win, initialEl = null) {
-      this.mounted = true;
-      if (initialEl) {
-        this.activeMovieHeroPath = initialEl.getAttribute('data-folder-path') || null;
-      }
-      win.addEventListener('movie-hero-active-change', this.handleMovieHeroChange);
-    }
+// 1.2 Adversarial payload: progress.duration === 0 (progress-bar zero-guard)
+runTest('1.2 UpNextWidget renders without throwing when progress.duration === 0', () => {
+  let html;
+  assert.doesNotThrow(() => {
+    html = cleanSsr(renderUpNext(upNextPayload({ progress: { duration: 0, currentTime: 0 } })));
+  }, 'Rendering with duration 0 must not throw');
 
-    unmount(win) {
-      this.mounted = false;
-      win.removeEventListener('movie-hero-active-change', this.handleMovieHeroChange);
-    }
+  assert(html.length > 0, 'Widget must render non-empty markup');
+  assert(/width:\s*0%/.test(html), 'Progress bar fill must compute 0% via the zero-guard, never NaN%');
+  assert(!html.includes('NaN') && !html.includes('Infinity'), 'No NaN/Infinity may leak into the DOM');
+  assert(html.includes('00:00'), 'Timecodes must render via formatTime even at zero progress');
+});
 
-    isDuplicate() {
-      return Boolean(
-        this.isMovieHeroActive ||
-        (this.selectedFolderPath && this.selectedFolderPath === this.lastWatched.folderPath) ||
-        (this.activeMovieHeroPath && this.activeMovieHeroPath === this.lastWatched.folderPath)
-      );
+// 1.3 Adversarial payload: currentTime === 0 and completed episodes
+runTest('1.3 UpNextWidget renders without throwing when currentTime === 0 or episode is completed', () => {
+  let zeroCurrent;
+  assert.doesNotThrow(() => {
+    zeroCurrent = cleanSsr(renderUpNext(upNextPayload({ progress: { currentTime: 0, completed: false } })));
+  }, 'Rendering with currentTime 0 must not throw');
+  assert(zeroCurrent.length > 0 && !zeroCurrent.includes('NaN'), 'currentTime 0 renders safely without NaN');
+
+  let completed;
+  assert.doesNotThrow(() => {
+    completed = cleanSsr(renderUpNext(upNextPayload({ progress: { currentTime: 1500, duration: 1440, completed: true } })));
+  }, 'Rendering a completed episode must not throw');
+  assert(completed.length > 0, 'Completed episode renders non-empty markup');
+  assert(/width:\s*100%/.test(completed), 'Over-watched completed progress clamps the bar to 100%');
+  assert(completed.includes('25:00 / 24:00'), 'Completed episode still renders its timecode readout');
+});
+
+// 1.4 Chip switching: 'Up Next' when isUpNext, 'Continue Watching' otherwise
+runTest('1.4 UpNextWidget renders UP NEXT when isUpNext is true and CONTINUE WATCHING otherwise', () => {
+  const upNextHtml = cleanSsr(renderUpNext(upNextPayload({ isUpNext: true })));
+  assert(upNextHtml.includes('Up Next'), 'isUpNext=true must render the Up Next chip');
+  assert(!upNextHtml.includes('Continue Watching'), 'isUpNext=true must not render the Continue Watching chip');
+  assert(upNextHtml.includes('uppercase'), 'Chip label must be presented uppercase');
+
+  const continueHtml = cleanSsr(renderUpNext(upNextPayload({ isUpNext: false })));
+  assert(continueHtml.includes('Continue Watching'), 'isUpNext=false must render the Continue Watching chip');
+  assert(!continueHtml.includes('Up Next'), 'isUpNext=false must not render the Up Next chip');
+});
+
+// 1.5 Adversarial payload: null / undefined / '' poster & banner URLs
+runTest('1.5 UpNextWidget renders poster fallback gracefully when posterUrl/bannerUrl are null, undefined or empty', () => {
+  for (const posterUrl of [null, undefined, '']) {
+    for (const bannerUrl of [null, undefined, '']) {
+      let html;
+      assert.doesNotThrow(() => {
+        html = cleanSsr(renderUpNext(upNextPayload({ posterUrl, bannerUrl })));
+      }, `posterUrl=${posterUrl}, bannerUrl=${bannerUrl} must not crash the render`);
+
+      assert(html.includes('>F</span>'), 'Fallback initial of the series title must render when no poster resolves');
+      assert(!html.includes('src="undefined"') && !html.includes('src="null"'), 'No broken undefined/null img src may be emitted');
     }
   }
-
-  const lastWatched = { folderPath: 'C:/Anime/Frieren', fileName: 'Frieren_01.mkv', currentTime: 120, duration: 1400 };
-  const harness = new HeroContinueStateHarness(lastWatched, false, undefined);
-
-  assert.strictEqual(mockWindow.listenerCount('movie-hero-active-change'), 0);
-  harness.mount(mockWindow);
-  assert.strictEqual(mockWindow.listenerCount('movie-hero-active-change'), 1, 'Listener registered on mount');
-
-  // Unmount must clean up
-  harness.unmount(mockWindow);
-  assert.strictEqual(mockWindow.listenerCount('movie-hero-active-change'), 0, 'Listener removed on unmount');
-
-  // Verify events dispatched after unmount do not affect state
-  mockWindow.dispatchEvent(
-    new CustomEvent('movie-hero-active-change', {
-      detail: { folderPath: 'C:/Anime/Frieren' },
-    })
-  );
-  assert.strictEqual(harness.activeMovieHeroPath, null, 'Unmounted component state unchanged');
 });
 
-// 1.3 HeroContinueWatching Initial State from Existing DOM element
-runTest('1.3 HeroContinueWatching reads data-folder-path if MovieHeroCard already in DOM at mount', () => {
-  const mockWindow = new MockDOMWindow();
-  mockWindow.setMockElement('[data-movie-hero-card="true"]', {
-    'data-folder-path': 'C:/Anime/SpiritedAway',
-  });
+// 1.6 Adversarial payload: empty progress.episodeNumber (label fallback)
+runTest('1.6 UpNextWidget play button label falls back when progress.episodeNumber is empty', () => {
+  for (const episodeNumber of [undefined, null, '']) {
+    const html = cleanSsr(renderUpNext(upNextPayload({ progress: { episodeNumber } })));
+    assert(html.includes('Play Episode'), `episodeNumber=${episodeNumber} must fall back to the "Play Episode" label`);
+    assert(html.includes('title="Play episode"'), `episodeNumber=${episodeNumber} must fall back to the "Play episode" tooltip`);
+    assert(!html.includes('>undefined<') && !html.includes('>null<'), 'No raw undefined/null may leak into the DOM');
+  }
 
-  const lastWatchedMatch = { folderPath: 'C:/Anime/SpiritedAway', fileName: 'movie.mkv', currentTime: 50, duration: 7200 };
-  const lastWatchedDiff = { folderPath: 'C:/Anime/VinlandSaga', fileName: 'ep1.mkv', currentTime: 50, duration: 1400 };
-
-  // Match scenario
-  const el = mockWindow.querySelector('[data-movie-hero-card="true"]');
-  const initialPath = el?.getAttribute('data-folder-path') || null;
-  assert.strictEqual(initialPath, 'C:/Anime/SpiritedAway');
-
-  const isDupMatch = Boolean(initialPath === lastWatchedMatch.folderPath);
-  assert.strictEqual(isDupMatch, true, 'Immediately deduplicates matching movie hero');
-
-  const isDupDiff = Boolean(initialPath === lastWatchedDiff.folderPath);
-  assert.strictEqual(isDupDiff, false, 'Does not deduplicate when folder path differs');
+  const labeled = cleanSsr(renderUpNext(upNextPayload({ progress: { episodeNumber: 1 } })));
+  assert(labeled.includes('Play 1'), 'Numeric episodeNumber renders as "Play 1"');
+  assert(labeled.includes('title="Play 1"'), 'Numeric episodeNumber renders the matching tooltip');
 });
 
-// 1.4 Unexpected Event Payload Robustness (null, undefined, malformed, empty)
-runTest('1.4 HeroContinueWatching safely handles null, undefined, and malformed event payloads', () => {
-  const mockWindow = new MockDOMWindow();
-  let activePath = 'INITIAL';
+// 1.7 Render storm: 1,000 adversarial payload alternations remain stable (mirrors the old event-storm stress)
+runTest('1.7 UpNextWidget SSR render storm (1,000 cycles across adversarial payload alternations)', () => {
+  const payloads = [
+    upNextPayload({ progress: { duration: 0, currentTime: 0 }, isUpNext: true }),
+    upNextPayload({ progress: { duration: -5, currentTime: NaN }, posterUrl: null, bannerUrl: null }),
+    upNextPayload({ progress: { episodeNumber: '' }, posterUrl: '', bannerUrl: '' }),
+    upNextPayload({ isUpNext: true, posterUrl: undefined, bannerUrl: undefined }),
+  ];
 
-  const handler = (e) => {
-    const custom = e;
-    activePath = custom.detail?.folderPath || null;
-  };
-  mockWindow.addEventListener('movie-hero-active-change', handler);
-
-  // Payload: null detail (unmount signal)
-  mockWindow.dispatchEvent(new CustomEvent('movie-hero-active-change', { detail: null }));
-  assert.strictEqual(activePath, null, 'detail: null safely resolves to null');
-
-  // Payload: undefined detail
-  mockWindow.dispatchEvent(new CustomEvent('movie-hero-active-change', { detail: undefined }));
-  assert.strictEqual(activePath, null, 'detail: undefined safely resolves to null');
-
-  // Payload: empty object
-  mockWindow.dispatchEvent(new CustomEvent('movie-hero-active-change', { detail: {} }));
-  assert.strictEqual(activePath, null, 'detail: {} safely resolves to null');
-
-  // Payload: empty folderPath string
-  mockWindow.dispatchEvent(new CustomEvent('movie-hero-active-change', { detail: { folderPath: '' } }));
-  assert.strictEqual(activePath, null, 'detail: { folderPath: "" } safely resolves to null');
-
-  // Payload: malformed numerical folderPath
-  mockWindow.dispatchEvent(new CustomEvent('movie-hero-active-change', { detail: { folderPath: 99999 } }));
-  assert.strictEqual(activePath, 99999, 'malformed number handled without throwing');
-  assert.strictEqual(Boolean(activePath === 'C:/Anime/SomeFolder'), false);
-
-  // Payload: valid matching folderPath
-  mockWindow.dispatchEvent(new CustomEvent('movie-hero-active-change', { detail: { folderPath: 'C:/Anime/Frieren' } }));
-  assert.strictEqual(activePath, 'C:/Anime/Frieren');
-
-  mockWindow.removeEventListener('movie-hero-active-change', handler);
-});
-
-// 1.5 Rapid Event Dispatches and State Machine Stability (1,000 cycles)
-runTest('1.5 Deduplication state machine remains consistent under rapid event storm (1,000 cycles)', () => {
-  const mockWindow = new MockDOMWindow();
-  const targetFolder = 'C:/Anime/MovieTarget';
-
-  const lastWatched = {
-    folderPath: targetFolder,
-    fileName: 'movie.mkv',
-    currentTime: 300,
-    duration: 6000,
-  };
-
-  let activeMovieHeroPath = null;
-  mockWindow.addEventListener('movie-hero-active-change', (e) => {
-    activeMovieHeroPath = e.detail?.folderPath || null;
-  });
-
-  const getIsDuplicate = () => Boolean(activeMovieHeroPath && activeMovieHeroPath === lastWatched.folderPath);
+  const baselines = payloads.map((p) => cleanSsr(renderUpNext(p)).length);
+  assert(baselines.every((len) => len > 0), 'All adversarial payloads must render non-empty markup');
 
   for (let i = 0; i < 1000; i++) {
-    if (i % 3 === 0) {
-      mockWindow.dispatchEvent(new CustomEvent('movie-hero-active-change', { detail: { folderPath: targetFolder } }));
-      assert.strictEqual(getIsDuplicate(), true, `Cycle ${i}: Expected duplicate`);
-    } else if (i % 3 === 1) {
-      mockWindow.dispatchEvent(new CustomEvent('movie-hero-active-change', { detail: { folderPath: 'C:/Anime/Other' } }));
-      assert.strictEqual(getIsDuplicate(), false, `Cycle ${i}: Expected non-duplicate for different path`);
-    } else {
-      mockWindow.dispatchEvent(new CustomEvent('movie-hero-active-change', { detail: null }));
-      assert.strictEqual(getIsDuplicate(), false, `Cycle ${i}: Expected non-duplicate for null detail`);
-    }
+    const slot = i % payloads.length;
+    const html = cleanSsr(renderUpNext(payloads[slot]));
+    assert(html.length > 0 && !html.includes('NaN'), `Cycle ${i}: render must stay non-empty and NaN-free`);
+    assert.strictEqual(html.length, baselines[slot], `Cycle ${i}: markup must be deterministic per payload`);
   }
-});
-
-// 1.6 HeroContinueWatching SSR / Component render verification
-runTest('1.6 HeroContinueWatching returns null when isMovieHeroActive prop is true', () => {
-  const dummyEpisode = {
-    fileName: 'ep01.mkv',
-    filePath: 'C:/Anime/Frieren/ep01.mkv',
-    episodeNumber: 1,
-    hasExternalSrt: false,
-    hasWhisperSrt: false,
-    hasEmbeddedSubtitles: true,
-    hasEmbeddedDubtitles: false,
-  };
-
-  const html = renderToString(
-    React.createElement(HeroContinueWatching, {
-      lastWatched: {
-        folderPath: 'C:/Anime/Frieren',
-        filePath: 'C:/Anime/Frieren/ep01.mkv',
-        fileName: 'ep01.mkv',
-        currentTime: 240,
-        duration: 1440,
-        episodeNumber: 1,
-      },
-      episode: dummyEpisode,
-      seasonName: 'Frieren: Beyond Journey\'s End',
-      isMovieHeroActive: true, // Should suppress rendering
-      onResume: () => {},
-    })
-  );
-
-  assert.strictEqual(html, '', 'HeroContinueWatching must render nothing when isMovieHeroActive is true');
-});
-
-runTest('1.7 HeroContinueWatching renders full card when not duplicated', () => {
-  const dummyEpisode = {
-    fileName: 'ep01.mkv',
-    filePath: 'C:/Anime/Frieren/ep01.mkv',
-    episodeNumber: 1,
-    hasExternalSrt: false,
-    hasWhisperSrt: false,
-    hasEmbeddedSubtitles: true,
-    hasEmbeddedDubtitles: false,
-  };
-
-  const html = renderToString(
-    React.createElement(HeroContinueWatching, {
-      lastWatched: {
-        folderPath: 'C:/Anime/Frieren',
-        filePath: 'C:/Anime/Frieren/ep01.mkv',
-        fileName: 'ep01.mkv',
-        currentTime: 240,
-        duration: 1440,
-        episodeNumber: 1,
-      },
-      episode: dummyEpisode,
-      seasonName: 'Frieren: Beyond Journey\'s End',
-      isMovieHeroActive: false,
-      onResume: () => {},
-    })
-  );
-
-  assert(html.includes('Continue Watching'), 'Must render Continue Watching badge');
-  assert(html.includes('Resume from'), 'Must render Resume button');
 });
 
 // ===========================================================================

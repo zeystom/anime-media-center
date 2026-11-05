@@ -17,6 +17,7 @@ export interface KitsuEpisodeInfo {
 export interface KitsuAnimeCache {
   animeId: string;
   malId?: number | null;
+  anilistId?: number | null;
   canonicalTitle: string;
   posterUrl: string | null;
   bannerUrl?: string | null;
@@ -164,6 +165,7 @@ async function fetchAniListMetadata(
   targetSeason: number | 'final' | null = null
 ): Promise<{
   malId?: number | null;
+  anilistId: number | null;
   canonicalTitle: string;
   posterUrl: string | null;
   bannerUrl: string | null;
@@ -253,6 +255,7 @@ async function fetchAniListMetadata(
   }
 
   const malId = media.idMal || null;
+  const anilistId = typeof media.id === 'number' ? media.id : null;
   const canonicalTitle = media.title?.english || media.title?.romaji || query;
   const posterUrl = media.coverImage?.extraLarge || media.coverImage?.large || null;
   const bannerUrl = media.bannerImage || null;
@@ -278,6 +281,7 @@ async function fetchAniListMetadata(
 
   return {
     malId,
+    anilistId,
     canonicalTitle,
     posterUrl,
     bannerUrl,
@@ -528,6 +532,7 @@ export async function getKitsuMetadata(rawSeriesName: string): Promise<KitsuAnim
       }
 
       const malId = aniList?.malId || null;
+      const anilistId = aniList?.anilistId ?? null;
       const bannerUrl = aniList?.bannerUrl || null;
       const synopsis = aniList?.synopsis || null;
       const genres = aniList?.genres || [];
@@ -536,6 +541,7 @@ export async function getKitsuMetadata(rawSeriesName: string): Promise<KitsuAnim
       const result: KitsuAnimeCache = {
         animeId,
         malId,
+        anilistId,
         canonicalTitle,
         posterUrl,
         bannerUrl,

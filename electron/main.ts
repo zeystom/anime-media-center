@@ -509,6 +509,7 @@ function setupIpcHandlers() {
             posterUrl: kitsuData?.posterUrl || null,
             bannerUrl: kitsuData?.bannerUrl || null,
             canonicalTitle: kitsuData?.canonicalTitle || null,
+            anilistId: kitsuData?.anilistId ?? null,
             synopsis: kitsuData?.synopsis || null,
             genres: kitsuData?.genres || [],
             averageScore: kitsuData?.averageScore || null,

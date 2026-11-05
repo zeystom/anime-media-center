@@ -6,7 +6,7 @@
  * 1. EpisodeCard: Subtitle False Negative fix (hasEmbeddedSubtitles), showGlobalToast replacement, hover jitter fix
  * 2. MovieHeroCard: alert() replacement, hasEmbeddedSubtitles badge, duplicate button/badge clutter removal, movie hero broadcast
  * 3. FolderBrowser: Dedicated search empty state with "Clear Search", no episode grid or missing folder box on 0 search matches, consolidated subtitle status
- * 4. HeroContinueWatching: Deduplicated presentation when continue-watching item is selected as movie hero card
+ * 4. UpNextWidget / HomeView / App.tsx (Phase 3 UI refactor): compact UP NEXT / CONTINUE WATCHING resume banner on the new Home tab, HomeView block composition, home-tab-only wiring (replaces the deleted Phase 2 hero resume banner and its dedup logic)
  * 5. SettingsModal: Confirmation dialog before removing media folder, modal accessibility attributes
  * 6. WhisperStudio: Duplicate banner cleanup, developer CLI dump replaced with feature chips, harmonized cards
  * 7. App.tsx: Refined Escape key listener prevents closing video player when episode drawer or modal is open
@@ -43,7 +43,8 @@ console.log('================================================================\n'
 const episodeCardFile = path.join(__dirname, 'src', 'components', 'Library', 'EpisodeCard.tsx');
 const movieHeroCardFile = path.join(__dirname, 'src', 'components', 'Library', 'MovieHeroCard.tsx');
 const folderBrowserFile = path.join(__dirname, 'src', 'components', 'Library', 'FolderBrowser.tsx');
-const heroContinueFile = path.join(__dirname, 'src', 'components', 'Library', 'HeroContinueWatching.tsx');
+const upNextWidgetFile = path.join(__dirname, 'src', 'components', 'Home', 'UpNextWidget.tsx');
+const homeViewFile = path.join(__dirname, 'src', 'components', 'Home', 'HomeView.tsx');
 const settingsModalFile = path.join(__dirname, 'src', 'components', 'SettingsModal.tsx');
 const whisperStudioFile = path.join(__dirname, 'src', 'components', 'WhisperStudio', 'WhisperStudio.tsx');
 const appFile = path.join(__dirname, 'src', 'App.tsx');
@@ -52,7 +53,8 @@ const appFile = path.join(__dirname, 'src', 'App.tsx');
 const episodeCardSrc = fs.readFileSync(episodeCardFile, 'utf-8');
 const movieHeroCardSrc = fs.readFileSync(movieHeroCardFile, 'utf-8');
 const folderBrowserSrc = fs.readFileSync(folderBrowserFile, 'utf-8');
-const heroContinueSrc = fs.readFileSync(heroContinueFile, 'utf-8');
+const upNextWidgetSrc = fs.readFileSync(upNextWidgetFile, 'utf-8');
+const homeViewSrc = fs.readFileSync(homeViewFile, 'utf-8');
 const settingsModalSrc = fs.readFileSync(settingsModalFile, 'utf-8');
 const whisperStudioSrc = fs.readFileSync(whisperStudioFile, 'utf-8');
 const appSrc = fs.readFileSync(appFile, 'utf-8');
@@ -175,23 +177,55 @@ runTest('3.5 Header subtitle badge soup consolidated into clean status pill refl
   );
 });
 
-console.log('\n--- TEST GROUP 4: HeroContinueWatching Deduplication ---');
+console.log('\n--- TEST GROUP 4: UP NEXT / Home Composition ---');
 
-runTest('4.1 HeroContinueWatching deduplicates presentation when active as movie hero card', () => {
+runTest('4.1 UpNextWidget is a compact resume banner with timecodes, chips and play action', () => {
   assert(
-    heroContinueSrc.includes('isDuplicate') && heroContinueSrc.includes('return null;'),
-    'HeroContinueWatching must return null when duplicated by active movie hero card'
+    upNextWidgetSrc.includes('formatTime('),
+    'UpNextWidget must render timecodes via formatTime'
   );
   assert(
-    heroContinueSrc.includes('isMovieHeroActive') || heroContinueSrc.includes('activeMovieHeroPath'),
-    'HeroContinueWatching must track active movie hero state'
+    upNextWidgetSrc.includes('onPlay(episode, startAt)'),
+    'UpNextWidget must invoke onPlay with the episode and resume offset'
+  );
+  assert(
+    upNextWidgetSrc.includes("'Up Next'") && upNextWidgetSrc.includes("'Continue Watching'"),
+    'UpNextWidget must render both UP NEXT and CONTINUE WATCHING chip labels'
+  );
+  assert(
+    upNextWidgetSrc.includes('uppercase'),
+    'UpNextWidget chip labels must be presented uppercase (UP NEXT / CONTINUE WATCHING)'
   );
 });
 
-runTest('4.2 HeroContinueWatching listens for movie-hero-active-change events', () => {
+runTest('4.2 HomeView composes the strict Home block order', () => {
   assert(
-    heroContinueSrc.includes("'movie-hero-active-change'"),
-    'HeroContinueWatching must subscribe to movie-hero-active-change'
+    homeViewSrc.includes('UpNextWidget') &&
+      homeViewSrc.includes('DownloadedRail') &&
+      homeViewSrc.includes('SeasonHero') &&
+      homeViewSrc.includes('CatalogRail'),
+    'HomeView must reference UpNextWidget, DownloadedRail, SeasonHero and CatalogRail'
+  );
+  const order = ['UpNextWidget', 'DownloadedRail', 'SeasonHero', 'CatalogRail'].map((name) =>
+    homeViewSrc.indexOf(name)
+  );
+  assert(
+    order.every((idx, i) => idx !== -1 && (i === 0 || idx > order[i - 1])),
+    'HomeView must compose blocks in order: UpNextWidget, DownloadedRail, SeasonHero, CatalogRail'
+  );
+});
+
+runTest('4.3 App renders HomeView on the home tab only and no longer references the deleted hero resume banner', () => {
+  // Name of the Phase 2 component deleted by the Phase 3 refactor (joined at runtime to keep
+  // this suite free of dangling references to the removed file).
+  const deletedHeroComponent = ['Hero', 'Continue', 'Watching'].join('');
+  assert(
+    appSrc.includes("currentTab === 'home' ? 'block' : 'hidden'") && appSrc.includes('<HomeView'),
+    "App.tsx must gate the HomeView render behind currentTab === 'home'"
+  );
+  assert(
+    !appSrc.includes(deletedHeroComponent),
+    'App.tsx must no longer import or render the deleted hero resume banner component'
   );
 });
 
