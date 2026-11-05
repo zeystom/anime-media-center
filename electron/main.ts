@@ -17,6 +17,9 @@ import { userLibrary, UserListStatus } from './userLibrary';
 import { computeDiskUsage, computeStorageOverview, deleteAnime, deleteEpisodes } from './libraryManager';
 import { syncBackupNow, getBackupStatus, detectRestoreState, restoreFromBackup, scheduleBackupSync } from './userDataBackup';
 import { exportWatchlist, importWatchlist, MAL_ONLY_ANILIST_ID_BASE } from './watchlistIO';
+import { initTorrentEngine, engineSetEnabled, engineAddDownload, enginePause, engineResume, engineCancel, engineGetState, engineShutdown } from './torrentEngine';
+import { detectVpnStatus } from './vpnGuard';
+import { searchProviders, rankReleasesForEpisode } from './indexers';
 
 const __filename = fileURLToPath(import.meta.url);
 const __dirname = path.dirname(__filename);
@@ -357,6 +360,17 @@ let ipcHandlersSetup = false;
 function setupIpcHandlers() {
   if (ipcHandlersSetup) return;
   ipcHandlersSetup = true;
+
+  // Torrent engine (BYOC): only ever starts when the user enabled P2P and accepted the consent modal.
+  initTorrentEngine({
+    getSettings: () => storage.getSettings(),
+    onState: (state) => {
+      if (mainWindow && !mainWindow.isDestroyed()) {
+        mainWindow.webContents.send('p2p-state-changed', state);
+      }
+    },
+    persistDir: path.join(app.getPath('userData'), 'torrents'),
+  });
 
   ipcMain.handle('get-settings', async () => {
     return storage.getSettings();
@@ -825,6 +839,75 @@ function setupIpcHandlers() {
   ipcMain.handle('watchlist:import', async (_event, filePath: string) => {
     return importWatchlist(filePath);
   });
+
+  // ---- P2P / BitTorrent (BYOC — user-provided indexers, engine opt-in only) ----
+  ipcMain.handle('p2p:get-state', async () => {
+    return engineGetState();
+  });
+
+  ipcMain.handle('p2p:accept-consent', async () => {
+    storage.updateSettings({ p2pConsentAcceptedAt: Date.now() });
+    return engineGetState();
+  });
+
+  ipcMain.handle('p2p:enable', async () => {
+    return engineSetEnabled(true);
+  });
+
+  ipcMain.handle('p2p:disable', async () => {
+    return engineSetEnabled(false);
+  });
+
+  ipcMain.handle('p2p:vpn-status', async () => {
+    return detectVpnStatus();
+  });
+
+  ipcMain.handle('p2p:search', async (_event, params: { title: string; anilistId?: number | null; season?: number | null; episode?: number | null }) => {
+    const settings = storage.getSettings();
+    const providers = (Array.isArray(settings.rssProviders) ? settings.rssProviders : []).filter((p) => p.enabled);
+    const query = (params && typeof params.title === 'string') ? params.title : '';
+    if (!query.trim() || providers.length === 0) return [];
+    const results = await searchProviders(providers, { query, season: params?.season ?? null, episode: params?.episode ?? null });
+    return rankReleasesForEpisode(results, {
+      animeTitle: query,
+      season: params?.season ?? null,
+      episode: params?.episode ?? null,
+    });
+  });
+
+  ipcMain.handle('p2p:add-download', async (_event, params) => {
+    return engineAddDownload(params || ({} as any));
+  });
+
+  ipcMain.handle('p2p:pause', async (_event, infoHash: string) => {
+    return enginePause(infoHash);
+  });
+
+  ipcMain.handle('p2p:resume', async (_event, infoHash: string) => {
+    return engineResume(infoHash);
+  });
+
+  ipcMain.handle('p2p:cancel', async (_event, infoHash: string, removeFiles?: boolean) => {
+    return engineCancel(infoHash, Boolean(removeFiles));
+  });
+
+  ipcMain.handle('p2p:set-limits', async (_event, limits: { maxConcurrent?: number; downloadSpeedMBps?: number; uploadSpeedMBps?: number; seedMinutes?: number }) => {
+    const patch: Record<string, number> = {};
+    if (limits && typeof limits.maxConcurrent === 'number' && Number.isFinite(limits.maxConcurrent)) patch.maxConcurrentDownloads = Math.max(1, Math.min(6, Math.round(limits.maxConcurrent)));
+    if (limits && typeof limits.downloadSpeedMBps === 'number' && Number.isFinite(limits.downloadSpeedMBps)) patch.downloadSpeedLimitMBps = Math.max(0, limits.downloadSpeedMBps);
+    if (limits && typeof limits.uploadSpeedMBps === 'number' && Number.isFinite(limits.uploadSpeedMBps)) patch.uploadSpeedLimitMBps = Math.max(0, limits.uploadSpeedMBps);
+    if (limits && typeof limits.seedMinutes === 'number' && Number.isFinite(limits.seedMinutes)) patch.seedMinutesAfterComplete = Math.max(0, limits.seedMinutes);
+    return storage.updateSettings(patch);
+  });
+
+  ipcMain.handle('p2p:get-providers', async () => {
+    return storage.getSettings().rssProviders || [];
+  });
+
+  ipcMain.handle('p2p:save-providers', async (_event, providers) => {
+    storage.updateSettings({ rssProviders: Array.isArray(providers) ? providers : [] });
+    return { success: true };
+  });
 }
 
 app.whenReady().then(createWindow);
@@ -843,6 +926,7 @@ app.on('before-quit', () => {
   storage.flushHistory();
   userLibrary.flush();
   syncBackupNow();
+  engineShutdown();
   streamServer.stop();
   whisperManager.cancel();
 });

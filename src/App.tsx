@@ -10,7 +10,7 @@ import { WhisperStudio } from './components/WhisperStudio/WhisperStudio';
 import { DownloadsView } from './components/Downloads/DownloadsView';
 import { CompletionPrompt, CompletionPromptData } from './components/common/CompletionPrompt';
 import { SettingsModal } from './components/SettingsModal';
-import { AnimeFolder, Episode, AppSettings, PlaybackProgress, UserLibraryEntry } from './types';
+import { AnimeFolder, Episode, AppSettings, PlaybackProgress, UserLibraryEntry, P2pState } from './types';
 import { useLocalStatus } from './hooks/useLocalStatus';
 import { ToastProvider, showGlobalToast } from './components/Toast';
 import { getPathBasename, getPathDirname, formatFileSize } from './utils/format';
@@ -107,6 +107,12 @@ export const App: React.FC = () => {
   const isScanningRef = useRef(false);
   const scanPendingRef = useRef(false);
 
+  // P2P / BitTorrent (Phase 5): drives the Navbar P2P/VPN indicator and the
+  // download-completed / download-failed toasts.
+  const [p2pState, setP2pState] = useState<P2pState | null>(null);
+  const [vpnActive, setVpnActive] = useState<boolean | null>(null);
+  const prevJobStatusRef = useRef<Record<string, string>>({});
+
   const checkBinariesStatus = useCallback(async (appSettings: AppSettings) => {
     if (!window.electronAPI) return;
     try {
@@ -128,6 +134,75 @@ export const App: React.FC = () => {
       setUserEntries(entries || {});
     } catch {}
   }, []);
+
+  // Applies a P2P state snapshot and toasts on job status transitions to
+  // completed / error. The first snapshot only seeds the ref (no toasts for
+  // jobs that were already finished before the app started).
+  const handleP2pState = useCallback((state: P2pState) => {
+    setP2pState(state);
+    const prev = prevJobStatusRef.current;
+    const next: Record<string, string> = {};
+    for (const job of state.jobs) {
+      next[job.infoHash] = job.status;
+      const before = prev[job.infoHash];
+      if (before && before !== job.status) {
+        if (job.status === 'completed') {
+          showGlobalToast(`Downloaded "${job.title}" — it is now in your library`, 'success');
+        } else if (job.status === 'error') {
+          showGlobalToast(
+            job.error ? `Download failed: ${job.error}` : `Download failed for "${job.title}"`,
+            'warning'
+          );
+        }
+      }
+    }
+    prevJobStatusRef.current = next;
+  }, []);
+
+  // P2P state: initial load + live subscription (unsubscribed on unmount).
+  useEffect(() => {
+    const api = window.electronAPI;
+    if (!api?.getP2pState || !api?.onP2pStateChanged) return;
+    let cancelled = false;
+    api
+      .getP2pState()
+      .then((state) => {
+        if (!cancelled) handleP2pState(state);
+      })
+      .catch(() => {});
+    const unsubscribe = api.onP2pStateChanged((state) => {
+      if (!cancelled) handleP2pState(state);
+    });
+    return () => {
+      cancelled = true;
+      unsubscribe();
+    };
+  }, [handleP2pState]);
+
+  // VPN tunnel status: polled every 20s only while P2P is enabled; reset to
+  // null (unknown) when P2P is off.
+  useEffect(() => {
+    const api = window.electronAPI;
+    if (!p2pState?.enabled || !api?.getVpnStatus) {
+      setVpnActive(null);
+      return;
+    }
+    let cancelled = false;
+    const poll = async () => {
+      try {
+        const status = await api.getVpnStatus();
+        if (!cancelled) setVpnActive(Boolean(status?.active));
+      } catch {
+        if (!cancelled) setVpnActive(null);
+      }
+    };
+    poll();
+    const interval = setInterval(poll, 20000);
+    return () => {
+      cancelled = true;
+      clearInterval(interval);
+    };
+  }, [p2pState?.enabled]);
 
   // 1. Load Settings and History on Startup
   const loadInitialData = useCallback(async () => {
@@ -650,6 +725,7 @@ export const App: React.FC = () => {
             onSelectTab={setCurrentTab}
             onOpenSettings={() => setSettingsOpen(true)}
             isWhisperActive={isWhisperActive}
+            p2pIndicator={{ enabled: Boolean(p2pState?.enabled), vpnActive }}
           />
 
           {/* Missing Binary Warning Banner */}

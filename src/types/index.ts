@@ -28,6 +28,7 @@ export interface StorageOverview {
 import type { CatalogItem, AiringEntry } from '../../electron/catalog';
 import type { RemoteEpisodeInfo } from '../../electron/aniZip';
 import type { UserLibraryEntry, UserListStatus } from '../../electron/userLibrary';
+import type { P2pState, VpnStatus, ReleaseSearchResult, RssProvider, AppSettings } from '../../electron/types';
 
 export interface StreamInfo {
   url: string;
@@ -98,6 +99,21 @@ export interface ElectronAPI {
   browseSaveFile: (options?: { title?: string; defaultPath?: string; extensions?: string[] }) => Promise<string | null>;
   exportWatchlist: (format: 'json' | 'mal-xml', filePath: string) => Promise<{ success: boolean; count?: number; error?: string }>;
   importWatchlist: (filePath: string) => Promise<{ success: boolean; imported?: number; skipped?: number; error?: string }>;
+  // P2P / BitTorrent (Phase 5, BYOC)
+  getP2pState: () => Promise<P2pState>;
+  acceptP2pConsent: () => Promise<P2pState>;
+  enableP2p: () => Promise<{ success: boolean; error?: string }>;
+  disableP2p: () => Promise<{ success: boolean }>;
+  getVpnStatus: () => Promise<VpnStatus>;
+  searchReleases: (params: { title: string; anilistId?: number | null; season?: number | null; episode?: number | null; episodeCount?: number | null }) => Promise<ReleaseSearchResult[]>;
+  addDownload: (params: { item: ReleaseSearchResult; title: string; anilistId?: number | null; episode?: number | null; targetFolder?: string }) => Promise<{ success: boolean; infoHash?: string; error?: string }>;
+  pauseDownload: (infoHash: string) => Promise<{ success: boolean }>;
+  resumeDownload: (infoHash: string) => Promise<{ success: boolean }>;
+  cancelDownload: (infoHash: string, removeFiles?: boolean) => Promise<{ success: boolean }>;
+  setP2pLimits: (limits: { maxConcurrent?: number; downloadSpeedMBps?: number; uploadSpeedMBps?: number; seedMinutes?: number }) => Promise<AppSettings>;
+  getP2pProviders: () => Promise<RssProvider[]>;
+  saveP2pProviders: (providers: RssProvider[]) => Promise<{ success: boolean; error?: string }>;
+  onP2pStateChanged: (callback: (state: P2pState) => void) => () => void;
 }
 
 declare global {

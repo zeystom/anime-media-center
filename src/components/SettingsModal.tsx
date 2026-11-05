@@ -1,4 +1,4 @@
-import React, { useState, useEffect } from 'react';
+import React, { useState, useEffect, useRef } from 'react';
 import {
   X,
   Settings as SettingsIcon,
@@ -18,9 +18,16 @@ import {
   Download,
   Upload,
   Save,
+  Share2,
+  ShieldCheck,
+  ShieldAlert,
+  Gauge,
+  Rss,
 } from 'lucide-react';
 import { AppSettings } from '../types';
+import type { P2pState, VpnStatus, RssProvider } from '../types';
 import { showGlobalToast } from './Toast';
+import { P2pConsentModal } from './P2P/P2pConsentModal';
 import { formatFileSize } from '../utils/format';
 
 interface BackupStatusInfo {
@@ -40,6 +47,31 @@ function formatRelativeTime(ts?: number): string | null {
   if (hours < 24) return `${hours}h ago`;
   return `${Math.floor(hours / 24)}d ago`;
 }
+
+/** Small toggle switch matching the app's existing switch style (EpisodeDrawer). */
+const ToggleSwitch: React.FC<{
+  checked: boolean;
+  onChange: () => void;
+  disabled?: boolean;
+  label: string;
+}> = ({ checked, onChange, disabled, label }) => (
+  <button
+    type="button"
+    onClick={onChange}
+    disabled={disabled}
+    aria-label={label}
+    title={label}
+    className={`w-11 h-6 rounded-full p-0.5 transition-colors duration-200 shrink-0 disabled:opacity-50 ${
+      checked ? 'bg-red-600' : 'bg-zinc-700'
+    }`}
+  >
+    <div
+      className={`w-5 h-5 rounded-full bg-white shadow-md transition-transform duration-200 ${
+        checked ? 'translate-x-5' : 'translate-x-0'
+      }`}
+    />
+  </button>
+);
 
 interface SettingsModalProps {
   isOpen: boolean;
@@ -84,6 +116,26 @@ export const SettingsModal: React.FC<SettingsModalProps> = ({
   const [restoreAvailable, setRestoreAvailable] = useState(false);
   const [confirmRestore, setConfirmRestore] = useState(false);
   const [dataBusy, setDataBusy] = useState<'backup' | 'restore' | 'export' | 'import' | null>(null);
+
+  // P2P & Downloads section state (driven by p2pState, NOT parent settings which may lag)
+  const [p2pState, setP2pState] = useState<P2pState | null>(null);
+  const [p2pBusy, setP2pBusy] = useState(false);
+  const [showP2pConsent, setShowP2pConsent] = useState(false);
+  const [requireVpn, setRequireVpn] = useState<boolean>(settings.requireVpnForP2p ?? true);
+  const [blockNoVpn, setBlockNoVpn] = useState<boolean>(settings.vpnBlockDownload ?? true);
+  const [vpnStatus, setVpnStatus] = useState<VpnStatus | null>(null);
+  const [vpnChecking, setVpnChecking] = useState(false);
+
+  // Limits draft (kept as strings while typing; committed via setP2pLimits on blur)
+  const [limitMaxConcurrent, setLimitMaxConcurrent] = useState('2');
+  const [limitDownload, setLimitDownload] = useState('0');
+  const [limitUpload, setLimitUpload] = useState('0');
+  const [limitSeedMinutes, setLimitSeedMinutes] = useState('0');
+
+  // Indexers (BYOC) draft
+  const [providersDraft, setProvidersDraft] = useState<RssProvider[]>([]);
+  const [providersBusy, setProvidersBusy] = useState(false);
+  const providerImportRef = useRef<HTMLInputElement>(null);
 
   useEffect(() => {
     if (isOpen) {
@@ -137,6 +189,73 @@ export const SettingsModal: React.FC<SettingsModalProps> = ({
     }
   }, [isOpen]);
 
+  // Keep VPN-related toggles in sync with persisted settings
+  useEffect(() => {
+    setRequireVpn(settings.requireVpnForP2p ?? true);
+    setBlockNoVpn(settings.vpnBlockDownload ?? true);
+  }, [settings]);
+
+  // P2P: load engine state when the modal opens
+  useEffect(() => {
+    if (!isOpen) return;
+    const api = window.electronAPI;
+    if (!api?.getP2pState) return;
+    let cancelled = false;
+    api
+      .getP2pState()
+      .then((state) => {
+        if (cancelled) return;
+        setP2pState(state);
+        setLimitMaxConcurrent(String(state.limits.maxConcurrent));
+        setLimitDownload(String(state.limits.downloadSpeedMBps));
+        setLimitUpload(String(state.limits.uploadSpeedMBps));
+        setLimitSeedMinutes(String(state.limits.seedMinutes));
+      })
+      .catch(() => {});
+    return () => {
+      cancelled = true;
+    };
+  }, [isOpen]);
+
+  // P2P: load indexer draft once the engine is enabled
+  useEffect(() => {
+    if (!isOpen || !p2pState?.enabled) return;
+    const api = window.electronAPI;
+    if (!api?.getP2pProviders) return;
+    let cancelled = false;
+    api
+      .getP2pProviders()
+      .then((providers) => {
+        if (!cancelled) setProvidersDraft(Array.isArray(providers) ? providers : []);
+      })
+      .catch(() => {});
+    return () => {
+      cancelled = true;
+    };
+  }, [isOpen, p2pState?.enabled]);
+
+  // P2P: poll VPN status every 15s while the engine is enabled
+  useEffect(() => {
+    if (!isOpen || !p2pState?.enabled) return;
+    const api = window.electronAPI;
+    if (!api?.getVpnStatus) return;
+    let cancelled = false;
+    const fetchVpn = () => {
+      api
+        .getVpnStatus()
+        .then((status) => {
+          if (!cancelled) setVpnStatus(status);
+        })
+        .catch(() => {});
+    };
+    fetchVpn();
+    const interval = window.setInterval(fetchVpn, 15000);
+    return () => {
+      cancelled = true;
+      window.clearInterval(interval);
+    };
+  }, [isOpen, p2pState?.enabled]);
+
   // Save any pending uncommitted path changes before closing
   const handleClose = () => {
     if (ffmpegPath !== settings.ffmpegPath || whisperPath !== settings.whisperPath) {
@@ -148,16 +267,17 @@ export const SettingsModal: React.FC<SettingsModalProps> = ({
     onClose();
   };
 
-  // Handle Escape key to close
+  // Handle Escape key to close (the P2P consent modal handles its own Escape)
   useEffect(() => {
     const handleKeyDown = (e: KeyboardEvent) => {
       if (e.key === 'Escape' && isOpen) {
+        if (showP2pConsent) return;
         handleClose();
       }
     };
     window.addEventListener('keydown', handleKeyDown);
     return () => window.removeEventListener('keydown', handleKeyDown);
-  }, [isOpen, ffmpegPath, whisperPath, settings, onClose]);
+  }, [isOpen, ffmpegPath, whisperPath, settings, onClose, showP2pConsent]);
 
   if (!isOpen) return null;
 
@@ -378,6 +498,294 @@ export const SettingsModal: React.FC<SettingsModalProps> = ({
       showGlobalToast('Import failed', 'error');
     } finally {
       setDataBusy(null);
+    }
+  };
+
+  // ---- P2P & Downloads handlers ----
+
+  const refreshP2pState = async () => {
+    const api = window.electronAPI;
+    if (!api?.getP2pState) return;
+    try {
+      const state = await api.getP2pState();
+      setP2pState(state);
+      setLimitMaxConcurrent(String(state.limits.maxConcurrent));
+      setLimitDownload(String(state.limits.downloadSpeedMBps));
+      setLimitUpload(String(state.limits.uploadSpeedMBps));
+      setLimitSeedMinutes(String(state.limits.seedMinutes));
+    } catch {
+      // keep last known state
+    }
+  };
+
+  // Master engine toggle: OFF -> open the consent modal; ON -> disable
+  const handleToggleP2pEngine = async () => {
+    const api = window.electronAPI;
+    if (!api?.enableP2p || !api?.disableP2p || p2pBusy) return;
+    if (p2pState?.enabled) {
+      setP2pBusy(true);
+      try {
+        const res = await api.disableP2p();
+        if (res?.success) {
+          showGlobalToast('P2P engine disabled — no torrents are downloaded or shared', 'success');
+        } else {
+          showGlobalToast('Failed to disable the P2P engine', 'error');
+        }
+      } catch {
+        showGlobalToast('Failed to disable the P2P engine', 'error');
+      } finally {
+        setP2pBusy(false);
+        refreshP2pState();
+      }
+    } else {
+      setShowP2pConsent(true);
+    }
+  };
+
+  // Consent accepted -> record consent, then enable the engine
+  const handleP2pConsentAccept = async () => {
+    const api = window.electronAPI;
+    if (!api?.acceptP2pConsent || !api?.enableP2p || p2pBusy) return;
+    setP2pBusy(true);
+    try {
+      await api.acceptP2pConsent();
+      const res = await api.enableP2p();
+      if (res?.success) {
+        showGlobalToast('P2P engine enabled — add your own indexers below', 'success');
+        setShowP2pConsent(false);
+      } else {
+        showGlobalToast(res?.error || 'Failed to enable the P2P engine', 'error');
+      }
+    } catch {
+      showGlobalToast('Failed to enable the P2P engine', 'error');
+    } finally {
+      setP2pBusy(false);
+      refreshP2pState();
+    }
+  };
+
+  const handleRefreshVpn = async () => {
+    const api = window.electronAPI;
+    if (!api?.getVpnStatus || vpnChecking) return;
+    setVpnChecking(true);
+    try {
+      const status = await api.getVpnStatus();
+      setVpnStatus(status);
+    } catch {
+      // keep last known status
+    } finally {
+      setVpnChecking(false);
+    }
+  };
+
+  const handleRequireVpnToggle = () => {
+    const next = !requireVpn;
+    setRequireVpn(next);
+    onSave({ requireVpnForP2p: next });
+  };
+
+  const handleBlockNoVpnToggle = () => {
+    const next = !blockNoVpn;
+    setBlockNoVpn(next);
+    onSave({ vpnBlockDownload: next });
+  };
+
+  const parseClampedInt = (raw: string, min: number, max: number, fallback: number): number => {
+    const parsed = Math.round(Number(raw));
+    if (!Number.isFinite(parsed)) return fallback;
+    return Math.min(max, Math.max(min, parsed));
+  };
+
+  const commitLimits = async (patch: {
+    maxConcurrent?: number;
+    downloadSpeedMBps?: number;
+    uploadSpeedMBps?: number;
+    seedMinutes?: number;
+  }) => {
+    const api = window.electronAPI;
+    if (!api?.setP2pLimits) return;
+    const current =
+      p2pState?.limits ?? { maxConcurrent: 2, downloadSpeedMBps: 0, uploadSpeedMBps: 0, seedMinutes: 0 };
+    const limits = {
+      maxConcurrent: patch.maxConcurrent ?? current.maxConcurrent,
+      downloadSpeedMBps: patch.downloadSpeedMBps ?? current.downloadSpeedMBps,
+      uploadSpeedMBps: patch.uploadSpeedMBps ?? current.uploadSpeedMBps,
+      seedMinutes: patch.seedMinutes ?? current.seedMinutes,
+    };
+    try {
+      await api.setP2pLimits(limits);
+      setP2pState((prev) => (prev ? { ...prev, limits } : prev));
+    } catch {
+      showGlobalToast('Failed to apply P2P limits', 'error');
+    }
+  };
+
+  const handleMaxConcurrentBlur = () => {
+    const value = parseClampedInt(limitMaxConcurrent, 1, 6, p2pState?.limits.maxConcurrent ?? 2);
+    setLimitMaxConcurrent(String(value));
+    if (p2pState && value !== p2pState.limits.maxConcurrent) {
+      commitLimits({ maxConcurrent: value });
+    }
+  };
+
+  const handleDownloadLimitBlur = () => {
+    const value = parseClampedInt(limitDownload, 0, 100000, p2pState?.limits.downloadSpeedMBps ?? 0);
+    setLimitDownload(String(value));
+    if (p2pState && value !== p2pState.limits.downloadSpeedMBps) {
+      commitLimits({ downloadSpeedMBps: value });
+    }
+  };
+
+  const handleUploadLimitBlur = () => {
+    const value = parseClampedInt(limitUpload, 0, 100000, p2pState?.limits.uploadSpeedMBps ?? 0);
+    setLimitUpload(String(value));
+    if (p2pState && value !== p2pState.limits.uploadSpeedMBps) {
+      commitLimits({ uploadSpeedMBps: value });
+    }
+  };
+
+  const handleSeedMinutesChange = (value: string) => {
+    setLimitSeedMinutes(value);
+    const num = Math.round(Number(value));
+    const seedMinutes = Number.isFinite(num) && num >= 0 ? num : 0;
+    if (p2pState && seedMinutes !== p2pState.limits.seedMinutes) {
+      commitLimits({ seedMinutes });
+    }
+  };
+
+  const makeProviderId = () =>
+    `provider-${Date.now()}-${Math.random().toString(36).slice(2, 7)}`;
+
+  const handleAddProvider = () => {
+    setProvidersDraft((prev) => [
+      ...prev,
+      { id: makeProviderId(), name: '', urlTemplate: '', type: 'rss', enabled: true },
+    ]);
+  };
+
+  const handleRemoveProvider = (index: number) => {
+    setProvidersDraft((prev) => prev.filter((_, i) => i !== index));
+  };
+
+  const handleProviderField = (index: number, patch: Partial<RssProvider>) => {
+    setProvidersDraft((prev) => prev.map((p, i) => (i === index ? { ...p, ...patch } : p)));
+  };
+
+  // Mirrors the main-process validation: http(s) URL containing a {query} slot
+  const validateProviders = (providers: RssProvider[]): string | null => {
+    for (const provider of providers) {
+      if (!provider.name.trim()) return 'Every provider needs a name.';
+      const url = provider.urlTemplate.trim();
+      if (!/^https?:\/\//i.test(url)) {
+        return `${provider.name}: the URL must start with http:// or https://`;
+      }
+      if (!url.includes('{query}')) {
+        return `${provider.name}: the URL must contain the {query} placeholder`;
+      }
+    }
+    return null;
+  };
+
+  const handleSaveProviders = async () => {
+    const api = window.electronAPI;
+    if (!api?.saveP2pProviders || providersBusy) return;
+    const validationError = validateProviders(providersDraft);
+    if (validationError) {
+      showGlobalToast(validationError, 'error');
+      return;
+    }
+    setProvidersBusy(true);
+    try {
+      const res = await api.saveP2pProviders(
+        providersDraft.map((p) => ({ ...p, name: p.name.trim(), urlTemplate: p.urlTemplate.trim() }))
+      );
+      if (res?.success) {
+        showGlobalToast(
+          `Saved ${providersDraft.length} provider${providersDraft.length === 1 ? '' : 's'}`,
+          'success'
+        );
+      } else {
+        showGlobalToast(res?.error || 'Failed to save providers', 'error');
+      }
+    } catch {
+      showGlobalToast('Failed to save providers', 'error');
+    } finally {
+      setProvidersBusy(false);
+    }
+  };
+
+  const handleImportProvidersFile = async (event: React.ChangeEvent<HTMLInputElement>) => {
+    const file = event.target.files?.[0];
+    event.target.value = ''; // allow re-selecting the same file later
+    if (!file) return;
+    try {
+      const text = await file.text();
+      const parsed: unknown = JSON.parse(text);
+      const list = Array.isArray(parsed)
+        ? parsed
+        : parsed && typeof parsed === 'object' && Array.isArray((parsed as { providers?: unknown }).providers)
+        ? ((parsed as { providers: unknown[] }).providers)
+        : null;
+      if (!list) {
+        showGlobalToast('Invalid config: expected an array or { "providers": [...] }', 'error');
+        return;
+      }
+      const imported: RssProvider[] = [];
+      let skipped = 0;
+      for (const raw of list) {
+        if (!raw || typeof raw !== 'object') {
+          skipped += 1;
+          continue;
+        }
+        const rec = raw as Record<string, unknown>;
+        const name = typeof rec.name === 'string' ? rec.name.trim() : '';
+        const urlTemplate = typeof rec.urlTemplate === 'string' ? rec.urlTemplate.trim() : '';
+        if (!name || !urlTemplate) {
+          skipped += 1;
+          continue;
+        }
+        imported.push({
+          id: typeof rec.id === 'string' && rec.id ? rec.id : makeProviderId(),
+          name,
+          urlTemplate,
+          type: rec.type === 'torznab' ? 'torznab' : 'rss',
+          enabled: rec.enabled !== false,
+        });
+      }
+      if (imported.length === 0) {
+        showGlobalToast('No valid providers found in the config file', 'error');
+        return;
+      }
+      setProvidersDraft(imported);
+      showGlobalToast(
+        `Imported ${imported.length} provider${imported.length === 1 ? '' : 's'}${
+          skipped > 0 ? `, skipped ${skipped} invalid` : ''
+        } — remember to Save providers`,
+        'success'
+      );
+    } catch {
+      showGlobalToast('Failed to read the config file — is it valid JSON?', 'error');
+    }
+  };
+
+  const handleExportProviders = () => {
+    try {
+      const payload = JSON.stringify({ providers: providersDraft }, null, 2);
+      const blob = new Blob([payload], { type: 'application/json' });
+      const url = URL.createObjectURL(blob);
+      const anchor = document.createElement('a');
+      anchor.href = url;
+      anchor.download = 'animecenter-providers.json';
+      document.body.appendChild(anchor);
+      anchor.click();
+      anchor.remove();
+      window.setTimeout(() => URL.revokeObjectURL(url), 1000);
+      showGlobalToast(
+        `Exported ${providersDraft.length} provider${providersDraft.length === 1 ? '' : 's'}`,
+        'success'
+      );
+    } catch {
+      showGlobalToast('Export failed', 'error');
     }
   };
 
@@ -828,6 +1236,317 @@ export const SettingsModal: React.FC<SettingsModalProps> = ({
               </div>
             </div>
           </div>
+
+          {/* Section: P2P & Downloads */}
+          <div className="space-y-3 pt-3 border-t border-white/10">
+            <div>
+              <label className="text-xs font-semibold text-zinc-200 uppercase tracking-wider flex items-center space-x-2">
+                <Share2 className="w-3.5 h-3.5 text-zinc-400" />
+                <span>P2P &amp; Downloads</span>
+              </label>
+              <p className="text-[11px] text-zinc-400">
+                BitTorrent engine with VPN protection, speed limits and your own RSS/Torznab indexers.
+              </p>
+            </div>
+
+            {/* Master engine toggle card */}
+            <div className="flex items-center justify-between gap-3 rounded-xl bg-zinc-900/90 border border-white/10 p-3.5">
+              <div className="min-w-0">
+                <p className="flex items-center space-x-2 text-xs font-semibold text-zinc-200">
+                  <span>P2P / BitTorrent engine</span>
+                  <span
+                    className={`w-1.5 h-1.5 rounded-full shrink-0 ${
+                      p2pState === null ? 'bg-amber-400' : p2pState.enabled ? 'bg-emerald-400' : 'bg-zinc-600'
+                    }`}
+                  />
+                </p>
+                <p className="mt-0.5 text-[10px] text-zinc-500">
+                  {p2pState === null
+                    ? 'Checking engine state…'
+                    : p2pState.enabled
+                    ? 'On — torrents are downloaded and seeded via your own indexers.'
+                    : 'Off — no torrents are downloaded or shared.'}
+                </p>
+              </div>
+              <ToggleSwitch
+                checked={Boolean(p2pState?.enabled)}
+                onChange={handleToggleP2pEngine}
+                disabled={p2pBusy || p2pState === null || !window.electronAPI?.enableP2p}
+                label={p2pState?.enabled ? 'Disable P2P engine' : 'Enable P2P engine'}
+              />
+            </div>
+
+            {p2pState?.enabled ? (
+              <>
+                {/* VPN protection card */}
+                <div className="space-y-2.5 rounded-xl bg-zinc-900/90 border border-white/10 p-3.5">
+                  <div className="flex items-center justify-between gap-2">
+                    <p className="flex items-center space-x-2 text-xs font-semibold text-zinc-200">
+                      <ShieldCheck className="w-3.5 h-3.5 text-zinc-400" />
+                      <span>VPN Protection</span>
+                    </p>
+                    <div className="flex items-center space-x-2 min-w-0">
+                      <span
+                        className={`w-2 h-2 rounded-full shrink-0 ${
+                          vpnStatus === null ? 'bg-amber-400' : vpnStatus.active ? 'bg-emerald-400' : 'bg-red-500'
+                        }`}
+                      />
+                      <span
+                        className={`text-[11px] font-medium truncate max-w-[230px] ${
+                          vpnStatus !== null && vpnStatus.active ? 'text-emerald-300' : vpnStatus === null ? 'text-amber-300' : 'text-red-300'
+                        }`}
+                        title={
+                          vpnStatus === null
+                            ? 'Checking VPN status…'
+                            : vpnStatus.active
+                            ? `VPN tunnel detected on: ${vpnStatus.interfaces.join(', ') || 'unknown interfaces'}`
+                            : 'No VPN tunnel detected — torrent traffic could expose your IP'
+                        }
+                      >
+                        {vpnStatus === null
+                          ? 'Checking VPN…'
+                          : vpnStatus.active
+                          ? `VPN detected${vpnStatus.interfaces.length ? ` (${vpnStatus.interfaces.join(', ')})` : ''}`
+                          : 'No VPN tunnel detected'}
+                      </span>
+                      <button
+                        type="button"
+                        onClick={handleRefreshVpn}
+                        disabled={vpnChecking}
+                        className="p-1 rounded-lg text-zinc-500 hover:text-zinc-200 hover:bg-zinc-800 transition-colors shrink-0 disabled:opacity-50"
+                        title="Re-check VPN status now"
+                      >
+                        <RefreshCw className={`w-3 h-3 ${vpnChecking ? 'animate-spin' : ''}`} />
+                      </button>
+                    </div>
+                  </div>
+
+                  <div className="flex items-center justify-between gap-3 rounded-lg bg-zinc-950/70 border border-white/5 px-3 py-2">
+                    <div className="min-w-0">
+                      <p className="text-xs font-medium text-zinc-200">Require VPN for downloads</p>
+                      <p className="text-[10px] text-zinc-500">Refuse to start torrents unless a VPN tunnel is active.</p>
+                    </div>
+                    <ToggleSwitch
+                      checked={requireVpn}
+                      onChange={handleRequireVpnToggle}
+                      label="Require VPN for downloads"
+                    />
+                  </div>
+
+                  <div className="flex items-center justify-between gap-3 rounded-lg bg-zinc-950/70 border border-white/5 px-3 py-2">
+                    <div className="min-w-0">
+                      <p className="text-xs font-medium text-zinc-200">Block downloads without VPN</p>
+                      <p className="text-[10px] text-zinc-500">Refuse adding torrents while no VPN interface is detected.</p>
+                    </div>
+                    <ToggleSwitch
+                      checked={blockNoVpn}
+                      onChange={handleBlockNoVpnToggle}
+                      label="Block downloads without VPN"
+                    />
+                  </div>
+                </div>
+
+                {/* Speed & Limits card */}
+                <div className="space-y-2.5 rounded-xl bg-zinc-900/90 border border-white/10 p-3.5">
+                  <p className="flex items-center space-x-2 text-xs font-semibold text-zinc-200">
+                    <Gauge className="w-3.5 h-3.5 text-zinc-400" />
+                    <span>Speed &amp; Limits</span>
+                  </p>
+                  <div className="grid grid-cols-2 gap-2.5">
+                    <div className="space-y-1">
+                      <label className="text-[10px] font-medium text-zinc-400">Max simultaneous downloads</label>
+                      <input
+                        type="number"
+                        min={1}
+                        max={6}
+                        value={limitMaxConcurrent}
+                        onChange={(e) => setLimitMaxConcurrent(e.target.value)}
+                        onBlur={handleMaxConcurrentBlur}
+                        onKeyDown={(e) => {
+                          if (e.key === 'Enter') (e.target as HTMLInputElement).blur();
+                        }}
+                        className="w-full px-3 py-2 rounded-lg bg-zinc-950/70 border border-white/10 text-xs text-zinc-200 focus:outline-none focus:border-zinc-500"
+                      />
+                      <p className="text-[10px] text-zinc-500">Between 1 and 6 torrents at once.</p>
+                    </div>
+                    <div className="space-y-1">
+                      <label className="text-[10px] font-medium text-zinc-400">Seed after complete</label>
+                      <select
+                        value={limitSeedMinutes}
+                        onChange={(e) => handleSeedMinutesChange(e.target.value)}
+                        className="w-full px-3 py-2 rounded-lg bg-zinc-950/70 border border-white/10 text-xs text-zinc-200 focus:outline-none focus:border-zinc-500 cursor-pointer"
+                      >
+                        <option value="0">Stop immediately</option>
+                        <option value="15">15 minutes</option>
+                        <option value="60">1 hour</option>
+                        <option value="480">8 hours</option>
+                      </select>
+                      <p className="text-[10px] text-zinc-500">How long to keep seeding once done.</p>
+                    </div>
+                    <div className="space-y-1">
+                      <label className="text-[10px] font-medium text-zinc-400">
+                        Download speed limit MB/s <span className="text-zinc-600">(0 = Unlimited)</span>
+                      </label>
+                      <input
+                        type="number"
+                        min={0}
+                        value={limitDownload}
+                        onChange={(e) => setLimitDownload(e.target.value)}
+                        onBlur={handleDownloadLimitBlur}
+                        onKeyDown={(e) => {
+                          if (e.key === 'Enter') (e.target as HTMLInputElement).blur();
+                        }}
+                        className="w-full px-3 py-2 rounded-lg bg-zinc-950/70 border border-white/10 text-xs text-zinc-200 focus:outline-none focus:border-zinc-500"
+                      />
+                    </div>
+                    <div className="space-y-1">
+                      <label className="text-[10px] font-medium text-zinc-400">
+                        Upload speed limit MB/s <span className="text-zinc-600">(0 = Unlimited)</span>
+                      </label>
+                      <input
+                        type="number"
+                        min={0}
+                        value={limitUpload}
+                        onChange={(e) => setLimitUpload(e.target.value)}
+                        onBlur={handleUploadLimitBlur}
+                        onKeyDown={(e) => {
+                          if (e.key === 'Enter') (e.target as HTMLInputElement).blur();
+                        }}
+                        className="w-full px-3 py-2 rounded-lg bg-zinc-950/70 border border-white/10 text-xs text-zinc-200 focus:outline-none focus:border-zinc-500"
+                      />
+                    </div>
+                  </div>
+                  <p className="text-[10px] text-zinc-500">Changes apply live to the torrent engine.</p>
+                </div>
+
+                {/* Indexers (BYOC) card */}
+                <div className="space-y-2.5 rounded-xl bg-zinc-900/90 border border-white/10 p-3.5">
+                  <div className="flex items-center justify-between">
+                    <p className="flex items-center space-x-2 text-xs font-semibold text-zinc-200">
+                      <Rss className="w-3.5 h-3.5 text-zinc-400" />
+                      <span>Indexers (BYOC)</span>
+                    </p>
+                    <span className="text-[10px] text-zinc-500">{providersDraft.length} configured</span>
+                  </div>
+
+                  {providersDraft.length === 0 ? (
+                    <div className="p-3 rounded-xl border border-dashed border-zinc-800 bg-zinc-950/40 text-center">
+                      <p className="text-[11px] text-zinc-500">No indexers configured yet. Add one below or import a config file.</p>
+                    </div>
+                  ) : (
+                    <div className="space-y-2">
+                      {providersDraft.map((provider, index) => (
+                        <div
+                          key={provider.id || `provider-row-${index}`}
+                          className="space-y-1.5 rounded-xl bg-zinc-950/70 border border-white/10 p-2.5"
+                        >
+                          <div className="flex items-center gap-2">
+                            <input
+                              type="text"
+                              value={provider.name}
+                              onChange={(e) => handleProviderField(index, { name: e.target.value })}
+                              placeholder="Indexer name"
+                              className="flex-1 min-w-0 px-2.5 py-1.5 rounded-lg bg-zinc-900 border border-white/10 text-xs text-zinc-200 placeholder-zinc-600 focus:outline-none focus:border-zinc-500"
+                            />
+                            <select
+                              value={provider.type}
+                              onChange={(e) =>
+                                handleProviderField(index, { type: e.target.value as RssProvider['type'] })
+                              }
+                              className="px-2 py-1.5 rounded-lg bg-zinc-900 border border-white/10 text-xs text-zinc-200 focus:outline-none focus:border-zinc-500 cursor-pointer shrink-0"
+                              title="Feed type"
+                            >
+                              <option value="rss">RSS</option>
+                              <option value="torznab">Torznab</option>
+                            </select>
+                            <input
+                              type="checkbox"
+                              checked={provider.enabled}
+                              onChange={(e) => handleProviderField(index, { enabled: e.target.checked })}
+                              className="w-4 h-4 rounded border-zinc-700 bg-zinc-900 text-red-600 focus:ring-0 focus:ring-offset-0 cursor-pointer accent-red-600 shrink-0"
+                              title="Enabled"
+                              aria-label={`${provider.name || 'Provider'} enabled`}
+                            />
+                            <button
+                              type="button"
+                              onClick={() => handleRemoveProvider(index)}
+                              className="p-1 rounded-lg text-zinc-500 hover:text-red-400 hover:bg-red-500/10 transition-colors shrink-0"
+                              title="Remove provider"
+                            >
+                              <Trash2 className="w-3.5 h-3.5" />
+                            </button>
+                          </div>
+                          <input
+                            type="text"
+                            value={provider.urlTemplate}
+                            onChange={(e) => handleProviderField(index, { urlTemplate: e.target.value })}
+                            placeholder="https://your-indexer.example/rss?q={query}"
+                            className="w-full px-2.5 py-1.5 rounded-lg bg-zinc-900 border border-white/10 text-[11px] font-mono text-zinc-200 placeholder-zinc-600 focus:outline-none focus:border-zinc-500 select-all"
+                          />
+                        </div>
+                      ))}
+                    </div>
+                  )}
+
+                  <div className="flex flex-wrap items-center gap-2">
+                    <button
+                      type="button"
+                      onClick={handleAddProvider}
+                      className="flex items-center space-x-1.5 px-3 py-1.5 rounded-lg bg-zinc-800 hover:bg-zinc-700 text-zinc-100 border border-white/10 text-xs font-medium transition-all shadow-sm"
+                    >
+                      <Plus className="w-3.5 h-3.5" />
+                      <span>Add provider</span>
+                    </button>
+                    <button
+                      type="button"
+                      onClick={() => providerImportRef.current?.click()}
+                      disabled={providersBusy}
+                      className="flex items-center space-x-1.5 px-3 py-1.5 rounded-lg bg-zinc-800 hover:bg-zinc-700 text-zinc-200 border border-white/10 text-xs font-medium transition-colors disabled:opacity-50"
+                      title="Import providers from a JSON config file"
+                    >
+                      <Upload className="w-3.5 h-3.5 text-zinc-400" />
+                      <span>Import config</span>
+                    </button>
+                    <button
+                      type="button"
+                      onClick={handleExportProviders}
+                      className="flex items-center space-x-1.5 px-3 py-1.5 rounded-lg bg-zinc-800 hover:bg-zinc-700 text-zinc-200 border border-white/10 text-xs font-medium transition-colors"
+                      title="Export providers to animecenter-providers.json"
+                    >
+                      <Download className="w-3.5 h-3.5 text-zinc-400" />
+                      <span>Export config</span>
+                    </button>
+                    <div className="flex-1" />
+                    <button
+                      type="button"
+                      onClick={handleSaveProviders}
+                      disabled={providersBusy}
+                      className="flex items-center space-x-1.5 px-3 py-1.5 rounded-lg bg-zinc-100 hover:bg-white text-zinc-900 text-xs font-bold transition-colors shadow-sm disabled:opacity-50"
+                    >
+                      <Save className="w-3.5 h-3.5" />
+                      <span>{providersBusy ? 'Saving…' : 'Save providers'}</span>
+                    </button>
+                  </div>
+
+                  <p className="text-[10px] text-zinc-500">No indexers are bundled. You bring your own RSS/Torznab sources.</p>
+                </div>
+
+                {/* Hidden input backing the Import config button */}
+                <input
+                  ref={providerImportRef}
+                  type="file"
+                  accept=".json,application/json"
+                  className="hidden"
+                  onChange={handleImportProvidersFile}
+                />
+              </>
+            ) : (
+              <p className="text-[10px] text-zinc-500 px-1">
+                The engine is off. Enable it above to configure VPN protection, speed limits and indexers.
+                No indexers are bundled — you bring your own RSS/Torznab sources.
+              </p>
+            )}
+          </div>
         </div>
 
         {/* Footer Actions */}
@@ -849,6 +1568,14 @@ export const SettingsModal: React.FC<SettingsModalProps> = ({
             Done
           </button>
         </div>
+
+        {/* P2P consent overlay (renders above this modal; handles its own Escape/backdrop) */}
+        {showP2pConsent && (
+          <P2pConsentModal
+            onAccept={handleP2pConsentAccept}
+            onCancel={() => setShowP2pConsent(false)}
+          />
+        )}
       </div>
     </div>
   );

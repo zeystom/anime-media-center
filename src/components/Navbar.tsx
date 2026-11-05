@@ -1,13 +1,22 @@
 import React from 'react';
-import { House, Film, CalendarDays, HardDrive, Sparkles, Settings as SettingsIcon, Terminal, Clapperboard } from 'lucide-react';
+import { House, Film, CalendarDays, HardDrive, Sparkles, Settings as SettingsIcon, Terminal, Clapperboard, ShieldCheck, ShieldAlert } from 'lucide-react';
 
 export type AppTab = 'home' | 'library' | 'schedule' | 'downloads' | 'whisper';
+
+/** VPN/P2P status pill shown in the navbar while the P2P engine is enabled. */
+export interface P2pIndicatorState {
+  enabled: boolean;
+  /** true = VPN tunnel detected, false = no VPN detected, null = unknown/checking. */
+  vpnActive: boolean | null;
+}
 
 interface NavbarProps {
   currentTab: AppTab;
   onSelectTab: (tab: AppTab) => void;
   onOpenSettings: () => void;
   isWhisperActive: boolean;
+  /** Optional P2P status pill rendered before the Settings button (Phase 5). */
+  p2pIndicator?: P2pIndicatorState;
 }
 
 export const Navbar: React.FC<NavbarProps> = ({
@@ -15,6 +24,7 @@ export const Navbar: React.FC<NavbarProps> = ({
   onSelectTab,
   onOpenSettings,
   isWhisperActive,
+  p2pIndicator,
 }) => {
   return (
     <header className="h-14 border-b border-zinc-800/80 bg-[#121216] px-6 flex items-center justify-between z-30 select-none">
@@ -108,6 +118,38 @@ export const Navbar: React.FC<NavbarProps> = ({
           >
             <Terminal className="w-3.5 h-3.5 animate-pulse" />
             <span>Transcribing in background</span>
+          </div>
+        )}
+
+        {p2pIndicator?.enabled && (
+          <div
+            title={
+              p2pIndicator.vpnActive === true
+                ? 'P2P is enabled — VPN tunnel detected. Torrent traffic goes through the VPN.'
+                : p2pIndicator.vpnActive === false
+                ? 'P2P is enabled but no VPN tunnel was detected. Your real IP may be visible to peers and your ISP.'
+                : 'P2P is enabled — VPN status is being checked.'
+            }
+            className={`hidden sm:flex items-center space-x-1.5 px-2.5 py-1 rounded-full border text-xs font-medium transition-colors ${
+              p2pIndicator.vpnActive === true
+                ? 'bg-emerald-500/10 border-emerald-500/30 text-emerald-300'
+                : p2pIndicator.vpnActive === false
+                ? 'bg-red-500/10 border-red-500/30 text-red-300'
+                : 'bg-amber-500/10 border-amber-500/30 text-amber-300'
+            }`}
+          >
+            {p2pIndicator.vpnActive === true ? (
+              <ShieldCheck className="w-3.5 h-3.5" />
+            ) : (
+              <ShieldAlert className="w-3.5 h-3.5" />
+            )}
+            <span>
+              {p2pIndicator.vpnActive === true
+                ? 'VPN'
+                : p2pIndicator.vpnActive === false
+                ? 'No VPN'
+                : 'P2P'}
+            </span>
           </div>
         )}
 

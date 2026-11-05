@@ -9,8 +9,8 @@
     "build": "tsc && vite build",
     "start": "electron .",
     "package": "npm run build && electron-builder",
-    "test": "node test-episodes.js && node test-path-security.js && node test-torrents.js && node test-whisper-queue.js && node test-milestone1.js && node test-milestone2.js && node test-milestone3.js && node test-milestone4.js",
-    "test:all": "node test-episodes.js && node test-path-security.js && node test-torrents.js && node test-whisper-queue.js && node test-milestone1.js && node test-milestone1-adversarial.js && node test-milestone2.js && node test-milestone2-adversarial.js && node test-milestone3.js && node test-milestone3-adversarial.js && node test-milestone4.js && node test-milestone4-adversarial.js && node test-milestone4-challenger2.js"
+    "test": "node test-episodes.js && node test-release-parser.js && node test-path-security.js && node test-torrents.js && node test-whisper-queue.js && node test-catalog-cache.js && node test-library-manager.js && node test-watchlist-io.js && node test-indexers.js && node test-torrent-engine.js && node test-milestone1.js && node test-milestone2.js && node test-milestone3.js && node test-milestone4.js",
+    "test:all": "node test-episodes.js && node test-release-parser.js && node test-path-security.js && node test-torrents.js && node test-whisper-queue.js && node test-catalog-cache.js && node test-library-manager.js && node test-watchlist-io.js && node test-indexers.js && node test-torrent-engine.js && node test-milestone1.js && node test-milestone1-adversarial.js && node test-milestone2.js && node test-milestone2-adversarial.js && node test-milestone3.js && node test-milestone3-adversarial.js && node test-milestone4.js && node test-milestone4-adversarial.js && node test-milestone4-challenger2.js"
   },
   "build": {
     "appId": "com.animemediacenter.app",
@@ -38,7 +38,8 @@
     "jassub": "^2.5.23",
     "lucide-react": "^0.460.0",
     "react": "^18.3.1",
-    "react-dom": "^18.3.1"
+    "react-dom": "^18.3.1",
+    "webtorrent": "^3.0.21"
   },
   "devDependencies": {
     "@types/node": "^22.9.0",

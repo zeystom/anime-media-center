@@ -14,6 +14,7 @@ import type {
   CatalogItem,
   Episode,
   PlaybackProgress,
+  ReleaseSearchResult,
   RemoteEpisodeInfo,
   UserLibraryEntry,
   UserListStatus,
@@ -22,6 +23,7 @@ import type { RailItem } from '../../hooks/useCatalog'
 import { findLocalFolder, useLocalStatus } from '../../hooks/useLocalStatus'
 import { useUserLibrary } from '../../hooks/useUserLibrary'
 import { StatusBadges } from '../common/StatusBadges'
+import { ReleasePickerModal } from '../P2P/ReleasePickerModal'
 import { EpisodeRow } from './EpisodeRow'
 // CRITICAL: import the wasm-free regex engine directly — never from
 // ../../lib/releaseParser/index.ts, which pulls native/wasm deps unsuitable
@@ -122,6 +124,10 @@ export const AnimeDetailView: React.FC<AnimeDetailViewProps> = ({
   const [completedSuggestion, setCompletedSuggestion] = useState(false)
   const completedPromptedRef = useRef(false)
 
+  // Release picker: null = closed; { episode: null } = whole season / pack.
+  const [pickerState, setPickerState] = useState<{ episode: number | null } | null>(null)
+  const [queueing, setQueueing] = useState(false)
+
   const railItem = source.kind === 'catalog' ? source.item : null
 
   // Local folder resolution: direct for local sources, fuzzy (anilistId then
@@ -135,6 +141,19 @@ export const AnimeDetailView: React.FC<AnimeDetailViewProps> = ({
   // an AniList id; purely local titles skip all network calls.
   const anilistId =
     source.kind === 'catalog' ? source.item.anilistId : (localFolder?.anilistId ?? null)
+
+  // P2P download flows: enabled only when the renderer API exposes release
+  // search AND the title resolves to an AniList id for the indexer queries.
+  const p2pAvailable = typeof window.electronAPI?.searchReleases === 'function'
+  const canDownload = p2pAvailable && anilistId != null
+
+  // Season hint for release searches: parsed from the first local file name
+  // (catalog-only titles search without a season filter).
+  const parsedSeason = useMemo(() => {
+    const firstFile = localFolder?.episodes.find((ep) => !!ep?.fileName)
+    if (!firstFile?.fileName) return null
+    return parseReleaseCore(firstFile.fileName).season
+  }, [localFolder])
 
   const { statusFor } = useLocalStatus(folders, history, userEntries)
   // Mutators only: reads come from the userEntries prop (plus this instance's
@@ -393,6 +412,31 @@ export const AnimeDetailView: React.FC<AnimeDetailViewProps> = ({
     onPlayEpisode(resumeEpisode, resumeStartAt)
   }
 
+  // Queues the picked release via the torrent engine, then closes the picker.
+  // The library refresh runs immediately (cheap rescan) so the new files show
+  // up as soon as the engine starts writing them.
+  const handlePickRelease = async (result: ReleaseSearchResult) => {
+    const api = window.electronAPI
+    if (!pickerState || !api?.addDownload || queueing) return
+    const { episode } = pickerState
+    setQueueing(true)
+    try {
+      const res = await api.addDownload({ item: result, title: hero.title, anilistId, episode })
+      if (res?.success) {
+        showGlobalToast('Download queued — see the Downloads tab', 'success')
+      } else {
+        showGlobalToast(res?.error || 'Failed to queue download', 'error')
+      }
+    } catch (err) {
+      console.error('Failed to queue download:', err)
+      showGlobalToast('Failed to queue download', 'error')
+    } finally {
+      setQueueing(false)
+      setPickerState(null)
+      onLibraryChanged?.()
+    }
+  }
+
   const showBanner = !!hero.bannerUrl && !bgFailed
   const showPoster = !!hero.posterUrl && !posterFailed
   const episodeTotal = hero.episodesCount ?? hero.totalEpisodes
@@ -574,15 +618,27 @@ export const AnimeDetailView: React.FC<AnimeDetailViewProps> = ({
                 </button>
               )}
 
-              <button
-                type="button"
-                disabled
-                title={DOWNLOAD_TOOLTIP}
-                className="flex cursor-not-allowed select-none items-center gap-2 rounded-xl border border-zinc-700/40 bg-zinc-800/40 px-4 py-3 text-xs font-bold text-zinc-500 opacity-70"
-              >
-                <Download className="h-4 w-4" />
-                <span>Download</span>
-              </button>
+              {canDownload ? (
+                <button
+                  type="button"
+                  onClick={() => setPickerState({ episode: null })}
+                  title="Search your indexers and download this title"
+                  className="flex select-none items-center gap-2 rounded-xl border border-indigo-500/40 bg-indigo-600/20 px-4 py-3 text-xs font-bold text-indigo-300 transition-all hover:bg-indigo-600/30 hover:scale-[1.02] active:scale-[0.98]"
+                >
+                  <Download className="h-4 w-4" />
+                  <span>Download</span>
+                </button>
+              ) : (
+                <button
+                  type="button"
+                  disabled
+                  title={DOWNLOAD_TOOLTIP}
+                  className="flex cursor-not-allowed select-none items-center gap-2 rounded-xl border border-zinc-700/40 bg-zinc-800/40 px-4 py-3 text-xs font-bold text-zinc-500 opacity-70"
+                >
+                  <Download className="h-4 w-4" />
+                  <span>Download</span>
+                </button>
+              )}
             </div>
 
             {/* List status + score (only when the AniList id is known) */}
@@ -689,12 +745,19 @@ export const AnimeDetailView: React.FC<AnimeDetailViewProps> = ({
                   thumbnailUrl={thumbnail}
                   airDate={row.remote?.airDate ?? null}
                   local={local}
-                  remoteOnly={!local}
+                  // When release search is available, fileless rows get an
+                  // enabled download action (EpisodeRow keeps remoteOnly rows
+                  // as disabled ghosts), trading the 'Not Downloaded' pill /
+                  // air-date line for the actionable button.
+                  remoteOnly={!local && !p2pAvailable}
                   watched={!!local && history[local.filePath]?.completed === true}
                   isDownloading={!!local?.isDownloading}
                   downloadProgress={local?.downloadProgress}
                   onPlay={local ? () => onPlayEpisode(local, startAt) : undefined}
                   onWhisper={local && localFolder ? () => onOpenWhisper(localFolder) : undefined}
+                  onDownload={
+                    p2pAvailable && !local ? () => setPickerState({ episode: row.num }) : undefined
+                  }
                   onDelete={local ? () => setConfirmDeleteEpisode(local) : undefined}
                 />
               )
@@ -800,6 +863,19 @@ export const AnimeDetailView: React.FC<AnimeDetailViewProps> = ({
           </div>
         </div>
       )}
+
+      {/* Release picker: searches the user's indexers for this title; the
+          picked release is queued by handlePickRelease. episode=null means
+          whole season / pack. */}
+      <ReleasePickerModal
+        open={pickerState !== null}
+        title={hero.title}
+        anilistId={anilistId}
+        season={parsedSeason}
+        episode={pickerState?.episode ?? null}
+        onCancel={() => setPickerState(null)}
+        onPicked={handlePickRelease}
+      />
     </div>
   )
 }

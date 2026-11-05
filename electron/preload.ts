@@ -92,4 +92,26 @@ contextBridge.exposeInMainWorld('electronAPI', {
     ipcRenderer.invoke('browse-save-file', options),
   exportWatchlist: (format: string, filePath: string) => ipcRenderer.invoke('watchlist:export', format, filePath),
   importWatchlist: (filePath: string) => ipcRenderer.invoke('watchlist:import', filePath),
+  // P2P / BitTorrent (Phase 5, BYOC)
+  getP2pState: () => ipcRenderer.invoke('p2p:get-state'),
+  acceptP2pConsent: () => ipcRenderer.invoke('p2p:accept-consent'),
+  enableP2p: () => ipcRenderer.invoke('p2p:enable'),
+  disableP2p: () => ipcRenderer.invoke('p2p:disable'),
+  getVpnStatus: () => ipcRenderer.invoke('p2p:vpn-status'),
+  searchReleases: (params: { title: string; anilistId?: number | null; season?: number | null; episode?: number | null; episodeCount?: number | null }) =>
+    ipcRenderer.invoke('p2p:search', params),
+  addDownload: (params: { item: import('./types').ReleaseSearchResult; title: string; anilistId?: number | null; episode?: number | null; targetFolder?: string }) =>
+    ipcRenderer.invoke('p2p:add-download', params),
+  pauseDownload: (infoHash: string) => ipcRenderer.invoke('p2p:pause', infoHash),
+  resumeDownload: (infoHash: string) => ipcRenderer.invoke('p2p:resume', infoHash),
+  cancelDownload: (infoHash: string, removeFiles?: boolean) => ipcRenderer.invoke('p2p:cancel', infoHash, removeFiles),
+  setP2pLimits: (limits: { maxConcurrent?: number; downloadSpeedMBps?: number; uploadSpeedMBps?: number; seedMinutes?: number }) =>
+    ipcRenderer.invoke('p2p:set-limits', limits),
+  getP2pProviders: () => ipcRenderer.invoke('p2p:get-providers'),
+  saveP2pProviders: (providers: import('./types').RssProvider[]) => ipcRenderer.invoke('p2p:save-providers', providers),
+  onP2pStateChanged: (callback: (state: import('./types').P2pState) => void) => {
+    const handler = (_event: any, state: import('./types').P2pState) => callback(state);
+    ipcRenderer.on('p2p-state-changed', handler);
+    return () => ipcRenderer.removeListener('p2p-state-changed', handler);
+  },
 });

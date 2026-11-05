@@ -139,6 +139,79 @@ export interface AppSettings {
   subtitlesOutlineWidth?: 'thin' | 'medium' | 'thick' | 'heavy' | 'none';
   subtitlesOutlineColor?: string;
   hideDownloadingAnime?: boolean;
+
+  // ---- P2P / BitTorrent (BYOC — user provides their own indexers) ----
+  enableP2P?: boolean;              // default false — the torrent engine never starts until the user opts in
+  p2pConsentAcceptedAt?: number | null;
+  requireVpnForP2p?: boolean;       // default true — VPN tunnel is required
+  vpnBlockDownload?: boolean;       // default true — refuse starting downloads without a VPN tunnel
+  maxConcurrentDownloads?: number;  // default 2
+  downloadSpeedLimitMBps?: number;  // 0 = unlimited
+  uploadSpeedLimitMBps?: number;    // 0 = unlimited
+  seedMinutesAfterComplete?: number; // 0 = stop seeding immediately once the download completes
+  rssProviders?: RssProvider[];     // user-provided RSS/Torznab indexers — NO defaults, nothing hardcoded
+  downloadTargetFolder?: string;    // optional override; defaults to the first library folder
+}
+
+// ---- P2P shared types ----
+
+export interface RssProvider {
+  id: string;
+  name: string;
+  urlTemplate: string; // e.g. https://example.example/search?q={query} — user-supplied, never bundled
+  type: 'rss' | 'torznab';
+  enabled: boolean;
+}
+
+export interface VpnStatus {
+  active: boolean;
+  interfaces: string[];
+  checkedAt: number;
+}
+
+export interface ReleaseSearchResult {
+  providerId: string;
+  providerName: string;
+  title: string;
+  downloadUrl: string; // magnet: URI or http(s) URL to a .torrent file
+  sizeBytes: number | null;
+  seeders: number | null;
+  leechers: number | null;
+  pubDate: number | null;
+}
+
+export type TorrentJobStatus = 'queued' | 'connecting' | 'downloading' | 'paused' | 'seeding' | 'completed' | 'error';
+
+export interface TorrentJob {
+  infoHash: string;
+  name: string;
+  title: string;
+  anilistId: number | null;
+  targetFolder: string;
+  magnetUri: string;
+  status: TorrentJobStatus;
+  progress: number; // 0..100
+  downloadedBytes: number;
+  totalBytes: number;
+  downloadSpeed: number; // bytes/sec
+  uploadSpeed: number;   // bytes/sec
+  peers: number;
+  episode: number | null;
+  error?: string;
+  addedAt: number;
+  completedAt?: number | null;
+}
+
+export interface P2pState {
+  enabled: boolean;
+  consentAccepted: boolean;
+  jobs: TorrentJob[];
+  limits: {
+    maxConcurrent: number;
+    downloadSpeedMBps: number;
+    uploadSpeedMBps: number;
+    seedMinutes: number;
+  };
 }
 
 export interface WhisperQueueItem {
