@@ -64,6 +64,8 @@ const BROADCAST_TICK_MS = 1_000
 const PERSIST_DEBOUNCE_MS = 2_000
 /** Timeout for fetching remote .torrent files referenced by a release. */
 const TORRENT_FETCH_TIMEOUT_MS = 20_000
+/** How long a job may sit in 'connecting' (no metadata) before it fails loudly. */
+const CONNECTING_TIMEOUT_MS = 120_000
 /** Hard cap for client/torrent destroy callbacks so callers never hang. */
 const DESTROY_GUARD_MS = 3_000
 /** Longest window a completed torrent keeps seeding before auto-stop. */
@@ -184,6 +186,8 @@ interface InternalJob {
   addedAt: number
   completedAt: number | null
   error?: string
+  /** Set when the job enters 'connecting'; drives the stuck-connecting watchdog. */
+  connectingSince?: number | null
   torrent: TorrentLike | null
   /** Timestamp after which a seeding torrent is destroyed and the job removed. */
   seedingDeadline: number | null
@@ -426,13 +430,47 @@ export function extractTorrentMeta(buf: Buffer): TorrentMeta | null {
   }
 }
 
+/**
+ * Browser-like User-Agent for outbound .torrent fetches — many indexers
+ * (nyaa.si included) answer bare Node fetches with 403/Cloudflare pages.
+ */
+const TORRENT_FETCH_UA =
+  'Mozilla/5.0 (Windows NT 10.0; Win64; x64) AppleWebKit/537.36 (KHTML, like Gecko) Chrome/126.0.0.0 Safari/537.36'
+
+let cachedNetFetch: typeof fetch | null = null
+/**
+ * electron.net.fetch goes through Chromium networking (system proxy/VPN aware).
+ * ONLY the electron implementation is cached — globalThis.fetch is re-resolved
+ * on every call so tests may swap their fetch mocks between cases.
+ */
+async function resolveFetch(): Promise<typeof fetch> {
+  if (cachedNetFetch) return cachedNetFetch
+  try {
+    const mod: any = await import('electron')
+    if (mod && mod.net && typeof mod.net.fetch === 'function') {
+      cachedNetFetch = (mod.net.fetch.bind(mod.net) as unknown) as typeof fetch
+      return cachedNetFetch
+    }
+  } catch {
+    /* plain Node (tests) → fall through to global fetch */
+  }
+  const globalFetch = (globalThis as { fetch?: typeof fetch }).fetch
+  if (typeof globalFetch === 'function') return globalFetch
+  throw new Error('no fetch implementation available')
+}
+
 /** Fetch a remote .torrent file with a hard 20s timeout. */
 async function fetchTorrentBytes(url: string): Promise<Buffer> {
   const controller = new AbortController()
   const timer = setTimeout(() => controller.abort(), TORRENT_FETCH_TIMEOUT_MS)
   unref(timer)
   try {
-    const res = await fetch(url, { signal: controller.signal, redirect: 'follow' })
+    const doFetch = await resolveFetch()
+    const res = await doFetch(url, {
+      signal: controller.signal,
+      redirect: 'follow',
+      headers: { 'User-Agent': TORRENT_FETCH_UA, Accept: 'application/x-bittorrent, */*' },
+    })
     if (!res.ok) throw new Error(`HTTP ${res.status} ${res.statusText || ''}`.trim())
     const bytes = Buffer.from(await res.arrayBuffer())
     if (bytes.length === 0) throw new Error('empty response body')
@@ -440,6 +478,30 @@ async function fetchTorrentBytes(url: string): Promise<Buffer> {
   } finally {
     clearTimeout(timer)
   }
+}
+
+/**
+ * Stable public trackers appended to trackerless magnets. DHT alone often
+ * strands on a cold routing table (metadata never arrives even for releases
+ * with 1000+ seeders), while a single tracker announce fixes peer discovery
+ * instantly. These are generic public infrastructure, not indexers — the BYOC
+ * rule (no bundled tracker/indexer SITES) still holds.
+ */
+const FALLBACK_TRACKERS = [
+  'udp://tracker.opentrackr.org:1337/announce',
+  'udp://open.demonii.com:1337/announce',
+  'udp://tracker.open-internet.nl:6969/announce',
+  'udp://exodus.desync.com:6969/announce',
+  'udp://tracker.torrent.eu.org:451/announce',
+  'udp://tracker.tiny-vps.com:6969/announce',
+]
+
+/** Append fallback trackers to a magnet URI that carries none. */
+export function ensureMagnetTrackers(magnetUri: string): string {
+  if (!magnetUri || !magnetUri.startsWith('magnet:')) return magnetUri
+  if (/[?&]tr=/i.test(magnetUri)) return magnetUri
+  const encoded = FALLBACK_TRACKERS.map((t) => `tr=${encodeURIComponent(t)}`).join('&')
+  return `${magnetUri}&${encoded}`
 }
 
 // ---- Persistence ------------------------------------------------------------
@@ -876,7 +938,8 @@ async function activateJob(job: InternalJob): Promise<void> {
   } catch (err) {
     warn('could not create download dir:', errMsg(err))
   }
-  const payload: string | Buffer = job.sourceBuffer ?? job.magnetUri
+  const payload: string | Buffer = job.sourceBuffer ?? ensureMagnetTrackers(job.magnetUri)
+  job.connectingSince = Date.now()
   try {
     c.add(payload, { path: job.downloadDir }, undefined)
   } catch (err) {
@@ -994,6 +1057,28 @@ function expireSeedingJobs(): void {
   }
 }
 
+/**
+ * Kill switch for eternally-stuck 'connecting' jobs: when metadata never
+ * arrives within the window, surface a clear, actionable error instead of
+ * spinning forever (typically a dead/rare release or a hostile network).
+ */
+function expireStuckConnectingJobs(): void {
+  if (jobs.size === 0) return
+  const now = Date.now()
+  for (const job of [...jobs.values()]) {
+    if (job.status !== 'connecting' || !job.connectingSince) continue
+    if (now - job.connectingSince < CONNECTING_TIMEOUT_MS) continue
+    job.status = 'error'
+    job.error = 'No peers or metadata received — the release looks dead or unreachable. Cancel it and pick a different release (more seeders = better).'
+    job.connectingSince = null
+    if (job.torrent) destroyTorrentQuietly(job.torrent, false)
+    warn(`job ${job.infoHash} stuck connecting > ${CONNECTING_TIMEOUT_MS / 1000}s — marked as error`)
+    broadcastNow()
+    schedulePersist()
+    runScheduler()
+  }
+}
+
 function startTimers(): void {
   if (broadcastTimer) return
   broadcastTickCount = 0
@@ -1003,6 +1088,7 @@ function startTimers(): void {
     if (!client) return
     if (broadcastTickCount % 2 === 0) enforceSpeedLimits(s); // 2s speed cadence
     expireSeedingJobs()
+    expireStuckConnectingJobs()
     broadcastThrottled(); // ≤1/s while jobs exist
   }, BROADCAST_TICK_MS)
   unref(broadcastTimer)
