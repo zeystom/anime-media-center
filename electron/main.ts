@@ -4,13 +4,16 @@ import fs from 'fs';
 import { fileURLToPath } from 'url';
 import { storage, autoDetectFfmpegPath, autoDetectWhisperPath } from './storage';
 import { streamServer } from './server';
-import { probeMkv, extractEmbeddedSubtitle, extractEmbeddedAss, extractEmbeddedFonts, filterFontsForAss, parseSrt, findPrecedingKeyframe, readMkvEmbeddedTitle, readMkvDuration, cleanupOldCaches } from './ffmpeg';
+import { probeMkv, extractEmbeddedSubtitle, extractEmbeddedAss, extractEmbeddedFonts, filterFontsForAss, parseSrt, findPrecedingKeyframe, readMkvEmbeddedTitle, readContainerDuration, cleanupOldCaches } from './ffmpeg';
 import { whisperManager } from './whisper';
 import { findExternalSubtitles } from './subtitles';
-import { AnimeFolder, Episode, PlaybackProgress, SeasonPreference } from './types';
+import { AnimeFolder, Episode, PlaybackProgress, SeasonPreference, VIDEO_EXTENSIONS } from './types';
 import { getKitsuMetadata, fetchAniSkipTimes } from './kitsu';
 import { extractEpisodeNumber } from './episodes';
 import { checkEpisodeDownloading, isFolderDownloading } from './torrents';
+import { getTrending, getPopularSeason, getAllTimePopular, getAiringSchedule, getRecommendations, searchCatalog, getCatalogDetails } from './catalog';
+import { fetchAniZipMappings } from './aniZip';
+import { userLibrary, UserListStatus } from './userLibrary';
 
 const __filename = fileURLToPath(import.meta.url);
 const __dirname = path.dirname(__filename);
@@ -70,14 +73,14 @@ interface FolderSubtitleFlags {
 const folderSubtitleCache = new Map<string, FolderSubtitleFlags>();
 
 async function checkFolderSubtitles(
-  mkvFiles: string[],
+  videoFiles: string[],
   folderPath: string,
   ffmpegPath: string
 ): Promise<FolderSubtitleFlags> {
   if (folderSubtitleCache.has(folderPath)) {
     return folderSubtitleCache.get(folderPath)!;
   }
-  const sample = mkvFiles.slice(0, 3);
+  const sample = videoFiles.slice(0, 3);
   let foundDub = false;
   let foundSub = false;
 
@@ -109,18 +112,18 @@ async function scanFolderForEpisodes(folderPath: string, port: number, targetRoo
 
   try {
     const files = fs.readdirSync(folderPath);
-    const mkvFiles = files.filter((f) => f.toLowerCase().endsWith('.mkv'));
-    if (mkvFiles.length === 0) {
+    const videoFiles = files.filter((f) => VIDEO_EXTENSIONS.some((ext) => f.toLowerCase().endsWith(ext)));
+    if (videoFiles.length === 0) {
       return [];
     }
 
     const srtFiles = new Set(files.filter((f) => f.toLowerCase().endsWith('.srt')));
     const allFilesLower = new Set(files.map((f) => f.toLowerCase()));
-    mkvFiles.sort((a, b) => a.localeCompare(b, undefined, { numeric: true, sensitivity: 'base' }));
+    videoFiles.sort((a, b) => a.localeCompare(b, undefined, { numeric: true, sensitivity: 'base' }));
 
     const settings = storage.getSettings();
     const { hasDubtitles, hasEmbeddedSubtitles } = await checkFolderSubtitles(
-      mkvFiles,
+      videoFiles,
       folderPath,
       settings.ffmpegPath
     );
@@ -132,14 +135,14 @@ async function scanFolderForEpisodes(folderPath: string, port: number, targetRoo
     const history = storage.getAllPlaybackProgress();
     const episodes: Episode[] = [];
 
-    for (const file of mkvFiles) {
+    for (const file of videoFiles) {
       const fullPath = path.join(folderPath, file);
       const stat = fs.statSync(fullPath);
       const baseName = path.parse(file).name;
       const { episodeNum, label: epNum } = extractEpisodeNumber(file);
       const dlStatus = checkEpisodeDownloading(fullPath, allFilesLower, stat);
 
-      // Populate episode duration: history cached, or instant EBML duration
+      // Populate episode duration: history cached, or instant container duration
       const cachedProgress = history[fullPath];
       let duration: number | undefined =
         cachedProgress?.duration && cachedProgress.duration > 0
@@ -147,9 +150,9 @@ async function scanFolderForEpisodes(folderPath: string, port: number, targetRoo
           : undefined;
 
       if (!duration) {
-        const mkvDur = readMkvDuration(fullPath);
-        if (mkvDur && mkvDur > 0) {
-          duration = Math.round(mkvDur);
+        const containerDur = readContainerDuration(fullPath);
+        if (containerDur && containerDur > 0) {
+          duration = Math.round(containerDur);
         }
       }
 
@@ -169,7 +172,7 @@ async function scanFolderForEpisodes(folderPath: string, port: number, targetRoo
       // If standalone movie (1 file) or episode thumbnail missing, fall back to API banner or poster
       const kitsuThumb =
         kitsuEp?.thumbnailUrl ||
-        (mkvFiles.length === 1 ? kitsuData?.bannerUrl || kitsuData?.posterUrl : null) ||
+        (videoFiles.length === 1 ? kitsuData?.bannerUrl || kitsuData?.posterUrl : null) ||
         null;
 
       episodes.push({
@@ -219,9 +222,11 @@ function findMediaFolders(rootDir: string, maxDepth = 4): string[] {
       return;
     }
 
-    // Check if current directory contains any .mkv files
-    const hasMkv = entries.some((e) => e.isFile() && e.name.toLowerCase().endsWith('.mkv'));
-    if (hasMkv) {
+    // Check if current directory contains any video files (.mkv / .mp4)
+    const hasVideo = entries.some(
+      (e) => e.isFile() && VIDEO_EXTENSIONS.some((ext) => e.name.toLowerCase().endsWith(ext))
+    );
+    if (hasVideo) {
       mediaDirs.push(currentDir);
     }
 
@@ -690,12 +695,69 @@ function setupIpcHandlers() {
   ipcMain.handle('is-fullscreen', async () => {
     return mainWindow ? mainWindow.isFullScreen() : false;
   });
+
+  // ---- Catalog & Metadata Service (global AniList catalog + remote episode lists) ----
+  ipcMain.handle('catalog:trending', async () => {
+    return getTrending();
+  });
+
+  ipcMain.handle('catalog:season', async () => {
+    return getPopularSeason();
+  });
+
+  ipcMain.handle('catalog:all-time', async () => {
+    return getAllTimePopular();
+  });
+
+  ipcMain.handle('catalog:airing-schedule', async (_event, weekOffset?: number) => {
+    return getAiringSchedule(Number.isFinite(weekOffset) ? Number(weekOffset) : 0);
+  });
+
+  ipcMain.handle('catalog:recommendations', async (_event, seeds?: number[]) => {
+    // Personal seed = titles the user is watching or has completed in their local user library.
+    const librarySeeds = Object.values(userLibrary.getAll())
+      .filter((e) => e.status === 'watching' || e.status === 'completed')
+      .map((e) => e.anilistId);
+    const effectiveSeeds = Array.isArray(seeds) && seeds.length > 0 ? seeds : librarySeeds;
+    if (effectiveSeeds.length === 0) return [];
+    return getRecommendations(effectiveSeeds);
+  });
+
+  ipcMain.handle('catalog:search', async (_event, query: string) => {
+    return searchCatalog(query);
+  });
+
+  ipcMain.handle('catalog:details', async (_event, anilistId: number) => {
+    return getCatalogDetails(anilistId);
+  });
+
+  ipcMain.handle('metadata:remote-episodes', async (_event, anilistId: number) => {
+    return fetchAniZipMappings(anilistId);
+  });
+
+  // ---- User Library (watching/completed/planning/dropped statuses + scores) ----
+  ipcMain.handle('user-library:get-all', async () => {
+    return userLibrary.getAll();
+  });
+
+  ipcMain.handle('user-library:set-status', async (_event, anilistId: number, idMal: number | null, titleSnapshot: string, status: UserListStatus) => {
+    return userLibrary.setStatus(anilistId, idMal, titleSnapshot, status);
+  });
+
+  ipcMain.handle('user-library:set-score', async (_event, anilistId: number, score: number | null) => {
+    return userLibrary.setScore(anilistId, score);
+  });
+
+  ipcMain.handle('user-library:set-progress', async (_event, anilistId: number, progress: number) => {
+    return userLibrary.setProgress(anilistId, progress);
+  });
 }
 
 app.whenReady().then(createWindow);
 
 app.on('window-all-closed', () => {
   storage.flushHistory();
+  userLibrary.flush();
   streamServer.stop();
   whisperManager.cancel();
   if (process.platform !== 'darwin') {
@@ -705,6 +767,7 @@ app.on('window-all-closed', () => {
 
 app.on('before-quit', () => {
   storage.flushHistory();
+  userLibrary.flush();
   streamServer.stop();
   whisperManager.cancel();
 });

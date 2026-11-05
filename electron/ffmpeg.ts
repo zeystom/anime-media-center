@@ -135,8 +135,11 @@ export function invalidateProbeCache(filePath?: string): void {
  * Fast EBML reader that inspects the first 64KB of a Matroska (.mkv) file
  * to instantly extract the official container Segment Title (element ID 0x7BA9).
  * Runs in under 1ms with 0 subprocesses or network requests.
+ * Returns null for non-Matroska containers (e.g. MP4) since scanning their
+ * binary payload for the 0x7BA9 byte pair would only yield false positives.
  */
 export function readMkvEmbeddedTitle(filePath: string): string | null {
+  if (path.extname(filePath).toLowerCase() !== '.mkv') return null;
   try {
     const fd = fs.openSync(filePath, 'r');
     const buf = Buffer.alloc(65536);
@@ -251,6 +254,125 @@ export function readMkvDuration(filePath: string): number | null {
   } catch {
     return null;
   }
+}
+
+/**
+ * Fast binary parser that walks the top-level ISO-BMFF atom chain of an MP4
+ * file ([4-byte size][4-byte type] boxes) to locate the `moov` atom — it can
+ * live at the END of the file when not faststart-muxed — and then reads the
+ * `mvhd` movie header to extract the container duration.
+ * Runs in under 1ms with 0 subprocesses. Returns seconds (rounded) or null.
+ */
+export function readMp4Duration(filePath: string): number | null {
+  let fd: number | null = null;
+  try {
+    let stat: fs.Stats;
+    try {
+      stat = fs.statSync(filePath);
+    } catch {
+      return null;
+    }
+    if (!stat.isFile() || stat.size < 32) return null;
+
+    fd = fs.openSync(filePath, 'r');
+    const headBuf = Buffer.alloc(8);
+
+    let offset = 0;
+    while (offset + 8 <= stat.size) {
+      if (fs.readSync(fd, headBuf, 0, 8, offset) < 8) return null;
+      let boxSize = headBuf.readUInt32BE(0);
+      const boxType = headBuf.toString('latin1', 4, 8);
+
+      if (boxSize === 1) {
+        // 64-bit largesize variant: real size follows the type field
+        const largeBuf = Buffer.alloc(8);
+        if (fs.readSync(fd, largeBuf, 0, 8, offset + 8) < 8) return null;
+        boxSize = Number(largeBuf.readBigUInt64BE(0));
+      } else if (boxSize === 0) {
+        // Size 0 means the box extends to the end of the file
+        boxSize = stat.size - offset;
+      }
+
+      if (boxSize < 8) return null;
+
+      if (boxType === 'moov') {
+        const remaining = stat.size - offset;
+        return parseMp4MvhdDuration(fd, offset, Math.min(boxSize, remaining));
+      }
+      offset += boxSize;
+    }
+    return null;
+  } catch {
+    return null;
+  } finally {
+    if (fd !== null) {
+      try {
+        fs.closeSync(fd);
+      } catch {}
+    }
+  }
+}
+
+/**
+ * Reads the `mvhd` movie header (the first child of `moov`) to derive the
+ * duration. mvhd version 0 uses 32-bit fields, version 1 uses 64-bit ones:
+ *   v0: ctime u32, mtime u32, timescale u32, duration u32
+ *   v1: ctime u64, mtime u64, timescale u32, duration u64
+ * duration in seconds = duration / timescale.
+ */
+function parseMp4MvhdDuration(fd: number, moovOffset: number, moovSize: number): number | null {
+  try {
+    // mvhd is always the first child of moov, so a small window suffices
+    const windowSize = Math.min(moovSize, 4096);
+    const buf = Buffer.alloc(windowSize);
+    if (fs.readSync(fd, buf, 0, windowSize, moovOffset) < 8) return null;
+
+    // Walk moov child atoms starting after the 8-byte moov header
+    let offset = 8;
+    while (offset + 8 <= buf.length) {
+      const childSize = buf.readUInt32BE(offset);
+      const childType = buf.toString('latin1', offset + 4, offset + 8);
+      if (childSize < 8) return null;
+      if (childType === 'mvhd') {
+        if (offset + childSize > buf.length) return null;
+
+        const version = buf[offset + 8]; // after 8-byte box header
+        const base = offset + 12;        // after version/flags field
+
+        if (version === 1) {
+          if (base + 28 > buf.length) return null;
+          const timescale = buf.readUInt32BE(base + 16);
+          const duration = Number(buf.readBigUInt64BE(base + 20));
+          if (timescale <= 0 || !Number.isFinite(duration) || duration <= 0) return null;
+          return Math.round(duration / timescale);
+        }
+
+        if (base + 16 > buf.length) return null;
+        const timescale = buf.readUInt32BE(base + 8);
+        const duration = buf.readUInt32BE(base + 12);
+        if (timescale <= 0 || duration <= 0) return null;
+        return Math.round(duration / timescale);
+      }
+      offset += childSize;
+    }
+    return null;
+  } catch {
+    return null;
+  }
+}
+
+/**
+ * Container-agnostic instant duration reader: dispatches on the file extension
+ * to the EBML (Matroska) or ISO-BMFF (MP4) binary parser. Unknown extensions
+ * fall back to trying both parsers in sequence. Returns seconds or null.
+ */
+export function readContainerDuration(filePath: string): number | null {
+  const ext = path.extname(filePath).toLowerCase();
+  if (ext === '.mkv') return readMkvDuration(filePath);
+  if (ext === '.mp4' || ext === '.m4v') return readMp4Duration(filePath);
+  const mkvDur = readMkvDuration(filePath);
+  if (mkvDur !== null) return mkvDur;
+  return readMp4Duration(filePath);
 }
 
 export async function probeMkv(filePath: string, ffmpegPath: string): Promise<VideoMetadata> {

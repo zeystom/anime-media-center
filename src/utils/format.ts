@@ -1,3 +1,8 @@
+// Season/episode/series extraction is delegated to the shared parser core.
+// Source of truth: src/lib/releaseParser/regexEngine.ts (pure, wasm-free — safe
+// for both the renderer bundle and the esbuild data-URI test graph).
+import { normalizeReleaseString, parseReleaseCore } from '../lib/releaseParser/regexEngine.ts';
+
 export function formatTime(seconds: number): string {
   if (isNaN(seconds) || seconds < 0) return '00:00';
   const hrs = Math.floor(seconds / 3600);
@@ -259,6 +264,11 @@ export function cleanSeriesTitle(raw: string): string {
  * Parses raw anime release filenames (e.g. [hchcsen] Haruhi S01E01 [DVD 576p x265...].mkv,
  * Clevatess.S01E01.REPACK.1080p..., Cowboy Bebop - 01 - Asteroid Blues.mkv)
  * into a clean, aesthetic episode structure with extracted quality tags.
+ *
+ * Season/episode/series facts are delegated to the shared parser core
+ * (source of truth: src/lib/releaseParser/regexEngine.ts). format.ts keeps the
+ * display concerns: tag extraction, episode-title remainder slicing and the
+ * legacy "EP 05"/"S02E03" label shape.
  */
 export function cleanEpisodeTitle(filename: string): ParsedEpisode {
   if (!filename) {
@@ -272,13 +282,17 @@ export function cleanEpisodeTitle(filename: string): ParsedEpisode {
     };
   }
 
+  // Season / episode / multi-episode facts come from the shared regex core.
+  const core = parseReleaseCore(filename);
+  const season = core.season;
+  const episode = core.episodeNumber;
+
   let name = filename.replace(/\.(mkv|mp4|avi|webm|ts)$/i, '');
 
-  // 0. Normalize Unicode dashes, Japanese wave dashes, full-width numbers and typography
-  name = name
-    .replace(/[\uFF10-\uFF19]/g, (ch) => String.fromCharCode(ch.charCodeAt(0) - 0xfee0))
-    .replace(/[\u2013\u2014\u2015\u2212\u301C\uFF5E]/g, '-')
-    .replace(/[\u30FB\u00B7]/g, ' ');
+  // 0. Normalize Unicode dashes, Japanese wave dashes, full-width numbers and
+  // typography via the shared core (also collapses whitespace, which the
+  // downstream junk-token cleanup did anyway).
+  name = normalizeReleaseString(name);
 
   // 1. Extract quality, source, audio and release tags
   const tags: string[] = [];
@@ -308,6 +322,11 @@ export function cleanEpisodeTitle(filename: string): ParsedEpisode {
   }
 
   // 2. Remove CRC32/MD5 hashes like [B6543D71]
+  // NOTE: steps 2-8 stay local on purpose. The shared sanitizeMediaTags() is not
+  // equivalent for the display path: it keeps quality bracket blocks and leading
+  // groups intact and *replaces* junk tokens instead of deleting them, which
+  // would leak "[Group]"/"(1080p)" remnants into the cleaned title this code
+  // slices the episode title from.
   name = name.replace(/\[[0-9a-fA-F]{8}\]/g, '');
 
   // 3. Remove leading release group [Group] or (Group)
@@ -350,96 +369,65 @@ export function cleanEpisodeTitle(filename: string): ParsedEpisode {
   name = name.replace(/\s+/g, ' ').trim();
   name = name.replace(/^[-_–—\s]+|[-_–—\s]+$/g, '');
 
-  // 9. Extract Season & Episode numbers
-  let season: number | null = null;
-  let episode: number | null = null;
-  let episodeLabel = '';
-  let series = '';
+  // 9. Locate the episode token so the text after it can be surfaced as the
+  // episode title (a display concern kept in format.ts). The numeric facts
+  // (season / episode / multi-episode) already came from parseReleaseCore
+  // above; this scan only decides where the title remainder starts.
   let epTitle = '';
+  let markerIndex = -1;
+  let stripTrailingSeparators = false;
 
   const multiSeMatch = name.match(/s(\d{1,2})\s*e(\d{1,4})[-_~–—]e?(\d{1,4})/i);
   if (multiSeMatch) {
-    season = parseInt(multiSeMatch[1], 10);
-    episode = parseInt(multiSeMatch[2], 10);
-    const endEp = parseInt(multiSeMatch[3], 10);
-    episodeLabel = `S${String(season).padStart(2, '0')}E${String(episode).padStart(2, '0')}-E${String(endEp).padStart(2, '0')}`;
-    const idx = name.search(/s\d+\s*e\d+/i);
-    series = name.substring(0, idx).trim().replace(/[-_–—\s]+$/, '');
-    const remainder = name.substring(idx + multiSeMatch[0].length);
+    markerIndex = name.search(/s\d+\s*e\d+/i);
+    stripTrailingSeparators = true;
+    const remainder = name.substring(markerIndex + multiSeMatch[0].length);
     const titleMatch = remainder.match(/^\s*[-_–—:]\s*(.+)/);
     if (titleMatch) {
       epTitle = titleMatch[1].trim();
-    } else {
-      epTitle = '';
     }
   } else {
     const seMatch = name.match(/s(\d+)\s*e(\d+(?:\.5)?)/i);
     if (seMatch) {
-      season = parseInt(seMatch[1], 10);
-      episode = parseFloat(seMatch[2]);
-      const numPart = Number.isInteger(episode) ? String(episode).padStart(2, '0') : String(episode);
-      episodeLabel = `S${String(season).padStart(2, '0')}E${numPart}`;
-      const idx = name.search(/s\d+\s*e\d+/i);
-      series = name.substring(0, idx).trim().replace(/[-_–—\s]+$/, '');
-      const remainder = name.substring(idx + seMatch[0].length);
+      markerIndex = name.search(/s\d+\s*e\d+/i);
+      stripTrailingSeparators = true;
+      const remainder = name.substring(markerIndex + seMatch[0].length);
       const titleMatch = remainder.match(/^\s*[-_–—:]\s*(.+)/);
       if (titleMatch) {
         epTitle = titleMatch[1].trim();
-      } else {
-        epTitle = '';
       }
     } else {
       const multiDashMatch = name.match(/\s+-\s+(\d{1,4})[-_~–—](\d{1,4})(?:\s+-\s*|\s+|$)/);
       if (multiDashMatch) {
-        episode = parseInt(multiDashMatch[1], 10);
-        const endEp = parseInt(multiDashMatch[2], 10);
-        episodeLabel = `EP ${String(episode).padStart(2, '0')}-E${String(endEp).padStart(2, '0')}`;
-        const idx = name.indexOf(multiDashMatch[0]);
-        series = name.substring(0, idx).trim();
-        const remainder = name.substring(idx + multiDashMatch[0].length);
+        markerIndex = name.indexOf(multiDashMatch[0]);
+        const remainder = name.substring(markerIndex + multiDashMatch[0].length);
         const titleMatch = remainder.match(/^\s*[-_–—:]\s*(.+)/);
         if (titleMatch) {
           epTitle = titleMatch[1].trim();
-        } else {
-          epTitle = '';
         }
       } else {
         const dashMatch = name.match(/\s+-\s+(\d{1,4}(?:\.5)?)(?:\s+-\s*|\s+|$)/);
         if (dashMatch) {
-          episode = parseFloat(dashMatch[1]);
-          const numPart = Number.isInteger(episode) ? String(episode).padStart(2, '0') : String(episode);
-          episodeLabel = `EP ${numPart}`;
-          const idx = name.indexOf(dashMatch[0]);
-          series = name.substring(0, idx).trim();
-          const remainder = name.substring(idx + dashMatch[0].length);
+          markerIndex = name.indexOf(dashMatch[0]);
+          const remainder = name.substring(markerIndex + dashMatch[0].length);
           if (dashMatch[0].trim().endsWith('-')) {
             epTitle = remainder.trim();
           } else {
             const titleMatch = remainder.match(/^\s*[-_–—:]\s*(.+)/);
             if (titleMatch) {
               epTitle = titleMatch[1].trim();
-            } else {
-              epTitle = '';
             }
           }
         } else {
           const epMatch = name.match(/(?:ep|episode|e)\s*(\d+(?:\.5)?)/i);
           if (epMatch) {
-            episode = parseFloat(epMatch[1]);
-            const numPart = Number.isInteger(episode) ? String(episode).padStart(2, '0') : String(episode);
-            episodeLabel = `EP ${numPart}`;
-            const idx = name.search(/(?:ep|episode|e)\s*\d+/i);
-            series = name.substring(0, idx).trim().replace(/[-_–—\s]+$/, '');
-            const remainder = name.substring(idx + epMatch[0].length);
+            markerIndex = name.search(/(?:ep|episode|e)\s*\d+/i);
+            stripTrailingSeparators = true;
+            const remainder = name.substring(markerIndex + epMatch[0].length);
             const titleMatch = remainder.match(/^\s*[-_–—:]\s*(.+)/);
             if (titleMatch) {
               epTitle = titleMatch[1].trim();
-            } else {
-              epTitle = '';
             }
-          } else {
-            series = name;
-            episodeLabel = 'EP';
           }
         }
       }
@@ -456,7 +444,23 @@ export function cleanEpisodeTitle(filename: string): ParsedEpisode {
     epTitle = '';
   }
 
-  // 11. Format final clean display title
+  // 11. Series title. When the legacy marker scan above matched, keep the exact
+  // legacy extraction (text before the marker) — its output is pinned
+  // ("Clevatess 2025", "Another Anime 2024") and differs from the shared core's
+  // animeTitle, which additionally strips trailing years/season markers.
+  // When the legacy scan found nothing, upgrade to the shared core's animeTitle
+  // (source of truth: src/lib/releaseParser/regexEngine.ts) — but only when the
+  // core actually detected an episode the legacy chain missed.
+  let series: string;
+  if (markerIndex >= 0) {
+    series = stripTrailingSeparators
+      ? name.substring(0, markerIndex).trim().replace(/[-_–—\s]+$/, '')
+      : name.substring(0, markerIndex).trim();
+  } else {
+    series = core.episodeNumber !== null && core.animeTitle ? core.animeTitle : name;
+  }
+
+  // 12. Format final clean display title
   let displayTitle = '';
   if (epTitle) {
     displayTitle = epTitle;
@@ -466,11 +470,31 @@ export function cleanEpisodeTitle(filename: string): ParsedEpisode {
     displayTitle = series || filename;
   }
 
+  // 13. Episode label composed in the legacy format.ts shape ("S02E03" /
+  // "S01E01-E02" / "EP 01-E02" / "EP 05"). The shared core's compact labels
+  // ("E05", "E01-E02") remain the source of truth for the facts; this is a
+  // presentation-only mapping kept for UI compatibility.
+  const pad2 = (n: number) => String(n).padStart(2, '0');
+  const fmtNum = (n: number) => (Number.isInteger(n) ? String(n).padStart(2, '0') : String(n));
+  let episodeLabel = 'EP';
+  if (core.isMultiEpisode && core.episodeNumbers.length > 1) {
+    const first = core.episodeNumbers[0];
+    const last = core.episodeNumbers[core.episodeNumbers.length - 1];
+    episodeLabel =
+      season !== null
+        ? `S${pad2(season)}E${pad2(first)}-E${pad2(last)}`
+        : `EP ${pad2(first)}-E${pad2(last)}`;
+  } else if (season !== null && episode !== null) {
+    episodeLabel = `S${pad2(season)}E${fmtNum(episode)}`;
+  } else if (episode !== null) {
+    episodeLabel = `EP ${fmtNum(episode)}`;
+  }
+
   return {
     seriesTitle: series,
     episodeNumber: episode,
     seasonNumber: season,
-    episodeLabel: episodeLabel || (episode !== null ? `EP ${String(episode).padStart(2, '0')}` : 'EP'),
+    episodeLabel: episodeLabel || (episode !== null ? `EP ${fmtNum(episode)}` : 'EP'),
     displayTitle,
     tags,
   };

@@ -183,6 +183,15 @@ export function checkEpisodeDownloading(
             statusCache.set(fullPath, { ...res, progress: 0, mtimeMs: stat.mtimeMs, size: stat.size, checkedAt: now });
             return res;
           }
+        } else if (fileName.endsWith('.mp4')) {
+          // ISO-BMFF brand box: every valid MP4 starts with a box whose type
+          // field (bytes 4..8) is ASCII 'ftyp'. A pre-allocated stub is
+          // zero-filled there, so the brand check fails.
+          if (headBuf.toString('latin1', 4, 8) !== 'ftyp') {
+            const res: TorrentEpisodeStatus = { isDownloading: true, downloadProgress: 0 };
+            statusCache.set(fullPath, { ...res, progress: 0, mtimeMs: stat.mtimeMs, size: stat.size, checkedAt: now });
+            return res;
+          }
         } else {
           // Generic video: if the first 16 bytes are all 0x00, the file was pre-allocated but never started
           let headAllZero = true;

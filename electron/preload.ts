@@ -60,4 +60,21 @@ contextBridge.exposeInMainWorld('electronAPI', {
     ipcRenderer.on('fullscreen-change', handler);
     return () => ipcRenderer.removeListener('fullscreen-change', handler);
   },
+  // Catalog & Metadata Service
+  getCatalogTrending: () => ipcRenderer.invoke('catalog:trending'),
+  getCatalogSeason: () => ipcRenderer.invoke('catalog:season'),
+  getCatalogAllTime: () => ipcRenderer.invoke('catalog:all-time'),
+  getAiringSchedule: (weekOffset?: number) => ipcRenderer.invoke('catalog:airing-schedule', weekOffset),
+  getCatalogRecommendations: (seeds?: number[]) => ipcRenderer.invoke('catalog:recommendations', seeds),
+  searchCatalog: (query: string) => ipcRenderer.invoke('catalog:search', query),
+  getCatalogDetails: (anilistId: number) => ipcRenderer.invoke('catalog:details', anilistId),
+  getRemoteEpisodes: (anilistId: number) => ipcRenderer.invoke('metadata:remote-episodes', anilistId),
+  // User Library
+  getUserLibrary: () => ipcRenderer.invoke('user-library:get-all'),
+  setUserLibraryStatus: (anilistId: number, idMal: number | null, titleSnapshot: string, status: string) =>
+    ipcRenderer.invoke('user-library:set-status', anilistId, idMal, titleSnapshot, status),
+  setUserLibraryScore: (anilistId: number, score: number | null) =>
+    ipcRenderer.invoke('user-library:set-score', anilistId, score),
+  setUserLibraryProgress: (anilistId: number, progress: number) =>
+    ipcRenderer.invoke('user-library:set-progress', anilistId, progress),
 });

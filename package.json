@@ -19,7 +19,9 @@
       "output": "dist-build"
     },
     "win": {
-      "target": ["nsis"],
+      "target": [
+        "nsis"
+      ],
       "icon": "app-icon.ico"
     },
     "nsis": {
@@ -30,6 +32,7 @@
     }
   },
   "dependencies": {
+    "anitomyscript": "^2.0.4",
     "framer-motion": "^11.11.17",
     "jassub": "^2.5.23",
     "lucide-react": "^0.460.0",

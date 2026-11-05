@@ -2,6 +2,10 @@ import fs from 'fs';
 import path from 'path';
 import crypto from 'crypto';
 import { storage } from './storage';
+// Typography normalization is delegated to the shared parser core (wasm-free,
+// safe to bundle in the main process).
+// Source of truth: src/lib/releaseParser/regexEngine.ts
+import { normalizeReleaseString } from '../src/lib/releaseParser/regexEngine.ts';
 
 export interface KitsuEpisodeInfo {
   number: number;
@@ -73,8 +77,16 @@ export function buildAnimeSearchQueries(raw: string): AnimeSearchQueries {
     str = str.substring(0, match.index);
   }
 
-  // 5. Replace dots, underscores, dashes with spaces
-  str = str.replace(/[-_–—.]+/g, ' ').replace(/\s+/g, ' ').trim();
+  // 5. Unicode typography via the shared core (wave dashes, full-width digits,
+  // interpuncts), then replace dots, underscores and remaining dashes with spaces.
+  // NOTE: sanitizeMediaTags()/parseReleaseCore() are intentionally NOT used here —
+  // they replace junk tokens with spaces instead of cutting at the first junk
+  // token and strip trailing years/season markers from titles, both of which
+  // would change the AniList/Kitsu search queries and sequel matching.
+  str = normalizeReleaseString(str)
+    .replace(/[-_.]+/g, ' ')
+    .replace(/\s+/g, ' ')
+    .trim();
 
   // Detect season / cour / part tokens accurately
   const seasonMatch = str.match(/\b(?:S|Season\s*)0*(\d+)\b/i);

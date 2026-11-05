@@ -1,3 +1,7 @@
+// Video container extensions recognized by the library scanner, stream server,
+// and download-progress heuristics. Keep in sync with readContainerDuration().
+export const VIDEO_EXTENSIONS = ['.mkv', '.mp4'] as const;
+
 export interface AudioTrack {
   index: number;         // FFmpeg overall stream index (e.g. 1, 2)
   audioIndex: number;    // 0-based audio stream index for -map 0:a:<index> (0, 1...)

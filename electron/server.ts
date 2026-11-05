@@ -5,7 +5,7 @@ import path from 'path';
 import crypto from 'crypto';
 import { spawn, ChildProcess } from 'child_process';
 import { storage } from './storage';
-import { generateSingleThumbnail, readMkvDuration } from './ffmpeg';
+import { generateSingleThumbnail, readContainerDuration } from './ffmpeg';
 import { isEpisodeDownloading } from './torrents';
 
 interface VideoFormatInfo {
@@ -450,9 +450,9 @@ export class LocalStreamServer {
         ? queryDuration
         : storage.getAllPlaybackProgress()[filePath]?.duration;
     if (!duration || duration <= 0) {
-      const mkvDur = readMkvDuration(filePath);
-      if (mkvDur && mkvDur > 0) {
-        duration = Math.round(mkvDur);
+      const containerDur = readContainerDuration(filePath);
+      if (containerDur && containerDur > 0) {
+        duration = Math.round(containerDur);
       }
     }
 

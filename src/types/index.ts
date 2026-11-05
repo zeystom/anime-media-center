@@ -1,5 +1,17 @@
 export * from '../../electron/types';
 
+export type {
+  CatalogItem,
+  AiringEntry,
+  CatalogNextAiringEpisode,
+} from '../../electron/catalog';
+export type { RemoteEpisodeInfo } from '../../electron/aniZip';
+export type { UserLibraryEntry, UserListStatus } from '../../electron/userLibrary';
+
+import type { CatalogItem, AiringEntry } from '../../electron/catalog';
+import type { RemoteEpisodeInfo } from '../../electron/aniZip';
+import type { UserLibraryEntry, UserListStatus } from '../../electron/userLibrary';
+
 export interface StreamInfo {
   url: string;
   actualStartTime: number;
@@ -41,6 +53,20 @@ export interface ElectronAPI {
   setFullScreen: (flag: boolean) => Promise<boolean>;
   isFullScreen: () => Promise<boolean>;
   onFullScreenChange: (callback: (isFull: boolean) => void) => () => void;
+  // Catalog & Metadata Service
+  getCatalogTrending: () => Promise<CatalogItem[]>;
+  getCatalogSeason: () => Promise<CatalogItem[]>;
+  getCatalogAllTime: () => Promise<CatalogItem[]>;
+  getAiringSchedule: (weekOffset?: number) => Promise<AiringEntry[]>;
+  getCatalogRecommendations: (seeds?: number[]) => Promise<CatalogItem[]>;
+  searchCatalog: (query: string) => Promise<CatalogItem[]>;
+  getCatalogDetails: (anilistId: number) => Promise<CatalogItem | null>;
+  getRemoteEpisodes: (anilistId: number) => Promise<RemoteEpisodeInfo[]>;
+  // User Library
+  getUserLibrary: () => Promise<Record<number, UserLibraryEntry>>;
+  setUserLibraryStatus: (anilistId: number, idMal: number | null, titleSnapshot: string, status: UserListStatus) => Promise<UserLibraryEntry | null>;
+  setUserLibraryScore: (anilistId: number, score: number | null) => Promise<UserLibraryEntry | null>;
+  setUserLibraryProgress: (anilistId: number, progress: number) => Promise<UserLibraryEntry | null>;
 }
 
 declare global {
