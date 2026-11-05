@@ -8,17 +8,24 @@
  * come exclusively from user configuration).
  *
  * Covered:
- * 1. buildQueryUrl — substitutions, encoding, placeholder preservation, invalid templates.
+ * 1. buildQueryUrl — substitutions, encoding, query sanitization inside the
+ *    builder, placeholder preservation, invalid templates.
  * 2. fetchProviderFeed — RSS 2.0 fixtures (enclosure/link/magnet), Torznab
- *    fixtures (namespaced + plain attr seeders/leechers/size), HTTP errors,
- *    malformed XML, empty channels, request headers/timeout signal.
- * 3. searchProviders — allSettled merge across providers, dedupe by
- *    title+size, disabled providers skipped, provider failures tolerated.
- * 4. rankReleasesForEpisode — title/season/episode scoring, stable order,
- *    no mutation, empty-reference passthrough.
+ *    fixtures (namespaced + plain attr seeders/leechers/size), Nyaa-style
+ *    fixtures (nyaa:infoHash magnet building, nyaa:size/seeders, .torrent
+ *    links kept, link-less items dropped), HTTP errors (403/500), malformed
+ *    XML, empty channels, request headers/timeout signal.
+ * 3. searchProviders — {results, reports} shape, allSettled merge across
+ *    providers, per-provider ok/failure reports, dedupe by infoHash +
+ *    title+size fallback, disabled providers skipped, failures tolerated.
+ * 4. rankReleasesForEpisode — title/season/episode scoring, batch/season-pack
+ *    bonus when episode is null, stable order, no mutation, NEVER filters,
+ *    empty-reference passthrough.
  * 5. import/exportProvidersConfig — round-trip, tolerant import, validation,
  *    20-provider cap.
  * 6. VPN guard — real os-based detection shape + cache/clear semantics.
+ * 7. sanitizeSearchQuery / extractInfoHash — punctuation stripping + magnet
+ *    hash extraction (hex + base32).
  */
 
 import assert from 'assert';
@@ -29,6 +36,8 @@ import {
   rankReleasesForEpisode,
   importProvidersConfig,
   exportProvidersConfig,
+  sanitizeSearchQuery,
+  extractInfoHash,
 } from './electron/indexers.ts';
 import { detectVpnStatus, clearVpnCache } from './electron/vpnGuard.ts';
 
@@ -150,6 +159,48 @@ const EMPTY_FEED_FIXTURE = `<?xml version="1.0" encoding="UTF-8"?>
   </channel>
 </rss>`;
 
+// Nyaa-style fixture: namespaced nyaa:* extras as literal colon keys, .torrent
+// <link> (NOT a magnet) + nyaa:infoHash, base32 hash without any link, and a
+// link-less item that must be dropped.
+const NYAA_FIXTURE = `<?xml version="1.0" encoding="UTF-8"?>
+<rss version="2.0" xmlns:nyaa="https://nyaa.example/xmlns/nyaa">
+  <channel>
+    <title>Example Nyaa-style Feed</title>
+    <item>
+      <title>[Group] Sousou no Frieren - 05 [1080p][HEVC].mkv</title>
+      <link>https://nyaa.example/download/12345.torrent</link>
+      <nyaa:infoHash>0123abcd0123abcd0123abcd0123abcd0123abcd</nyaa:infoHash>
+      <nyaa:seeders>42</nyaa:seeders>
+      <nyaa:leechers>3</nyaa:leechers>
+      <nyaa:size>1.4 GiB</nyaa:size>
+      <pubDate>Tue, 04 Nov 2025 12:00:00 GMT</pubDate>
+    </item>
+    <item>
+      <title>[Group] Sousou no Frieren - 06 [1080p]</title>
+      <link>https://nyaa.example/download/12346.torrent</link>
+      <nyaa:seeders>17</nyaa:seeders>
+      <nyaa:size>890 MiB</nyaa:size>
+    </item>
+    <item>
+      <title>[Group] Sousou no Frieren - Season 01 [Batch]</title>
+      <nyaa:infoHash>ABCDEFGHIJKLMNOPQRSTUVWXYZ234567</nyaa:infoHash>
+    </item>
+    <item>
+      <title>[Group] Description-only item with no download source</title>
+      <description>nothing usable here</description>
+    </item>
+  </channel>
+</rss>`;
+
+/** A provider whose template points at a fake Nyaa-style indexer. */
+const nyaaProvider = {
+  id: 'prov-nyaa',
+  name: 'Example Nyaa',
+  urlTemplate: 'https://nyaa.example/?page=rss&q={query}',
+  type: 'rss',
+  enabled: true,
+};
+
 async function main() {
   console.log('Testing BYOC indexers + VPN guard (offline, mocked fetch)...\n');
 
@@ -218,6 +269,23 @@ async function main() {
     );
   });
 
+  runTest('1.9 sanitizes the query inside the builder (encode AFTER sanitizing)', () => {
+    // Raw titles with colons/dashes must not hit the wire verbatim.
+    assert.strictEqual(
+      buildQueryUrl('https://indexer.example/rss?q={query}', { query: 'Frieren: Beyond' }),
+      'https://indexer.example/rss?q=Frieren%20Beyond'
+    );
+    assert.strictEqual(
+      buildQueryUrl('https://indexer.example/rss?q={query}', { query: 'Re:Zero - Starting Life' }),
+      'https://indexer.example/rss?q=Re%20Zero%20Starting%20Life'
+    );
+    // Word characters and unicode survive sanitization unchanged.
+    assert.strictEqual(
+      buildQueryUrl('https://indexer.example/rss?q={query}', { query: '鬼滅の刃' }),
+      `https://indexer.example/rss?q=${encodeURIComponent('鬼滅の刃')}`
+    );
+  });
+
   // =========================================================================
   // 2. fetchProviderFeed (mocked fetch)
   // =========================================================================
@@ -253,7 +321,7 @@ async function main() {
     }
   });
 
-  await runAsyncTest('2.2 request shape: encoded URL, User-Agent, Accept, timeout signal', async () => {
+  await runAsyncTest('2.2 request shape: browser-like User-Agent, Accept, timeout signal', async () => {
     let captured = null;
     installFetchMock((url, init, calls) => {
       calls.push({ url, init });
@@ -264,8 +332,13 @@ async function main() {
       await fetchProviderFeed(rssProvider, { query: 'Example Anime' });
       assert.strictEqual(captured.url, 'https://indexer.example/rss?q=Example%20Anime');
       const headers = new Headers(captured.init.headers);
-      assert.strictEqual(headers.get('user-agent'), 'AnimeMediaCenter/1.0');
-      assert.strictEqual(headers.get('accept'), 'application/rss+xml, application/xml, text/xml');
+      assert.strictEqual(
+        headers.get('user-agent'),
+        'Mozilla/5.0 (Windows NT 10.0; Win64; x64) AppleWebKit/537.36 (KHTML, like Gecko) Chrome/126.0.0.0 Safari/537.36',
+        'must present a browser-like UA — non-browser agents are 403-blocked by real indexers'
+      );
+      assert.ok(!/AnimeMediaCenter/i.test(headers.get('user-agent') ?? ''), 'custom app UA must be gone');
+      assert.strictEqual(headers.get('accept'), 'application/rss+xml, application/xml, text/xml, */*;q=0.8');
       assert.ok(captured.init.signal instanceof AbortSignal, 'fetch must carry an AbortSignal timeout');
     } finally {
       globalThis.fetch = originalFetch;
@@ -303,6 +376,18 @@ async function main() {
       await assert.rejects(
         () => fetchProviderFeed(rssProvider, { query: 'x' }),
         /HTTP 500/
+      );
+    } finally {
+      globalThis.fetch = originalFetch;
+    }
+  });
+
+  await runAsyncTest('2.4b HTTP 403 → throws with Cloudflare hint in the message', async () => {
+    installFetchMock(() => jsonResponse(403, 'forbidden'));
+    try {
+      await assert.rejects(
+        () => fetchProviderFeed(rssProvider, { query: 'x' }),
+        (err) => /HTTP 403/.test(err.message) && /Cloudflare/i.test(err.message)
       );
     } finally {
       globalThis.fetch = originalFetch;
@@ -347,12 +432,90 @@ async function main() {
     );
   });
 
+  await runAsyncTest('2.9 Nyaa-style feed: nyaa:* namespaces, magnet built from infoHash, .torrent link kept', async () => {
+    let logs = [];
+    const originalLog = console.log;
+    installFetchMock((url, init, calls) => {
+      calls.push({ url, init });
+      return jsonResponse(200, NYAA_FIXTURE);
+    });
+    try {
+      console.log = (...args) => { logs.push(args.join(' ')); };
+      const results = await fetchProviderFeed(nyaaProvider, { query: 'Frieren' });
+      // 4 raw items; the 4th (no link/enclosure/infoHash) is dropped → 3 parsed.
+      assert.strictEqual(results.length, 3, `expected 3 parsed items, got ${results.length}`);
+
+      const [r0, r1, r2] = results;
+      assert.strictEqual(r0.providerId, 'prov-nyaa');
+      assert.strictEqual(r0.providerName, 'Example Nyaa');
+      assert.strictEqual(r0.title, '[Group] Sousou no Frieren - 05 [1080p][HEVC].mkv');
+      // nyaa:infoHash wins over the .torrent <link>: tracker-less magnet, DHT discovers peers.
+      assert.strictEqual(
+        r0.downloadUrl,
+        `magnet:?xt=urn:btih:0123abcd0123abcd0123abcd0123abcd0123abcd&dn=${encodeURIComponent('[Group] Sousou no Frieren - 05 [1080p][HEVC].mkv')}`,
+        'item must NOT be dropped: nyaa:infoHash → synthesized magnet with dn title'
+      );
+      assert.ok(
+        Math.abs(r0.sizeBytes - 1.4 * 2 ** 30) <= 1,
+        `nyaa:size "1.4 GiB" must parse to ~1.4*2^30 bytes, got ${r0.sizeBytes}`
+      );
+      assert.strictEqual(r0.seeders, 42, 'nyaa:seeders parsed');
+      assert.strictEqual(r0.leechers, 3, 'nyaa:leechers parsed');
+      assert.strictEqual(r0.pubDate, Date.parse('Tue, 04 Nov 2025 12:00:00 GMT'));
+
+      // No infoHash, plain .torrent <link> → kept with the http URL as-is.
+      assert.strictEqual(r1.downloadUrl, 'https://nyaa.example/download/12346.torrent');
+      assert.strictEqual(r1.seeders, 17, 'nyaa:seeders parsed without torznab attrs');
+      assert.strictEqual(r1.leechers, null);
+      assert.strictEqual(r1.sizeBytes, 890 * 1024 ** 2, 'nyaa:size "890 MiB" → bytes');
+      assert.strictEqual(r1.pubDate, null);
+
+      // base32 infoHash, no link at all → lowercased magnet, still kept.
+      assert.strictEqual(r2.title, '[Group] Sousou no Frieren - Season 01 [Batch]');
+      assert.strictEqual(
+        r2.downloadUrl,
+        `magnet:?xt=urn:btih:abcdefghijklmnopqrstuvwxyz234567&dn=${encodeURIComponent('[Group] Sousou no Frieren - Season 01 [Batch]')}`
+      );
+      assert.strictEqual(r2.sizeBytes, null);
+      assert.strictEqual(r2.seeders, null);
+
+      // Feed logging: GET line + response line with raw vs parsed counts.
+      const joined = logs.join('\n');
+      assert.ok(/\[Indexers\] GET https:\/\/nyaa\.example\/\?page=rss&q=Frieren \(provider "Example Nyaa"\)/.test(joined), 'GET log line missing');
+      assert.ok(joined.includes('items: 4, parsed: 3'), `response log must count raw vs parsed, got: ${joined}`);
+    } finally {
+      console.log = originalLog;
+      globalThis.fetch = originalFetch;
+    }
+  });
+
+  await runAsyncTest('2.10 Nyaa-style: item with no link/enclosure/infoHash at all → dropped (parsed 0)', async () => {
+    const linklessFeed = `<?xml version="1.0" encoding="UTF-8"?>
+      <rss version="2.0" xmlns:nyaa="https://nyaa.example/xmlns/nyaa">
+        <channel>
+          <title>Linkless Feed</title>
+          <item>
+            <title>[Group] No source here [1080p]</title>
+            <nyaa:seeders>99</nyaa:seeders>
+            <description>only metadata</description>
+          </item>
+        </channel>
+      </rss>`;
+    installFetchMock(() => jsonResponse(200, linklessFeed));
+    try {
+      const results = await fetchProviderFeed(nyaaProvider, { query: 'x' });
+      assert.deepStrictEqual(results, [], 'items without any download source must be skipped');
+    } finally {
+      globalThis.fetch = originalFetch;
+    }
+  });
+
   // =========================================================================
   // 3. searchProviders
   // =========================================================================
   console.log('\n--- SUITE 3: searchProviders (allSettled merge + dedupe) ---');
 
-  await runAsyncTest('3.1 merge across providers, tolerate rejection, skip disabled, dedupe title+size', async () => {
+  await runAsyncTest('3.1 {results, reports}: merge across providers, tolerate rejection, skip disabled, dedupe title+size', async () => {
     const providerA = { id: 'a', name: 'Alpha', urlTemplate: 'https://alpha.example/api?q={query}', type: 'rss', enabled: true };
     const providerB = { id: 'b', name: 'Beta', urlTemplate: 'https://beta.example/feed?q={query}', type: 'rss', enabled: true };
     const providerDisabled = { id: 'c', name: 'Gamma', urlTemplate: 'https://gamma.example/rss?q={query}', type: 'rss', enabled: false };
@@ -390,7 +553,7 @@ async function main() {
     let warningText = null;
     console.warn = (...args) => { warningText = args.join(' '); };
     try {
-      const merged = await searchProviders([providerA, providerB, providerDisabled, providerDead], { query: 'Example' });
+      const { results: merged, reports } = await searchProviders([providerA, providerB, providerDisabled, providerDead], { query: 'Example' });
       // Alpha: 2 items; Beta: 2 items (1 dup of Alpha's first, 1 unique); Delta rejected.
       assert.strictEqual(merged.length, 3, `expected 3 merged results, got ${merged.length}: ${JSON.stringify(merged)}`);
       assert.deepStrictEqual(
@@ -401,28 +564,115 @@ async function main() {
       assert.ok(!merged.some((r) => r.providerId === 'c'), 'disabled provider must be skipped');
       assert.ok(fetchCalls.every((c) => c && !String(c.url).startsWith('https://gamma.example/')), 'disabled provider fetch must never fire');
       assert.ok(/delta/i.test(warningText ?? ''), 'rejected provider must be logged via console.warn');
+
+      // One report per ATTEMPTED provider: a, b ok with feed item counts; d failed.
+      assert.strictEqual(reports.length, 3, `expected 3 reports (a, b, d), got ${JSON.stringify(reports)}`);
+      assert.deepStrictEqual(
+        reports.map((r) => `${r.providerId}:${r.ok}:${r.itemCount}`),
+        ['a:true:2', 'b:true:2', 'd:false:0'],
+        'report itemCounts reflect each feed before cross-provider dedupe'
+      );
+      assert.match(reports[2].error, /network unreachable/);
+      assert.ok(!reports.some((r) => r.providerId === 'c'), 'disabled provider must not be attempted/reported');
     } finally {
       console.warn = originalWarn;
       globalThis.fetch = originalFetch;
     }
   });
 
-  await runAsyncTest('3.2 all providers failing → empty array, still no throw', async () => {
+  await runAsyncTest('3.2 all providers failing → empty results + failure reports, still no throw', async () => {
     installFetchMock(() => Promise.reject(new Error('network unreachable')));
     console.warn = () => {};
     try {
-      const merged = await searchProviders([rssProvider, torznabProvider], { query: 'x' });
-      assert.deepStrictEqual(merged, []);
+      const { results, reports } = await searchProviders([rssProvider, torznabProvider], { query: 'x' });
+      assert.deepStrictEqual(results, []);
+      assert.strictEqual(reports.length, 2);
+      assert.ok(reports.every((r) => r.ok === false && /network unreachable/.test(r.error ?? '')));
     } finally {
       console.warn = originalWarn;
       globalThis.fetch = originalFetch;
     }
   });
 
-  await runAsyncTest('3.3 empty / non-array provider lists → []', async () => {
+  await runAsyncTest('3.3 empty / non-array provider lists → empty results + empty reports', async () => {
     globalThis.fetch = originalFetch;
-    assert.deepStrictEqual(await searchProviders([], { query: 'x' }), []);
-    assert.deepStrictEqual(await searchProviders(null, { query: 'x' }), []);
+    assert.deepStrictEqual(await searchProviders([], { query: 'x' }), { results: [], reports: [] });
+    assert.deepStrictEqual(await searchProviders(null, { query: 'x' }), { results: [], reports: [] });
+  });
+
+  await runAsyncTest('3.4 HTTP 403 provider → failure report contains "HTTP 403"', async () => {
+    installFetchMock(() => jsonResponse(403, 'forbidden'));
+    console.warn = () => {};
+    try {
+      const { results, reports } = await searchProviders([rssProvider], { query: 'x' });
+      assert.deepStrictEqual(results, []);
+      assert.strictEqual(reports.length, 1);
+      assert.strictEqual(reports[0].providerId, 'prov-rss');
+      assert.strictEqual(reports[0].providerName, 'Example RSS');
+      assert.strictEqual(reports[0].ok, false);
+      assert.ok(reports[0].error.includes('HTTP 403'), `error must carry the HTTP status, got: ${reports[0].error}`);
+    } finally {
+      console.warn = originalWarn;
+      globalThis.fetch = originalFetch;
+    }
+  });
+
+  await runAsyncTest('3.5 mixed ok/failure providers merge results and reports together', async () => {
+    const goodProvider = { id: 'good', name: 'Good', urlTemplate: 'https://good.example/rss?q={query}', type: 'rss', enabled: true };
+    installFetchMock((url) => {
+      if (url.startsWith('https://good.example/')) {
+        return jsonResponse(200, `<?xml version="1.0"?><rss version="2.0"><channel>
+          <item><title>Example Anime - 05</title><link>https://mirror.example/get/1</link>
+            <enclosure url="https://mirror.example/dl/1.torrent" length="1000" type="application/x-bittorrent" /></item>
+        </channel></rss>`);
+      }
+      return jsonResponse(503, 'service unavailable');
+    });
+    console.warn = () => {};
+    try {
+      const { results, reports } = await searchProviders([goodProvider, rssProvider], { query: 'Example' });
+      assert.strictEqual(results.length, 1);
+      assert.strictEqual(results[0].providerId, 'good');
+      assert.strictEqual(reports.length, 2);
+      assert.strictEqual(reports[0].ok, true);
+      assert.strictEqual(reports[0].itemCount, 1);
+      assert.strictEqual(reports[1].ok, false);
+      assert.ok(reports[1].error.includes('HTTP 503'), `503 must be reported, got: ${reports[1].error}`);
+      assert.ok(reports[1].error.includes('Cloudflare'), `503 should hint at Cloudflare/bot protection, got: ${reports[1].error}`);
+    } finally {
+      console.warn = originalWarn;
+      globalThis.fetch = originalFetch;
+    }
+  });
+
+  await runAsyncTest('3.6 dedupe by infoHash across providers (different titles, same torrent)', async () => {
+    const providerA = { id: 'a', name: 'Alpha', urlTemplate: 'https://alpha.example/rss?q={query}', type: 'rss', enabled: true };
+    const providerB = { id: 'b', name: 'Beta', urlTemplate: 'https://beta.example/rss?q={query}', type: 'rss', enabled: true };
+    const hash = '0123abcd0123abcd0123abcd0123abcd0123abcd';
+    installFetchMock((url) => {
+      if (url.startsWith('https://alpha.example/')) {
+        return jsonResponse(200, `<?xml version="1.0"?><rss version="2.0" xmlns:nyaa="https://nyaa.example/xmlns/nyaa"><channel>
+          <item><title>Alpha Release of Show - 01</title><link>https://alpha.example/dl.torrent</link>
+            <nyaa:infoHash>${hash}</nyaa:infoHash><nyaa:size>1.0 GiB</nyaa:size></item>
+        </channel></rss>`);
+      }
+      // Beta reports the SAME torrent (same infoHash) under a totally different title/size.
+      return jsonResponse(200, `<?xml version="1.0"?><rss version="2.0"><channel>
+        <item><title>Completely Different Name 720p</title>
+          <enclosure url="magnet:?xt=urn:btih:${hash.toUpperCase()}&dn=whatever" length="999" type="application/x-bittorrent" /></item>
+      </channel></rss>`);
+    });
+    console.warn = () => {};
+    try {
+      const { results, reports } = await searchProviders([providerA, providerB], { query: 'Show' });
+      assert.strictEqual(results.length, 1, `same infoHash must dedupe across providers, got ${results.length}`);
+      assert.strictEqual(results[0].providerId, 'a', 'first provider to report the torrent wins');
+      assert.strictEqual(reports.length, 2, 'both providers still report ok');
+      assert.ok(reports.every((r) => r.ok === true));
+    } finally {
+      console.warn = originalWarn;
+      globalThis.fetch = originalFetch;
+    }
   });
 
   // =========================================================================
@@ -476,6 +726,40 @@ async function main() {
     const b = makeResult('[SubsPlease] Frieren Beyond Journeys End - 05 [1080p]', 99);
     const ranked = rankReleasesForEpisode([a, b], { animeTitle: '!!!', season: 1, episode: 5 });
     assert.deepStrictEqual(ranked, [a, b]);
+  });
+
+  runTest('4.5 episode=null → batch/season-pack releases get +20 and float up', () => {
+    const ref = { animeTitle: 'Show', season: null, episode: null };
+    const singleEpisode = makeResult('[Group] Show - 05 [1080p]', 5);      // title 60 + seeders 5 = 65
+    const rangePack = makeResult('[Group] Show - 01-12 [1080p]', 5);       // title 60 + multi-ep bonus 20 + 5 = 85
+    const batchPack = makeResult('[Group] Show Season Pack [Batch] [1080p]', 10); // containment 40 + batch bonus 20 + 5 = 65... plus seeders tie-break
+    const ranked = rankReleasesForEpisode([singleEpisode, batchPack, rangePack], ref);
+    assert.strictEqual(ranked[0], rangePack, 'multi-episode parse (01-12) must get the +20 batch bonus');
+    assert.strictEqual(ranked[1], batchPack, '/batch|season pack/ title match must also get +20');
+    assert.strictEqual(ranked[2], singleEpisode, 'plain single episode stays below batches');
+    assert.strictEqual(ranked.length, 3);
+  });
+
+  runTest('4.6 episode=null + equal scores → plain episode still wins tie-break, bonus never filters', () => {
+    const ref = { animeTitle: 'Show', season: null, episode: null };
+    const batch = makeResult('[Group] Show Complete [1080p]', 5);   // 60 + 20 + 5 = 85
+    const single = makeResult('[Group] Show - 05 [1080p]', 5);      // 60 + 5 = 65
+    const unrelated = makeResult('[Group] Unrelated Show Complete', 1); // containment 40 + 20 + 5 = 65
+    const garbage = makeResult('???-??? ??? [1080p]', null);
+    const input = [batch, single, unrelated, garbage];
+    const ranked = rankReleasesForEpisode(input, ref);
+    // NEVER filters: every input element must come back, just reordered.
+    assert.strictEqual(ranked.length, input.length, 'rank must not drop any input element');
+    for (const item of input) assert.ok(ranked.includes(item), 'rank must not lose any input element');
+    assert.strictEqual(ranked[0], batch, 'batch floats to the top');
+  });
+
+  runTest('4.7 episode=null bonus does not apply when a specific episode is requested', () => {
+    const ref = { animeTitle: 'Show', season: null, episode: 5 };
+    const batch = makeResult('[Group] Show Complete [1080p]', 5);      // 60 -15(episode mismatch... no episodeNumbers→ no penalty) +5 = 65
+    const single = makeResult('[Group] Show - 05 [1080p]', 5);         // 60 +25 +5 = 90
+    const ranked = rankReleasesForEpisode([batch, single], ref);
+    assert.strictEqual(ranked[0], single, 'with episode=5 the requested episode beats the batch (no +20)');
   });
 
   // =========================================================================
@@ -592,6 +876,57 @@ async function main() {
         `interface "${name}" was reported but does not match the tunnel pattern`
       );
     }
+  });
+
+  // =========================================================================
+  // 7. sanitizeSearchQuery + extractInfoHash
+  // =========================================================================
+  console.log('\n--- SUITE 7: query sanitization + info-hash extraction ---');
+
+  runTest('7.1 sanitizeSearchQuery strips release-name punctuation, collapses whitespace', () => {
+    assert.strictEqual(sanitizeSearchQuery('Cyberpunk: Edgerunners 2'), 'Cyberpunk Edgerunners 2');
+    assert.strictEqual(sanitizeSearchQuery('Re:Zero - Starting Life in Another World...'), 'Re Zero Starting Life in Another World');
+    assert.strictEqual(sanitizeSearchQuery('Frieren_BD [1080p]'), 'Frieren BD 1080p');
+    assert.strictEqual(sanitizeSearchQuery("Show's Name!? (2024)"), 'Show s Name 2024');
+    assert.strictEqual(sanitizeSearchQuery('  multiple   spaces\tand\nnewlines  '), 'multiple spaces and newlines');
+    assert.strictEqual(sanitizeSearchQuery('鬼滅の刃 Second Season'), '鬼滅の刃 Second Season', 'unicode word characters survive');
+    assert.strictEqual(sanitizeSearchQuery('!!!'), '', 'punctuation-only input sanitizes to empty');
+    assert.strictEqual(sanitizeSearchQuery(''), '');
+  });
+
+  runTest('7.2 sanitizeSearchQuery handles non-string input defensively', () => {
+    assert.strictEqual(sanitizeSearchQuery(undefined), '');
+    assert.strictEqual(sanitizeSearchQuery(null), '');
+    assert.strictEqual(sanitizeSearchQuery(42), '');
+  });
+
+  runTest('7.3 extractInfoHash: 40-hex magnet → lowercase hash', () => {
+    assert.strictEqual(
+      extractInfoHash('magnet:?xt=urn:btih:CAFEBABE00000000000000000000000000000000&dn=Show'),
+      'cafebabe00000000000000000000000000000000'
+    );
+    assert.strictEqual(
+      extractInfoHash('magnet:?xt=urn:btih:0123abcd0123abcd0123abcd0123abcd0123abcd&dn=x&tr=udp://tracker.example'),
+      '0123abcd0123abcd0123abcd0123abcd0123abcd'
+    );
+  });
+
+  runTest('7.4 extractInfoHash: 32-char base32 magnet → lowercase hash', () => {
+    assert.strictEqual(
+      extractInfoHash('magnet:?xt=urn:btih:ABCDEFGHIJKLMNOPQRSTUVWXYZ234567&dn=Show'),
+      'abcdefghijklmnopqrstuvwxyz234567'
+    );
+    assert.strictEqual(extractInfoHash('magnet:?xt=urn:btih:ABCDEFGHIJKLMNOPQRSTUVWXYZ234560'), null, '0 is not base32');
+  });
+
+  runTest('7.5 extractInfoHash: non-magnet URLs and garbage → null', () => {
+    assert.strictEqual(extractInfoHash('https://mirror.example/dl/1.torrent'), null);
+    assert.strictEqual(extractInfoHash('https://nyaa.example/download/12345.torrent'), null);
+    assert.strictEqual(extractInfoHash('magnet:?dn=only-name'), null);
+    assert.strictEqual(extractInfoHash('magnet:?xt=urn:btih:NOTHEXNOTHEXNOTHEXNOTHEXNOTHEXNOTH'), null, '40 chars but not hex');
+    assert.strictEqual(extractInfoHash(''), null);
+    assert.strictEqual(extractInfoHash(null), null);
+    assert.strictEqual(extractInfoHash(undefined), null);
   });
 
   // =========================================================================

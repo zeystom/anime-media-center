@@ -7,7 +7,7 @@ import { streamServer } from './server';
 import { probeMkv, extractEmbeddedSubtitle, extractEmbeddedAss, extractEmbeddedFonts, filterFontsForAss, parseSrt, findPrecedingKeyframe, readMkvEmbeddedTitle, readContainerDuration, cleanupOldCaches } from './ffmpeg';
 import { whisperManager } from './whisper';
 import { findExternalSubtitles } from './subtitles';
-import { AnimeFolder, Episode, PlaybackProgress, SeasonPreference, VIDEO_EXTENSIONS } from './types';
+import { AnimeFolder, Episode, PlaybackProgress, SeasonPreference, VIDEO_EXTENSIONS, ReleaseSearchResult, ProviderReport } from './types';
 import { getKitsuMetadata, fetchAniSkipTimes } from './kitsu';
 import { extractEpisodeNumber } from './episodes';
 import { checkEpisodeDownloading, isFolderDownloading } from './torrents';
@@ -19,7 +19,7 @@ import { syncBackupNow, getBackupStatus, detectRestoreState, restoreFromBackup, 
 import { exportWatchlist, importWatchlist, MAL_ONLY_ANILIST_ID_BASE } from './watchlistIO';
 import { initTorrentEngine, engineSetEnabled, engineAddDownload, enginePause, engineResume, engineCancel, engineGetState, engineShutdown } from './torrentEngine';
 import { detectVpnStatus } from './vpnGuard';
-import { searchProviders, rankReleasesForEpisode } from './indexers';
+import { searchProviders, rankReleasesForEpisode, sanitizeSearchQuery, extractInfoHash } from './indexers';
 
 const __filename = fileURLToPath(import.meta.url);
 const __dirname = path.dirname(__filename);
@@ -865,17 +865,63 @@ function setupIpcHandlers() {
     return detectVpnStatus();
   });
 
-  ipcMain.handle('p2p:search', async (_event, params: { title: string; anilistId?: number | null; season?: number | null; episode?: number | null }) => {
+  ipcMain.handle('p2p:search', async (_event, params: {
+    title: string
+    aliases?: string[]
+    anilistId?: number | null
+    season?: number | null
+    episode?: number | null
+    episodeCount?: number | null
+    queryOverride?: string
+  }) => {
     const settings = storage.getSettings();
     const providers = (Array.isArray(settings.rssProviders) ? settings.rssProviders : []).filter((p) => p.enabled);
-    const query = (params && typeof params.title === 'string') ? params.title : '';
-    if (!query.trim() || providers.length === 0) return [];
-    const results = await searchProviders(providers, { query, season: params?.season ?? null, episode: params?.episode ?? null });
-    return rankReleasesForEpisode(results, {
-      animeTitle: query,
+    if (providers.length === 0) return { results: [], reports: [], queries: [] };
+    const title = params && typeof params.title === 'string' ? params.title : '';
+    // Build the query set: manual override wins; otherwise the sanitized
+    // primary title plus romaji/english aliases (max 3 queries).
+    const override = params && typeof params.queryOverride === 'string' ? params.queryOverride : '';
+    const candidates = override.trim()
+      ? [override]
+      : [title, ...(Array.isArray(params?.aliases) ? (params.aliases as string[]) : [])];
+    const queries: string[] = [];
+    for (const candidate of candidates) {
+      const sanitized = sanitizeSearchQuery(candidate || '');
+      if (sanitized && !queries.includes(sanitized)) queries.push(sanitized);
+      if (queries.length >= 3) break;
+    }
+    if (queries.length === 0) return { results: [], reports: [], queries: [] };
+    // Search every query across all enabled providers, merging and deduping by infoHash.
+    const allResults: ReleaseSearchResult[] = [];
+    const attemptReports: ProviderReport[] = [];
+    const seen = new Set<string>();
+    for (const query of queries) {
+      const { results, reports } = await searchProviders(providers, {
+        query,
+        season: params?.season ?? null,
+        episode: params?.episode ?? null,
+      });
+      for (const result of results) {
+        const key = extractInfoHash(result.downloadUrl) || `${result.title.toLowerCase()}|${result.sizeBytes ?? ''}`;
+        if (seen.has(key)) continue;
+        seen.add(key);
+        allResults.push(result);
+      }
+      attemptReports.push(...reports);
+    }
+    // One report per provider across queries: an ok report wins, otherwise keep the first error.
+    const reportByProvider = new Map<string, ProviderReport>();
+    for (const report of attemptReports) {
+      const existing = reportByProvider.get(report.providerId);
+      if (!existing || (!existing.ok && report.ok)) reportByProvider.set(report.providerId, report);
+    }
+    const ranked = rankReleasesForEpisode(allResults, {
+      animeTitle: title,
       season: params?.season ?? null,
       episode: params?.episode ?? null,
     });
+    console.log(`[P2P] search "${queries.join('" / "')}" -> ${ranked.length} results from ${providers.length} provider(s)`);
+    return { results: ranked, reports: [...reportByProvider.values()], queries };
   });
 
   ipcMain.handle('p2p:add-download', async (_event, params) => {

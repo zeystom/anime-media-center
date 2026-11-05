@@ -180,6 +180,20 @@ export interface ReleaseSearchResult {
   pubDate: number | null;
 }
 
+export interface ProviderReport {
+  providerId: string;
+  providerName: string;
+  ok: boolean;
+  itemCount: number;
+  error?: string; // network / HTTP status / parse failure detail
+}
+
+export interface ReleaseSearchResponse {
+  results: ReleaseSearchResult[];
+  reports: ProviderReport[];   // one per ATTEMPTED provider; empty when zero enabled providers
+  queries: string[];           // sanitized queries actually used (first = primary)
+}
+
 export type TorrentJobStatus = 'queued' | 'connecting' | 'downloading' | 'paused' | 'seeding' | 'completed' | 'error';
 
 export interface TorrentJob {

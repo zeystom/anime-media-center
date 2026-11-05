@@ -98,7 +98,7 @@ contextBridge.exposeInMainWorld('electronAPI', {
   enableP2p: () => ipcRenderer.invoke('p2p:enable'),
   disableP2p: () => ipcRenderer.invoke('p2p:disable'),
   getVpnStatus: () => ipcRenderer.invoke('p2p:vpn-status'),
-  searchReleases: (params: { title: string; anilistId?: number | null; season?: number | null; episode?: number | null; episodeCount?: number | null }) =>
+  searchReleases: (params: { title: string; aliases?: string[]; anilistId?: number | null; season?: number | null; episode?: number | null; episodeCount?: number | null; queryOverride?: string }) =>
     ipcRenderer.invoke('p2p:search', params),
   addDownload: (params: { item: import('./types').ReleaseSearchResult; title: string; anilistId?: number | null; episode?: number | null; targetFolder?: string }) =>
     ipcRenderer.invoke('p2p:add-download', params),

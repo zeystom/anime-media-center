@@ -233,6 +233,25 @@ export const AnimeDetailView: React.FC<AnimeDetailViewProps> = ({
     }
   }, [details, railItem, localFolder])
 
+  // Alias titles (romaji/english) for release searches: deduped case-
+  // insensitively and minus the display title that is already searched as the
+  // primary query. Memoized so ReleasePickerModal's search effect (which keys
+  // on the aliases identity) does not re-run on every render.
+  const searchAliases = useMemo(() => {
+    if (!details) return []
+    const displayKey = hero.title.trim().toLowerCase()
+    const seen = new Set<string>([displayKey])
+    const aliases: string[] = []
+    for (const t of [details.title.romaji, details.title.english]) {
+      if (!t) continue
+      const key = t.trim().toLowerCase()
+      if (!key || seen.has(key)) continue
+      seen.add(key)
+      aliases.push(t)
+    }
+    return aliases
+  }, [details, hero.title])
+
   useEffect(() => {
     setBgFailed(false)
     setPosterFailed(false)
@@ -873,6 +892,8 @@ export const AnimeDetailView: React.FC<AnimeDetailViewProps> = ({
         anilistId={anilistId}
         season={parsedSeason}
         episode={pickerState?.episode ?? null}
+        episodeCount={details?.episodesCount ?? null}
+        aliases={searchAliases}
         onCancel={() => setPickerState(null)}
         onPicked={handlePickRelease}
       />
