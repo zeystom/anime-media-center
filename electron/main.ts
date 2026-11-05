@@ -851,10 +851,13 @@ function setupIpcHandlers() {
   });
 
   ipcMain.handle('p2p:enable', async () => {
+    // Persist the opt-in so the engine's settings gate (enableP2P + consent) passes
+    storage.updateSettings({ enableP2P: true });
     return engineSetEnabled(true);
   });
 
   ipcMain.handle('p2p:disable', async () => {
+    storage.updateSettings({ enableP2P: false });
     return engineSetEnabled(false);
   });
 
