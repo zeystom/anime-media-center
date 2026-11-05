@@ -371,10 +371,14 @@ export class WhisperManager {
 
         args.push(
           '--sentence',
+          '--max_line_width',
+          '46',
           '--max_line_count',
           '2',
-          '--max_line_width',
-          '42',
+          '--max_comma_cent',
+          '70',
+          '--min_dist_to_end',
+          '8',
           '--output_format',
           'srt',
           '--output_dir',
