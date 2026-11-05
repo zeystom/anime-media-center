@@ -40,6 +40,7 @@ interface VideoPlayerProps {
   history: Record<string, any>;
   onClose: () => void;
   onEpisodeChange: (episode: Episode) => void;
+  onEpisodeCompleted?: (episode: Episode) => void;
 }
 
 function combineAss(ass1: string, ass2: string): string {
@@ -261,9 +262,13 @@ export const VideoPlayer: React.FC<VideoPlayerProps> = ({
   history,
   onClose,
   onEpisodeChange,
+  onEpisodeCompleted,
 }) => {
   const videoRef = useRef<HTMLVideoElement>(null);
   const containerRef = useRef<HTMLDivElement>(null);
+
+  // filePath already reported through onEpisodeCompleted (fires once per episode)
+  const lastCompletedNotifiedRef = useRef<string | null>(null);
 
   // Clean parsed episode metadata
   const parsed = useMemo(() => cleanEpisodeTitle(episode.fileName), [episode.fileName]);
@@ -1061,6 +1066,12 @@ export const VideoPlayer: React.FC<VideoPlayerProps> = ({
         completed: timeRef.current / duration > 0.9,
       };
       window.electronAPI.savePlaybackProgress(progress).catch(() => {});
+
+      // Notify the host once per episode when the completion threshold is crossed
+      if (progress.completed && lastCompletedNotifiedRef.current !== episode.filePath) {
+        lastCompletedNotifiedRef.current = episode.filePath;
+        onEpisodeCompleted?.(episode);
+      }
     }, 3000);
 
     return () => clearInterval(interval);

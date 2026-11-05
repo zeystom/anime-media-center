@@ -1,5 +1,5 @@
 import React, { useEffect, useState } from 'react'
-import { Check, Download, Film, Play, Wand2 } from 'lucide-react'
+import { Check, Download, Film, Play, Trash2, Wand2 } from 'lucide-react'
 import type { Episode } from '../../types'
 
 export interface EpisodeRowProps {
@@ -18,6 +18,8 @@ export interface EpisodeRowProps {
   onPlay?: () => void
   onWhisper?: () => void
   onDownload?: () => void
+  /** Opens the delete-from-PC confirm for this episode's local file. */
+  onDelete?: () => void
 }
 
 const ACTION_BTN = 'flex h-8 w-8 items-center justify-center rounded-full border transition-colors'
@@ -52,6 +54,7 @@ export const EpisodeRow: React.FC<EpisodeRowProps> = ({
   onPlay,
   onWhisper,
   onDownload,
+  onDelete,
 }) => {
   const [imgError, setImgError] = useState(false)
 
@@ -135,6 +138,17 @@ export const EpisodeRow: React.FC<EpisodeRowProps> = ({
             className={`${ACTION_BTN} border-indigo-500/30 bg-indigo-500/10 text-indigo-300 hover:bg-indigo-500/20`}
           >
             <Wand2 className="h-4 w-4" />
+          </button>
+        )}
+
+        {local && onDelete && (
+          <button
+            type="button"
+            onClick={onDelete}
+            title="Delete this episode's file from PC (history is kept)"
+            className={`${ACTION_BTN} border-red-500/30 bg-red-500/5 text-red-400 hover:bg-red-500/20 hover:text-red-300`}
+          >
+            <Trash2 className="h-4 w-4" />
           </button>
         )}
 

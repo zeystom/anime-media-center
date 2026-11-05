@@ -8,6 +8,23 @@ export type {
 export type { RemoteEpisodeInfo } from '../../electron/aniZip';
 export type { UserLibraryEntry, UserListStatus } from '../../electron/userLibrary';
 
+// Storage overview shapes (implemented by electron/libraryManager.ts — structurally identical)
+export interface StorageTitleUsage {
+  folderPath: string;
+  folderName: string;
+  canonicalTitle?: string | null;
+  posterUrl?: string | null;
+  anilistId?: number | null;
+  totalBytes: number;
+  episodeCount: number;
+}
+
+export interface StorageOverview {
+  titles: StorageTitleUsage[];
+  totalBytes: number;
+  freeBytes: number | null;
+}
+
 import type { CatalogItem, AiringEntry } from '../../electron/catalog';
 import type { RemoteEpisodeInfo } from '../../electron/aniZip';
 import type { UserLibraryEntry, UserListStatus } from '../../electron/userLibrary';
@@ -67,6 +84,20 @@ export interface ElectronAPI {
   setUserLibraryStatus: (anilistId: number, idMal: number | null, titleSnapshot: string, status: UserListStatus) => Promise<UserLibraryEntry | null>;
   setUserLibraryScore: (anilistId: number, score: number | null) => Promise<UserLibraryEntry | null>;
   setUserLibraryProgress: (anilistId: number, progress: number) => Promise<UserLibraryEntry | null>;
+  // Library storage management (Phase 4)
+  getStorageOverview: () => Promise<StorageOverview>;
+  getDiskUsage: (folderPath: string) => Promise<{ totalBytes: number; episodeCount: number }>;
+  deleteAnimeFromPC: (folderPath: string) => Promise<{ success: boolean; deletedBytes?: number; error?: string }>;
+  deleteEpisodesFromPC: (filePaths: string[]) => Promise<{ success: boolean; deletedBytes?: number; error?: string }>;
+  // Documents backup (Phase 4)
+  getBackupStatus: () => Promise<{ exists: boolean; path: string; lastSyncedAt?: number; sizeBytes?: number }>;
+  backupNow: () => Promise<{ success: boolean; path: string; error?: string }>;
+  detectBackupRestore: () => Promise<{ available: boolean; path: string; userDataHistoryMissing: boolean; exportedAt?: number }>;
+  restoreFromBackup: () => Promise<{ success: boolean; restored?: { history: number; seasonRules: number; userLibrary: number }; error?: string }>;
+  // Watchlist import/export (Phase 4)
+  browseSaveFile: (options?: { title?: string; defaultPath?: string; extensions?: string[] }) => Promise<string | null>;
+  exportWatchlist: (format: 'json' | 'mal-xml', filePath: string) => Promise<{ success: boolean; count?: number; error?: string }>;
+  importWatchlist: (filePath: string) => Promise<{ success: boolean; imported?: number; skipped?: number; error?: string }>;
 }
 
 declare global {

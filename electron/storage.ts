@@ -3,6 +3,14 @@ import path from 'path';
 import { execSync } from 'child_process';
 import { app } from 'electron';
 import { AppSettings, PlaybackProgress, SeasonPreference } from './types';
+import { registerMainServices } from './userDataBackup';
+
+/**
+ * Object keys that must never be written through dynamic assignment when
+ * merging externally sourced records (JSON.parse can surface them and an
+ * assignment like `out['__proto__'] = x` would mutate the prototype).
+ */
+const UNSAFE_RECORD_KEYS = ['__proto__', 'constructor', 'prototype'];
 
 const exePathCache = new Map<string, { path: string | null; time: number }>();
 
@@ -431,6 +439,117 @@ export class StorageService {
       console.error('Failed to write season rules:', e);
     }
   }
+
+  /**
+   * Phase 4 (Documents backup): returns the full season-rules map, reusing the
+   * existing season-rules.json read/cache path. Additive — does not alter any
+   * existing method.
+   */
+  getAllSeasonRules(): Record<string, SeasonPreference> {
+    if (this.seasonRulesCache !== null) {
+      return this.seasonRulesCache;
+    }
+    try {
+      if (fs.existsSync(this.seasonRulesFile)) {
+        const raw = fs.readFileSync(this.seasonRulesFile, 'utf-8');
+        this.seasonRulesCache = JSON.parse(raw);
+        return this.seasonRulesCache!;
+      }
+    } catch (e) {
+      console.error('Failed to read season rules:', e);
+    }
+    this.seasonRulesCache = {};
+    return this.seasonRulesCache;
+  }
+
+  /**
+   * Phase 4 (backup/watchlist restore): merges externally sourced playback
+   * records into the history cache. For existing keys the record with the
+   * newer lastWatchedAt wins (ties go to the incoming record); new keys are
+   * added. Marks the history dirty and schedules the regular 7s debounced
+   * flush. Returns the number of records added or updated.
+   */
+  mergePlaybackProgress(records: Record<string, PlaybackProgress>): number {
+    if (!records || typeof records !== 'object') return 0;
+    const all = this.getAllPlaybackProgress();
+    let merged = 0;
+    for (const [key, incoming] of Object.entries(records)) {
+      if (UNSAFE_RECORD_KEYS.includes(key) || !key || !incoming || typeof incoming !== 'object') continue;
+      if (typeof incoming.lastWatchedAt !== 'number' || !Number.isFinite(incoming.lastWatchedAt)) continue;
+      const normalized: PlaybackProgress = typeof incoming.filePath === 'string' && incoming.filePath
+        ? incoming
+        : { ...incoming, filePath: key };
+      const existing = all[key];
+      if (!existing || normalized.lastWatchedAt >= existing.lastWatchedAt) {
+        all[key] = normalized;
+        merged++;
+      }
+    }
+    if (merged > 0) {
+      this.historyDirty = true;
+      if (!this.historySaveTimer) {
+        this.historySaveTimer = setTimeout(() => {
+          this.flushHistory();
+        }, 7000); // 7 second debounce
+      }
+    }
+    return merged;
+  }
+
+  /**
+   * Phase 4 (backup/watchlist restore): merges externally sourced per-folder
+   * season preferences (incoming values win — preferences carry no timestamp)
+   * and persists the merged map immediately via the regular atomic write path.
+   * Returns the number of rules added or updated.
+   */
+  mergeSeasonRules(rules: Record<string, SeasonPreference>): number {
+    if (!rules || typeof rules !== 'object') return 0;
+    let merged = 0;
+    const current: Record<string, SeasonPreference> = {};
+    for (const [key, pref] of Object.entries(this.getAllSeasonRules())) {
+      if (UNSAFE_RECORD_KEYS.includes(key)) continue;
+      current[key] = pref;
+    }
+    for (const [key, pref] of Object.entries(rules)) {
+      if (UNSAFE_RECORD_KEYS.includes(key) || !key || !pref || typeof pref !== 'object') continue;
+      current[key] = pref;
+      merged++;
+    }
+    if (merged > 0) {
+      try {
+        saveJsonSync(this.seasonRulesFile, current);
+        this.seasonRulesCache = current;
+      } catch (e) {
+        console.error('Failed to merge season rules:', e);
+        return 0;
+      }
+    }
+    return merged;
+  }
+
+  /**
+   * Phase 4 (Documents backup): absolute path of history.json, used to detect
+   * a fresh userData install where a backup restore is available but no local
+   * playback history exists on disk yet.
+   */
+  getHistoryFilePath(): string {
+    return this.historyFile;
+  }
 }
 
 export const storage = new StorageService();
+
+// Phase 4: expose the singleton (plus a documents-dir resolver) to
+// userDataBackup.ts / watchlistIO.ts via registration instead of a static
+// import from their side, so those modules stay free of electron imports and
+// can be loaded by plain Node tests.
+registerMainServices({
+  storage,
+  resolveDocumentsDir: () => {
+    try {
+      return app.getPath('documents');
+    } catch {
+      return '';
+    }
+  },
+});

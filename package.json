@@ -33,6 +33,7 @@
   },
   "dependencies": {
     "anitomyscript": "^2.0.4",
+    "fast-xml-parser": "^5.12.0",
     "framer-motion": "^11.11.17",
     "jassub": "^2.5.23",
     "lucide-react": "^0.460.0",

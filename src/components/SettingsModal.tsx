@@ -14,8 +14,32 @@ import {
   AlertTriangle,
   HelpCircle,
   Cpu,
+  Database,
+  Download,
+  Upload,
+  Save,
 } from 'lucide-react';
 import { AppSettings } from '../types';
+import { showGlobalToast } from './Toast';
+import { formatFileSize } from '../utils/format';
+
+interface BackupStatusInfo {
+  exists: boolean;
+  path: string;
+  lastSyncedAt?: number;
+  sizeBytes?: number;
+}
+
+/** Compact relative timestamp for the backup 'Last synced' line. */
+function formatRelativeTime(ts?: number): string | null {
+  if (!ts || ts <= 0) return null;
+  const mins = Math.floor((Date.now() - ts) / 60000);
+  if (mins < 1) return 'just now';
+  if (mins < 60) return `${mins} min ago`;
+  const hours = Math.floor(mins / 60);
+  if (hours < 24) return `${hours}h ago`;
+  return `${Math.floor(hours / 24)}d ago`;
+}
 
 interface SettingsModalProps {
   isOpen: boolean;
@@ -55,6 +79,12 @@ export const SettingsModal: React.FC<SettingsModalProps> = ({
   const [showSetupGuide, setShowSetupGuide] = useState(false);
   const [confirmDeleteIndex, setConfirmDeleteIndex] = useState<number | null>(null);
 
+  // Data & Backup section state
+  const [backupStatus, setBackupStatus] = useState<BackupStatusInfo | null>(null);
+  const [restoreAvailable, setRestoreAvailable] = useState(false);
+  const [confirmRestore, setConfirmRestore] = useState(false);
+  const [dataBusy, setDataBusy] = useState<'backup' | 'restore' | 'export' | 'import' | null>(null);
+
   useEffect(() => {
     if (isOpen) {
       setFfmpegPath(settings.ffmpegPath);
@@ -89,6 +119,23 @@ export const SettingsModal: React.FC<SettingsModalProps> = ({
         .catch(() => {});
     }
   }, [isOpen, ffmpegPath, whisperPath]);
+
+  // Data & Backup: load backup status + restore availability when opened
+  useEffect(() => {
+    if (!isOpen) return;
+    const api = window.electronAPI;
+    if (!api?.getBackupStatus) return;
+    api
+      .getBackupStatus()
+      .then((status) => setBackupStatus(status))
+      .catch(() => {});
+    if (typeof api.detectBackupRestore === 'function') {
+      api
+        .detectBackupRestore()
+        .then((detection) => setRestoreAvailable(Boolean(detection?.available)))
+        .catch(() => {});
+    }
+  }, [isOpen]);
 
   // Save any pending uncommitted path changes before closing
   const handleClose = () => {
@@ -230,6 +277,107 @@ export const SettingsModal: React.FC<SettingsModalProps> = ({
       });
     } finally {
       setIsDetecting(false);
+    }
+  };
+
+  const refreshBackupStatus = () => {
+    const api = window.electronAPI;
+    if (!api?.getBackupStatus) return;
+    api
+      .getBackupStatus()
+      .then((status) => setBackupStatus(status))
+      .catch(() => {});
+  };
+
+  const handleBackupNow = async () => {
+    const api = window.electronAPI;
+    if (!api?.backupNow || dataBusy) return;
+    setDataBusy('backup');
+    try {
+      const res = await api.backupNow();
+      if (res?.success) {
+        showGlobalToast('Backup saved successfully', 'success');
+        refreshBackupStatus();
+      } else {
+        showGlobalToast(res?.error || 'Backup failed', 'error');
+      }
+    } catch {
+      showGlobalToast('Backup failed', 'error');
+    } finally {
+      setDataBusy(null);
+    }
+  };
+
+  const handleRestoreConfirmed = async () => {
+    const api = window.electronAPI;
+    if (!api?.restoreFromBackup || dataBusy) return;
+    setDataBusy('restore');
+    try {
+      const res = await api.restoreFromBackup();
+      if (res?.success) {
+        const restored = res.restored;
+        showGlobalToast(
+          restored
+            ? `Restored ${restored.history} history entries, ${restored.seasonRules} season rules, ${restored.userLibrary} library items`
+            : 'Restore completed',
+          'success'
+        );
+        setConfirmRestore(false);
+      } else {
+        showGlobalToast(res?.error || 'Restore failed', 'error');
+      }
+    } catch {
+      showGlobalToast('Restore failed', 'error');
+    } finally {
+      setDataBusy(null);
+    }
+  };
+
+  const handleExportWatchlist = async (format: 'json' | 'mal-xml') => {
+    const api = window.electronAPI;
+    if (!api?.browseSaveFile || !api?.exportWatchlist || dataBusy) return;
+    setDataBusy('export');
+    try {
+      const isJson = format === 'json';
+      const filePath = await api.browseSaveFile({
+        title: 'Export Watchlist',
+        defaultPath: isJson ? 'animacenter-watchlist.json' : 'animacenter-watchlist.xml',
+        extensions: [isJson ? 'json' : 'xml'],
+      });
+      if (!filePath) return;
+      const res = await api.exportWatchlist(format, filePath);
+      if (res?.success) {
+        showGlobalToast(`Exported ${res.count ?? 0} titles`, 'success');
+      } else {
+        showGlobalToast(res?.error || 'Export failed', 'error');
+      }
+    } catch {
+      showGlobalToast('Export failed', 'error');
+    } finally {
+      setDataBusy(null);
+    }
+  };
+
+  const handleImportWatchlist = async () => {
+    const api = window.electronAPI;
+    if (!api?.browseFile || !api?.importWatchlist || dataBusy) return;
+    setDataBusy('import');
+    try {
+      const filePath = await api.browseFile({
+        title: 'Import Watchlist',
+        extensions: ['json', 'xml'],
+      });
+      if (!filePath) return;
+      const res = await api.importWatchlist(filePath);
+      if (res?.success) {
+        showGlobalToast(`Imported ${res.imported ?? 0}, skipped ${res.skipped ?? 0}`, 'success');
+      } else {
+        showGlobalToast(res?.error || 'Import failed', 'error');
+      }
+    } catch {
+      showGlobalToast('Import failed', 'error');
+    } finally {
+      setDataBusy(null);
     }
   };
 
@@ -541,6 +689,141 @@ export const SettingsModal: React.FC<SettingsModalProps> = ({
                 >
                   <FolderOpen className="w-3.5 h-3.5 text-zinc-400" />
                   <span>Browse</span>
+                </button>
+              </div>
+            </div>
+          </div>
+
+          {/* Section: Data & Backup */}
+          <div className="space-y-3 pt-3 border-t border-white/10">
+            <div>
+              <label className="text-xs font-semibold text-zinc-200 uppercase tracking-wider flex items-center space-x-2">
+                <Database className="w-3.5 h-3.5 text-zinc-400" />
+                <span>Data &amp; Backup</span>
+              </label>
+              <p className="text-[11px] text-zinc-400">
+                Back up watch history, season rules and your list to Documents, and move your watchlist in or out.
+              </p>
+            </div>
+
+            {/* Documents backup card */}
+            <div className="space-y-2.5 rounded-xl bg-zinc-900/90 border border-white/10 p-3.5">
+              <div className="flex items-start justify-between gap-3">
+                <div className="min-w-0">
+                  <p className="text-xs font-semibold text-zinc-200">Documents Backup</p>
+                  {backupStatus?.path ? (
+                    <p
+                      className="mt-0.5 truncate font-mono text-[10px] text-zinc-500 select-all"
+                      title={backupStatus.path}
+                    >
+                      {backupStatus.path}
+                    </p>
+                  ) : (
+                    <p className="mt-0.5 text-[10px] text-zinc-500">No backup location reported yet</p>
+                  )}
+                  <p className="mt-0.5 text-[10px] text-zinc-500">
+                    {backupStatus?.exists
+                      ? `Last synced ${formatRelativeTime(backupStatus.lastSyncedAt) ?? 'unknown'}${
+                          backupStatus.sizeBytes ? ` · ${formatFileSize(backupStatus.sizeBytes)}` : ''
+                        }`
+                      : 'No backup created yet'}
+                  </p>
+                </div>
+                {backupStatus?.exists && (
+                  <CheckCircle2 className="w-3.5 h-3.5 shrink-0 text-emerald-400 mt-0.5" />
+                )}
+              </div>
+
+              {confirmRestore ? (
+                <div className="flex items-center justify-between gap-3 px-3 py-2 rounded-xl bg-red-950/40 border border-red-500/40 animate-in fade-in duration-150">
+                  <div className="flex items-center space-x-2 text-xs text-red-200 min-w-0 flex-1">
+                    <AlertTriangle className="w-3.5 h-3.5 text-red-400 shrink-0" />
+                    <span className="truncate">
+                      Restore backup over current data? Watch history, season rules and your list will be replaced.
+                    </span>
+                  </div>
+                  <div className="flex items-center space-x-2 shrink-0">
+                    <button
+                      type="button"
+                      onClick={() => setConfirmRestore(false)}
+                      disabled={dataBusy === 'restore'}
+                      className="px-2.5 py-1 rounded-lg text-[11px] font-medium text-zinc-300 hover:text-white bg-zinc-800 hover:bg-zinc-700 transition-colors disabled:opacity-50"
+                    >
+                      Cancel
+                    </button>
+                    <button
+                      type="button"
+                      onClick={handleRestoreConfirmed}
+                      disabled={dataBusy === 'restore'}
+                      className="px-2.5 py-1 rounded-lg text-[11px] font-bold text-white bg-red-600 hover:bg-red-500 transition-colors shadow-sm disabled:opacity-60"
+                    >
+                      {dataBusy === 'restore' ? 'Restoring…' : 'Confirm Restore'}
+                    </button>
+                  </div>
+                </div>
+              ) : (
+                <div className="flex flex-wrap items-center gap-2">
+                  <button
+                    type="button"
+                    onClick={handleBackupNow}
+                    disabled={dataBusy !== null || !window.electronAPI?.backupNow}
+                    className="flex items-center space-x-1.5 px-3 py-1.5 rounded-lg bg-zinc-100 hover:bg-white text-zinc-900 text-xs font-bold transition-colors shadow-sm disabled:opacity-50"
+                  >
+                    <Save className="w-3.5 h-3.5" />
+                    <span>{dataBusy === 'backup' ? 'Backing up…' : 'Backup now'}</span>
+                  </button>
+                  {restoreAvailable && (
+                    <button
+                      type="button"
+                      onClick={() => setConfirmRestore(true)}
+                      disabled={dataBusy !== null || !window.electronAPI?.restoreFromBackup}
+                      className="flex items-center space-x-1.5 px-3 py-1.5 rounded-lg bg-zinc-800 hover:bg-zinc-700 text-zinc-200 border border-white/10 text-xs font-medium transition-colors disabled:opacity-50"
+                    >
+                      <RotateCcw className="w-3.5 h-3.5 text-zinc-400" />
+                      <span>Restore from backup</span>
+                    </button>
+                  )}
+                </div>
+              )}
+            </div>
+
+            {/* Watchlist import / export card */}
+            <div className="space-y-2.5 rounded-xl bg-zinc-900/90 border border-white/10 p-3.5">
+              <p className="text-xs font-semibold text-zinc-200">Watchlist</p>
+              <p className="text-[10px] text-zinc-500">
+                Export your tracked titles as a full JSON snapshot or MAL-compatible XML, or import an existing list.
+              </p>
+
+              <div className="flex flex-wrap items-center gap-2">
+                <button
+                  type="button"
+                  onClick={() => handleExportWatchlist('json')}
+                  disabled={dataBusy !== null || !window.electronAPI?.exportWatchlist}
+                  className="flex items-center space-x-1.5 px-3 py-1.5 rounded-lg bg-zinc-800 hover:bg-zinc-700 text-zinc-200 border border-white/10 text-xs font-medium transition-colors disabled:opacity-50"
+                  title="Export the full watchlist (scores, progress, status) as JSON"
+                >
+                  <Download className="w-3.5 h-3.5 text-zinc-400" />
+                  <span>JSON (full)</span>
+                </button>
+                <button
+                  type="button"
+                  onClick={() => handleExportWatchlist('mal-xml')}
+                  disabled={dataBusy !== null || !window.electronAPI?.exportWatchlist}
+                  className="flex items-center space-x-1.5 px-3 py-1.5 rounded-lg bg-zinc-800 hover:bg-zinc-700 text-zinc-200 border border-white/10 text-xs font-medium transition-colors disabled:opacity-50"
+                  title="Export as MyAnimeList-compatible XML"
+                >
+                  <Download className="w-3.5 h-3.5 text-zinc-400" />
+                  <span>MAL XML</span>
+                </button>
+                <button
+                  type="button"
+                  onClick={handleImportWatchlist}
+                  disabled={dataBusy !== null || !window.electronAPI?.importWatchlist}
+                  className="flex items-center space-x-1.5 px-3 py-1.5 rounded-lg bg-zinc-800 hover:bg-zinc-700 text-zinc-200 border border-white/10 text-xs font-medium transition-colors disabled:opacity-50"
+                  title="Import a previously exported JSON or MAL XML watchlist"
+                >
+                  <Upload className="w-3.5 h-3.5 text-zinc-400" />
+                  <span>{dataBusy === 'import' ? 'Importing…' : 'Import Watchlist'}</span>
                 </button>
               </div>
             </div>

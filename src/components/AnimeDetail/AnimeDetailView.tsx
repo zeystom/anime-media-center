@@ -6,9 +6,9 @@
  * controls, and a single episode list merging local files with remote rows.
  * Purely local titles (no AniList id) render without any remote fetches.
  */
-import React, { useEffect, useMemo, useState } from 'react'
+import React, { useEffect, useMemo, useRef, useState } from 'react'
 import { motion } from 'framer-motion'
-import { Download, Film, Play, Star, Wand2, X } from 'lucide-react'
+import { AlertTriangle, CheckCircle, Download, Film, Play, Star, Trash2, Wand2, X } from 'lucide-react'
 import type {
   AnimeFolder,
   CatalogItem,
@@ -27,7 +27,8 @@ import { EpisodeRow } from './EpisodeRow'
 // ../../lib/releaseParser/index.ts, which pulls native/wasm deps unsuitable
 // for the renderer process.
 import { parseReleaseCore } from '../../lib/releaseParser/regexEngine.ts'
-import { formatTime } from '../../utils/format'
+import { formatFileSize, formatTime } from '../../utils/format'
+import { showGlobalToast } from '../Toast'
 
 export type DetailSource = { kind: 'catalog'; item: RailItem } | { kind: 'local'; folder: AnimeFolder }
 
@@ -38,6 +39,7 @@ export interface AnimeDetailViewProps {
   userEntries: Record<number, UserLibraryEntry>
   onClose: () => void
   onPlayEpisode: (episode: Episode, startAt?: number) => void
+  onLibraryChanged?: () => void
   onOpenWhisper: (folder: AnimeFolder) => void
 }
 
@@ -100,6 +102,7 @@ export const AnimeDetailView: React.FC<AnimeDetailViewProps> = ({
   userEntries,
   onClose,
   onPlayEpisode,
+  onLibraryChanged,
   onOpenWhisper,
 }) => {
   const [details, setDetails] = useState<CatalogItem | null>(null)
@@ -107,6 +110,17 @@ export const AnimeDetailView: React.FC<AnimeDetailViewProps> = ({
   const [detailsLoading, setDetailsLoading] = useState(false)
   const [bgFailed, setBgFailed] = useState(false)
   const [posterFailed, setPosterFailed] = useState(false)
+
+  // Files-only deletion state (season or single episode). Deleted episode
+  // paths are filtered out of the merged list immediately; the library refresh
+  // syncs the rest of the app with the new on-disk reality.
+  const [confirmDeleteSeason, setConfirmDeleteSeason] = useState(false)
+  const [confirmDeleteEpisode, setConfirmDeleteEpisode] = useState<Episode | null>(null)
+  const [removedPaths, setRemovedPaths] = useState<Set<string>>(() => new Set())
+  const [deleteBusy, setDeleteBusy] = useState(false)
+  // Inline 'Completed!' suggestion after picking the Completed list status.
+  const [completedSuggestion, setCompletedSuggestion] = useState(false)
+  const completedPromptedRef = useRef(false)
 
   const railItem = source.kind === 'catalog' ? source.item : null
 
@@ -135,6 +149,15 @@ export const AnimeDetailView: React.FC<AnimeDetailViewProps> = ({
     window.addEventListener('keydown', onKey)
     return () => window.removeEventListener('keydown', onKey)
   }, [onClose])
+
+  // Reset per-title deletion / suggestion state when another title is opened.
+  useEffect(() => {
+    setConfirmDeleteSeason(false)
+    setConfirmDeleteEpisode(null)
+    setCompletedSuggestion(false)
+    setRemovedPaths(new Set())
+    completedPromptedRef.current = false
+  }, [source])
 
   // Remote details + episode metadata for the resolved AniList id.
   useEffect(() => {
@@ -207,9 +230,11 @@ export const AnimeDetailView: React.FC<AnimeDetailViewProps> = ({
   )
 
   // Local episodes keyed by their parsed release number (fallback: index+1),
-  // sorted ascending for both the merge and the resume target.
+  // sorted ascending for both the merge and the resume target. Rows whose
+  // files were deleted this session (removedPaths) drop out immediately.
   const localRows = useMemo(() => {
     return (localFolder?.episodes ?? [])
+      .filter((episode) => !episode || !removedPaths.has(episode.filePath))
       .map((episode, index) => {
         const parsed = episode?.fileName ? parseReleaseCore(episode.fileName) : null
         const num =
@@ -219,7 +244,13 @@ export const AnimeDetailView: React.FC<AnimeDetailViewProps> = ({
         return { episode, num }
       })
       .sort((a, b) => a.num - b.num)
-  }, [localFolder])
+  }, [localFolder, removedPaths])
+
+  // Disk space the remaining local files occupy (drives the delete confirms).
+  const seasonSizeBytes = useMemo(
+    () => localRows.reduce((acc, row) => acc + (row.episode?.size || 0), 0),
+    [localRows]
+  )
 
   // Resume target: first non-completed local episode, falling back to the
   // first episode for a full rewatch.
@@ -286,6 +317,18 @@ export const AnimeDetailView: React.FC<AnimeDetailViewProps> = ({
     const status = event.target.value as UserListStatus
     if (!STATUS_OPTIONS.some((option) => option.value === status)) return
     void userLibrary.setStatus(anilistId, hero.idMal, hero.title, status)
+
+    // Suggest freeing the downloaded files once per session when the user
+    // marks a locally downloaded title as Completed.
+    if (
+      status === 'completed' &&
+      localFolder &&
+      localRows.length > 0 &&
+      !completedPromptedRef.current
+    ) {
+      completedPromptedRef.current = true
+      setCompletedSuggestion(true)
+    }
   }
 
   const handleScoreChange = (event: React.ChangeEvent<HTMLSelectElement>) => {
@@ -293,6 +336,57 @@ export const AnimeDetailView: React.FC<AnimeDetailViewProps> = ({
     const score = Number(event.target.value)
     void userLibrary.setScore(anilistId, Number.isNaN(score) || score === 0 ? null : score)
   }
+
+  // Deletes every remaining local file of this title. History and list
+  // progress are untouched; the folder disappears from the PC, so the overlay
+  // closes after the library refresh kicks off.
+  const handleDeleteSeasonConfirmed = async () => {
+    if (!localFolder || deleteBusy) return
+    setDeleteBusy(true)
+    try {
+      const res = await window.electronAPI.deleteAnimeFromPC(localFolder.folderPath)
+      if (res?.success) {
+        showGlobalToast(`Freed ${formatFileSize(res.deletedBytes ?? seasonSizeBytes)}`, 'success')
+        setConfirmDeleteSeason(false)
+        setCompletedSuggestion(false)
+        onLibraryChanged?.()
+        onClose()
+      } else {
+        showGlobalToast(res?.error || 'Failed to delete files from PC', 'error')
+      }
+    } catch (err) {
+      console.error('Failed to delete anime from PC:', err)
+      showGlobalToast('Failed to delete files from PC', 'error')
+    } finally {
+      setDeleteBusy(false)
+    }
+  }
+
+  const handleDeleteEpisodeConfirmed = async () => {
+    const ep = confirmDeleteEpisode
+    if (!ep || deleteBusy) return
+    setDeleteBusy(true)
+    try {
+      const res = await window.electronAPI.deleteEpisodesFromPC([ep.filePath])
+      if (res?.success) {
+        showGlobalToast(`Freed ${formatFileSize(res.deletedBytes ?? ep.size)}`, 'success')
+        setRemovedPaths((prev) => new Set(prev).add(ep.filePath))
+        setConfirmDeleteEpisode(null)
+        onLibraryChanged?.()
+      } else {
+        showGlobalToast(res?.error || 'Failed to delete files from PC', 'error')
+      }
+    } catch (err) {
+      console.error('Failed to delete episodes from PC:', err)
+      showGlobalToast('Failed to delete files from PC', 'error')
+    } finally {
+      setDeleteBusy(false)
+    }
+  }
+
+  const handleSuggestionKeep = () => setCompletedSuggestion(false)
+
+  const handleSuggestionDelete = handleDeleteSeasonConfirmed
 
   const handlePlayResume = () => {
     if (!resumeEpisode) return
@@ -468,6 +562,18 @@ export const AnimeDetailView: React.FC<AnimeDetailViewProps> = ({
                 </button>
               )}
 
+              {localFolder && localRows.length > 0 && (
+                <button
+                  type="button"
+                  onClick={() => setConfirmDeleteSeason(true)}
+                  title="Delete the downloaded files from this PC (history and progress are kept)"
+                  className="flex select-none items-center gap-2 rounded-xl border border-red-500/30 bg-red-500/10 px-4 py-3 text-xs font-bold text-red-300 transition-all hover:bg-red-500/20 hover:scale-[1.02] active:scale-[0.98]"
+                >
+                  <Trash2 className="h-4 w-4" />
+                  <span>Delete from PC</span>
+                </button>
+              )}
+
               <button
                 type="button"
                 disabled
@@ -505,6 +611,41 @@ export const AnimeDetailView: React.FC<AnimeDetailViewProps> = ({
                   ))}
                 </select>
               </div>
+            )}
+
+            {/* 'Completed!' suggestion: offer freeing the downloaded files */}
+            {completedSuggestion && localFolder && localRows.length > 0 && (
+              <motion.div
+                initial={{ opacity: 0, y: 8 }}
+                animate={{ opacity: 1, y: 0 }}
+                transition={{ duration: 0.25, ease: 'easeOut' }}
+                className="mt-4 flex flex-wrap items-center gap-3 rounded-xl border border-emerald-500/30 bg-emerald-500/10 px-4 py-3"
+              >
+                <CheckCircle className="h-5 w-5 shrink-0 text-emerald-400" />
+                <p className="min-w-0 flex-1 text-xs leading-relaxed text-zinc-200">
+                  Completed! Delete files (frees {formatFileSize(seasonSizeBytes)}), keeping it in
+                  history?
+                </p>
+                <div className="flex items-center gap-2">
+                  <button
+                    type="button"
+                    onClick={handleSuggestionDelete}
+                    disabled={deleteBusy}
+                    className="flex select-none items-center gap-1.5 rounded-lg bg-red-600 px-3 py-1.5 text-xs font-bold text-white shadow-sm transition-colors hover:bg-red-500 disabled:opacity-60 active:scale-[0.98]"
+                  >
+                    <Trash2 className="h-3.5 w-3.5" />
+                    <span>Delete files</span>
+                  </button>
+                  <button
+                    type="button"
+                    onClick={handleSuggestionKeep}
+                    disabled={deleteBusy}
+                    className="rounded-lg border border-zinc-700/60 bg-zinc-800/80 px-3 py-1.5 text-xs font-semibold text-zinc-300 transition-colors hover:bg-zinc-700/80 hover:text-white disabled:opacity-60"
+                  >
+                    Keep
+                  </button>
+                </div>
+              </motion.div>
             )}
           </motion.div>
         </div>
@@ -554,12 +695,111 @@ export const AnimeDetailView: React.FC<AnimeDetailViewProps> = ({
                   downloadProgress={local?.downloadProgress}
                   onPlay={local ? () => onPlayEpisode(local, startAt) : undefined}
                   onWhisper={local && localFolder ? () => onOpenWhisper(localFolder) : undefined}
+                  onDelete={local ? () => setConfirmDeleteEpisode(local) : undefined}
                 />
               )
             })}
           </div>
         )}
       </section>
+
+      {/* Season delete confirmation (files only — history and progress are kept) */}
+      {confirmDeleteSeason && localFolder && (
+        <div
+          className="fixed inset-0 z-50 flex items-center justify-center bg-black/80 p-4 animate-in fade-in duration-150"
+          onClick={() => !deleteBusy && setConfirmDeleteSeason(false)}
+        >
+          <div
+            role="dialog"
+            aria-modal="true"
+            data-modal="true"
+            className="w-full max-w-md rounded-2xl border border-white/10 bg-[#141418] p-5 text-zinc-100 shadow-2xl animate-in zoom-in-95 duration-150"
+            onClick={(e) => e.stopPropagation()}
+          >
+            <div className="flex items-start gap-3">
+              <div className="flex h-9 w-9 shrink-0 items-center justify-center rounded-full bg-red-500/10">
+                <AlertTriangle className="h-5 w-5 text-red-400" />
+              </div>
+              <div className="min-w-0">
+                <h3 className="text-sm font-bold text-white">Delete files from PC</h3>
+                <p className="mt-1 text-xs leading-relaxed text-zinc-400">
+                  Delete &ldquo;{localFolder.canonicalTitle || localFolder.folderName}&rdquo; from PC? This
+                  frees {formatFileSize(seasonSizeBytes)}. Watch history and progress are kept.
+                </p>
+              </div>
+            </div>
+
+            <div className="mt-4 flex items-center justify-end gap-2">
+              <button
+                type="button"
+                onClick={() => setConfirmDeleteSeason(false)}
+                disabled={deleteBusy}
+                className="rounded-lg bg-zinc-800 px-3 py-1.5 text-xs font-medium text-zinc-300 transition-colors hover:bg-zinc-700 hover:text-white disabled:opacity-50"
+              >
+                Cancel
+              </button>
+              <button
+                type="button"
+                onClick={handleDeleteSeasonConfirmed}
+                disabled={deleteBusy}
+                className="flex select-none items-center gap-1.5 rounded-lg bg-red-600 px-3 py-1.5 text-xs font-bold text-white shadow-sm transition-colors hover:bg-red-500 disabled:opacity-60 active:scale-[0.98]"
+              >
+                <Trash2 className="h-3.5 w-3.5" />
+                <span>{deleteBusy ? 'Deleting…' : 'Delete files'}</span>
+              </button>
+            </div>
+          </div>
+        </div>
+      )}
+
+      {/* Single-episode delete confirmation */}
+      {confirmDeleteEpisode && (
+        <div
+          className="fixed inset-0 z-50 flex items-center justify-center bg-black/80 p-4 animate-in fade-in duration-150"
+          onClick={() => !deleteBusy && setConfirmDeleteEpisode(null)}
+        >
+          <div
+            role="dialog"
+            aria-modal="true"
+            data-modal="true"
+            className="w-full max-w-md rounded-2xl border border-white/10 bg-[#141418] p-5 text-zinc-100 shadow-2xl animate-in zoom-in-95 duration-150"
+            onClick={(e) => e.stopPropagation()}
+          >
+            <div className="flex items-start gap-3">
+              <div className="flex h-9 w-9 shrink-0 items-center justify-center rounded-full bg-red-500/10">
+                <AlertTriangle className="h-5 w-5 text-red-400" />
+              </div>
+              <div className="min-w-0">
+                <h3 className="text-sm font-bold text-white">Delete episode from PC</h3>
+                <p className="mt-1 break-all text-xs leading-relaxed text-zinc-400">
+                  Delete &ldquo;{confirmDeleteEpisode.fileName}&rdquo; from PC? This frees{' '}
+                  {formatFileSize(confirmDeleteEpisode.size)}. Watch history and progress are kept.
+                </p>
+              </div>
+            </div>
+
+            <div className="mt-4 flex items-center justify-end gap-2">
+              <button
+                type="button"
+                onClick={() => setConfirmDeleteEpisode(null)}
+                disabled={deleteBusy}
+                className="rounded-lg bg-zinc-800 px-3 py-1.5 text-xs font-medium text-zinc-300 transition-colors hover:bg-zinc-700 hover:text-white disabled:opacity-50"
+              >
+                Cancel
+              </button>
+              <button
+                type="button"
+                onClick={handleDeleteEpisodeConfirmed}
+                disabled={deleteBusy}
+                className="flex select-none items-center gap-1.5 rounded-lg bg-red-600 px-3 py-1.5 text-xs font-bold text-white shadow-sm transition-colors hover:bg-red-500 disabled:opacity-60 active:scale-[0.98]"
+              >
+                <Trash2 className="h-3.5 w-3.5" />
+                <span>{deleteBusy ? 'Deleting…' : 'Delete files'}</span>
+              </button>
+            </div>
+          </div>
+        </div>
+      )}
     </div>
   )
 }

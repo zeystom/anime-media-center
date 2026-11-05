@@ -77,4 +77,19 @@ contextBridge.exposeInMainWorld('electronAPI', {
     ipcRenderer.invoke('user-library:set-score', anilistId, score),
   setUserLibraryProgress: (anilistId: number, progress: number) =>
     ipcRenderer.invoke('user-library:set-progress', anilistId, progress),
+  // Library storage management (Phase 4)
+  getStorageOverview: () => ipcRenderer.invoke('library:storage-overview'),
+  getDiskUsage: (folderPath: string) => ipcRenderer.invoke('library:disk-usage', folderPath),
+  deleteAnimeFromPC: (folderPath: string) => ipcRenderer.invoke('library:delete-anime', folderPath),
+  deleteEpisodesFromPC: (filePaths: string[]) => ipcRenderer.invoke('library:delete-episodes', filePaths),
+  // Documents backup (Phase 4)
+  getBackupStatus: () => ipcRenderer.invoke('backup:status'),
+  backupNow: () => ipcRenderer.invoke('backup:export-now'),
+  detectBackupRestore: () => ipcRenderer.invoke('backup:detect-restore'),
+  restoreFromBackup: () => ipcRenderer.invoke('backup:restore'),
+  // Watchlist import/export (Phase 4)
+  browseSaveFile: (options?: { title?: string; defaultPath?: string; extensions?: string[] }) =>
+    ipcRenderer.invoke('browse-save-file', options),
+  exportWatchlist: (format: string, filePath: string) => ipcRenderer.invoke('watchlist:export', format, filePath),
+  importWatchlist: (filePath: string) => ipcRenderer.invoke('watchlist:import', filePath),
 });

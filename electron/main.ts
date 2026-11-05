@@ -14,6 +14,9 @@ import { checkEpisodeDownloading, isFolderDownloading } from './torrents';
 import { getTrending, getPopularSeason, getAllTimePopular, getAiringSchedule, getRecommendations, searchCatalog, getCatalogDetails } from './catalog';
 import { fetchAniZipMappings } from './aniZip';
 import { userLibrary, UserListStatus } from './userLibrary';
+import { computeDiskUsage, computeStorageOverview, deleteAnime, deleteEpisodes } from './libraryManager';
+import { syncBackupNow, getBackupStatus, detectRestoreState, restoreFromBackup, scheduleBackupSync } from './userDataBackup';
+import { exportWatchlist, importWatchlist, MAL_ONLY_ANILIST_ID_BASE } from './watchlistIO';
 
 const __filename = fileURLToPath(import.meta.url);
 const __dirname = path.dirname(__filename);
@@ -630,6 +633,7 @@ function setupIpcHandlers() {
 
   ipcMain.handle('save-playback-progress', async (_event, progress: PlaybackProgress) => {
     storage.savePlaybackProgress(progress);
+    scheduleBackupSync();
   });
 
   ipcMain.handle('get-all-playback-progress', async () => {
@@ -717,7 +721,7 @@ function setupIpcHandlers() {
   ipcMain.handle('catalog:recommendations', async (_event, seeds?: number[]) => {
     // Personal seed = titles the user is watching or has completed in their local user library.
     const librarySeeds = Object.values(userLibrary.getAll())
-      .filter((e) => e.status === 'watching' || e.status === 'completed')
+      .filter((e) => (e.status === 'watching' || e.status === 'completed') && e.anilistId < MAL_ONLY_ANILIST_ID_BASE)
       .map((e) => e.anilistId);
     const effectiveSeeds = Array.isArray(seeds) && seeds.length > 0 ? seeds : librarySeeds;
     if (effectiveSeeds.length === 0) return [];
@@ -752,6 +756,75 @@ function setupIpcHandlers() {
   ipcMain.handle('user-library:set-progress', async (_event, anilistId: number, progress: number) => {
     return userLibrary.setProgress(anilistId, progress);
   });
+
+  // ---- Library storage management (explicit user-driven deletion, no auto-cleanup) ----
+  ipcMain.handle('library:storage-overview', async () => {
+    const settings = storage.getSettings();
+    const roots = Array.isArray(settings.libraryFolders) ? settings.libraryFolders : [];
+    return computeStorageOverview(roots);
+  });
+
+  ipcMain.handle('library:disk-usage', async (_event, folderPath: string) => {
+    return computeDiskUsage(folderPath);
+  });
+
+  ipcMain.handle('library:delete-anime', async (_event, folderPath: string) => {
+    const settings = storage.getSettings();
+    const roots = Array.isArray(settings.libraryFolders) ? settings.libraryFolders : [];
+    return deleteAnime(folderPath, { allowedRoots: roots });
+  });
+
+  ipcMain.handle('library:delete-episodes', async (_event, filePaths: string[]) => {
+    const settings = storage.getSettings();
+    const roots = Array.isArray(settings.libraryFolders) ? settings.libraryFolders : [];
+    return deleteEpisodes(filePaths, { allowedRoots: roots });
+  });
+
+  // ---- Documents backup (Documents/AnimeCenter/user_library_backup.json) ----
+  ipcMain.handle('backup:status', async () => {
+    return getBackupStatus();
+  });
+
+  ipcMain.handle('backup:export-now', async () => {
+    return syncBackupNow();
+  });
+
+  ipcMain.handle('backup:detect-restore', async () => {
+    return detectRestoreState();
+  });
+
+  ipcMain.handle('backup:restore', async () => {
+    return restoreFromBackup();
+  });
+
+  // ---- Watchlist export/import (AnimeCenter JSON + MAL XML) ----
+  ipcMain.handle('browse-save-file', async (_event, options?: { title?: string; defaultPath?: string; extensions?: string[] }) => {
+    const win = mainWindow || BrowserWindow.getFocusedWindow();
+    const filters =
+      options?.extensions && options.extensions.length > 0
+        ? [
+            { name: 'Allowed Files', extensions: options.extensions },
+            { name: 'All Files (*.*)', extensions: ['*'] },
+          ]
+        : [{ name: 'All Files (*.*)', extensions: ['*'] }];
+    const res = await dialog.showSaveDialog(win || (undefined as any), {
+      title: options?.title || 'Save File',
+      defaultPath: options?.defaultPath,
+      filters,
+    });
+    if (!res.canceled && res.filePath) {
+      return res.filePath;
+    }
+    return null;
+  });
+
+  ipcMain.handle('watchlist:export', async (_event, format: 'json' | 'mal-xml', filePath: string) => {
+    return exportWatchlist(format, filePath);
+  });
+
+  ipcMain.handle('watchlist:import', async (_event, filePath: string) => {
+    return importWatchlist(filePath);
+  });
 }
 
 app.whenReady().then(createWindow);
@@ -769,6 +842,7 @@ app.on('window-all-closed', () => {
 app.on('before-quit', () => {
   storage.flushHistory();
   userLibrary.flush();
+  syncBackupNow();
   streamServer.stop();
   whisperManager.cancel();
 });

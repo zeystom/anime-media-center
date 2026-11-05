@@ -11,6 +11,7 @@
 import fs from 'fs';
 import path from 'path';
 import { app } from 'electron';
+import { registerMainServices } from './userDataBackup';
 
 export type UserListStatus = 'watching' | 'completed' | 'planning' | 'dropped' | 'paused';
 
@@ -81,6 +82,23 @@ function saveJsonSync(targetFile: string, data: any): void {
       }
     } catch {}
   }
+}
+
+/**
+ * Coerces an externally sourced record (backup restore / watchlist import)
+ * into a well-formed UserLibraryEntry — mirrors the normalization load()
+ * applies to user-library.json.
+ */
+function normalizeUserLibraryEntry(anilistId: number, raw: Partial<UserLibraryEntry>): UserLibraryEntry {
+  return {
+    anilistId,
+    idMal: typeof raw.idMal === 'number' && Number.isFinite(raw.idMal) ? Math.trunc(raw.idMal) : null,
+    titleSnapshot: typeof raw.titleSnapshot === 'string' ? raw.titleSnapshot : '',
+    status: VALID_STATUSES.includes(raw.status as UserListStatus) ? (raw.status as UserListStatus) : 'planning',
+    score: typeof raw.score === 'number' && Number.isFinite(raw.score) ? raw.score : null,
+    progress: typeof raw.progress === 'number' ? Math.max(0, Math.trunc(raw.progress)) : 0,
+    updatedAt: typeof raw.updatedAt === 'number' ? raw.updatedAt : 0,
+  };
 }
 
 export class UserLibrary {
@@ -284,6 +302,63 @@ export class UserLibrary {
   }
 
   /**
+   * Phase 4 (backup restore / watchlist import): merges a map of entries
+   * keyed by anilistId into the library. For an existing entry the record
+   * with the newer updatedAt is the base; missing idMal / score are filled
+   * from the other side and progress never regresses (higher of the two).
+   * Schedules the regular debounced flush. Returns the number of entries
+   * created or updated.
+   */
+  mergeEntries(entries: Record<number, UserLibraryEntry>): number {
+    if (!entries || typeof entries !== 'object') return 0;
+    const map = this.load();
+    let merged = 0;
+    for (const [key, incomingRaw] of Object.entries(entries)) {
+      if (!incomingRaw || typeof incomingRaw !== 'object') continue;
+      const raw = incomingRaw as Partial<UserLibraryEntry>;
+      const anilistId = Math.trunc(Number(raw.anilistId ?? key));
+      if (!Number.isFinite(anilistId) || anilistId <= 0) continue;
+      const incoming = normalizeUserLibraryEntry(anilistId, raw);
+      const existing = map[anilistId];
+
+      let entry: UserLibraryEntry;
+      if (!existing) {
+        entry = incoming;
+      } else {
+        const incomingNewer = incoming.updatedAt > existing.updatedAt;
+        const base = incomingNewer ? incoming : existing;
+        const other = incomingNewer ? existing : incoming;
+        entry = {
+          anilistId,
+          idMal: base.idMal ?? other.idMal ?? null,
+          titleSnapshot: base.titleSnapshot || other.titleSnapshot || '',
+          status: VALID_STATUSES.includes(base.status) ? base.status : other.status,
+          score: base.score ?? other.score ?? null,
+          progress: Math.max(existing.progress, incoming.progress),
+          updatedAt: Math.max(existing.updatedAt, incoming.updatedAt),
+        };
+        if (
+          entry.idMal === existing.idMal &&
+          entry.titleSnapshot === existing.titleSnapshot &&
+          entry.status === existing.status &&
+          entry.score === existing.score &&
+          entry.progress === existing.progress &&
+          entry.updatedAt === existing.updatedAt
+        ) {
+          continue; // nothing changed — do not count or touch updatedAt
+        }
+      }
+
+      map[anilistId] = entry;
+      merged++;
+    }
+    if (merged > 0) {
+      this.scheduleFlush();
+    }
+    return merged;
+  }
+
+  /**
    * Forces a flush of pending changes to user-library.json (no-op when
    * nothing is dirty). Cancels the pending debounce timer.
    */
@@ -309,3 +384,8 @@ export class UserLibrary {
 }
 
 export const userLibrary = new UserLibrary();
+
+// Phase 4: expose the singleton to userDataBackup.ts / watchlistIO.ts via
+// registration (see storage.ts for the rationale — keeps those modules free
+// of static electron imports so plain Node tests can load their helpers).
+registerMainServices({ userLibrary });

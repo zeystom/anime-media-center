@@ -1,7 +1,7 @@
 import React from 'react';
-import { House, Film, CalendarDays, Sparkles, Settings as SettingsIcon, Terminal, Clapperboard } from 'lucide-react';
+import { House, Film, CalendarDays, HardDrive, Sparkles, Settings as SettingsIcon, Terminal, Clapperboard } from 'lucide-react';
 
-export type AppTab = 'home' | 'library' | 'schedule' | 'whisper';
+export type AppTab = 'home' | 'library' | 'schedule' | 'downloads' | 'whisper';
 
 interface NavbarProps {
   currentTab: AppTab;
@@ -66,6 +66,18 @@ export const Navbar: React.FC<NavbarProps> = ({
         >
           <CalendarDays className="w-4 h-4" />
           <span>Schedule</span>
+        </button>
+
+        <button
+          onClick={() => onSelectTab('downloads')}
+          className={`flex items-center space-x-2 px-4 py-1.5 rounded-md text-sm font-medium transition-all ${
+            currentTab === 'downloads'
+              ? 'bg-zinc-800 text-white shadow-sm'
+              : 'text-zinc-400 hover:text-zinc-200 hover:bg-zinc-800/50'
+          }`}
+        >
+          <HardDrive className="w-4 h-4" />
+          <span>Downloads</span>
         </button>
 
         <button

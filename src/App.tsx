@@ -7,11 +7,17 @@ import { AnimeDetailView, DetailSource } from './components/AnimeDetail/AnimeDet
 import { ScheduleView } from './components/Schedule/ScheduleView';
 import { VideoPlayer } from './components/Player/VideoPlayer';
 import { WhisperStudio } from './components/WhisperStudio/WhisperStudio';
+import { DownloadsView } from './components/Downloads/DownloadsView';
+import { CompletionPrompt, CompletionPromptData } from './components/common/CompletionPrompt';
 import { SettingsModal } from './components/SettingsModal';
 import { AnimeFolder, Episode, AppSettings, PlaybackProgress, UserLibraryEntry } from './types';
 import { useLocalStatus } from './hooks/useLocalStatus';
 import { ToastProvider, showGlobalToast } from './components/Toast';
-import { getPathBasename, getPathDirname } from './utils/format';
+import { getPathBasename, getPathDirname, formatFileSize } from './utils/format';
+
+interface CompletionPromptState extends CompletionPromptData {
+  folderPath: string;
+}
 
 function findLastWatchedFolder(
   folders: AnimeFolder[],
@@ -45,7 +51,7 @@ function findLastWatchedFolder(
 
 export const App: React.FC = () => {
   // Navigation & View state
-  const [currentTab, setCurrentTab] = useState<'home' | 'library' | 'schedule' | 'whisper'>('home');
+  const [currentTab, setCurrentTab] = useState<'home' | 'library' | 'schedule' | 'downloads' | 'whisper'>('home');
   const [activePlayerEpisode, setActivePlayerEpisode] = useState<Episode | null>(null);
   const [playerInitialTime, setPlayerInitialTime] = useState<number>(0);
   const [settingsOpen, setSettingsOpen] = useState<boolean>(false);
@@ -92,6 +98,11 @@ export const App: React.FC = () => {
     whisperExists: true,
   });
   const [bannerDismissed, setBannerDismissed] = useState<boolean>(false);
+
+  // Season-completion suggestion: offers to free downloaded files when a
+  // season finishes playing. Dismissed folders stay muted for the session.
+  const [completionPrompt, setCompletionPrompt] = useState<CompletionPromptState | null>(null);
+  const dismissedFoldersRef = useRef<Set<string>>(new Set());
 
   const isScanningRef = useRef(false);
   const scanPendingRef = useRef(false);
@@ -491,6 +502,59 @@ export const App: React.FC = () => {
     setPlayerInitialTime(0);
   };
 
+  // Fired by the player once per episode when it crosses the completion
+  // threshold. Suggests freeing the downloaded files when the whole season is
+  // finished (single-episode folders, or every later episode already watched
+  // or still downloading). Files-only deletion: history and progress persist.
+  const handleEpisodeCompleted = useCallback(
+    (episode: Episode) => {
+      const parentFolder = folders.find((f) => f.episodes.some((e) => e.filePath === episode.filePath));
+      if (!parentFolder) return;
+      if (dismissedFoldersRef.current.has(parentFolder.folderPath)) return;
+
+      const epIndex = parentFolder.episodes.findIndex((e) => e.filePath === episode.filePath);
+      const laterEpisodes = parentFolder.episodes.slice(epIndex + 1);
+      const seasonFinished =
+        parentFolder.episodes.length === 1 ||
+        laterEpisodes.every((e) => history[e.filePath]?.completed || e.isDownloading);
+      if (!seasonFinished) return;
+
+      const sizeBytes = parentFolder.episodes.reduce((acc, e) => acc + (e.size || 0), 0);
+      setCompletionPrompt({
+        title: parentFolder.canonicalTitle || parentFolder.folderName,
+        sizeBytes,
+        folderPath: parentFolder.folderPath,
+      });
+    },
+    [folders, history]
+  );
+
+  const handleCompletionPromptKeep = () => {
+    if (completionPrompt) {
+      dismissedFoldersRef.current.add(completionPrompt.folderPath);
+    }
+    setCompletionPrompt(null);
+  };
+
+  const handleCompletionPromptDelete = async () => {
+    if (!completionPrompt) return;
+    const { folderPath, sizeBytes } = completionPrompt;
+    dismissedFoldersRef.current.add(folderPath);
+    setCompletionPrompt(null);
+    try {
+      const res = await window.electronAPI.deleteAnimeFromPC(folderPath);
+      if (res?.success) {
+        showGlobalToast(`Freed ${formatFileSize(res.deletedBytes ?? sizeBytes)}`, 'success');
+      } else {
+        showGlobalToast(res?.error || 'Failed to delete files from PC', 'error');
+      }
+    } catch (err) {
+      console.error('Failed to delete anime from PC:', err);
+      showGlobalToast('Failed to delete files from PC', 'error');
+    }
+    handleRefreshLibrary();
+  };
+
   // Open Whisper Studio with preselected folder
   const handleOpenWhisperForFolder = (folder: AnimeFolder) => {
     setSelectedFolder(folder);
@@ -686,6 +750,11 @@ export const App: React.FC = () => {
           />
         </div>
 
+        {/* Downloads Tab View (storage usage + files-only deletion) */}
+        <div className={`h-full overflow-y-auto ${currentTab === 'downloads' ? 'block' : 'hidden'}`}>
+          <DownloadsView onRefreshLibrary={handleRefreshLibrary} />
+        </div>
+
         {/* Whisper Studio Tab View (Never unmounted so active jobs & terminal logs are preserved) */}
         <div className={`h-full flex-1 min-h-0 ${currentTab === 'whisper' ? 'flex flex-col' : 'hidden'}`}>
           <WhisperStudio
@@ -708,6 +777,7 @@ export const App: React.FC = () => {
           userEntries={userEntries}
           onClose={() => setDetailSource(null)}
           onPlayEpisode={handlePlayEpisode}
+          onLibraryChanged={handleRefreshLibrary}
           onOpenWhisper={(folder) => {
             setSelectedFolder(folder);
             setDetailSource(null);
@@ -729,6 +799,7 @@ export const App: React.FC = () => {
             history={history}
             onClose={handleClosePlayer}
             onEpisodeChange={handlePlayerEpisodeChange}
+            onEpisodeCompleted={handleEpisodeCompleted}
           />
         ) : (
           <div className="fixed inset-0 z-50 bg-[#0f0f12] flex flex-col items-center justify-center p-6 text-center">
@@ -747,6 +818,15 @@ export const App: React.FC = () => {
             </div>
           </div>
         ))}
+
+      {/* Season-completion suggestion (hidden while the player covers the screen) */}
+      {completionPrompt && !activePlayerEpisode && (
+        <CompletionPrompt
+          data={{ title: completionPrompt.title, sizeBytes: completionPrompt.sizeBytes }}
+          onDelete={handleCompletionPromptDelete}
+          onKeep={handleCompletionPromptKeep}
+        />
+      )}
 
       {/* Settings Modal */}
       <SettingsModal

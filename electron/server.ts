@@ -7,6 +7,11 @@ import { spawn, ChildProcess } from 'child_process';
 import { storage } from './storage';
 import { generateSingleThumbnail, readContainerDuration } from './ffmpeg';
 import { isEpisodeDownloading } from './torrents';
+import { isPathInside } from './pathSafety.ts';
+
+// Implementation lives in pathSafety.ts (shared with libraryManager); re-exported
+// so existing importers of server.ts keep working.
+export { isPathInside } from './pathSafety.ts';
 
 interface VideoFormatInfo {
   codec: string;
@@ -104,15 +109,6 @@ class ThumbnailQueue {
       const next = this.queue.shift();
       if (next) next();
     };
-  }
-}
-
-export function isPathInside(child: string, root: string): boolean {
-  try {
-    const rel = path.relative(path.resolve(root), path.resolve(child));
-    return rel === '' || (!rel.startsWith('..') && !path.isAbsolute(rel));
-  } catch {
-    return false;
   }
 }
 
