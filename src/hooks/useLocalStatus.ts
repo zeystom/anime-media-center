@@ -54,7 +54,10 @@ export function normalizeMatchTitle(s: string): string {
 /**
  * Resolves a local library folder for a catalog reference. Exact anilistId
  * match first (folders may carry exact AniList ids), normalized-title match
- * second (canonicalTitle, falling back to the raw folder name).
+ * second (canonicalTitle, falling back to the raw folder name). Folders that
+ * carry an exact id never fuzzy-match a different id: sibling entries of a
+ * franchise share titles (Haruhi 2006 vs the 2009 rebroadcast), and a title
+ * match would attach one folder to several entries.
  */
 export function findLocalFolder(
   folders: AnimeFolder[],
@@ -70,7 +73,10 @@ export function findLocalFolder(
 
   const normalizedTitle = normalizeMatchTitle(ref?.title || '')
   if (normalizedTitle) {
-    const byTitle = folders.find(
+    const pool = refId !== null
+      ? folders.filter((folder) => getFolderAnilistId(folder) === null)
+      : folders
+    const byTitle = pool.find(
       (folder) => normalizeMatchTitle(folder.canonicalTitle || folder.folderName) === normalizedTitle
     )
     if (byTitle) return byTitle
@@ -110,11 +116,19 @@ export function useLocalStatus(
     return (ref: LocalStatusRef): LocalBadgeState | null => {
       const refId = normalizeRefAnilistId(ref?.anilistId)
 
-      // anilistId match first, normalized-title match second.
+      // anilistId match first, normalized-title match second. Exact-id folders
+      // are excluded from the fuzzy title pool so one folder cannot light up
+      // sibling entries of the same franchise.
       let folder: AnimeFolder | null = refId !== null ? indexes.byAnilist.get(refId) ?? null : null
       if (!folder) {
         const titleKey = normalizeMatchTitle(ref?.title || '')
-        if (titleKey) folder = indexes.byTitle.get(titleKey) ?? null
+        if (titleKey) {
+          const candidate = indexes.byTitle.get(titleKey) ?? null
+          const candidateId = candidate ? getFolderAnilistId(candidate) : null
+          if (candidate && !(refId !== null && candidateId !== null && candidateId !== refId)) {
+            folder = candidate
+          }
+        }
       }
 
       const userEntry = refId !== null ? entryMap[refId] : undefined

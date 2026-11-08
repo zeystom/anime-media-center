@@ -27,7 +27,7 @@ export interface StorageOverview {
 }
 
 // Directory names never scanned, mirroring the library scan in main.ts.
-const IGNORED_DIR_PATTERN = /^(?:\$recycle\.bin|system volume information|\.git|\.cache|node_modules|temp|tmp|\.idea|\.vscode)$/i;
+const IGNORED_DIR_PATTERN = /^(?:\.anime-center-staging|\$recycle\.bin|system volume information|\.git|\.cache|node_modules|temp|tmp|\.idea|\.vscode)$/i;
 
 // Maximum release-folder depth below a library root, mirroring main.ts.
 const MAX_SCAN_DEPTH = 4;

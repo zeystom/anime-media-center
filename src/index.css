@@ -4,8 +4,8 @@
 
 @layer base {
   body {
-    @apply bg-[#0f0f12] text-zinc-100 antialiased selection:bg-red-600 selection:text-white;
-    font-family: 'Inter', -apple-system, BlinkMacSystemFont, 'Segoe UI', Roboto, Oxygen, Ubuntu, Cantarell, sans-serif;
+    @apply bg-[#0b0c10] text-zinc-100 antialiased selection:bg-violet-600 selection:text-white;
+    font-family: 'Space Grotesk', 'Inter', -apple-system, BlinkMacSystemFont, 'Segoe UI', Roboto, Oxygen, Ubuntu, Cantarell, sans-serif;
   }
 }
 
@@ -20,12 +20,12 @@
 }
 
 ::-webkit-scrollbar-thumb {
-  background: #282830;
-  border-radius: 4px;
+  background: #343439;
+  border-radius: 999px;
 }
 
 ::-webkit-scrollbar-thumb:hover {
-  background: #3f3f4e;
+  background: #8a3ffc;
 }
 
 /* Hide scrollbars utility */
@@ -35,6 +35,25 @@
 .scrollbar-none {
   -ms-overflow-style: none;
   scrollbar-width: none;
+}
+
+/* Keep poster images from starting the browser's native image-drag operation.
+   The containing rail handles pointer dragging to scroll instead. */
+.horizontal-rail img {
+  pointer-events: none;
+  -webkit-user-drag: none;
+  user-select: none;
+}
+
+/* Let Chromium defer layout and painting for long catalog pages and rails. */
+.anime-card {
+  content-visibility: auto;
+  contain-intrinsic-size: auto 330px;
+}
+
+.home-rail-section {
+  content-visibility: auto;
+  contain-intrinsic-size: auto 400px;
 }
 
 /* Subtitle Styling: Netflix/Fansub Grade */
@@ -66,14 +85,28 @@
 
 /* Glassmorphism helpers */
 .glass-panel {
-  background: rgba(24, 24, 28, 0.95);
+  background: rgba(18, 20, 29, 0.76);
   border: 1px solid rgba(255, 255, 255, 0.08);
+  backdrop-filter: blur(18px);
+  -webkit-backdrop-filter: blur(18px);
 }
 
 .glass-dropdown {
   background: rgba(18, 18, 22, 0.98);
   border: 1px solid rgba(255, 255, 255, 0.12);
   box-shadow: 0 16px 40px rgba(0, 0, 0, 0.8);
+}
+
+/* Stitch-inspired shared canvas, glass surfaces, and violet focus treatment. */
+::selection {
+  background: rgba(138, 63, 252, 0.65);
+  color: #fff;
+}
+
+input:focus-visible,
+select:focus-visible,
+button:focus-visible {
+  outline-color: rgba(138, 63, 252, 0.75);
 }
 
 /*
@@ -130,4 +163,32 @@ canvas.JASSUB {
   animation: keepCompositorAlive 1s infinite linear;
   will-change: opacity, transform;
   z-index: 1;
+}
+
+/* Animated border beam on the Downloads nav tab while a download is running */
+@keyframes download-beam-spin {
+  from { transform: rotate(0deg); }
+  to { transform: rotate(360deg); }
+}
+.download-beam-mask {
+  position: absolute;
+  inset: 0;
+  border-radius: inherit;
+  padding: 1.5px;
+  overflow: hidden;
+  pointer-events: none;
+  -webkit-mask: linear-gradient(#fff 0 0) content-box, linear-gradient(#fff 0 0);
+  -webkit-mask-composite: xor;
+  mask: linear-gradient(#fff 0 0) content-box, linear-gradient(#fff 0 0);
+  mask-composite: exclude;
+}
+.download-beam-arc {
+  /* Oversized 3x layer: a same-size square leaves the pill corners uncovered
+     at diagonal rotation angles, which reads as a flickering/jerky beam. */
+  position: absolute;
+  inset: -100%;
+  background: conic-gradient(from 0deg, transparent 0deg, transparent 250deg, #22d3ee 312deg, #6ee7b7 348deg, transparent 360deg);
+  animation: download-beam-spin 2.6s linear infinite;
+  will-change: transform;
+  backface-visibility: hidden;
 }

@@ -1,5 +1,5 @@
 import { useCallback, useEffect, useState } from 'react'
-import type { AiringEntry, CatalogItem } from '../types'
+import type { AiringEntry, CatalogItem, GenrePickRail } from '../types'
 
 /**
  * Normalized rail/card item shared by catalog rails, the airing schedule and
@@ -8,6 +8,7 @@ import type { AiringEntry, CatalogItem } from '../types'
  */
 export interface RailItem {
   anilistId: number
+  idMal?: number | null
   title: string
   posterUrl: string | null
   bannerUrl?: string | null
@@ -15,6 +16,8 @@ export interface RailItem {
   episodesCount?: number | null
   format?: string
   status?: string
+  isAdult?: boolean
+  genres?: string[]
   seasonYear?: number | null
   airingAt?: number | null
   airingEpisode?: number | null
@@ -39,6 +42,12 @@ interface AiringScheduleState {
 interface CatalogSearchState {
   results: RailItem[]
   loading: boolean
+}
+
+interface GenrePicksState {
+  rails: { genre: string; items: RailItem[] }[]
+  loading: boolean
+  error: string | null
 }
 
 const DEFAULT_SEARCH_DEBOUNCE_MS = 300
@@ -69,6 +78,7 @@ export function toRailItem(item: CatalogItem | AiringEntry): RailItem {
   const catalog = item
   return {
     anilistId: catalog.anilistId,
+    idMal: catalog.idMal,
     title: catalog.title.english || catalog.title.romaji || '',
     posterUrl: catalog.posterUrl,
     bannerUrl: catalog.bannerUrl,
@@ -76,7 +86,9 @@ export function toRailItem(item: CatalogItem | AiringEntry): RailItem {
     episodesCount: catalog.episodesCount,
     format: catalog.format ?? undefined,
     status: catalog.status ?? undefined,
-    seasonYear: catalog.seasonYear,
+    isAdult: catalog.isAdult,
+    genres: catalog.genres,
+    seasonYear: catalog.seasonYear ?? catalog.startDate?.year ?? null,
     airingAt: catalog.nextAiringEpisode ? catalog.nextAiringEpisode.airingAt : null,
     airingEpisode: catalog.nextAiringEpisode ? catalog.nextAiringEpisode.episode : null,
   }
@@ -164,6 +176,41 @@ export function useCatalogSection(section: CatalogSection): CatalogSectionState 
   const refresh = useCallback(() => setRefreshTick((t) => t + 1), [])
 
   return { items, loading, error, refresh }
+}
+
+/** Loads the home genre rails; the main process persists a three-day snapshot. */
+export function useGenrePicks(): GenrePicksState {
+  const [rails, setRails] = useState<GenrePicksState['rails']>([])
+  const [loading, setLoading] = useState(true)
+  const [error, setError] = useState<string | null>(null)
+
+  useEffect(() => {
+    let cancelled = false
+    const load = async () => {
+      setLoading(true)
+      setError(null)
+      try {
+        const data: GenrePickRail[] = window.electronAPI ? await window.electronAPI.getCatalogGenrePicks() : []
+        if (!cancelled) {
+          setRails((Array.isArray(data) ? data : []).map((rail) => ({
+            genre: rail.genre,
+            items: (Array.isArray(rail.items) ? rail.items : []).map(toRailItem),
+          })))
+        }
+      } catch (err) {
+        if (!cancelled) {
+          setRails([])
+          setError(toErrorMessage(err))
+        }
+      } finally {
+        if (!cancelled) setLoading(false)
+      }
+    }
+    load()
+    return () => { cancelled = true }
+  }, [])
+
+  return { rails, loading, error }
 }
 
 /**

@@ -1,4 +1,4 @@
-# Install Anime Media Center Desktop and Start Menu shortcuts
+# Install Kaiko Desktop and Start Menu shortcuts
 $ErrorActionPreference = "Stop"
 
 $appDir = $PSScriptRoot
@@ -6,7 +6,7 @@ if (-not $appDir) {
     $appDir = (Get-Location).Path
 }
 
-$exePath = Join-Path $appDir "Anime Media Center.exe"
+$exePath = Join-Path $appDir "Kaiko.exe"
 $electronExe = Join-Path $appDir "node_modules\electron\dist\electron.exe"
 $iconPath = Join-Path $appDir "app-icon.ico"
 
@@ -32,7 +32,7 @@ $WshShell = New-Object -ComObject WScript.Shell
 # 1. Start Menu Shortcut
 $startMenuDir = [Environment]::GetFolderPath('Programs')
 if ($startMenuDir -and (Test-Path $startMenuDir)) {
-    $startMenuShortcutPath = Join-Path $startMenuDir "Anime Media Center.lnk"
+    $startMenuShortcutPath = Join-Path $startMenuDir "Kaiko.lnk"
     $startShortcut = $WshShell.CreateShortcut($startMenuShortcutPath)
     $startShortcut.TargetPath = $targetPath
     if ($arguments) {
@@ -42,7 +42,7 @@ if ($startMenuDir -and (Test-Path $startMenuDir)) {
     if (Test-Path $iconPath) {
         $startShortcut.IconLocation = "$iconPath,0"
     }
-    $startShortcut.Description = "Anime Media Center & Whisper Studio"
+    $startShortcut.Description = "Kaiko anime library and media center"
     $startShortcut.Save()
     Write-Host "Created Start Menu shortcut: $startMenuShortcutPath"
 }
@@ -50,7 +50,7 @@ if ($startMenuDir -and (Test-Path $startMenuDir)) {
 # 2. Desktop Shortcut
 $desktopDir = [Environment]::GetFolderPath('Desktop')
 if ($desktopDir -and (Test-Path $desktopDir)) {
-    $desktopShortcutPath = Join-Path $desktopDir "Anime Media Center.lnk"
+    $desktopShortcutPath = Join-Path $desktopDir "Kaiko.lnk"
     $desktopShortcut = $WshShell.CreateShortcut($desktopShortcutPath)
     $desktopShortcut.TargetPath = $targetPath
     if ($arguments) {
@@ -60,9 +60,9 @@ if ($desktopDir -and (Test-Path $desktopDir)) {
     if (Test-Path $iconPath) {
         $desktopShortcut.IconLocation = "$iconPath,0"
     }
-    $desktopShortcut.Description = "Anime Media Center & Whisper Studio"
+    $desktopShortcut.Description = "Kaiko anime library and media center"
     $desktopShortcut.Save()
     Write-Host "Created Desktop shortcut: $desktopShortcutPath"
 }
 
-Write-Host "SUCCESS: Anime Media Center shortcuts installed successfully!"
+Write-Host "SUCCESS: Kaiko shortcuts installed successfully!"

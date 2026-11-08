@@ -83,7 +83,7 @@ export const SeasonHero: React.FC<SeasonHeroProps> = ({ items, loading, onSelect
   if (loading) {
     return (
       <section className="mb-8" aria-label="Season spotlight loading">
-        <div className="h-[280px] w-full animate-pulse overflow-hidden rounded-2xl border border-zinc-800/80 bg-zinc-900">
+        <div className="h-[340px] w-full animate-pulse overflow-hidden rounded-3xl border border-white/[0.08] bg-zinc-900">
           <div className="flex h-full items-end p-8">
             <div className="w-full max-w-xl space-y-4">
               <div className="h-8 w-2/3 rounded bg-zinc-800/80" />
@@ -103,7 +103,7 @@ export const SeasonHero: React.FC<SeasonHeroProps> = ({ items, loading, onSelect
   return (
     <section className="mb-8" aria-label="Season spotlight">
       <div
-        className="group relative h-[280px] w-full overflow-hidden rounded-2xl border border-zinc-800/80 bg-zinc-950"
+        className="group relative h-[340px] w-full overflow-hidden rounded-3xl border border-white/[0.08] bg-zinc-950 shadow-[0_24px_80px_rgba(0,0,0,0.42)] 2xl:h-[420px]"
         onMouseEnter={() => setPaused(true)}
         onMouseLeave={() => setPaused(false)}
       >
@@ -125,19 +125,19 @@ export const SeasonHero: React.FC<SeasonHeroProps> = ({ items, loading, onSelect
             />
           </motion.div>
         ) : (
-          <div className="absolute inset-0 bg-gradient-to-br from-indigo-950/60 via-zinc-900 to-zinc-950" />
+          <div className="absolute inset-0 bg-gradient-to-br from-violet-950/60 via-zinc-900 to-zinc-950" />
         )}
 
         {/* Gradient overlays: bottom fade into page bg + left readability shade */}
-        <div className="absolute inset-x-0 bottom-0 h-3/4 bg-gradient-to-t from-[#0f0f12] to-transparent pointer-events-none" />
-        <div className="absolute inset-0 bg-gradient-to-r from-[#0f0f12]/95 via-[#0f0f12]/55 to-transparent pointer-events-none" />
+        <div className="absolute inset-x-0 bottom-0 h-3/4 bg-gradient-to-t from-[#0b0c10] to-transparent pointer-events-none" />
+        <div className="absolute inset-0 bg-gradient-to-r from-[#0b0c10]/95 via-[#0b0c10]/55 to-transparent pointer-events-none" />
 
         {/* Foreground content */}
         <div className="absolute inset-0 flex items-center">
           <div className="w-full px-6 sm:px-8">
             <div className="max-w-2xl">
               <div className="mb-2 flex items-center gap-2">
-                <Tv className="h-3.5 w-3.5 text-red-500" />
+                <Tv className="h-3.5 w-3.5 text-violet-300" />
                 <span className="text-[10px] font-bold uppercase tracking-widest text-zinc-400">
                   Popular This Season
                 </span>

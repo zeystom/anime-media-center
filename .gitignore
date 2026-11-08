@@ -6,9 +6,11 @@ dist-build
 .DS_Store
 Thumbs.db
 Anime Media Center.exe
+Kaiko.exe
 whisper_tmp
 .agents
 .test_*
 test_tmp
+scratch-*.cjs
 
 

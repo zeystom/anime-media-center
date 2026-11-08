@@ -22,9 +22,14 @@ import {
   queryRecommendations,
   querySearch,
   queryDetails,
+  queryFranchise,
+  queryFranchiseMedia,
+  queryDiscoverCatalog,
+  queryGenreCandidates,
   type AniListMedia,
   type AniListSeason,
 } from './anilist.ts';
+import type { DiscoverCatalogParams } from './types.ts';
 
 // --- Public types -----------------------------------------------------------
 
@@ -37,6 +42,7 @@ export interface CatalogNextAiringEpisode {
 export interface CatalogItem {
   anilistId: number;
   idMal: number | null;
+  countryOfOrigin: string | null;
   title: { romaji: string | null; english: string | null; native: string | null };
   synonyms: string[];
   posterUrl: string | null;
@@ -45,14 +51,22 @@ export interface CatalogItem {
   genres: string[];
   tags: string[];
   averageScore: number | null;
+  popularity: number | null;
+  trending: number | null;
   episodesCount: number | null;
   durationMinutes: number | null;
   format: string | null;
   status: string | null;
+  isAdult: boolean;
   season: string | null;
   seasonYear: number | null;
+  startDate: { year: number | null; month: number | null; day: number | null } | null;
   nextAiringEpisode: CatalogNextAiringEpisode | null;
   studios: string[];
+}
+
+export interface CatalogRelatedTitle extends CatalogItem {
+  relationType: string;
 }
 
 export interface AiringEntry {
@@ -72,16 +86,28 @@ interface CacheEntry<T> {
   fetchedAt: number;
 }
 
+export interface DiscoverCatalogPage {
+  items: CatalogItem[];
+  page: number;
+  hasNextPage: boolean;
+}
+
+export interface GenrePickRail {
+  genre: string;
+  items: CatalogItem[];
+}
+
 const memoryCache = new Map<string, CacheEntry<unknown>>();
 const inFlightRequests = new Map<string, Promise<unknown>>();
 
 const TTL_TRENDING_MS = 30 * 60 * 1000; // 30 minutes
 const TTL_POPULAR_SEASON_MS = 6 * 60 * 60 * 1000; // 6 hours
 const TTL_ALL_TIME_POPULAR_MS = 24 * 60 * 60 * 1000; // 24 hours
-const TTL_AIRING_SCHEDULE_MS = 30 * 60 * 1000; // 30 minutes
+const TTL_AIRING_SCHEDULE_MS = 10 * 60 * 1000; // 10 minutes — also used by the ongoing-episode watcher
 const TTL_RECOMMENDATIONS_MS = 6 * 60 * 60 * 1000; // 6 hours
 const TTL_SEARCH_MS = 5 * 60 * 1000; // 5 minutes (memory only)
 const TTL_DETAILS_MS = 24 * 60 * 60 * 1000; // 24 hours
+const TTL_GENRE_PICKS_MS = 3 * 24 * 60 * 60 * 1000; // refresh every three days
 
 const DEFAULT_LIST_PER_PAGE = 24;
 
@@ -125,7 +151,7 @@ async function cachedServiceCall<T>(
   cacheName: string,
   ttlMs: number,
   fetcher: () => Promise<T>,
-  options: { emptyValue: T; useDiskCache?: boolean }
+  options: { emptyValue: T; useDiskCache?: boolean; throwOnError?: boolean }
 ): Promise<T> {
   const useDiskCache = options.useDiskCache !== false;
 
@@ -169,6 +195,7 @@ async function cachedServiceCall<T>(
       if (mem) {
         return mem.data as T;
       }
+      if (options.throwOnError) throw err;
       return options.emptyValue;
     } finally {
       inFlightRequests.delete(cacheName);
@@ -192,6 +219,7 @@ export function normalizeMedia(raw: AniListMedia): CatalogItem {
   return {
     anilistId: raw?.id,
     idMal: typeof raw?.idMal === 'number' ? raw.idMal : null,
+    countryOfOrigin: raw?.countryOfOrigin || null,
     title: {
       romaji: raw?.title?.romaji || null,
       english: raw?.title?.english || null,
@@ -206,12 +234,23 @@ export function normalizeMedia(raw: AniListMedia): CatalogItem {
     // surfaced to keep the IPC payload lean.
     tags: Array.isArray(raw?.tags) ? raw.tags.map((t) => t?.name).filter((n): n is string => !!n) : [],
     averageScore: typeof raw?.averageScore === 'number' ? raw.averageScore : null,
+    popularity: typeof raw?.popularity === 'number' ? raw.popularity : null,
+    trending: typeof raw?.trending === 'number' ? raw.trending : null,
     episodesCount: typeof raw?.episodes === 'number' ? raw.episodes : null,
     durationMinutes: typeof raw?.duration === 'number' ? raw.duration : null,
     format: raw?.format || null,
     status: raw?.status || null,
+    isAdult: raw?.isAdult === true,
     season: raw?.season || null,
     seasonYear: typeof raw?.seasonYear === 'number' ? raw.seasonYear : null,
+    startDate:
+      raw?.startDate && (typeof raw.startDate.year === 'number' || typeof raw.startDate.month === 'number' || typeof raw.startDate.day === 'number')
+        ? {
+            year: typeof raw.startDate.year === 'number' ? raw.startDate.year : null,
+            month: typeof raw.startDate.month === 'number' ? raw.startDate.month : null,
+            day: typeof raw.startDate.day === 'number' ? raw.startDate.day : null,
+          }
+        : null,
     nextAiringEpisode: raw?.nextAiringEpisode
       ? {
           episode: raw.nextAiringEpisode.episode,
@@ -270,7 +309,7 @@ export function getAiringWeekRange(weekOffset = 0): { from: number; to: number }
  * Currently trending anime. TTL 30 min.
  */
 export async function getTrending(perPage = DEFAULT_LIST_PER_PAGE): Promise<CatalogItem[]> {
-  return cachedServiceCall('trending', TTL_TRENDING_MS, async () => {
+  return cachedServiceCall('trending_jp', TTL_TRENDING_MS, async () => {
     const media = await queryTrending(perPage);
     return media.map(normalizeMedia);
   }, { emptyValue: [] });
@@ -282,19 +321,128 @@ export async function getTrending(perPage = DEFAULT_LIST_PER_PAGE): Promise<Cata
  */
 export async function getPopularSeason(perPage = DEFAULT_LIST_PER_PAGE): Promise<CatalogItem[]> {
   const { season, year } = getCurrentAniListSeason();
-  return cachedServiceCall(`popular_season_${season}_${year}`, TTL_POPULAR_SEASON_MS, async () => {
+  return cachedServiceCall(`popular_season_jp_${season}_${year}`, TTL_POPULAR_SEASON_MS, async () => {
     const media = await queryPopularSeason(season, year, perPage);
     return media.map(normalizeMedia);
   }, { emptyValue: [] });
+}
+
+const DISCOVER_PAGE_SIZE = 24;
+const DISCOVER_FILTERED_PAGE_SIZE = 50;
+const DISCOVER_FILTERED_PAGE_COUNT = 5;
+
+/** Filtered, paginated catalog query used by the Discover page. */
+export async function getDiscoverCatalog(
+  params: DiscoverCatalogParams,
+  recommendationSeeds: number[] = []
+): Promise<DiscoverCatalogPage> {
+  const mode = params.mode;
+  const page = Math.max(1, Math.min(500, Math.floor(Number(params.page) || 1)));
+  const search = typeof params.search === 'string' ? params.search.trim().slice(0, 100) : '';
+  const useSelectedSeason = (mode === 'season' && params.seasonFilterEnabled !== false) || (mode === 'search' && params.searchScope === 'season');
+  const { season: currentSeason, year: currentYear } = getCurrentAniListSeason();
+  const season = useSelectedSeason ? (params.season || currentSeason) : undefined;
+  const seasonYear = useSelectedSeason
+    ? Math.max(1970, Math.min(currentYear + 1, Math.floor(Number(params.year) || currentYear)))
+    : undefined;
+  const countryOfOrigin = mode === 'search' && search && params.searchScope === 'all' ? undefined : 'JP';
+  const sort = params.sort || (mode === 'trending' ? 'TRENDING_DESC' : mode === 'recommended' ? 'RECOMMENDATION' : 'POPULARITY_DESC');
+  const filters = {
+    genre: params.genre || undefined,
+    format: params.format || undefined,
+    status: params.status || undefined,
+    minScore: params.minScore && params.minScore > 0 ? Math.max(0, Math.min(100, Math.floor(params.minScore))) : undefined,
+  };
+
+  if (mode === 'recommended') {
+    const recommendations = recommendationSeeds.length > 0 ? await getRecommendations(recommendationSeeds, 100) : [];
+    const filtered = recommendations.filter((item) => {
+      if (filters.genre && !item.genres.some((value) => value.toLowerCase() === filters.genre!.toLowerCase())) return false;
+      if (filters.format && item.format !== filters.format) return false;
+      if (filters.status && item.status !== filters.status) return false;
+      if (filters.minScore && (item.averageScore == null || item.averageScore < filters.minScore)) return false;
+      return true;
+    });
+    filtered.sort((a, b) => {
+      if (sort === 'TITLE_ROMAJI') return (a.title.english || a.title.romaji || '').localeCompare(b.title.english || b.title.romaji || '');
+      if (sort === 'SCORE_DESC') return (b.averageScore || 0) - (a.averageScore || 0);
+      if (sort === 'POPULARITY_DESC') return (b.popularity || 0) - (a.popularity || 0);
+      if (sort === 'TRENDING_DESC') return (b.trending || 0) - (a.trending || 0);
+      return 0; // preserve personalized recommendation ranking
+    });
+    const start = (page - 1) * DISCOVER_PAGE_SIZE;
+    return { items: filtered.slice(start, start + DISCOVER_PAGE_SIZE), page, hasNextPage: filtered.length > start + DISCOVER_PAGE_SIZE };
+  }
+
+  const perPage = params.ageRating && params.ageRating !== 'ALL' ? DISCOVER_FILTERED_PAGE_SIZE : DISCOVER_PAGE_SIZE;
+  const pageCount = perPage === DISCOVER_FILTERED_PAGE_SIZE ? DISCOVER_FILTERED_PAGE_COUNT : 1;
+  const cacheName = `discover_${crypto.createHash('md5').update(JSON.stringify({ mode, search, scope: params.searchScope, season, seasonYear, filters, sort, page, perPage, pageCount, countryOfOrigin })).digest('hex')}`;
+  return cachedServiceCall(cacheName, 5 * 60 * 1000, async () => {
+    const result = await queryDiscoverCatalog({
+      page,
+      perPage,
+      pageCount,
+      search: mode === 'search' ? search : undefined,
+      season,
+      seasonYear,
+      ...filters,
+      sort,
+      countryOfOrigin,
+    });
+    return { items: result.items.map(normalizeMedia), page: page + pageCount - 1, hasNextPage: result.hasNextPage };
+  }, { emptyValue: { items: [], page, hasNextPage: false }, throwOnError: true });
 }
 
 /**
  * All-time popular anime. TTL 24 h.
  */
 export async function getAllTimePopular(perPage = DEFAULT_LIST_PER_PAGE): Promise<CatalogItem[]> {
-  return cachedServiceCall('all_time_popular', TTL_ALL_TIME_POPULAR_MS, async () => {
+  return cachedServiceCall('all_time_popular_jp', TTL_ALL_TIME_POPULAR_MS, async () => {
     const media = await queryAllTimePopular(perPage);
     return media.map(normalizeMedia);
+  }, { emptyValue: [] });
+}
+
+const HOME_PICK_GENRES = ['Action', 'Fantasy', 'Comedy', 'Drama', 'Sci-Fi'];
+
+/**
+ * Returns a persisted, three-day snapshot of randomized home genre rails.
+ * Each rail favors scores >=65 and reserves up to two slots for lower-scored
+ * titles, while excluding adult entries and duplicate titles across rails.
+ */
+export async function getGenrePicks(): Promise<GenrePickRail[]> {
+  return cachedServiceCall('home_genre_picks_v1', TTL_GENRE_PICKS_MS, async () => {
+    const candidates = await queryGenreCandidates(
+      HOME_PICK_GENRES.map((genre) => ({ genre, page: 1 + Math.floor(Math.random() * 16) })),
+      50
+    );
+    const used = new Set<number>();
+
+    return HOME_PICK_GENRES.map((genre) => {
+      const pool = (candidates[genre] || [])
+        .filter((media) => media.countryOfOrigin === 'JP' && media.isAdult !== true && !used.has(media.id));
+      const randomizedScore = new Map(pool.map((media) => [media.id, (media.averageScore ?? 0) + Math.random() * 24]));
+      const randomScoreOrder = (a: AniListMedia, b: AniListMedia) =>
+        (randomizedScore.get(b.id) ?? 0) - (randomizedScore.get(a.id) ?? 0);
+      const wellRated = pool.filter((media) => typeof media.averageScore === 'number' && media.averageScore >= 65)
+        .sort(randomScoreOrder);
+      const hiddenGems = pool.filter((media) => typeof media.averageScore === 'number' && media.averageScore >= 40 && media.averageScore < 65)
+        .sort(() => Math.random() - 0.5);
+      const selected = [...wellRated.slice(0, 8), ...hiddenGems.slice(0, 2)];
+
+      // Fill short rails with other rated titles, preserving the score bias.
+      if (selected.length < 10) {
+        const selectedIds = new Set(selected.map((media) => media.id));
+        const fill = pool
+          .filter((media) => typeof media.averageScore === 'number' && !selectedIds.has(media.id))
+          .sort(randomScoreOrder)
+          .slice(0, 10 - selected.length);
+        selected.push(...fill);
+      }
+
+      selected.forEach((media) => used.add(media.id));
+      return { genre, items: selected.map(normalizeMedia) };
+    });
   }, { emptyValue: [] });
 }
 
@@ -305,13 +453,13 @@ export async function getAllTimePopular(perPage = DEFAULT_LIST_PER_PAGE): Promis
 export async function getAiringSchedule(weekOffset = 0): Promise<AiringEntry[]> {
   const offset = Math.trunc(Number(weekOffset) || 0);
   const { from, to } = getAiringWeekRange(offset);
-  return cachedServiceCall(`schedule_${offset}`, TTL_AIRING_SCHEDULE_MS, async () => {
+  return cachedServiceCall(`schedule_jp_${offset}`, TTL_AIRING_SCHEDULE_MS, async () => {
     const entries = await queryAiringSchedule(from, to, 50);
     const items: AiringEntry[] = [];
     const seen = new Set<string>();
     for (const entry of entries) {
       const media = entry.media;
-      if (!media) continue;
+      if (!media || media.countryOfOrigin !== 'JP') continue;
       const airingAt = typeof entry.airingAt === 'number' ? entry.airingAt : 0;
       if (airingAt < from || airingAt >= to) continue; // paranoia against server drift
       const dedupeKey = `${media.id}:${entry.episode ?? '?'}:${airingAt}`;
@@ -354,7 +502,7 @@ export async function getRecommendations(seedAnilistIds: number[], limit = 24): 
   seeds.sort((a, b) => a - b);
 
   const seedKey = crypto.createHash('md5').update(seeds.join(',')).digest('hex');
-  const cacheName = `recs_${seedKey}`;
+  const cacheName = `recs_jp_${seedKey}_${Math.max(1, Math.floor(limit))}`;
 
   return cachedServiceCall(cacheName, TTL_RECOMMENDATIONS_MS, async () => {
     const recommended = await queryRecommendations(seeds);
@@ -362,7 +510,7 @@ export async function getRecommendations(seedAnilistIds: number[], limit = 24): 
     const counts = new Map<number, number>();
     const firstSeen = new Map<number, AniListMedia>();
     for (const media of recommended) {
-      if (!media || seedSet.has(media.id)) continue;
+      if (!media || media.countryOfOrigin !== 'JP' || seedSet.has(media.id)) continue;
       counts.set(media.id, (counts.get(media.id) || 0) + 1);
       if (!firstSeen.has(media.id)) {
         firstSeen.set(media.id, media);
@@ -409,4 +557,57 @@ export async function getCatalogDetails(anilistId: number): Promise<CatalogItem 
     const media = await queryDetails(id);
     return media ? normalizeMedia(media) : null;
   }, { emptyValue: null });
+}
+
+/** Returns connected anime titles from AniList's bounded franchise graph. */
+export async function getCatalogFranchise(anilistId: number): Promise<CatalogRelatedTitle[]> {
+  const id = Math.trunc(Number(anilistId));
+  if (!Number.isFinite(id) || id <= 0) return [];
+  return cachedServiceCall(`franchise_${id}`, TTL_DETAILS_MS, async () => {
+    const root = await queryFranchise(id);
+    const relationTypes = new Map<number, string>();
+    const addAnime = (node: { id?: number; type?: string } | null, relationType: string) => {
+      if (!node || node.type !== 'ANIME' || typeof node.id !== 'number' || node.id === id) return;
+      if (!relationTypes.has(node.id)) relationTypes.set(node.id, relationType || 'RELATED');
+    };
+    const edges = root?.relations?.edges || [];
+    // Direct anime relations first so titles keep their true relation type
+    // (SEQUEL, SIDE_STORY, ...) instead of being pre-empted by the manga hop
+    // below, which labels everything it reaches as ADAPTATION.
+    for (const edge of edges) {
+      if (edge.relationType === 'CHARACTER' || !edge.node) continue;
+      addAnime(edge.node, edge.relationType);
+    }
+    // Some AniList franchises link seasons through their manga adaptation
+    // node instead of connecting each anime season directly. Manga->anime
+    // edges are always labeled ADAPTATION, which is meaningless for an
+    // anime-to-anime link, so hop-two titles get the neutral RELATED label.
+    for (const edge of edges) {
+      if (edge.node?.type !== 'MANGA') continue;
+      for (const child of edge.node.relations?.edges || []) {
+        if (child.relationType === 'CHARACTER' || !child.node) continue;
+        addAnime(child.node, 'RELATED');
+      }
+    }
+    const media = await queryFranchiseMedia([...relationTypes.keys()]);
+    return media.map((item) => ({
+      ...normalizeMedia(item),
+      relationType: relationTypes.get(item.id) || 'RELATED',
+    })).sort((a, b) => {
+      // Chronological by first-air date. AniList's relation graph has no
+      // ordering of its own, so the release date (startDate, falling back to
+      // seasonYear) is the practical proxy. Titles with no date at all sink
+      // to the end, tie-broken by ID for stability.
+      const yearA = a.startDate?.year ?? a.seasonYear ?? Number.MAX_SAFE_INTEGER;
+      const yearB = b.startDate?.year ?? b.seasonYear ?? Number.MAX_SAFE_INTEGER;
+      if (yearA !== yearB) return yearA - yearB;
+      const monthA = a.startDate?.month ?? 0;
+      const monthB = b.startDate?.month ?? 0;
+      if (monthA !== monthB) return monthA - monthB;
+      const dayA = a.startDate?.day ?? 0;
+      const dayB = b.startDate?.day ?? 0;
+      if (dayA !== dayB) return dayA - dayB;
+      return a.anilistId - b.anilistId;
+    });
+  }, { emptyValue: [] });
 }

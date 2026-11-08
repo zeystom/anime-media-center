@@ -1,11 +1,11 @@
 import React, { useMemo } from 'react';
 import { AnimeFolder, Episode, PlaybackProgress, UserLibraryEntry } from '../../types';
-import { RailItem, useCatalogSection } from '../../hooks/useCatalog';
+import { RailItem, useCatalogSection, useGenrePicks } from '../../hooks/useCatalog';
 import { useLocalStatus } from '../../hooks/useLocalStatus';
 import { UpNextWidget, UpNextData } from './UpNextWidget';
-import { DownloadedRail } from './DownloadedRail';
-import { SeasonHero } from './SeasonHero';
 import { CatalogRail } from './CatalogRail';
+import { HomeSchedulePreview } from './HomeSchedulePreview';
+import { RecentEpisodesRail } from './RecentEpisodesRail';
 
 interface HomeViewProps {
   upNext: UpNextData | null;
@@ -15,6 +15,8 @@ interface HomeViewProps {
   onPlayEpisode: (episode: Episode, startAt?: number) => void;
   onSelectCatalogItem: (item: RailItem) => void;
   onSelectLocalFolder: (folder: AnimeFolder) => void;
+  onOpenSchedule: () => void;
+  onOpenDiscover: () => void;
 }
 
 export const HomeView: React.FC<HomeViewProps> = ({
@@ -25,11 +27,12 @@ export const HomeView: React.FC<HomeViewProps> = ({
   onPlayEpisode,
   onSelectCatalogItem,
   onSelectLocalFolder,
+  onOpenSchedule,
+  onOpenDiscover,
 }) => {
-  const airingToday = useCatalogSection('airingToday');
   const season = useCatalogSection('season');
   const trending = useCatalogSection('trending');
-  const recommended = useCatalogSection('recommended');
+  const genrePicks = useGenrePicks();
   const allTime = useCatalogSection('allTime');
 
   const { statusFor } = useLocalStatus(folders, history, userEntries);
@@ -54,33 +57,51 @@ export const HomeView: React.FC<HomeViewProps> = ({
     });
   }, [folders, history]);
 
-  const showRecommended = recommended.loading || recommended.items.length > 0;
+  const excludedAnimeIds = useMemo(() => {
+    const ids = new Set<number>();
+    for (const id of Object.keys(userEntries)) {
+      const parsed = Number(id);
+      if (Number.isFinite(parsed) && parsed > 0) ids.add(parsed);
+    }
+    for (const folder of folders) {
+      if (typeof folder.anilistId === 'number' && folder.anilistId > 0) ids.add(folder.anilistId);
+    }
+    // A play-history record means the title has already been started. Resolve
+    // its folder back to AniList so it stays out of discovery rails as well.
+    const foldersByPath = new Map(folders.map((folder) => [folder.folderPath, folder]));
+    for (const progress of Object.values(history)) {
+      if (!progress?.folderPath) continue;
+      const folder = foldersByPath.get(progress.folderPath);
+      if (typeof folder?.anilistId === 'number' && folder.anilistId > 0) ids.add(folder.anilistId);
+    }
+    return ids;
+  }, [folders, history, userEntries]);
+
+  const visibleGenreRails = useMemo(() => genrePicks.rails.map((rail) => ({
+    ...rail,
+    items: rail.items.filter((item) => !excludedAnimeIds.has(item.anilistId)),
+  })), [excludedAnimeIds, genrePicks.rails]);
 
   return (
-    <div className="mx-auto w-full max-w-7xl px-6 py-6">
-      {upNext && <UpNextWidget data={upNext} onPlay={onPlayEpisode} />}
+    <div className="mx-auto w-full max-w-[1800px] px-6 py-8 2xl:px-12">
+      {upNext && (
+        <UpNextWidget
+          data={upNext}
+          onPlay={onPlayEpisode}
+          onOpenDetails={() => {
+            const folder = sortedFolders.find((item) =>
+              item.folderPath === upNext.progress.folderPath ||
+              item.folderName === upNext.seasonName ||
+              item.canonicalTitle === upNext.seasonName
+            )
+            if (folder) onSelectLocalFolder(folder)
+          }}
+        />
+      )}
 
-      <DownloadedRail
-        folders={sortedFolders}
-        onSelectLocalFolder={onSelectLocalFolder}
-        statusFor={statusFor}
-      />
+      <RecentEpisodesRail folders={folders} history={history} onPlay={onPlayEpisode} />
 
-      <SeasonHero
-        items={season.items}
-        loading={season.loading}
-        onSelect={onSelectCatalogItem}
-        statusFor={statusFor}
-      />
-
-      <CatalogRail
-        title="Airing Today"
-        items={airingToday.items}
-        loading={airingToday.loading}
-        emptyHint="No episodes airing today"
-        onSelect={onSelectCatalogItem}
-        statusFor={statusFor}
-      />
+      <HomeSchedulePreview onSelect={onSelectCatalogItem} onOpenSchedule={onOpenSchedule} />
 
       <CatalogRail
         title="Popular This Season"
@@ -89,6 +110,7 @@ export const HomeView: React.FC<HomeViewProps> = ({
         emptyHint="Nothing popular this season yet"
         onSelect={onSelectCatalogItem}
         statusFor={statusFor}
+        onSeeMore={onOpenDiscover}
       />
 
       <CatalogRail
@@ -98,18 +120,21 @@ export const HomeView: React.FC<HomeViewProps> = ({
         emptyHint="Nothing trending right now"
         onSelect={onSelectCatalogItem}
         statusFor={statusFor}
+        onSeeMore={onOpenDiscover}
       />
 
-      {showRecommended && (
+      {visibleGenreRails.map((rail) => (genrePicks.loading || rail.items.length > 0) && (
         <CatalogRail
-          title="Recommended For You"
-          items={recommended.items}
-          loading={recommended.loading}
-          emptyHint="Watch and download more to get recommendations"
+          key={rail.genre}
+          title={rail.genre}
+          items={rail.items}
+          loading={genrePicks.loading}
+          emptyHint={`No ${rail.genre.toLowerCase()} anime to show`}
           onSelect={onSelectCatalogItem}
           statusFor={statusFor}
+          onSeeMore={onOpenDiscover}
         />
-      )}
+      ))}
 
       <CatalogRail
         title="All Time Popular"
@@ -118,6 +143,7 @@ export const HomeView: React.FC<HomeViewProps> = ({
         emptyHint="Nothing to show yet"
         onSelect={onSelectCatalogItem}
         statusFor={statusFor}
+        onSeeMore={onOpenDiscover}
       />
     </div>
   );

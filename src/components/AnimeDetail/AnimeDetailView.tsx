@@ -6,13 +6,16 @@
  * controls, and a single episode list merging local files with remote rows.
  * Purely local titles (no AniList id) render without any remote fetches.
  */
-import React, { useEffect, useMemo, useRef, useState } from 'react'
+import React, { useEffect, useLayoutEffect, useMemo, useRef, useState } from 'react'
 import { motion } from 'framer-motion'
-import { AlertTriangle, CheckCircle, Download, Film, Play, Star, Trash2, Wand2, X } from 'lucide-react'
+import { AlertTriangle, Bell, BellRing, CheckCircle, Download, Film, MoreHorizontal, Play, Star, Trash2, Wand2, X } from 'lucide-react'
 import type {
   AnimeFolder,
+  AppSettings,
   CatalogItem,
+  CatalogRelatedTitle,
   Episode,
+  P2pState,
   PlaybackProgress,
   ReleaseSearchResult,
   RemoteEpisodeInfo,
@@ -20,16 +23,21 @@ import type {
   UserListStatus,
 } from '../../types'
 import type { RailItem } from '../../hooks/useCatalog'
+import type { FollowedAnime } from '../../types/notifications'
 import { findLocalFolder, useLocalStatus } from '../../hooks/useLocalStatus'
 import { useUserLibrary } from '../../hooks/useUserLibrary'
 import { StatusBadges } from '../common/StatusBadges'
+import { DownloadActionButton } from '../common/DownloadActionButton'
 import { ReleasePickerModal } from '../P2P/ReleasePickerModal'
+import { classifyRelease, type TorrentLanguageCode } from '../../lib/releaseParser/releaseClassification.ts'
 import { EpisodeRow } from './EpisodeRow'
 // CRITICAL: import the wasm-free regex engine directly — never from
 // ../../lib/releaseParser/index.ts, which pulls native/wasm deps unsuitable
 // for the renderer process.
 import { parseReleaseCore } from '../../lib/releaseParser/regexEngine.ts'
 import { formatFileSize, formatTime } from '../../utils/format'
+import { normalizeAgeRating } from '../../utils/ageRating'
+import { useAgeRatings } from '../../hooks/useAgeRatings'
 import { showGlobalToast } from '../Toast'
 
 export type DetailSource = { kind: 'catalog'; item: RailItem } | { kind: 'local'; folder: AnimeFolder }
@@ -43,6 +51,13 @@ export interface AnimeDetailViewProps {
   onPlayEpisode: (episode: Episode, startAt?: number) => void
   onLibraryChanged?: () => void
   onOpenWhisper: (folder: AnimeFolder) => void
+  initialDownloadEpisode?: number | null
+  settings: AppSettings
+  p2pState: P2pState | null
+  onOpenRelated: (item: CatalogRelatedTitle) => void
+  isFollowing: boolean
+  onToggleFollow: (anime: FollowedAnime, follow: boolean) => void
+  onBackdropProgressChange?: (progress: number) => void
 }
 
 interface MergedEpisodeRow {
@@ -50,6 +65,9 @@ interface MergedEpisodeRow {
   local?: Episode
   remote?: RemoteEpisodeInfo
 }
+
+// Episode grid page size: 4 rows of 4 tiles at full width.
+const EPISODES_PER_PAGE = 16
 
 const STATUS_OPTIONS: { value: UserListStatus; label: string }[] = [
   { value: 'watching', label: 'Watching' },
@@ -59,7 +77,7 @@ const STATUS_OPTIONS: { value: UserListStatus; label: string }[] = [
   { value: 'dropped', label: 'Dropped' },
 ]
 
-const DOWNLOAD_TOOLTIP = 'P2P downloads arrive in a later update'
+const DOWNLOAD_TOOLTIP = 'Connect the P2P indexers in Settings to download this title'
 
 const SELECT_CLASS =
   'rounded-lg border border-zinc-700/60 bg-zinc-800/90 px-3 py-2 text-sm font-semibold text-zinc-100 focus:outline-none focus:ring-2 focus:ring-red-600/40 disabled:cursor-not-allowed disabled:opacity-50'
@@ -89,8 +107,33 @@ function stripHtml(raw: string | null | undefined): string | null {
   return text || null
 }
 
-const MetaChip: React.FC<{ children: React.ReactNode; className?: string }> = ({ children, className }) => (
+function torrentJobForEpisode(jobs: P2pState['jobs'], anilistId: number | null, episode: number) {
+  if (anilistId == null) return undefined
+  return jobs.find((job) => {
+    if (job.anilistId !== anilistId) return false
+    if (job.episodes?.includes(episode) || job.episode === episode) return true
+    if (job.episode == null && !job.episodes) return true
+    return job.episode == null && (job.filesProgress || []).some((file) => {
+      const parsed = parseReleaseCore(file.name)
+      return parsed.episodeNumbers.includes(episode) || parsed.episodeNumber === episode
+    })
+  })
+}
+
+function matchesPreferredReleaseLanguages(result: ReleaseSearchResult, audioPreferences: string[], subtitlePreferences: string[]): boolean {
+  const classification = classifyRelease(result.title, result.description)
+  const audioMatch = audioPreferences.length
+    ? audioPreferences.some((code) => classification.audioLanguageCodes.includes(code as TorrentLanguageCode))
+    : classification.audioLanguageCodes.length > 0
+  const subtitleMatch = subtitlePreferences.length
+    ? subtitlePreferences.some((code) => classification.subtitleLanguageCodes.includes(code as TorrentLanguageCode))
+    : classification.subtitleLanguageCodes.length > 0
+  return audioMatch && subtitleMatch
+}
+
+const MetaChip: React.FC<{ children: React.ReactNode; className?: string; title?: string }> = ({ children, className, title }) => (
   <span
+    title={title}
     className={`inline-flex items-center gap-1 rounded-full border border-white/10 bg-black/40 px-2 py-0.5 text-xs font-semibold text-zinc-200 backdrop-blur-sm ${className || ''}`}
   >
     {children}
@@ -106,12 +149,40 @@ export const AnimeDetailView: React.FC<AnimeDetailViewProps> = ({
   onPlayEpisode,
   onLibraryChanged,
   onOpenWhisper,
+  initialDownloadEpisode,
+  settings,
+  p2pState,
+  onOpenRelated,
+  isFollowing,
+  onToggleFollow,
+  onBackdropProgressChange,
 }) => {
   const [details, setDetails] = useState<CatalogItem | null>(null)
+  // Hero description expand-on-click (clamped to 3 lines by default). The
+  // marker lives OUTSIDE the clamped paragraph — an inline "…more" span sits
+  // past the clamp cut and would never be visible.
+  const descriptionRef = useRef<HTMLParagraphElement | null>(null)
+  const [descriptionClamped, setDescriptionClamped] = useState(false)
+  const [descriptionReaderOpen, setDescriptionReaderOpen] = useState(false)
+  const [relatedTitles, setRelatedTitles] = useState<CatalogRelatedTitle[]>([])
+  const [relatedLoading, setRelatedLoading] = useState(false)
   const [remoteEpisodes, setRemoteEpisodes] = useState<RemoteEpisodeInfo[]>([])
+  // Airing pointer shipped with the episodes payload (computed at fetch time,
+  // refreshed when an episode boundary passes). Keeps the grid capped even
+  // when the separate details request fails or is still in flight.
+  const [remoteAiredThrough, setRemoteAiredThrough] = useState<number | null>(null)
+  // Series artwork from the episodes payload (ani.zip/TVDB) — AniList has no
+  // bannerImage for many airing seasons.
+  const [remoteArtwork, setRemoteArtwork] = useState<{ bannerUrl: string | null; posterUrl: string | null }>({ bannerUrl: null, posterUrl: null })
+  const [remoteEpisodesLoading, setRemoteEpisodesLoading] = useState(false)
   const [detailsLoading, setDetailsLoading] = useState(false)
   const [bgFailed, setBgFailed] = useState(false)
   const [posterFailed, setPosterFailed] = useState(false)
+  const [posterAspect, setPosterAspect] = useState<{ url: string; ratio: number } | null>(null)
+  const [artworkHue, setArtworkHue] = useState<number | null>(null)
+  // Episodes are shown in pages of 16 (4 rows) so a 100-episode season does
+  // not mean 100 API-driven tiles and endless scrolling.
+  const [episodePage, setEpisodePage] = useState(1)
 
   // Files-only deletion state (season or single episode). Deleted episode
   // paths are filtered out of the merged list immediately; the library refresh
@@ -127,6 +198,20 @@ export const AnimeDetailView: React.FC<AnimeDetailViewProps> = ({
   // Release picker: null = closed; { episode: null } = whole season / pack.
   const [pickerState, setPickerState] = useState<{ episode: number | null } | null>(null)
   const [queueing, setQueueing] = useState(false)
+  const [episodeDownloadQueue, setEpisodeDownloadQueue] = useState<number[]>([])
+  const [activeQueuedEpisode, setActiveQueuedEpisode] = useState<number | null>(null)
+  const episodeQueueWorkerRef = useRef(false)
+  const [selectedDownloadRoot, setSelectedDownloadRoot] = useState<string | null>(null)
+  const [seasonFolderMenuOpen, setSeasonFolderMenuOpen] = useState(false)
+  const initialDownloadStartedRef = useRef<string | null>(null)
+  const scrollContainerRef = useRef<HTMLDivElement>(null)
+  // Episodes section heading; page changes scroll back here so the first rows
+  // of the new page are visible instead of the pager at the bottom.
+  const episodesSectionRef = useRef<HTMLElement>(null)
+  // Set by the pager buttons; the post-render effect below consumes it, so the
+  // scroll happens against the already-rendered new page (a synchronous
+  // scrollIntoView in onClick gets cancelled by the grid re-render).
+  const scrollEpisodesOnPageChange = useRef(false)
 
   const railItem = source.kind === 'catalog' ? source.item : null
 
@@ -142,9 +227,18 @@ export const AnimeDetailView: React.FC<AnimeDetailViewProps> = ({
   const anilistId =
     source.kind === 'catalog' ? source.item.anilistId : (localFolder?.anilistId ?? null)
 
+  // The detail overlay is reused for new titles, so reset its own scroll offset
+  // synchronously. Otherwise a previously scrolled page can open with the hero
+  // heading hidden underneath the fixed navbar.
+  useLayoutEffect(() => {
+    if (scrollContainerRef.current) scrollContainerRef.current.scrollTop = 0
+  }, [anilistId, source.kind])
+
   // P2P download flows: enabled only when the renderer API exposes release
   // search AND the title resolves to an AniList id for the indexer queries.
-  const p2pAvailable = typeof window.electronAPI?.searchReleases === 'function'
+  const p2pAvailable =
+    typeof window.electronAPI?.searchReleases === 'function' &&
+    typeof window.electronAPI?.addDownload === 'function'
   const canDownload = p2pAvailable && anilistId != null
 
   // Season hint for release searches: parsed from the first local file name
@@ -163,11 +257,18 @@ export const AnimeDetailView: React.FC<AnimeDetailViewProps> = ({
   // Escape closes the overlay (unless a consumer already handled the event).
   useEffect(() => {
     const onKey = (e: KeyboardEvent) => {
-      if (e.key === 'Escape' && !e.defaultPrevented) onClose()
+      if (e.key !== 'Escape' || e.defaultPrevented) return
+      if (descriptionReaderOpen) {
+        e.preventDefault()
+        e.stopImmediatePropagation()
+        setDescriptionReaderOpen(false)
+        return
+      }
+      onClose()
     }
     window.addEventListener('keydown', onKey)
     return () => window.removeEventListener('keydown', onKey)
-  }, [onClose])
+  }, [onClose, descriptionReaderOpen])
 
   // Reset per-title deletion / suggestion state when another title is opened.
   useEffect(() => {
@@ -175,6 +276,12 @@ export const AnimeDetailView: React.FC<AnimeDetailViewProps> = ({
     setConfirmDeleteEpisode(null)
     setCompletedSuggestion(false)
     setRemovedPaths(new Set())
+    setEpisodeDownloadQueue([])
+    setActiveQueuedEpisode(null)
+    setPickerState(null)
+    setQueueing(false)
+    setEpisodePage(1)
+    setDescriptionReaderOpen(false)
     completedPromptedRef.current = false
   }, [source])
 
@@ -182,34 +289,77 @@ export const AnimeDetailView: React.FC<AnimeDetailViewProps> = ({
   useEffect(() => {
     if (anilistId == null) {
       setDetails(null)
+      setRelatedTitles([])
       setRemoteEpisodes([])
+      setRemoteAiredThrough(null)
+      setRemoteArtwork({ bannerUrl: null, posterUrl: null })
       setDetailsLoading(false)
+      setRelatedLoading(false)
+      setEpisodePage(1)
       return
     }
     let cancelled = false
+    let unsubscribeUpdates: (() => void) | undefined
+    setDetails(null)
+    setRelatedTitles([])
+    setRemoteEpisodes([])
+    setRemoteAiredThrough(null)
+    setRemoteArtwork({ bannerUrl: null, posterUrl: null })
     setDetailsLoading(true)
+    setRemoteEpisodesLoading(true)
+    setRelatedLoading(true)
+    setEpisodePage(1)
     const load = async () => {
       const api = window.electronAPI
       if (!api) {
         if (!cancelled) {
           setDetails(null)
+          setRelatedTitles([])
           setRemoteEpisodes([])
           setDetailsLoading(false)
+          setRelatedLoading(false)
         }
         return
       }
-      const [detailsRes, episodesRes] = await Promise.all([
-        api.getCatalogDetails(anilistId).catch(() => null),
-        api.getRemoteEpisodes(anilistId).catch(() => [] as RemoteEpisodeInfo[]),
-      ])
-      if (cancelled) return
-      setDetails(detailsRes ?? null)
-      setRemoteEpisodes(Array.isArray(episodesRes) ? episodesRes : [])
-      setDetailsLoading(false)
+      void api.getCatalogDetails(anilistId).then((result) => {
+        if (!cancelled) setDetails(result ?? null)
+      }).catch((error) => {
+        console.warn('[Anime overview] AniList details failed:', error)
+      }).finally(() => {
+        if (!cancelled) setDetailsLoading(false)
+      })
+      void api.getRemoteEpisodes(anilistId).then((result) => {
+        if (cancelled) return
+        setRemoteEpisodes(Array.isArray(result?.episodes) ? result.episodes : [])
+        setRemoteAiredThrough(typeof result?.airedThrough === 'number' ? result.airedThrough : null)
+        setRemoteArtwork({ bannerUrl: result?.bannerUrl ?? null, posterUrl: result?.posterUrl ?? null })
+      }).catch((error) => {
+        console.warn('[Anime overview] Episode metadata failed:', error)
+      }).finally(() => {
+        if (!cancelled) setRemoteEpisodesLoading(false)
+      })
+      // Progressive pushes: the pipeline delivers its first usable snapshot
+      // (~1 s), then hedge/retry/fallback improvements — apply each payload
+      // in place so titles/thumbnails pop in without blocking the page.
+      unsubscribeUpdates = api.onRemoteEpisodesUpdated?.((updatedId, result) => {
+        if (cancelled || updatedId !== anilistId || !result) return
+        setRemoteEpisodes(Array.isArray(result.episodes) ? result.episodes : [])
+        setRemoteAiredThrough(typeof result.airedThrough === 'number' ? result.airedThrough : null)
+        setRemoteArtwork({ bannerUrl: result.bannerUrl ?? null, posterUrl: result.posterUrl ?? null })
+      })
+      void api.getCatalogFranchise(anilistId).then((result) => {
+        if (!cancelled) setRelatedTitles(Array.isArray(result) ? result : [])
+      }).catch((error) => {
+        console.warn('[Anime overview] Related titles failed:', error)
+        if (!cancelled) setRelatedTitles([])
+      }).finally(() => {
+        if (!cancelled) setRelatedLoading(false)
+      })
     }
-    load()
+    void load()
     return () => {
       cancelled = true
+      unsubscribeUpdates?.()
     }
   }, [anilistId])
 
@@ -219,19 +369,107 @@ export const AnimeDetailView: React.FC<AnimeDetailViewProps> = ({
     const title = details ? details.title.english || details.title.romaji || fallbackTitle : fallbackTitle
     return {
       title,
-      bannerUrl: details?.bannerUrl ?? railItem?.bannerUrl ?? localFolder?.bannerUrl ?? null,
-      posterUrl: details?.posterUrl ?? railItem?.posterUrl ?? localFolder?.posterUrl ?? null,
+      bannerUrl: details?.bannerUrl ?? railItem?.bannerUrl ?? remoteArtwork.bannerUrl ?? localFolder?.bannerUrl ?? null,
+      posterUrl: details?.posterUrl ?? railItem?.posterUrl ?? remoteArtwork.posterUrl ?? localFolder?.posterUrl ?? null,
       averageScore: details?.averageScore ?? railItem?.averageScore ?? localFolder?.averageScore ?? null,
       episodesCount: details?.episodesCount ?? railItem?.episodesCount ?? null,
       totalEpisodes: localFolder?.totalEpisodes ?? 0,
       format: details?.format ?? railItem?.format ?? null,
       status: details?.status ?? railItem?.status ?? null,
       seasonYear: details?.seasonYear ?? railItem?.seasonYear ?? null,
+      nextAiringEpisodeNumber: details?.nextAiringEpisode?.episode ?? railItem?.airingEpisode ?? null,
       genres: details?.genres ?? localFolder?.genres ?? [],
       description: stripHtml(details?.description ?? localFolder?.synopsis ?? null),
-      idMal: details?.idMal ?? null,
+      idMal: details?.idMal ?? railItem?.idMal ?? (anilistId != null ? userEntries[anilistId]?.idMal : null) ?? null,
     }
-  }, [details, railItem, localFolder])
+  }, [details, railItem, localFolder, remoteArtwork, anilistId, userEntries])
+  const posterAspectRatio = posterAspect?.url === hero.posterUrl ? posterAspect.ratio : 2 / 3
+
+  // Read a tiny downsample of the banner when the image host permits canvas
+  // access. If it does not, the deterministic title hue below remains the
+  // fallback and the actual banner still renders normally.
+  useEffect(() => {
+    setArtworkHue(null)
+    const source = hero.bannerUrl || hero.posterUrl
+    if (!source) return
+    let cancelled = false
+    const image = new Image()
+    image.crossOrigin = 'anonymous'
+    image.onload = () => {
+      try {
+        const canvas = document.createElement('canvas')
+        canvas.width = 24
+        canvas.height = 24
+        const context = canvas.getContext('2d', { willReadFrequently: true })
+        if (!context) return
+        context.drawImage(image, 0, 0, 24, 24)
+        const pixels = context.getImageData(0, 0, 24, 24).data
+        const bins = Array.from({ length: 18 }, () => 0)
+        for (let i = 0; i < pixels.length; i += 4) {
+          const r = pixels[i] / 255, g = pixels[i + 1] / 255, b = pixels[i + 2] / 255
+          const max = Math.max(r, g, b), min = Math.min(r, g, b), delta = max - min
+          const light = (max + min) / 2
+          if (delta < 0.08 || light < 0.14 || light > 0.9) continue
+          let hue = 0
+          if (max === r) hue = ((g - b) / delta) % 6
+          else if (max === g) hue = (b - r) / delta + 2
+          else hue = (r - g) / delta + 4
+          hue = (hue * 60 + 360) % 360
+          const saturation = delta / (1 - Math.abs(2 * light - 1))
+          bins[Math.floor(hue / 20) % bins.length] += saturation * (1 - Math.abs(light - 0.5))
+        }
+        const strongest = bins.indexOf(Math.max(...bins))
+        if (!cancelled && strongest >= 0 && bins[strongest] > 0) setArtworkHue(strongest * 20 + 10)
+      } catch {
+        // Cross-origin hosts may deny canvas reads. Keep the fallback hue.
+      }
+    }
+    image.src = source
+    return () => { cancelled = true }
+  }, [hero.bannerUrl, hero.posterUrl])
+
+  // Give each title a stable accent so the detail page borrows its own
+  // atmosphere instead of using the same violet treatment for every anime.
+  const animeHue = useMemo(() => {
+    const seed = `${anilistId ?? ''}:${hero.title}`
+    let hash = 2166136261
+    for (let i = 0; i < seed.length; i++) hash = Math.imul(hash ^ seed.charCodeAt(i), 16777619)
+    return (hash >>> 0) % 360
+  }, [anilistId, hero.title])
+  const themeHue = artworkHue ?? animeHue
+  const animeThemeStyle = {
+    '--anime-hue': themeHue,
+      '--anime-accent': `hsl(${themeHue} 78% 62%)`,
+      '--anime-accent-soft': `hsla(${themeHue} 78% 62% / .16)`,
+  } as React.CSSProperties
+  const isFeatureFilm = hero.format?.toUpperCase() === 'MOVIE'
+
+  const ageRatingItems = useMemo(() => [{ idMal: hero.idMal }], [hero.idMal])
+  const { ratings: ageRatings } = useAgeRatings(ageRatingItems)
+  const ageRating = normalizeAgeRating(hero.idMal == null ? null : ageRatings[hero.idMal])
+
+  // Detect whether the synopsis needs a separate reader, leaving the hero
+  // height and action row fixed regardless of the full text length.
+  useEffect(() => {
+    const el = descriptionRef.current;
+    if (!el) {
+      setDescriptionClamped(false)
+      return
+    }
+    const updateOverflow = () => setDescriptionClamped(el.scrollHeight > el.clientHeight + 1)
+    updateOverflow()
+    const observer = new ResizeObserver(updateOverflow)
+    observer.observe(el)
+    return () => observer.disconnect()
+  }, [hero.description]);
+
+  const seasonHint = useMemo(() => {
+    const namedSeason = /\bseason\s*0*(\d{1,2})\b/i.exec(hero.title)
+    if (namedSeason) return Number(namedSeason[1])
+    const ordinalSeason = /\b(\d{1,2})(?:st|nd|rd|th)\s+season\b/i.exec(hero.title)
+    if (ordinalSeason) return Number(ordinalSeason[1])
+    return parsedSeason
+  }, [parsedSeason, hero.title])
 
   // Alias titles (romaji/english) for release searches: deduped case-
   // insensitively and minus the display title that is already searched as the
@@ -266,6 +504,39 @@ export const AnimeDetailView: React.FC<AnimeDetailViewProps> = ({
       }),
     [statusFor, anilistId, hero.title, hero.episodesCount]
   )
+  const episodeTotal = hero.episodesCount ?? Math.max(
+    hero.totalEpisodes,
+    hero.nextAiringEpisodeNumber ? hero.nextAiringEpisodeNumber - 1 : 0,
+  )
+
+  // Episodes that have actually aired: ongoing titles announce the full season
+  // (AniList `episodes` is the planned count), but only the episodes before
+  // nextAiringEpisode exist — later rows have no releases yet. The episodes
+  // payload carries its own airing pointer computed at fetch time and
+  // refreshed at every episode boundary, so it wins over the 24 h-cached
+  // details snapshot; the details fallback keeps the cap when that request
+  // failed outright (e.g. AniList rate limiting at startup) — without it the
+  // grid once filled the whole planned season with downloadable unaired rows.
+  const detailsAiredThrough = useMemo(() => {
+    if (details?.status === 'NOT_YET_RELEASED') return 0
+    if (details?.status === 'RELEASING') {
+      const next = details.nextAiringEpisode?.episode
+      if (Number.isInteger(next) && (next as number) >= 1) return (next as number) - 1
+    }
+    return null
+  }, [details])
+  const airedThrough = remoteAiredThrough ?? detailsAiredThrough
+  const ongoing = airedThrough != null || details?.status === 'RELEASING'
+  const dateAiredThrough = useMemo(() => remoteEpisodes.reduce((max, episode) => {
+    const airTime = episode.airDate ? Date.parse(episode.airDate) : Number.NaN
+    return Number.isFinite(airTime) && airTime <= Date.now() ? Math.max(max, episode.number) : max
+  }, 0), [remoteEpisodes])
+  const releasedEpisodeCount = hero.status === 'FINISHED'
+    ? (episodeTotal || dateAiredThrough)
+    : hero.status === 'NOT_YET_RELEASED'
+      ? 0
+      : airedThrough ?? (dateAiredThrough > 0 ? dateAiredThrough : null)
+  const followEligible = hero.status === 'RELEASING' || hero.status === 'NOT_YET_RELEASED'
 
   // Local episodes keyed by their parsed release number (fallback: index+1),
   // sorted ascending for both the merge and the resume target. Rows whose
@@ -273,22 +544,27 @@ export const AnimeDetailView: React.FC<AnimeDetailViewProps> = ({
   const localRows = useMemo(() => {
     return (localFolder?.episodes ?? [])
       .filter((episode) => !episode || !removedPaths.has(episode.filePath))
-      .map((episode, index) => {
+      .flatMap((episode, index) => {
         const parsed = episode?.fileName ? parseReleaseCore(episode.fileName) : null
         const num =
           typeof parsed?.episodeNumber === 'number' && Number.isFinite(parsed.episodeNumber)
             ? parsed.episodeNumber
             : index + 1
-        return { episode, num }
+        if (episodeTotal > 0 && num > episodeTotal) return []
+        if (seasonHint != null && parsed?.season != null && parsed.season !== seasonHint) return []
+        return [{ episode, num }]
       })
       .sort((a, b) => a.num - b.num)
-  }, [localFolder, removedPaths])
+  }, [localFolder, removedPaths, episodeTotal, seasonHint])
 
   // Disk space the remaining local files occupy (drives the delete confirms).
   const seasonSizeBytes = useMemo(
     () => localRows.reduce((acc, row) => acc + (row.episode?.size || 0), 0),
     [localRows]
   )
+  const downloadedCount = localRows.filter((row) => row.episode && !row.episode.isDownloading).length
+  const downloadingCount = localRows.filter((row) => row.episode?.isDownloading).length
+  const downloadedSeason = episodeTotal > 0 && downloadedCount >= episodeTotal && downloadingCount === 0
 
   // Resume target: first non-completed local episode, falling back to the
   // first episode for a full rewatch.
@@ -307,6 +583,23 @@ export const AnimeDetailView: React.FC<AnimeDetailViewProps> = ({
       ? resumeProgress.currentTime
       : undefined
 
+  // Grid page number of the current (resume) episode, for auto-pagination.
+  const resumeEpisodeNumber = useMemo(() => {
+    if (!resumeEpisode) return null
+    return localRows.find((row) => row.episode === resumeEpisode)?.num ?? null
+  }, [resumeEpisode, localRows])
+
+  // Jump the episode grid straight to the page holding the user's current
+  // episode (first unfinished local file), so an 80-episode season does not
+  // demand hunting through pages after every visit. Keyed on the title so it
+  // re-runs on every open, after the page reset in the [source] effect above.
+  useEffect(() => {
+    if (!resumeEpisodeNumber) return
+    const page = Math.floor((resumeEpisodeNumber - 1) / EPISODES_PER_PAGE) + 1
+    if (page > 1) setEpisodePage(page)
+    // eslint-disable-next-line react-hooks/exhaustive-deps
+  }, [source, resumeEpisodeNumber])
+
   // Merge local + remote by episode number: local supplies the file, remote
   // fills title/thumbnail/air date (whole rows for fileless episodes).
   const mergedRows = useMemo<MergedEpisodeRow[]>(() => {
@@ -319,12 +612,68 @@ export const AnimeDetailView: React.FC<AnimeDetailViewProps> = ({
     }
     for (const remote of remoteEpisodes) {
       if (!remote || !Number.isFinite(remote.number)) continue
+      // The payload is pre-curated upstream (aired rows + future schedule
+      // rows; junk and wrong-season crosswalks already dropped), so past-the-
+      // pointer rows render as unaired placeholders instead of disappearing.
+      // Already-downloaded files stay visible even past the airing pointer.
       const existing = byNum.get(remote.number)
       if (existing) existing.remote = remote
       else byNum.set(remote.number, { num: remote.number, remote })
     }
+    // AniList/ani.zip sometimes has no per-episode records for a title.
+    // Render every planned episode as a numbered row so aired ones can be
+    // downloaded instead of showing an empty season; for ongoing titles the
+    // rows past the airing pointer become unaired schedule placeholders. The
+    // fill waits for the airing pointer so a slow details request cannot
+    // flash the whole unaired season with download buttons (the old bug) —
+    // except for finished shows, where a long season renders its numbered
+    // grid immediately instead of an empty "no episodes" stub (Black Clover:
+    // 170 episodes took seconds of blank space before the payload landed).
+    const finishedKnown = details?.status === 'FINISHED'
+    if (episodeTotal > 0 && (airedThrough != null || finishedKnown || (!detailsLoading && !remoteEpisodesLoading))) {
+      for (let number = 1; number <= episodeTotal; number += 1) {
+        if (!byNum.has(number)) byNum.set(number, { num: number })
+      }
+    }
     return Array.from(byNum.values()).sort((a, b) => a.num - b.num)
-  }, [localRows, remoteEpisodes])
+  }, [localRows, remoteEpisodes, episodeTotal, airedThrough, details, detailsLoading, remoteEpisodesLoading])
+
+  // Paged slice of the merged rows (4 rows of 4 tiles).
+  const episodePageCount = Math.max(1, Math.ceil(mergedRows.length / EPISODES_PER_PAGE))
+  const safeEpisodePage = Math.min(episodePage, episodePageCount)
+  const visibleEpisodeRows = useMemo(
+    () => mergedRows.slice((safeEpisodePage - 1) * EPISODES_PER_PAGE, safeEpisodePage * EPISODES_PER_PAGE),
+    [mergedRows, safeEpisodePage]
+  )
+
+  // After the new page renders, bring the top of the episode section back into
+  // view (only for explicit pager clicks, not the auto-jump on open).
+  useEffect(() => {
+    if (!scrollEpisodesOnPageChange.current) return
+    scrollEpisodesOnPageChange.current = false
+    episodesSectionRef.current?.scrollIntoView({ block: 'start' })
+  }, [safeEpisodePage])
+
+  // Related grid: the currently open title is inserted in chronological
+  // position (the backend excludes it from the franchise graph) as a
+  // highlighted, non-clickable card so the user sees where they are.
+  const orderedRelated = useMemo<CatalogRelatedTitle[]>(() => {
+    if (!details) return relatedTitles
+    const current: CatalogRelatedTitle = { ...details, relationType: 'CURRENT' }
+    const list = [...relatedTitles.filter((item) => item.anilistId !== details.anilistId), current]
+    return list.sort((a, b) => {
+      const yearA = a.startDate?.year ?? a.seasonYear ?? Number.MAX_SAFE_INTEGER
+      const yearB = b.startDate?.year ?? b.seasonYear ?? Number.MAX_SAFE_INTEGER
+      if (yearA !== yearB) return yearA - yearB
+      const monthA = a.startDate?.month ?? 0
+      const monthB = b.startDate?.month ?? 0
+      if (monthA !== monthB) return monthA - monthB
+      const dayA = a.startDate?.day ?? 0
+      const dayB = b.startDate?.day ?? 0
+      if (dayA !== dayB) return dayA - dayB
+      return a.anilistId - b.anilistId
+    })
+  }, [relatedTitles, details])
 
   // Tech tag chips (LOCAL only): release tags from the first local file plus
   // folder-level subtitle flags.
@@ -382,9 +731,20 @@ export const AnimeDetailView: React.FC<AnimeDetailViewProps> = ({
     if (!localFolder || deleteBusy) return
     setDeleteBusy(true)
     try {
+      const p2p = await window.electronAPI.getP2pState().catch(() => null)
+      const normalizedFolder = localFolder.folderPath.replace(/[\\/]+$/, '').toLocaleLowerCase()
+      const activeJobs = (p2p?.jobs ?? []).filter(
+        (job) => job.targetFolder.replace(/[\\/]+$/, '').toLocaleLowerCase() === normalizedFolder,
+      )
+      for (const job of activeJobs) {
+        const stopped = await window.electronAPI.cancelDownload(job.infoHash, true)
+        if (!stopped?.success) {
+          throw new Error(`Could not stop the active download before deleting the anime folder: ${stopped?.error || 'unknown error'}`)
+        }
+      }
       const res = await window.electronAPI.deleteAnimeFromPC(localFolder.folderPath)
       if (res?.success) {
-        showGlobalToast(`Freed ${formatFileSize(res.deletedBytes ?? seasonSizeBytes)}`, 'success')
+        showGlobalToast(`Deleted anime folder and stopped ${activeJobs.length} active download(s). Freed ${formatFileSize(res.deletedBytes ?? seasonSizeBytes)}.`, 'success')
         setConfirmDeleteSeason(false)
         setCompletedSuggestion(false)
         onLibraryChanged?.()
@@ -394,7 +754,7 @@ export const AnimeDetailView: React.FC<AnimeDetailViewProps> = ({
       }
     } catch (err) {
       console.error('Failed to delete anime from PC:', err)
-      showGlobalToast('Failed to delete files from PC', 'error')
+      showGlobalToast(err instanceof Error ? err.message : 'Failed to delete files from PC', 'error')
     } finally {
       setDeleteBusy(false)
     }
@@ -431,6 +791,157 @@ export const AnimeDetailView: React.FC<AnimeDetailViewProps> = ({
     onPlayEpisode(resumeEpisode, resumeStartAt)
   }
 
+  const downloadRoots = useMemo(() => {
+    const configured = [
+      ...(Array.isArray(settings.libraryFolders) ? settings.libraryFolders : []),
+      ...(settings.downloadTargetFolder ? [settings.downloadTargetFolder] : []),
+    ].filter((folder): folder is string => typeof folder === 'string' && folder.trim().length > 0)
+    return [...new Set(configured.map((folder) => folder.trim()))]
+  }, [settings.libraryFolders, settings.downloadTargetFolder])
+
+  const localFolderRoot = downloadRoots.find((root) => {
+    const normalizedRoot = root.replace(/[\\/]+$/, '').toLowerCase()
+    const normalizedFolder = localFolder?.folderPath.replace(/[\\/]+$/, '').toLowerCase() || ''
+    return normalizedFolder === normalizedRoot || normalizedFolder.startsWith(`${normalizedRoot}\\`) || normalizedFolder.startsWith(`${normalizedRoot}/`)
+  })
+  const defaultDownloadRoot = selectedDownloadRoot || localFolderRoot || settings.downloadTargetFolder || downloadRoots[0] || null
+  const downloadLocation = () => {
+    // Reuse the existing anime directory when the chosen root already contains it.
+    if (localFolder && (!selectedDownloadRoot || selectedDownloadRoot === localFolderRoot)) {
+      return { targetFolder: localFolder.folderPath }
+    }
+    return defaultDownloadRoot ? { downloadRoot: defaultDownloadRoot } : {}
+  }
+
+  const requestDownload = async (episode: number | null) => {
+    if (!canDownload) return
+    if (episode != null) {
+      const alreadyDownloading = (p2pState?.jobs || []).some((job) => job.status !== 'error' && job.anilistId === anilistId &&
+        (job.episodes?.includes(episode) || job.episode === episode || (job.episode == null && (job.filesProgress || []).some((file) => {
+          const parsed = parseReleaseCore(file.name)
+          return parsed.episodeNumbers.includes(episode) || parsed.episodeNumber === episode
+        }))))
+      if (alreadyDownloading || episodeDownloadQueue.includes(episode) || activeQueuedEpisode === episode) return
+      // Opening the manual picker is not a queued download. Keeping it out of
+      // the worker queue avoids showing the episode card's download spinner
+      // while the user is only browsing releases (or has not picked one yet).
+      if (settings.releaseSelectionMode === 'manual') {
+        setPickerState({ episode })
+        return
+      }
+      setEpisodeDownloadQueue((pending) => pending.includes(episode) ? pending : [...pending, episode])
+      return
+    }
+    if (queueing) return
+    if (settings.releaseSelectionMode === 'manual') {
+      setPickerState({ episode: null })
+      return
+    }
+    const api = window.electronAPI
+    if (!api?.searchReleases || !api.addDownload) return
+    setQueueing(true)
+    try {
+      const response = await api.searchReleases({ title: hero.title, aliases: searchAliases, anilistId, season: seasonHint, episode: null, episodeCount: details?.episodesCount ?? null, episodeDurationMinutes: details?.durationMinutes ?? null })
+      // Automatic selection requires the release to actually name this show:
+      // 'related' (a whole-word mention, e.g. "Re:Monster" for "Monster") and
+      // 'none' are refused — only exact/prefix titles may auto-download.
+      const best = response?.results?.find((release) => !release.sizeWarning
+        && (release.titleRelevance == null || release.titleRelevance === 'exact' || release.titleRelevance === 'prefix')
+        && matchesPreferredReleaseLanguages(release, settings.preferredTorrentAudioLanguages ?? ['en'], settings.preferredTorrentSubtitleLanguages ?? ['en'])
+        && ['season-pack', 'episode-range'].includes(classifyRelease(release.title, release.description).kind))
+      if (!best) {
+        if (response?.results?.length) {
+          showGlobalToast('No season release matched your automatic audio and subtitle preferences. Choose a release manually.', 'warning')
+          setPickerState({ episode: null })
+          return
+        }
+        const providerError = response?.reports?.find((report) => !report.ok)?.error
+        showGlobalToast(providerError ? `No release found: ${providerError}` : 'No matching season release found. Check your indexers in Settings.', 'error')
+        return
+      }
+      const result = await api.addDownload({ item: best, title: hero.title, anilistId, episode: null, season: seasonHint, ...downloadLocation() })
+      if (result?.success) showGlobalToast(`Season download queued: ${best.title}`, 'success')
+      else showGlobalToast(result?.error || 'Failed to queue the season download', 'error')
+    } catch (err) {
+      console.error('Automatic release selection failed:', err)
+      showGlobalToast(err instanceof Error ? err.message : 'Automatic release search failed', 'error')
+    } finally {
+      setQueueing(false)
+      onLibraryChanged?.()
+    }
+  }
+
+  // Process episode requests serially, so each card has one clear torrent job.
+  useEffect(() => {
+    if (!canDownload || episodeQueueWorkerRef.current || queueing || pickerState || activeQueuedEpisode != null || episodeDownloadQueue.length === 0) return
+    const episode = episodeDownloadQueue[0]
+    episodeQueueWorkerRef.current = true
+    setActiveQueuedEpisode(episode)
+    if (settings.releaseSelectionMode === 'manual') {
+      setPickerState({ episode })
+      episodeQueueWorkerRef.current = false
+      return
+    }
+    const api = window.electronAPI
+    if (!api?.searchReleases || !api.addDownload) {
+      setEpisodeDownloadQueue((pending) => pending.filter((number) => number !== episode))
+      setActiveQueuedEpisode(null)
+      episodeQueueWorkerRef.current = false
+      return
+    }
+    setQueueing(true)
+    void (async () => {
+      let holdForManualPick = false
+      try {
+        const response = await api.searchReleases({ title: hero.title, aliases: searchAliases, anilistId, season: seasonHint, episode, episodeCount: details?.episodesCount ?? null, episodeDurationMinutes: details?.durationMinutes ?? null })
+        // Same title-relevance gate as the season auto-pick: only exact/prefix
+        // releases may auto-download; 'related' ("Re:Monster", spin-offs) and
+        // 'none' ("Pocket Monsters") are refused.
+        const best = response?.results?.find((release) => !release.sizeWarning
+          && (release.titleRelevance == null || release.titleRelevance === 'exact' || release.titleRelevance === 'prefix')
+          && matchesPreferredReleaseLanguages(release, settings.preferredTorrentAudioLanguages ?? ['en'], settings.preferredTorrentSubtitleLanguages ?? ['en']))
+        if (!best && response?.results?.length) {
+          showGlobalToast(`No release matched your automatic audio and subtitle preferences for episode ${episode}. Choose manually.`, 'warning')
+          setPickerState({ episode })
+          holdForManualPick = true
+          return
+        }
+        if (!best) {
+          const providerError = response?.reports?.find((report) => !report.ok)?.error
+          const skipped = response?.skippedWrongEpisodeCount ?? 0
+          showGlobalToast(skipped > 0 ? `No release for episode ${episode} was found; ${skipped} mismatched result(s) were skipped.` : providerError ? `No release found: ${providerError}` : `No release found for episode ${episode}.`, 'error')
+          return
+        }
+        const result = await api.addDownload({ item: best, title: hero.title, anilistId, episode, season: seasonHint, ...downloadLocation() })
+        if (result?.success) showGlobalToast(`Episode ${episode} queued: ${best.title}`, 'success')
+        else showGlobalToast(result?.error || `Failed to queue episode ${episode}`, 'error')
+      } catch (err) {
+        console.error(`Automatic release search failed for episode ${episode}:`, err)
+        showGlobalToast(err instanceof Error ? err.message : `Release search failed for episode ${episode}`, 'error')
+      } finally {
+        setQueueing(false)
+        if (!holdForManualPick) {
+          setEpisodeDownloadQueue((pending) => pending.filter((number) => number !== episode))
+          setActiveQueuedEpisode(null)
+        }
+        episodeQueueWorkerRef.current = false
+        onLibraryChanged?.()
+      }
+    })()
+  }, [canDownload, episodeDownloadQueue, queueing, pickerState, activeQueuedEpisode, settings.releaseSelectionMode, settings.preferredTorrentAudioLanguages, settings.preferredTorrentSubtitleLanguages, hero.title, searchAliases, anilistId, seasonHint, details?.episodesCount, details?.durationMinutes, onLibraryChanged])
+
+  useEffect(() => {
+    if (initialDownloadEpisode == null) {
+      initialDownloadStartedRef.current = null
+      return
+    }
+    const requestKey = `${anilistId ?? 'unknown'}:${initialDownloadEpisode}`
+    if (canDownload && initialDownloadStartedRef.current !== requestKey) {
+      initialDownloadStartedRef.current = requestKey
+      void requestDownload(initialDownloadEpisode)
+    }
+  }, [initialDownloadEpisode, canDownload, anilistId])
+
   // Queues the picked release via the torrent engine, then closes the picker.
   // The library refresh runs immediately (cheap rescan) so the new files show
   // up as soon as the engine starts writing them.
@@ -440,7 +951,7 @@ export const AnimeDetailView: React.FC<AnimeDetailViewProps> = ({
     const { episode } = pickerState
     setQueueing(true)
     try {
-      const res = await api.addDownload({ item: result, title: hero.title, anilistId, episode })
+      const res = await api.addDownload({ item: result, title: hero.title, anilistId, episode, season: seasonHint, ...downloadLocation() })
       if (res?.success) {
         showGlobalToast('Download queued — see the Downloads tab', 'success')
       } else {
@@ -451,40 +962,70 @@ export const AnimeDetailView: React.FC<AnimeDetailViewProps> = ({
       showGlobalToast('Failed to queue download', 'error')
     } finally {
       setQueueing(false)
+      if (episode != null) {
+        setEpisodeDownloadQueue((pending) => pending.filter((number) => number !== episode))
+        setActiveQueuedEpisode(null)
+      }
       setPickerState(null)
       onLibraryChanged?.()
     }
   }
 
+  const handleCancelReleasePicker = () => {
+    const episode = pickerState?.episode
+    setPickerState(null)
+    if (episode != null) {
+      setEpisodeDownloadQueue((pending) => pending.filter((number) => number !== episode))
+      setActiveQueuedEpisode(null)
+    }
+  }
+
   const showBanner = !!hero.bannerUrl && !bgFailed
   const showPoster = !!hero.posterUrl && !posterFailed
-  const episodeTotal = hero.episodesCount ?? hero.totalEpisodes
+  const singleFileMovie = isFeatureFilm && localRows.length === 1
+  const reportBackdropProgress = (container: HTMLDivElement) => {
+    const heroElement = container.querySelector<HTMLElement>('[data-backdrop-hero]')
+    if (!heroElement) {
+      onBackdropProgressChange?.(0)
+      return
+    }
+    const heroRect = heroElement.getBoundingClientRect()
+    const containerTop = container.getBoundingClientRect().top
+    const progress = heroRect.height > 0
+      ? Math.max(0, Math.min(1, (heroRect.bottom - containerTop) / heroRect.height))
+      : 0
+    onBackdropProgressChange?.(progress)
+  }
+
+  useLayoutEffect(() => {
+    if (scrollContainerRef.current) reportBackdropProgress(scrollContainerRef.current)
+  }, [hero.bannerUrl])
 
   return (
-    <div className="fixed inset-0 z-40 overflow-y-auto bg-[#0f0f12]">
-      {/* Sticky top bar with close button */}
-      <div className="sticky top-0 z-30 flex items-center justify-between gap-3 border-b border-white/5 bg-[#0f0f12]/80 px-4 py-2.5 backdrop-blur-md">
-        <span className="truncate text-xs font-bold uppercase tracking-widest text-zinc-500">Title Details</span>
-        <button
-          type="button"
-          onClick={onClose}
-          title="Close (Esc)"
-          className="flex h-9 w-9 shrink-0 items-center justify-center rounded-full border border-white/10 bg-white/5 text-zinc-300 backdrop-blur-md transition-colors hover:bg-white/10 hover:text-white"
-        >
-          <X className="h-4 w-4" />
-        </button>
-      </div>
-
+    <div
+      ref={scrollContainerRef}
+      onScroll={(event) => reportBackdropProgress(event.currentTarget)}
+      style={animeThemeStyle}
+      className="fixed inset-x-0 bottom-0 top-[72px] z-40 overflow-y-auto bg-[#0b0c10]"
+    >
       {/* Hero */}
-      <div className="relative">
-        {/* Background: banner, or blurred poster as fallback */}
+      <div
+        data-backdrop-hero
+        className="relative overflow-hidden"
+        style={{
+          background: `radial-gradient(ellipse at 78% 8%, hsla(${themeHue}, 78%, 48%, .22), transparent 48%), #0b0c10`,
+        }}
+      >
+        {/* Banner and its fades stay clipped to the hero so they never wash
+            over the episode section below. */}
         {showBanner ? (
           <img
             src={hero.bannerUrl || ''}
             alt=""
-            loading="lazy"
+            loading="eager"
+            decoding="async"
             onError={() => setBgFailed(true)}
-            className="absolute inset-0 h-full w-full object-cover opacity-40"
+            className="absolute inset-0 h-full w-full object-cover object-[center_28%] opacity-85 saturate-[1.35]"
           />
         ) : hero.posterUrl && !bgFailed ? (
           <img
@@ -495,23 +1036,60 @@ export const AnimeDetailView: React.FC<AnimeDetailViewProps> = ({
             className="absolute inset-0 h-full w-full scale-125 object-cover opacity-20 blur-3xl"
           />
         ) : null}
-        <div className="absolute inset-0 bg-gradient-to-t from-[#0f0f12] via-[#0f0f12]/70 to-[#0f0f12]/40 pointer-events-none" />
-        <div className="absolute inset-0 bg-gradient-to-r from-[#0f0f12]/90 via-[#0f0f12]/55 to-transparent pointer-events-none" />
+        <div className="pointer-events-none absolute inset-0" style={{ background: 'linear-gradient(to top, #0b0c10 0%, rgba(11,12,16,.72) 18%, rgba(11,12,16,.38) 42%, rgba(11,12,16,.12) 68%, transparent 100%)' }} />
+        <div className="pointer-events-none absolute inset-0" style={{ background: 'linear-gradient(to right, rgba(11,12,16,.68) 0%, rgba(11,12,16,.28) 48%, transparent 100%)' }} />
+        <div className="pointer-events-none absolute inset-0 mix-blend-screen" style={{ background: `radial-gradient(ellipse at 82% 20%, hsla(${themeHue}, 85%, 56%, .22), transparent 58%)` }} />
 
-        <div className="relative z-10 mx-auto flex w-full max-w-7xl flex-col gap-6 px-6 py-8 sm:flex-row">
-          {/* Poster thumb */}
-          <div className="aspect-[2/3] w-[180px] shrink-0 overflow-hidden rounded-xl border border-white/10 bg-zinc-900 shadow-2xl">
-            {showPoster ? (
-              <img
-                src={hero.posterUrl || ''}
-                alt={hero.title}
-                loading="lazy"
-                onError={() => setPosterFailed(true)}
-                className="h-full w-full object-cover"
-              />
-            ) : (
-              <div className="flex h-full w-full items-center justify-center bg-gradient-to-br from-zinc-900 to-zinc-950">
-                <Film className="h-10 w-10 text-zinc-700" />
+        <div className="relative z-10 mx-auto flex w-full max-w-7xl flex-col gap-6 px-6 py-8 sm:flex-row sm:items-stretch">
+          {/* Poster and personal list controls share one aligned left column. */}
+          <div className="flex w-[180px] shrink-0 flex-col justify-between sm:w-[220px] md:w-[240px]">
+            <div className="w-full shrink-0 overflow-hidden rounded-xl border bg-zinc-900 shadow-2xl" style={{ aspectRatio: posterAspectRatio, borderColor: `hsla(${themeHue}, 70%, 70%, .48)`, boxShadow: `0 18px 55px hsla(${themeHue}, 75%, 35%, .24)` }}>
+              {showPoster ? (
+                <img
+                  key={hero.posterUrl}
+                  src={hero.posterUrl || ''}
+                  alt={hero.title}
+                  loading="eager"
+                  decoding="async"
+                  onLoad={(event) => {
+                    const { naturalWidth, naturalHeight } = event.currentTarget
+                    const loadedUrl = event.currentTarget.getAttribute('src')
+                    if (loadedUrl && loadedUrl === hero.posterUrl && naturalWidth > 0 && naturalHeight > 0) {
+                      setPosterAspect({ url: loadedUrl, ratio: naturalWidth / naturalHeight })
+                    }
+                  }}
+                  onError={() => setPosterFailed(true)}
+                  className="h-full w-full object-contain"
+                />
+              ) : (
+                <div className="flex h-full w-full items-center justify-center bg-gradient-to-br from-zinc-900 to-zinc-950">
+                  <Film className="h-10 w-10 text-zinc-700" />
+                </div>
+              )}
+            </div>
+
+            {anilistId != null && (
+              <div className="mt-3">
+                <span className="mb-1.5 block text-[10px] font-bold uppercase tracking-widest text-zinc-500">My List</span>
+                <div className="grid grid-cols-[minmax(0,1fr)_68px] gap-2">
+                  <select value={statusValue} onChange={handleStatusChange} className={`${SELECT_CLASS} min-w-0 w-full`}>
+                    <option value="">Add to list</option>
+                    {STATUS_OPTIONS.map((option) => (
+                      <option key={option.value} value={option.value}>{option.label}</option>
+                    ))}
+                  </select>
+                  <select
+                    value={scoreValue}
+                    onChange={handleScoreChange}
+                    disabled={!currentEntry}
+                    title={currentEntry ? 'Your score' : 'Set a list status first'}
+                    className={`${SELECT_CLASS} min-w-0 w-full px-2`}
+                  >
+                    {Array.from({ length: 11 }, (_, n) => n).map((n) => (
+                      <option key={n} value={n}>{n === 0 ? '—' : n}</option>
+                    ))}
+                  </select>
+                </div>
               </div>
             )}
           </div>
@@ -521,9 +1099,10 @@ export const AnimeDetailView: React.FC<AnimeDetailViewProps> = ({
             initial={{ opacity: 0, y: 10 }}
             animate={{ opacity: 1, y: 0 }}
             transition={{ duration: 0.3, ease: 'easeOut' }}
-            className="min-w-0 flex-1"
+            className="min-w-0 flex-1 pt-2 sm:flex sm:flex-col"
           >
-            <h1 className="text-3xl font-black leading-tight tracking-tight text-white" title={hero.title}>
+            <p className="mb-2 text-[10px] font-bold uppercase tracking-[0.22em]" style={{ color: `hsl(${themeHue} 78% 76%)` }}>Anime overview</p>
+            <h1 className="text-4xl font-black leading-tight tracking-tight text-white md:text-5xl" title={hero.title}>
               {hero.title}
             </h1>
 
@@ -545,31 +1124,42 @@ export const AnimeDetailView: React.FC<AnimeDetailViewProps> = ({
                   <span>{hero.format}</span>
                 </MetaChip>
               )}
-              {episodeTotal > 0 && (
+              {episodeTotal > 0 && !isFeatureFilm && (
                 <MetaChip>
                   <span>{episodeTotal} EP</span>
                 </MetaChip>
               )}
+              {hero.idMal != null && (
+                <MetaChip
+                  title={ageRating === 'NR' ? 'No age rating in the local database' : `MyAnimeList age rating: ${ageRating}`}
+                  className={ageRating === 'NR'
+                    ? 'border-zinc-300/20 bg-zinc-950/80 text-zinc-200'
+                    : ['R-17+', 'R+', 'Rx'].includes(ageRating)
+                      ? 'border-amber-300/30 bg-amber-950/80 text-amber-100'
+                      : 'border-teal-300/25 bg-teal-950/80 text-teal-100'}
+                >
+                  <span>{ageRating}</span>
+                </MetaChip>
+              )}
+              {!isFeatureFilm && releasedEpisodeCount != null && (hero.status === 'RELEASING' || hero.status === 'NOT_YET_RELEASED') && (
+                <MetaChip title="Episodes aired so far">
+                  <span>{releasedEpisodeCount}{episodeTotal > 0 ? `/${episodeTotal}` : ''} aired</span>
+                </MetaChip>
+              )}
               {hero.status && (
                 <MetaChip className={statusChipClass(hero.status)}>
-                  <span>{hero.status.replace(/_/g, ' ')}</span>
+                  <span>{hero.status === 'RELEASING' ? 'ONGOING' : hero.status.replace(/_/g, ' ')}</span>
                 </MetaChip>
               )}
             </div>
 
-            {badgeState && (
-              <div className="mt-3 flex flex-wrap gap-1.5">
-                <StatusBadges state={badgeState} />
-              </div>
-            )}
-
-            {/* Tech tag chips (LOCAL only) */}
-            {techChips.length > 0 && (
-              <div className="mt-3 flex flex-wrap items-center gap-1.5">
+            {(badgeState || techChips.length > 0) && (
+              <div className="mt-2 flex flex-wrap items-center gap-1.5">
+                {badgeState && <StatusBadges state={badgeState} />}
                 {techChips.map((chip) => (
                   <span
                     key={chip}
-                    className="rounded border border-white/15 bg-black/60 px-2 py-0.5 font-mono text-[10px] font-bold text-zinc-200 backdrop-blur-sm"
+                    className="rounded border border-white/10 bg-black/35 px-2 py-0.5 font-mono text-[9px] font-semibold text-zinc-300/90 backdrop-blur-sm"
                   >
                     {chip}
                   </span>
@@ -583,7 +1173,8 @@ export const AnimeDetailView: React.FC<AnimeDetailViewProps> = ({
                 {hero.genres.map((genre) => (
                   <span
                     key={genre}
-                    className="rounded border border-white/10 bg-white/5 px-2.5 py-0.5 text-[11px] font-medium text-zinc-300"
+                    className="rounded border px-2.5 py-0.5 text-[11px] font-medium text-zinc-200"
+                    style={{ borderColor: `hsla(${themeHue}, 72%, 68%, .24)`, backgroundColor: `hsla(${themeHue}, 72%, 58%, .10)` }}
                   >
                     {genre}
                   </span>
@@ -592,27 +1183,61 @@ export const AnimeDetailView: React.FC<AnimeDetailViewProps> = ({
             )}
 
             {hero.description && (
-              <p className="mt-4 max-w-2xl text-xs leading-relaxed text-zinc-300 line-clamp-3">{hero.description}</p>
+              <>
+                <p
+                  ref={descriptionRef}
+                  className="mt-4 line-clamp-5 max-w-2xl rounded-xl border border-white/[0.06] bg-[#080910]/55 px-3 py-2 text-[13px] leading-relaxed text-zinc-100/95 shadow-lg shadow-black/10 backdrop-blur-[3px]"
+                >
+                  {hero.description}
+                </p>
+                {descriptionClamped && (
+                  <button
+                    type="button"
+                    onClick={() => setDescriptionReaderOpen(true)}
+                    className="mt-1 inline-flex items-center gap-1 rounded-md px-1 py-0.5 text-[11px] font-semibold text-zinc-300 transition-colors hover:text-white focus:outline-none focus:ring-2 focus:ring-white/30"
+                  >
+                    Read full description <span aria-hidden="true">↗</span>
+                  </button>
+                )}
+              </>
             )}
 
             {/* Actions row */}
-            <div className="mt-6 flex flex-wrap items-center gap-3">
-              <button
+            <div className="mt-6 flex flex-wrap items-center gap-3 sm:mt-auto sm:pt-6">
+              {!singleFileMovie && <button
                 type="button"
                 onClick={handlePlayResume}
                 disabled={!resumeEpisode}
                 title={resumeEpisode ? 'Play the first unwatched local episode' : 'No local episodes on this PC yet'}
                 className={`flex select-none items-center gap-2 rounded-xl px-6 py-3 text-sm font-bold shadow-lg transition-all active:scale-[0.98] ${
                   resumeEpisode
-                    ? 'bg-gradient-to-r from-red-600 to-red-500 text-white shadow-red-600/30 hover:from-red-500 hover:to-red-400 hover:shadow-red-600/50 hover:scale-[1.02]'
+                  ? 'text-white hover:scale-[1.02]'
                     : 'cursor-not-allowed border border-zinc-700/40 bg-zinc-800 text-zinc-500 opacity-60 shadow-none'
                 }`}
+                style={resumeEpisode ? { background: `linear-gradient(110deg, hsl(${themeHue} 72% 48%), hsl(${(themeHue + 24) % 360} 82% 60%))`, boxShadow: `0 12px 30px hsla(${themeHue}, 70%, 45%, .28)` } : undefined}
               >
                 <Play className="h-4 w-4 fill-current" />
                 <span>
                   {resumeStartAt && resumeProgress ? `Resume from ${formatTime(resumeProgress.currentTime)}` : 'Play'}
                 </span>
-              </button>
+              </button>}
+
+              {anilistId != null && followEligible && (
+                <button
+                  type="button"
+                  onClick={() => onToggleFollow({
+                    anilistId,
+                    title: hero.title,
+                    posterUrl: hero.posterUrl,
+                    status: hero.status || 'RELEASING',
+                    episodesCount: hero.episodesCount,
+                  }, !isFollowing)}
+                  className={`flex select-none items-center gap-2 rounded-xl border px-4 py-3 text-xs font-bold transition-all hover:scale-[1.02] active:scale-[0.98] ${isFollowing ? 'border-emerald-400/30 bg-emerald-400/15 text-emerald-200 hover:bg-emerald-400/20' : 'border-emerald-400/30 bg-emerald-400/10 text-emerald-300 hover:bg-emerald-400/20'}`}
+                >
+                  {isFollowing ? <BellRing className="h-4 w-4" /> : <Bell className="h-4 w-4" />}
+                  <span>{isFollowing ? 'Following' : 'Follow'}</span>
+                </button>
+              )}
 
               {localFolder && (
                 <button
@@ -638,15 +1263,49 @@ export const AnimeDetailView: React.FC<AnimeDetailViewProps> = ({
               )}
 
               {canDownload ? (
-                <button
-                  type="button"
-                  onClick={() => setPickerState({ episode: null })}
-                  title="Search your indexers and download this title"
-                  className="flex select-none items-center gap-2 rounded-xl border border-indigo-500/40 bg-indigo-600/20 px-4 py-3 text-xs font-bold text-indigo-300 transition-all hover:bg-indigo-600/30 hover:scale-[1.02] active:scale-[0.98]"
-                >
-                  <Download className="h-4 w-4" />
-                  <span>Download</span>
-                </button>
+                <div className="relative flex">
+                  <DownloadActionButton
+                    type="button"
+                    onClick={() => void requestDownload(null)}
+                    onLongPress={() => setPickerState({ episode: null })}
+                    disabled={downloadedSeason || queueing}
+                    title={downloadedSeason ? 'All listed episodes are already on this PC' : 'Click to download · hold for manual release search'}
+                    className={`flex select-none items-center gap-2 border border-cyan-400/30 bg-cyan-400/10 px-4 py-3 text-xs font-bold text-cyan-200 transition-all hover:bg-cyan-400/20 disabled:cursor-default disabled:opacity-60 ${downloadRoots.length > 1 ? 'rounded-l-xl border-r-0' : 'rounded-xl'}`}
+                  >
+                    {downloadedSeason ? <CheckCircle className="h-4 w-4" /> : <Download className="h-4 w-4" />}
+                    <span>{queueing ? 'Searching…' : downloadedSeason ? 'Season downloaded' : 'Download season'}</span>
+                  </DownloadActionButton>
+                  {downloadRoots.length > 1 && (
+                    <>
+                      <button
+                        type="button"
+                        aria-label="Choose download folder"
+                        title={`Download to: ${defaultDownloadRoot || ''}`}
+                        onClick={() => setSeasonFolderMenuOpen((open) => !open)}
+                        className="flex w-11 items-center justify-center rounded-r-xl border border-cyan-400/30 bg-cyan-400/10 text-cyan-200 transition-colors hover:bg-cyan-400/20"
+                      >
+                        <MoreHorizontal className="h-4 w-4" />
+                      </button>
+                      {seasonFolderMenuOpen && (
+                        <div className="absolute bottom-full right-0 z-50 mb-2 max-h-56 w-72 overflow-y-auto rounded-xl border border-white/10 bg-[#17181f] p-1.5 shadow-2xl">
+                          <p className="px-2 py-1.5 text-[10px] font-bold uppercase tracking-wider text-zinc-500">Download to folder</p>
+                          {downloadRoots.map((root) => (
+                            <button
+                              key={root}
+                              type="button"
+                              title={root}
+                              onClick={() => { setSelectedDownloadRoot(root); setSeasonFolderMenuOpen(false) }}
+                              className={`block w-full rounded-lg px-2 py-2 text-left text-[11px] transition-colors ${defaultDownloadRoot === root ? 'bg-cyan-300/10 text-cyan-100' : 'text-zinc-300 hover:bg-white/5'}`}
+                            >
+                              <span className="block truncate font-medium">{root.split(/[\\/]/).filter(Boolean).slice(-1)[0] || root}</span>
+                              <span className="mt-0.5 block truncate font-mono text-[9px] text-zinc-500">{root}</span>
+                            </button>
+                          ))}
+                        </div>
+                      )}
+                    </>
+                  )}
+                </div>
               ) : (
                 <button
                   type="button"
@@ -655,38 +1314,10 @@ export const AnimeDetailView: React.FC<AnimeDetailViewProps> = ({
                   className="flex cursor-not-allowed select-none items-center gap-2 rounded-xl border border-zinc-700/40 bg-zinc-800/40 px-4 py-3 text-xs font-bold text-zinc-500 opacity-70"
                 >
                   <Download className="h-4 w-4" />
-                  <span>Download</span>
+                  <span>Download season</span>
                 </button>
               )}
             </div>
-
-            {/* List status + score (only when the AniList id is known) */}
-            {anilistId != null && (
-              <div className="mt-5 flex flex-wrap items-center gap-2">
-                <span className="text-[10px] font-bold uppercase tracking-widest text-zinc-500">My List</span>
-                <select value={statusValue} onChange={handleStatusChange} className={SELECT_CLASS}>
-                  <option value="">Add to list</option>
-                  {STATUS_OPTIONS.map((option) => (
-                    <option key={option.value} value={option.value}>
-                      {option.label}
-                    </option>
-                  ))}
-                </select>
-                <select
-                  value={scoreValue}
-                  onChange={handleScoreChange}
-                  disabled={!currentEntry}
-                  title={currentEntry ? 'Your score' : 'Set a list status first'}
-                  className={SELECT_CLASS}
-                >
-                  {Array.from({ length: 11 }, (_, n) => n).map((n) => (
-                    <option key={n} value={n}>
-                      {n === 0 ? '—' : n}
-                    </option>
-                  ))}
-                </select>
-              </div>
-            )}
 
             {/* 'Completed!' suggestion: offer freeing the downloaded files */}
             {completedSuggestion && localFolder && localRows.length > 0 && (
@@ -727,63 +1358,222 @@ export const AnimeDetailView: React.FC<AnimeDetailViewProps> = ({
       </div>
 
       {/* Episode list */}
-      <section className="mx-auto w-full max-w-7xl px-6 pb-16">
+      <section
+        ref={episodesSectionRef}
+        className="mx-auto w-full max-w-7xl scroll-mt-4 px-6 pb-16"
+      >
         <div className="mb-3 flex items-center justify-between">
-          <h2 className="text-lg font-black text-white">Episodes</h2>
-          {mergedRows.length > 0 && <span className="text-xs text-zinc-500">{mergedRows.length} total</span>}
+          <div>
+            <h2 className="text-xl font-black text-white">{isFeatureFilm ? 'Movie' : 'Episodes'}</h2>
+            <p className="mt-1 text-xs text-zinc-500">
+              {isFeatureFilm
+                ? `${downloadedCount ? 'Available on this PC' : downloadingCount ? 'Downloading movie' : 'Feature film'}${localRows[0]?.episode?.duration ? ` · ${formatTime(localRows[0].episode.duration)}` : ''}`
+                : <>{downloadedCount} downloaded{downloadingCount ? ` · ${downloadingCount} downloading` : ''}{releasedEpisodeCount != null ? ` · ${releasedEpisodeCount} aired` : ''}{` · ${Math.max(0, mergedRows.length - downloadedCount - downloadingCount)} not downloaded`}</>}
+            </p>
+          </div>
+          <div className="flex items-center gap-2">
+            {episodeDownloadQueue.length > 0 && <span className="rounded-full border border-cyan-300/20 bg-cyan-300/10 px-3 py-1 text-xs font-semibold text-cyan-200">{episodeDownloadQueue.length} in queue</span>}
+            {mergedRows.length > 0 && <span className="rounded-full border border-white/10 bg-white/5 px-3 py-1 text-xs text-zinc-400">{isFeatureFilm ? '1 movie' : `${mergedRows.length} episodes`}</span>}
+          </div>
         </div>
 
         {mergedRows.length === 0 ? (
           <p className="rounded-lg border border-zinc-800/80 bg-zinc-900/40 px-4 py-10 text-center text-sm text-zinc-500">
-            {detailsLoading ? 'Loading episodes…' : 'No episodes available for this title yet'}
+            {detailsLoading || remoteEpisodesLoading ? 'Loading episodes…' : 'No episodes available for this title yet'}
           </p>
         ) : (
-          <div className="flex flex-col gap-1">
-            {mergedRows.map((row) => {
-              const local = row.local
-              const progress = local ? history[local.filePath] : undefined
-              const startAt =
-                progress && !progress.completed && progress.currentTime > 0 ? progress.currentTime : undefined
-              const title = local
-                ? local.episodeTitle ||
-                  local.kitsuTitle ||
-                  local.title ||
-                  row.remote?.title ||
-                  local.fileName ||
-                  `Episode ${row.num}`
-                : row.remote?.title || `Episode ${row.num}`
-              const thumbnail = local
-                ? local.kitsuThumbnail || local.thumbnailUrl || row.remote?.thumbnailUrl || null
-                : (row.remote?.thumbnailUrl ?? null)
+          <>
+            <div className={singleFileMovie ? 'flex' : `grid gap-3 ${isFeatureFilm ? 'grid-cols-1' : 'grid-cols-1 sm:grid-cols-2 xl:grid-cols-3 2xl:grid-cols-4'}`}>
+              {singleFileMovie ? (
+                <button
+                  type="button"
+                  onClick={handlePlayResume}
+                  disabled={!resumeEpisode}
+                  className="inline-flex items-center gap-2.5 rounded-xl px-6 py-3.5 text-sm font-bold text-white shadow-lg transition hover:-translate-y-0.5 hover:brightness-110 disabled:cursor-not-allowed disabled:opacity-50"
+                  style={{ background: `linear-gradient(110deg, hsl(${themeHue} 72% 48%), hsl(${(themeHue + 24) % 360} 82% 60%))`, boxShadow: `0 12px 30px hsla(${themeHue}, 70%, 45%, .28)` }}
+                >
+                  <Play className="h-4 w-4 fill-current" />
+                  {resumeStartAt ? 'Resume movie' : 'Play movie'}
+                </button>
+              ) : visibleEpisodeRows.map((row) => {
+                const local = row.local
+                const progress = local ? history[local.filePath] : undefined
+                const startAt =
+                  progress && !progress.completed && progress.currentTime > 0 ? progress.currentTime : undefined
+                // AniList/ani.zip metadata is authoritative for episode-facing
+                // labels and stills. Local container/release names are only a
+                // fallback because they often contain the full torrent filename.
+                const isEnglishTitle = (value: string | null | undefined): value is string =>
+                  !!value?.trim() && !/[\u3040-\u30ff\u3400-\u9fff]/u.test(value)
+                const localEpisodeTitle = [local?.kitsuTitle, local?.episodeTitle].find(isEnglishTitle) || null
+                const localTitleLooksLikeRelease = !!localEpisodeTitle &&
+                  (/[\[\]]/.test(localEpisodeTitle) ||
+                    /\b(?:2160p|1080p|720p|web[- ]?rip|web[- ]?dl|bluray|h\.?265|x265|hevc|e[- ]?ac[- ]?3|multi[- ]audio|dual[- ]audio|repack)\b/i.test(localEpisodeTitle))
+                // No placeholder here: EpisodeRow renders a single "Episode N"
+                // when no real title exists (avoids "Episode 2 — Episode 2").
+                const title = (isEnglishTitle(row.remote?.title) ? row.remote?.title : null) ||
+                  (localEpisodeTitle && !localTitleLooksLikeRelease ? localEpisodeTitle : null)
+                const thumbnail = row.remote?.thumbnailUrl || local?.kitsuThumbnail || local?.thumbnailUrl || null
+                const torrentJob = torrentJobForEpisode(p2pState?.jobs || [], anilistId, row.num)
+                const queuedForSearch = episodeDownloadQueue.includes(row.num) || activeQueuedEpisode === row.num
+                const remoteAirTime = row.remote?.airDate ? Date.parse(row.remote.airDate) : Number.NaN
+                const unaired = !local && (
+                  (airedThrough != null && row.num > airedThrough) ||
+                  (Number.isFinite(remoteAirTime) && remoteAirTime > Date.now())
+                )
 
-              return (
-                <EpisodeRow
-                  key={`ep-${row.num}-${local?.filePath ?? 'remote'}`}
-                  number={String(row.num)}
-                  title={title}
-                  thumbnailUrl={thumbnail}
-                  airDate={row.remote?.airDate ?? null}
-                  local={local}
-                  // When release search is available, fileless rows get an
-                  // enabled download action (EpisodeRow keeps remoteOnly rows
-                  // as disabled ghosts), trading the 'Not Downloaded' pill /
-                  // air-date line for the actionable button.
-                  remoteOnly={!local && !p2pAvailable}
-                  watched={!!local && history[local.filePath]?.completed === true}
-                  isDownloading={!!local?.isDownloading}
-                  downloadProgress={local?.downloadProgress}
-                  onPlay={local ? () => onPlayEpisode(local, startAt) : undefined}
-                  onWhisper={local && localFolder ? () => onOpenWhisper(localFolder) : undefined}
-                  onDownload={
-                    p2pAvailable && !local ? () => setPickerState({ episode: row.num }) : undefined
-                  }
-                  onDelete={local ? () => setConfirmDeleteEpisode(local) : undefined}
-                />
+                return (
+                  <EpisodeRow
+                    key={`ep-${row.num}-${local?.filePath ?? 'remote'}`}
+                    number={String(row.num)}
+                    title={title}
+                    isFeatureFilm={isFeatureFilm}
+                    thumbnailUrl={thumbnail}
+                    fallbackThumbnailUrl={local?.thumbnailUrl}
+                    airDate={row.remote?.airDate ?? null}
+                    local={local}
+                    // When release search is available, fileless rows get an
+                    // enabled download action (EpisodeRow keeps remoteOnly rows
+                    // as disabled ghosts), trading the 'Not Downloaded' pill /
+                    // air-date line for the actionable button.
+                    remoteOnly={!local && !p2pAvailable}
+                    unaired={unaired}
+                    ongoing={ongoing}
+                    watched={!!local && history[local.filePath]?.completed === true}
+                    isDownloading={!!local?.isDownloading}
+                    downloadProgress={local?.downloadProgress}
+                    playbackProgress={progress}
+                    torrentJob={torrentJob}
+                    queuedForSearch={queuedForSearch && !torrentJob}
+                    onPlay={local ? () => onPlayEpisode(local, startAt) : undefined}
+                    onWhisper={local && localFolder ? () => onOpenWhisper(localFolder) : undefined}
+                    onDownload={
+                      p2pAvailable && !local ? () => void requestDownload(row.num) : undefined
+                    }
+                    onDownloadLongPress={p2pAvailable && !local ? () => setPickerState({ episode: row.num }) : undefined}
+                    downloadRoots={downloadRoots}
+                    selectedDownloadRoot={defaultDownloadRoot}
+                    onSelectDownloadRoot={setSelectedDownloadRoot}
+                    onDelete={local ? () => setConfirmDeleteEpisode(local) : undefined}
+                  />
+                )
+              })}
+            </div>
+
+            {episodePageCount > 1 && (
+              <div className="mt-5 flex items-center justify-center gap-3">
+                <button
+                  type="button"
+                  onClick={() => {
+                    scrollEpisodesOnPageChange.current = true
+                    setEpisodePage((page) => Math.max(1, safeEpisodePage - 1))
+                  }}
+                  disabled={safeEpisodePage <= 1}
+                  className="rounded-lg border border-zinc-700/60 bg-zinc-800/80 px-3 py-1.5 text-xs font-semibold text-zinc-300 transition-colors hover:bg-zinc-700/80 hover:text-white disabled:cursor-not-allowed disabled:opacity-40 disabled:hover:bg-zinc-800/80 disabled:hover:text-zinc-300"
+                >
+                  ← Previous
+                </button>
+                <span className="text-xs text-zinc-500">Page {safeEpisodePage} of {episodePageCount}</span>
+                <button
+                  type="button"
+                  onClick={() => {
+                    scrollEpisodesOnPageChange.current = true
+                    setEpisodePage((page) => Math.min(episodePageCount, safeEpisodePage + 1))
+                  }}
+                  disabled={safeEpisodePage >= episodePageCount}
+                  className="rounded-lg border border-zinc-700/60 bg-zinc-800/80 px-3 py-1.5 text-xs font-semibold text-zinc-300 transition-colors hover:bg-zinc-700/80 hover:text-white disabled:cursor-not-allowed disabled:opacity-40 disabled:hover:bg-zinc-800/80 disabled:hover:text-zinc-300"
+                >
+                  Next →
+                </button>
+              </div>
+            )}
+          </>
+        )}
+      </section>
+
+      <section className="mx-auto w-full max-w-7xl px-6 pb-16">
+        <div className="mb-4 flex items-end justify-between gap-4">
+          <div>
+            <h2 className="text-xl font-black text-white">Related</h2>
+            <p className="mt-1 text-xs text-zinc-500">Seasons and other entries in this franchise</p>
+          </div>
+          {orderedRelated.length > 0 && <span className="rounded-full border border-white/10 bg-white/5 px-3 py-1 text-xs text-zinc-400">{orderedRelated.length} titles</span>}
+        </div>
+        {relatedLoading ? <div className="h-36 animate-pulse rounded-2xl border border-white/10 bg-white/[0.03]" /> : orderedRelated.length === 0 ? (
+          <p className="rounded-xl border border-white/[0.08] bg-white/[0.02] px-4 py-6 text-center text-sm text-zinc-500">No related titles were returned by AniList.</p>
+        ) : (
+          <div className="grid grid-cols-2 gap-3 sm:grid-cols-3 xl:grid-cols-5">
+            {orderedRelated.map((item) => {
+              const title = item.title.english || item.title.romaji || `Anime ${item.anilistId}`
+              const isCurrent = item.anilistId === details?.anilistId
+              const card = (
+                <>
+                  <div className="relative aspect-[2/3] overflow-hidden bg-zinc-950">
+                    {item.posterUrl ? <img src={item.posterUrl} alt="" loading="lazy" className="h-full w-full object-cover transition duration-300 group-hover:scale-105" /> : <div className="flex h-full items-center justify-center text-xs text-zinc-600">No poster</div>}
+                    <span className={`absolute left-2 top-2 rounded-md border px-2 py-1 text-[9px] font-bold uppercase tracking-wide ${isCurrent ? 'border-violet-300/40 bg-violet-500/80 text-white' : 'border-black/20 bg-black/75 text-violet-100'}`}>{item.relationType.replace(/_/g, ' ')}</span>
+                  </div>
+                  <div className="p-2.5">
+                    <p className="line-clamp-2 min-h-9 text-xs font-semibold text-zinc-100">{title}</p>
+                    <p className="mt-1 text-[10px] text-zinc-500">{[item.format, item.startDate?.year ?? item.seasonYear].filter(Boolean).join(' · ') || 'Anime'}</p>
+                  </div>
+                </>
+              )
+              return isCurrent ? (
+                <div key={item.anilistId} aria-current="true" title="You are here" className="cursor-default overflow-hidden rounded-xl border border-violet-300/40 bg-[#17181e] shadow-lg shadow-violet-950/30 ring-2 ring-violet-400/80">
+                  {card}
+                </div>
+              ) : (
+                <button key={item.anilistId} type="button" onClick={() => onOpenRelated(item)} className="group overflow-hidden rounded-xl border border-white/10 bg-[#17181e] text-left transition hover:-translate-y-0.5 hover:border-violet-300/40 hover:shadow-lg hover:shadow-violet-950/20">
+                  {card}
+                </button>
               )
             })}
           </div>
         )}
       </section>
+
+      {descriptionReaderOpen && hero.description && (
+        <div
+          className="fixed inset-0 z-[80] flex items-center justify-center bg-black/70 p-4 backdrop-blur-sm animate-in fade-in duration-150"
+          onClick={() => setDescriptionReaderOpen(false)}
+        >
+          <section
+            role="dialog"
+            aria-modal="true"
+            aria-labelledby="anime-description-title"
+            className="flex max-h-[min(78vh,760px)] w-full max-w-2xl flex-col overflow-hidden rounded-2xl border border-white/10 bg-[#111218] shadow-2xl shadow-black/60 animate-in zoom-in-95 duration-150"
+            onClick={(event) => event.stopPropagation()}
+          >
+            <header className="flex items-start justify-between gap-4 border-b border-white/[0.07] px-5 py-4 sm:px-6">
+              <div className="min-w-0">
+                <p className="text-[10px] font-bold uppercase tracking-[0.2em]" style={{ color: `hsl(${themeHue} 78% 76%)` }}>Synopsis</p>
+                <h2 id="anime-description-title" className="mt-1 line-clamp-2 text-base font-bold text-white sm:text-lg">{hero.title}</h2>
+              </div>
+              <button
+                type="button"
+                autoFocus
+                aria-label="Close full description"
+                onClick={() => setDescriptionReaderOpen(false)}
+                className="flex h-9 w-9 shrink-0 items-center justify-center rounded-lg border border-white/10 text-zinc-400 transition hover:bg-white/10 hover:text-white focus:outline-none focus:ring-2 focus:ring-white/30"
+              >
+                <X className="h-4 w-4" />
+              </button>
+            </header>
+            <div className="overflow-y-auto px-5 py-5 text-sm leading-7 text-zinc-200 sm:px-6 sm:py-6">
+              {hero.description}
+            </div>
+            <footer className="flex justify-end border-t border-white/[0.07] px-5 py-3 sm:px-6">
+              <button
+                type="button"
+                onClick={() => setDescriptionReaderOpen(false)}
+                className="rounded-lg px-3 py-2 text-xs font-semibold text-zinc-300 transition hover:bg-white/10 hover:text-white"
+              >
+                Close
+              </button>
+            </footer>
+          </section>
+        </div>
+      )}
 
       {/* Season delete confirmation (files only — history and progress are kept) */}
       {confirmDeleteSeason && localFolder && (
@@ -803,10 +1593,10 @@ export const AnimeDetailView: React.FC<AnimeDetailViewProps> = ({
                 <AlertTriangle className="h-5 w-5 text-red-400" />
               </div>
               <div className="min-w-0">
-                <h3 className="text-sm font-bold text-white">Delete files from PC</h3>
+                <h3 className="text-sm font-bold text-white">Delete anime folder from PC</h3>
                 <p className="mt-1 text-xs leading-relaxed text-zinc-400">
-                  Delete &ldquo;{localFolder.canonicalTitle || localFolder.folderName}&rdquo; from PC? This
-                  frees {formatFileSize(seasonSizeBytes)}. Watch history and progress are kept.
+                  Permanently delete &ldquo;{localFolder.canonicalTitle || localFolder.folderName}&rdquo; and its files from this PC?
+                  This frees {formatFileSize(seasonSizeBytes)}. Active downloads to this folder will be stopped; watch history and progress are kept.
                 </p>
               </div>
             </div>
@@ -890,11 +1680,12 @@ export const AnimeDetailView: React.FC<AnimeDetailViewProps> = ({
         open={pickerState !== null}
         title={hero.title}
         anilistId={anilistId}
-        season={parsedSeason}
+        season={seasonHint}
         episode={pickerState?.episode ?? null}
         episodeCount={details?.episodesCount ?? null}
+        episodeDurationMinutes={details?.durationMinutes ?? null}
         aliases={searchAliases}
-        onCancel={() => setPickerState(null)}
+        onCancel={handleCancelReleasePicker}
         onPicked={handlePickRelease}
       />
     </div>

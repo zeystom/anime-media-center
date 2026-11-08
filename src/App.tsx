@@ -1,19 +1,24 @@
-import React, { useState, useEffect, useCallback, useMemo, useRef } from 'react';
+import React, { lazy, Suspense, useState, useEffect, useCallback, useMemo, useRef } from 'react';
 import { AlertCircle, X } from 'lucide-react';
 import { Navbar } from './components/Navbar';
 import { HomeView } from './components/Home/HomeView';
-import { FolderBrowser } from './components/Library/FolderBrowser';
-import { AnimeDetailView, DetailSource } from './components/AnimeDetail/AnimeDetailView';
-import { ScheduleView } from './components/Schedule/ScheduleView';
-import { VideoPlayer } from './components/Player/VideoPlayer';
-import { WhisperStudio } from './components/WhisperStudio/WhisperStudio';
-import { DownloadsView } from './components/Downloads/DownloadsView';
+import type { DetailSource } from './components/AnimeDetail/AnimeDetailView';
 import { CompletionPrompt, CompletionPromptData } from './components/common/CompletionPrompt';
-import { SettingsModal } from './components/SettingsModal';
 import { AnimeFolder, Episode, AppSettings, PlaybackProgress, UserLibraryEntry, P2pState } from './types';
 import { useLocalStatus } from './hooks/useLocalStatus';
 import { ToastProvider, showGlobalToast } from './components/Toast';
 import { getPathBasename, getPathDirname, formatFileSize } from './utils/format';
+import { toRailItem } from './hooks/useCatalog';
+import type { AppNotification, FollowedAnime } from './types/notifications';
+
+const AnimeDetailView = lazy(() => import('./components/AnimeDetail/AnimeDetailView').then((module) => ({ default: module.AnimeDetailView })));
+const VideoPlayer = lazy(() => import('./components/Player/VideoPlayer').then((module) => ({ default: module.VideoPlayer })));
+const WhisperStudio = lazy(() => import('./components/WhisperStudio/WhisperStudio').then((module) => ({ default: module.WhisperStudio })));
+const SettingsModal = lazy(() => import('./components/SettingsModal').then((module) => ({ default: module.SettingsModal })));
+const DiscoverView = lazy(() => import('./components/Home/DiscoverView').then((module) => ({ default: module.DiscoverView })));
+const FolderBrowser = lazy(() => import('./components/Library/FolderBrowser').then((module) => ({ default: module.FolderBrowser })));
+const ScheduleView = lazy(() => import('./components/Schedule/ScheduleView').then((module) => ({ default: module.ScheduleView })));
+const DownloadsView = lazy(() => import('./components/Downloads/DownloadsView').then((module) => ({ default: module.DownloadsView })));
 
 interface CompletionPromptState extends CompletionPromptData {
   folderPath: string;
@@ -49,14 +54,74 @@ function findLastWatchedFolder(
   return folders[0];
 }
 
+const NOTIFICATIONS_STORAGE_KEY = 'anime-center.notifications.v1';
+const AIRING_WATCH_STORAGE_KEY = 'anime-center.airing-watch.v1';
+const FOLLOWED_ANIME_STORAGE_KEY = 'anime-center.followed-anime.v1';
+
+function readNotifications(): AppNotification[] {
+  try {
+    const parsed = JSON.parse(localStorage.getItem(NOTIFICATIONS_STORAGE_KEY) || '[]');
+    return Array.isArray(parsed) ? parsed.slice(0, 200) : [];
+  } catch {
+    return [];
+  }
+}
+
+function readFollowedAnime(): FollowedAnime[] {
+  try {
+    const parsed = JSON.parse(localStorage.getItem(FOLLOWED_ANIME_STORAGE_KEY) || '[]');
+    return Array.isArray(parsed)
+      ? parsed.filter((item) => item && Number.isInteger(item.anilistId) && typeof item.title === 'string')
+      : [];
+  } catch {
+    return [];
+  }
+}
+
+function normalizeAnimeTitle(value: string | null | undefined): string {
+  return (value || '').toLocaleLowerCase().replace(/\b(season|s)\s*\d+\b/g, '').replace(/[^\p{L}\p{N}]+/gu, '');
+}
+
+function airingMatchesLibrary(entry: { anilistId: number; title: string }, folders: AnimeFolder[]): boolean {
+  const normalizedTitle = normalizeAnimeTitle(entry.title);
+  return folders.some((folder) => {
+    if (folder.anilistId != null) return folder.anilistId === entry.anilistId;
+    return [folder.canonicalTitle, folder.folderName].some((title) => {
+      const normalizedFolder = normalizeAnimeTitle(title);
+      return normalizedFolder.length >= 5 && normalizedFolder === normalizedTitle;
+    });
+  });
+}
+
 export const App: React.FC = () => {
   // Navigation & View state
-  const [currentTab, setCurrentTab] = useState<'home' | 'library' | 'schedule' | 'downloads' | 'whisper'>('home');
+  const [currentTab, setCurrentTab] = useState<'home' | 'discover' | 'library' | 'schedule' | 'downloads' | 'whisper'>('home');
+  const [visitedTabs, setVisitedTabs] = useState<Set<string>>(() => new Set(['home']));
   const [activePlayerEpisode, setActivePlayerEpisode] = useState<Episode | null>(null);
   const [playerInitialTime, setPlayerInitialTime] = useState<number>(0);
   const [settingsOpen, setSettingsOpen] = useState<boolean>(false);
   const [isWhisperActive, setIsWhisperActive] = useState<boolean>(false);
   const [detailSource, setDetailSource] = useState<DetailSource | null>(null);
+  const [navbarBackdropProgress, setNavbarBackdropProgress] = useState(1);
+  const [whisperMounted, setWhisperMounted] = useState(false);
+  const [settingsMounted, setSettingsMounted] = useState(false);
+
+  useEffect(() => {
+    if (currentTab === 'whisper') setWhisperMounted(true);
+  }, [currentTab]);
+
+  useEffect(() => {
+    if (settingsOpen) setSettingsMounted(true);
+  }, [settingsOpen]);
+
+  const updateNavbarBackdropProgress = useCallback((progress: number) => {
+    const next = Math.max(0, Math.min(1, Math.round(progress * 40) / 40));
+    setNavbarBackdropProgress((current) => Math.abs(current - next) < 0.025 ? current : next);
+  }, []);
+
+  useEffect(() => {
+    setNavbarBackdropProgress(1);
+  }, [currentTab, detailSource]);
 
   // Library & Data state
   const [settings, setSettings] = useState<AppSettings>({
@@ -72,32 +137,41 @@ export const App: React.FC = () => {
     subtitlesBgStyle: 'none',
     subtitlesOutlineWidth: 'thick',
     subtitlesOutlineColor: '#000000',
+    releaseSelectionMode: 'automatic',
+    preferredTorrentAudioLanguages: ['en'],
+    preferredTorrentSubtitleLanguages: ['en'],
   });
 
   const [folders, setFolders] = useState<AnimeFolder[]>([]);
   const [selectedFolder, setSelectedFolder] = useState<AnimeFolder | null>(null);
 
-  // Filter folders if user enabled 'Hide downloading / incomplete releases'
+  // Keep incomplete torrents out of the library until their files are ready.
   const visibleFolders = useMemo(() => {
-    if (settings.hideDownloadingAnime) {
-      return folders.filter((f) => !f.isDownloading);
-    }
-    return folders;
-  }, [folders, settings.hideDownloadingAnime]);
+    return folders.filter((folder) => !folder.isDownloading);
+  }, [folders]);
 
   useEffect(() => {
-    if (settings.hideDownloadingAnime && selectedFolder?.isDownloading) {
+    if (selectedFolder?.isDownloading) {
       setSelectedFolder(visibleFolders[0] || null);
     }
-  }, [settings.hideDownloadingAnime, selectedFolder, visibleFolders]);
+  }, [selectedFolder, visibleFolders]);
   const [history, setHistory] = useState<Record<string, PlaybackProgress>>({});
   const [userEntries, setUserEntries] = useState<Record<number, UserLibraryEntry>>({});
+  const [notifications, setNotifications] = useState<AppNotification[]>(readNotifications);
+  const [followedAnime, setFollowedAnime] = useState<FollowedAnime[]>(readFollowedAnime);
+  const [initialDownloadEpisode, setInitialDownloadEpisode] = useState<number | null>(null);
   const [loading, setLoading] = useState<boolean>(true);
   const [binaryStatus, setBinaryStatus] = useState<{ ffmpegExists: boolean; whisperExists: boolean }>({
     ffmpegExists: true,
     whisperExists: true,
   });
   const [bannerDismissed, setBannerDismissed] = useState<boolean>(false);
+
+  // Keep visited tabs mounted so their state survives navigation, but don't
+  // mount hidden pages (and start their catalog work) during the cold launch.
+  useEffect(() => {
+    setVisitedTabs((previous) => previous.has(currentTab) ? previous : new Set(previous).add(currentTab));
+  }, [currentTab]);
 
   // Season-completion suggestion: offers to free downloaded files when a
   // season finishes playing. Dismissed folders stay muted for the session.
@@ -107,11 +181,88 @@ export const App: React.FC = () => {
   const isScanningRef = useRef(false);
   const scanPendingRef = useRef(false);
 
-  // P2P / BitTorrent (Phase 5): drives the Navbar P2P/VPN indicator and the
-  // download-completed / download-failed toasts.
+  // P2P / BitTorrent (Phase 5): drives the Navbar P2P indicator and the
+  // download lifecycle notifications (started → progress → completed/error).
   const [p2pState, setP2pState] = useState<P2pState | null>(null);
-  const [vpnActive, setVpnActive] = useState<boolean | null>(null);
   const prevJobStatusRef = useRef<Record<string, string>>({});
+  const p2pSeededRef = useRef(false);
+  const prevProgressRef = useRef<Record<string, number>>({});
+
+  const addNotification = useCallback((notification: Omit<AppNotification, 'id' | 'createdAt' | 'read'>) => {
+    const item: AppNotification = {
+      ...notification,
+      id: `${Date.now()}-${Math.random().toString(36).slice(2, 8)}`,
+      createdAt: Date.now(),
+      read: false,
+    };
+    setNotifications((previous) => [item, ...previous].slice(0, 200));
+    const toastType = item.tone === 'purple'
+      ? 'purple'
+      : item.tone === 'green'
+        ? 'success'
+        : item.tone === 'amber'
+          ? 'warning'
+          : item.tone === 'red'
+            ? 'error'
+            : 'info';
+    showGlobalToast(`${item.title}: ${item.message}`, toastType, 5000);
+  }, []);
+
+  // Download notifications share a stable id derived from the torrent's
+  // infoHash: the started → progress → completed transitions UPDATE one item
+  // in place (progress bar in the panel) instead of spamming new entries.
+  const upsertDownloadNotification = useCallback((notification: Omit<AppNotification, 'createdAt' | 'read'>) => {
+    setNotifications((previous) => {
+      const index = notification.infoHash
+        ? previous.findIndex((item) => item.infoHash === notification.infoHash)
+        : -1;
+      if (index === -1) {
+        return [{ ...notification, createdAt: Date.now(), read: false }, ...previous].slice(0, 200);
+      }
+      const updated = [...previous];
+      updated[index] = { ...updated[index], ...notification };
+      return updated;
+    });
+  }, []);
+
+  useEffect(() => {
+    try { localStorage.setItem(NOTIFICATIONS_STORAGE_KEY, JSON.stringify(notifications)); } catch {}
+  }, [notifications]);
+
+  useEffect(() => {
+    try { localStorage.setItem(FOLLOWED_ANIME_STORAGE_KEY, JSON.stringify(followedAnime)); } catch {}
+  }, [followedAnime]);
+
+  const markNotificationRead = useCallback((id: string) => {
+    setNotifications((previous) => previous.map((item) => item.id === id ? { ...item, read: true } : item));
+  }, []);
+
+  const markAllNotificationsRead = useCallback(() => {
+    setNotifications((previous) => previous.map((item) => ({ ...item, read: true })));
+  }, []);
+
+  const clearNotifications = useCallback(() => setNotifications([]), []);
+  const dismissNotification = useCallback((id: string) => {
+    setNotifications((previous) => previous.filter((item) => item.id !== id));
+  }, []);
+
+  const toggleFollowAnime = useCallback((anime: FollowedAnime, follow: boolean) => {
+    setFollowedAnime((previous) => follow
+      ? previous.some((item) => item.anilistId === anime.anilistId)
+        ? previous.map((item) => item.anilistId === anime.anilistId ? anime : item)
+        : [anime, ...previous]
+      : previous.filter((item) => item.anilistId !== anime.anilistId));
+    addNotification({
+      kind: 'follow',
+      tone: follow ? 'green' : 'amber',
+      title: follow ? 'Anime followed' : 'Follow removed',
+      message: follow
+        ? `${anime.title} will be tracked for new episodes.`
+        : `${anime.title} will no longer be tracked for new episodes.`,
+      anilistId: anime.anilistId,
+      posterUrl: anime.posterUrl,
+    });
+  }, [addNotification]);
 
   const checkBinariesStatus = useCallback(async (appSettings: AppSettings) => {
     if (!window.electronAPI) return;
@@ -145,19 +296,101 @@ export const App: React.FC = () => {
     for (const job of state.jobs) {
       next[job.infoHash] = job.status;
       const before = prev[job.infoHash];
+      const poster = folders.find((f) => f.anilistId === job.anilistId)?.posterUrl ?? null;
+      const suffix = job.episode != null ? ` · Episode ${job.episode}` : '';
+
+      if (!p2pSeededRef.current) continue;
+
+      // New job: announce the start with a live progress notification.
+      if (before === undefined && (job.status === 'downloading' || job.status === 'connecting' || job.status === 'queued')) {
+        showGlobalToast(`${job.title} download started`, 'info', 5000);
+        upsertDownloadNotification({
+          kind: 'download',
+          tone: 'blue',
+          id: `dl:${job.infoHash}`,
+          infoHash: job.infoHash,
+          state: 'downloading',
+          progress: Math.max(0, Math.min(100, job.progress ?? 0)),
+          title: 'Download started',
+          message: `${job.title}${suffix} — searching peers and downloading.`,
+          anilistId: job.anilistId ?? undefined,
+          posterUrl: poster,
+          episode: job.episode ?? undefined,
+        });
+        prevProgressRef.current[job.infoHash] = job.progress ?? 0;
+        continue;
+      }
+
       if (before && before !== job.status) {
         if (job.status === 'completed') {
           showGlobalToast(`Downloaded "${job.title}" — it is now in your library`, 'success');
+          upsertDownloadNotification({
+            kind: 'download',
+            tone: 'green',
+            id: `dl:${job.infoHash}`,
+            infoHash: job.infoHash,
+            state: 'completed',
+            progress: 100,
+            title: 'Download complete',
+            message: `${job.title}${suffix} is ready in your library.`,
+            anilistId: job.anilistId ?? undefined,
+            posterUrl: poster,
+            episode: job.episode ?? undefined,
+          });
         } else if (job.status === 'error') {
           showGlobalToast(
             job.error ? `Download failed: ${job.error}` : `Download failed for "${job.title}"`,
             'warning'
           );
+          upsertDownloadNotification({
+            kind: 'download',
+            tone: 'red',
+            id: `dl:${job.infoHash}`,
+            infoHash: job.infoHash,
+            state: 'error',
+            title: 'Download failed',
+            message: job.error ? `${job.title}${suffix} — ${job.error}` : `${job.title}${suffix} failed.`,
+            anilistId: job.anilistId ?? undefined,
+            posterUrl: poster,
+            episode: job.episode ?? undefined,
+          });
+        }
+        continue;
+      }
+
+      // Live progress ticks while downloading (throttled to 2% steps so the
+      // localStorage persistence is not hammered on every poll).
+      if (job.status === 'downloading' && typeof job.progress === 'number') {
+        const last = prevProgressRef.current[job.infoHash];
+        if (last == null || Math.abs(job.progress - last) >= 2) {
+          prevProgressRef.current[job.infoHash] = job.progress;
+          upsertDownloadNotification({
+            kind: 'download',
+            tone: 'cyan',
+            id: `dl:${job.infoHash}`,
+            infoHash: job.infoHash,
+            state: 'downloading',
+            progress: Math.max(0, Math.min(100, job.progress)),
+            title: 'Downloading',
+            message: `${job.title}${suffix}`,
+            anilistId: job.anilistId ?? undefined,
+            posterUrl: poster,
+            episode: job.episode ?? undefined,
+          });
         }
       }
     }
     prevJobStatusRef.current = next;
-  }, []);
+    // A cancelled job removes its live "downloading" notification — a frozen
+    // progress bar for a torrent that no longer exists is noise.
+    setNotifications((previous) => {
+      const stale = previous.some((item) => item.state === 'downloading' && item.infoHash && !state.jobs.some((job) => job.infoHash === item.infoHash));
+      return stale
+        ? previous.filter((item) => !(item.state === 'downloading' && item.infoHash && !state.jobs.some((job) => job.infoHash === item.infoHash)))
+        : previous;
+    });
+    p2pSeededRef.current = true;
+  }, [folders, upsertDownloadNotification]);
 
   // P2P state: initial load + live subscription (unsubscribed on unmount).
   useEffect(() => {
@@ -179,30 +412,127 @@ export const App: React.FC = () => {
     };
   }, [handleP2pState]);
 
-  // VPN tunnel status: polled every 20s only while P2P is enabled; reset to
-  // null (unknown) when P2P is off.
+  // Watch AniList airing entries for library titles and titles explicitly
+  // followed by the user. Persist upcoming entries so episodes airing while
+  // the app is closed still produce a notification on the next poll.
   useEffect(() => {
-    const api = window.electronAPI;
-    if (!p2pState?.enabled || !api?.getVpnStatus) {
-      setVpnActive(null);
-      return;
-    }
+    if ((!folders.length && !followedAnime.length) || !window.electronAPI?.getAiringSchedule) return;
     let cancelled = false;
-    const poll = async () => {
+    const pollAiring = async () => {
       try {
-        const status = await api.getVpnStatus();
-        if (!cancelled) setVpnActive(Boolean(status?.active));
-      } catch {
-        if (!cancelled) setVpnActive(null);
+        const scheduleEntries = await window.electronAPI.getAiringSchedule(0);
+        if (cancelled || !Array.isArray(scheduleEntries)) return;
+        const followedEpisodeCounts = new Map<number, number>();
+        const followedEntries = await Promise.all(followedAnime.map(async (anime) => {
+          try {
+            const details = await window.electronAPI.getCatalogDetails(anime.anilistId);
+            if (details?.episodesCount != null) followedEpisodeCounts.set(anime.anilistId, details.episodesCount);
+            const next = details?.nextAiringEpisode;
+            if (!next) return null;
+            return {
+              anilistId: anime.anilistId,
+              idMal: details.idMal,
+              title: details.title.english || details.title.romaji || anime.title,
+              posterUrl: details.posterUrl || anime.posterUrl,
+              episode: next.episode,
+              airingAt: next.airingAt,
+            };
+          } catch {
+            return null;
+          }
+        }));
+        const entries = [...scheduleEntries, ...followedEntries.filter((entry): entry is NonNullable<typeof entry> => !!entry)];
+        if (cancelled) return;
+        let saved: {
+          initialized?: boolean;
+          upcoming?: Array<string | {
+            key?: string;
+            entry?: { anilistId: number; title: string; posterUrl: string | null; episode: number; airingAt: number };
+          }>;
+        } = {};
+        try { saved = JSON.parse(localStorage.getItem(AIRING_WATCH_STORAGE_KEY) || '{}'); } catch {}
+        const upcoming = new Map<string, { anilistId: number; title: string; posterUrl: string | null; episode: number; airingAt: number }>();
+        for (const item of saved.upcoming || []) {
+          if (item && typeof item === 'object' && typeof item.key === 'string' && item.entry) {
+            upcoming.set(item.key, item.entry);
+          } else if (typeof item === 'string') {
+            // Ignore keys written by an older watcher format; the metadata is
+            // needed to notify reliably if AniList drops an aired row.
+          }
+        }
+        for (const [key, entry] of upcoming) {
+          if (!airingMatchesLibrary(entry, folders) && !followedAnime.some((anime) => anime.anilistId === entry.anilistId)) {
+            upcoming.delete(key);
+          }
+        }
+        const initialized = saved.initialized === true;
+        const now = Math.floor(Date.now() / 1000);
+        const presentKeys = new Set<string>();
+        const announce = (entry: { anilistId: number; title: string; posterUrl: string | null; episode: number; airingAt: number }) => {
+          const followed = followedAnime.find((item) => item.anilistId === entry.anilistId);
+          const episodeCount = followed?.episodesCount ?? followedEpisodeCounts.get(entry.anilistId) ?? null;
+          const finalEpisode = episodeCount != null && entry.episode >= episodeCount;
+          addNotification({
+            kind: 'airing',
+            tone: finalEpisode ? 'purple' : 'green',
+            finalEpisode,
+            title: finalEpisode ? 'Final episode aired' : 'New episode aired',
+            message: `${entry.title} · Episode ${entry.episode} has aired. Search your release sources to download it.`,
+            anilistId: entry.anilistId,
+            posterUrl: entry.posterUrl,
+            episode: entry.episode,
+          });
+        };
+        for (const entry of entries) {
+          if (!entry || entry.episode == null || (!airingMatchesLibrary(entry, folders) && !followedAnime.some((item) => item.anilistId === entry.anilistId))) continue;
+          const key = `${entry.anilistId}:${entry.episode}`;
+          presentKeys.add(key);
+          const savedEntry = {
+            anilistId: entry.anilistId,
+            title: entry.title,
+            posterUrl: entry.posterUrl,
+            episode: entry.episode,
+            airingAt: entry.airingAt,
+          };
+          if (entry.airingAt > now) {
+            upcoming.set(key, savedEntry);
+          } else if (initialized && upcoming.has(key)) {
+            announce(savedEntry);
+            upcoming.delete(key);
+          } else if (entry.airingAt <= now) {
+            // An entry may not have been present in a poll while the app was
+            // asleep; if it was watched beforehand, report it once now.
+            const prior = upcoming.get(key);
+            if (initialized && prior) announce(prior);
+            upcoming.delete(key);
+          }
+        }
+        // Some catalog responses drop an airing row as soon as it airs. Use
+        // its persisted schedule snapshot to deliver the pending notification.
+        if (initialized) {
+          for (const [key, entry] of upcoming) {
+            if (entry.airingAt <= now && !presentKeys.has(key)) {
+              announce(entry);
+              upcoming.delete(key);
+            }
+          }
+        }
+        try {
+          localStorage.setItem(AIRING_WATCH_STORAGE_KEY, JSON.stringify({ initialized: true, upcoming: [...upcoming].map(([key, entry]) => ({ key, entry })) }));
+        } catch {}
+      } catch (error) {
+        console.warn('Could not check airing updates:', error);
       }
     };
-    poll();
-    const interval = setInterval(poll, 20000);
+    void pollAiring();
+    const timer = window.setInterval(() => void pollAiring(), 15 * 60 * 1000);
     return () => {
       cancelled = true;
-      clearInterval(interval);
+      window.clearInterval(timer);
     };
-  }, [p2pState?.enabled]);
+  }, [folders, followedAnime, addNotification]);
+
+  // VPN tunnel status removed — user manages their own network safety
 
   // 1. Load Settings and History on Startup
   const loadInitialData = useCallback(async () => {
@@ -220,8 +550,14 @@ export const App: React.FC = () => {
       setHistory(watchHistory);
       refreshUserEntries();
 
-      // Scan all configured Library Roots
-      const scannedFolders = await window.electronAPI.scanLibrary();
+      // Reuse the last completed scan on startup. A full scan reads metadata
+      // from every video file, which can wake a media HDD and delay the home
+      // hero. Explicit refreshes still perform a fresh scan and update cache.
+      const roots = appSettings.libraryFolders?.length
+        ? appSettings.libraryFolders
+        : appSettings.defaultLibraryRoot ? [appSettings.defaultLibraryRoot] : [];
+      const cachedFolders = await window.electronAPI.getLibraryCache(roots);
+      const scannedFolders = cachedFolders ?? await window.electronAPI.scanLibrary(roots);
       setFolders(scannedFolders);
 
       if (scannedFolders.length > 0) {
@@ -298,6 +634,24 @@ export const App: React.FC = () => {
       setLoading(false);
     }
   }, []);
+
+  // Once the torrent engine has moved completed files out of staging, refresh
+  // the library automatically so the title appears without an extra click.
+  const refreshedTorrentJobsRef = useRef<Set<string> | null>(null);
+  useEffect(() => {
+    if (!p2pState) return;
+    const completed = new Set(
+      p2pState.jobs
+        .filter((job) => job.status === 'completed' || job.status === 'seeding')
+        .map((job) => job.infoHash)
+    );
+    const previous = refreshedTorrentJobsRef.current;
+    refreshedTorrentJobsRef.current = completed;
+    if (previous === null) return; // Initial queue snapshot is not a new completion.
+    if ([...completed].some((infoHash) => !previous.has(infoHash))) {
+      void handleRefreshLibrary();
+    }
+  }, [p2pState, handleRefreshLibrary]);
 
   // Active Download Watcher: polls active torrents every 1.5 seconds while downloading
   // so progress percentage updates smoothly in real-time, and playback unlocks instantly when complete!
@@ -714,18 +1068,108 @@ export const App: React.FC = () => {
     return () => window.removeEventListener('keydown', handleGlobalKeyDown);
   }, [activePlayerEpisode, handleClosePlayer]);
 
+  // This is a single-page app, so the native mouse Back button must never
+  // traverse Chromium's document history (which also contains the startup
+  // splash page). Handle Back as an app-level stack instead.
+  useEffect(() => {
+    const navigateBack = () => {
+      if (activePlayerEpisode) {
+        handleClosePlayer();
+      } else if (settingsOpen) {
+        setSettingsOpen(false);
+      } else if (detailSource) {
+        setInitialDownloadEpisode(null);
+        setDetailSource(null);
+      } else if (currentTab !== 'home') {
+        setCurrentTab('home');
+      }
+    };
+
+    const suppressMouseNavigation = (event: MouseEvent) => {
+      if (event.button !== 3 && event.button !== 4) return;
+      event.preventDefault();
+      event.stopImmediatePropagation();
+      // Run on mouse-down because preventing its default action can suppress
+      // the later auxclick event in Chromium.
+      if (event.type === 'mousedown' && event.button === 3) navigateBack();
+    };
+
+    // Prevent Chromium from navigating away and handle Back exactly once.
+    window.addEventListener('mousedown', suppressMouseNavigation, true);
+    window.addEventListener('mouseup', suppressMouseNavigation, true);
+    window.addEventListener('auxclick', suppressMouseNavigation, true);
+    return () => {
+      window.removeEventListener('mousedown', suppressMouseNavigation, true);
+      window.removeEventListener('mouseup', suppressMouseNavigation, true);
+      window.removeEventListener('auxclick', suppressMouseNavigation, true);
+    };
+  }, [detailSource, currentTab, activePlayerEpisode, settingsOpen, handleClosePlayer]);
+
   return (
     <ToastProvider>
-      <div className="flex flex-col h-screen w-screen bg-[#0f0f12] text-zinc-100 overflow-hidden font-sans">
+      <div className="flex h-screen w-screen flex-col overflow-hidden bg-[#0b0c10] font-sans text-zinc-100">
       {/* Top Navbar - Only rendered in Menu/Library/Whisper views */}
       {!activePlayerEpisode && (
         <>
           <Navbar
             currentTab={currentTab}
-            onSelectTab={setCurrentTab}
+            backdropImage={detailSource
+              ? detailSource.kind === 'catalog'
+                ? detailSource.item.bannerUrl || detailSource.item.posterUrl
+                : detailSource.folder.bannerUrl || detailSource.folder.posterUrl
+              : currentTab === 'home'
+                ? mostRecentWatched?.folder?.bannerUrl || mostRecentWatched?.folder?.posterUrl
+                : null}
+            backdropMode={detailSource ? 'anime' : 'ambient'}
+            backdropProgress={navbarBackdropProgress}
+            onSelectTab={(tab) => {
+              setInitialDownloadEpisode(null);
+              setDetailSource(null);
+              setCurrentTab(tab);
+            }}
             onOpenSettings={() => setSettingsOpen(true)}
+            onSelectSearchItem={(item) => {
+              setInitialDownloadEpisode(null);
+              setDetailSource({ kind: 'catalog', item });
+            }}
+            notifications={notifications}
+            onNotificationRead={markNotificationRead}
+            onDismissNotification={dismissNotification}
+            onMarkAllNotificationsRead={markAllNotificationsRead}
+            onClearNotifications={clearNotifications}
+            onNotificationAction={(item) => {
+              if (item.kind === 'airing' && item.anilistId && item.episode) {
+                setInitialDownloadEpisode(item.episode);
+                setDetailSource({
+                  kind: 'catalog',
+                  item: toRailItem({
+                    anilistId: item.anilistId,
+                    idMal: null,
+                    title: item.title,
+                    posterUrl: item.posterUrl ?? null,
+                    episode: item.episode,
+                    airingAt: Math.floor(item.createdAt / 1000),
+                  }),
+                });
+              } else if (item.kind === 'download') {
+                setDetailSource(null);
+                setCurrentTab('downloads');
+              }
+            }}
             isWhisperActive={isWhisperActive}
-            p2pIndicator={{ enabled: Boolean(p2pState?.enabled), vpnActive }}
+            downloadsActive={!!p2pState?.enabled && p2pState.jobs.some((j) => j.status === 'downloading' || j.status === 'connecting' || j.status === 'queued')}
+            p2pIndicator={(() => {
+              if (!p2pState?.enabled) {
+                return { enabled: false, status: 'P2P Off', icon: 'HardDrive', bgColor: 'bg-zinc-800', textColor: 'text-zinc-400' }
+              }
+              if (p2pState.jobs.some((j) => j.status === 'downloading' || j.status === 'connecting')) {
+                return { enabled: true, status: 'Downloading', icon: 'HardDrive', bgColor: 'bg-indigo-500/20', textColor: 'text-indigo-300' }
+              }
+              if (p2pState.jobs.some((j) => j.status === 'seeding')) {
+                return { enabled: true, status: 'Seeding', icon: 'ShieldCheck', bgColor: 'bg-emerald-500/20', textColor: 'text-emerald-300' }
+              }
+              return { enabled: true, status: 'Idle', icon: 'ShieldCheck', bgColor: 'bg-zinc-700', textColor: 'text-zinc-300' }
+            })()}
           />
 
           {/* Missing Binary Warning Banner */}
@@ -770,7 +1214,22 @@ export const App: React.FC = () => {
         }`}
       >
         {/* Home Tab View */}
-        <div className={`h-full overflow-y-auto ${currentTab === 'home' ? 'block' : 'hidden'}`}>
+        {(visitedTabs.has('home') || currentTab === 'home') && <div
+          className={`h-full overflow-y-auto ${currentTab === 'home' ? 'block' : 'hidden'}`}
+          onScroll={(event) => {
+            const hero = event.currentTarget.querySelector<HTMLElement>('[data-backdrop-hero]');
+            if (!hero) {
+              updateNavbarBackdropProgress(0);
+              return;
+            }
+            const heroRect = hero.getBoundingClientRect();
+            const containerTop = event.currentTarget.getBoundingClientRect().top;
+            const progress = heroRect.height > 0
+              ? Math.max(0, Math.min(1, (heroRect.bottom - containerTop) / heroRect.height))
+              : 0;
+            updateNavbarBackdropProgress(progress);
+          }}
+        >
           <HomeView
             upNext={
               mostRecentWatched
@@ -780,6 +1239,7 @@ export const App: React.FC = () => {
                     seasonName: mostRecentWatched.seasonName,
                     posterUrl: mostRecentWatched.folder?.posterUrl,
                     bannerUrl: mostRecentWatched.folder?.bannerUrl,
+                    anilistId: mostRecentWatched.folder?.anilistId,
                     isUpNext: mostRecentWatched.isUpNext,
                   }
                 : null
@@ -790,81 +1250,128 @@ export const App: React.FC = () => {
             onPlayEpisode={handlePlayEpisode}
             onSelectCatalogItem={(item) => setDetailSource({ kind: 'catalog', item })}
             onSelectLocalFolder={(folder) => setDetailSource({ kind: 'local', folder })}
+            onOpenSchedule={() => setCurrentTab('schedule')}
+            onOpenDiscover={() => setCurrentTab('discover')}
           />
-        </div>
+        </div>}
+
+        {/* Discover tab: genre-based catalog page with full-library search kept in the navbar. */}
+        {(visitedTabs.has('discover') || currentTab === 'discover') && <div className={`h-full overflow-y-auto ${currentTab === 'discover' ? 'block' : 'hidden'}`}>
+          <Suspense fallback={<div className="flex h-full items-center justify-center text-sm text-zinc-500">Loading Discover…</div>}>
+            <DiscoverView
+              folders={visibleFolders}
+              history={history}
+              userEntries={userEntries}
+              onSelectItem={(item) => setDetailSource({ kind: 'catalog', item })}
+            />
+          </Suspense>
+        </div>}
 
         {/* Library Tab View */}
-        <div className={`h-full overflow-y-auto ${currentTab === 'library' ? 'block' : 'hidden'}`}>
-          <div className="max-w-7xl mx-auto px-6 py-6">
-            {/* Folder Browser & Episode Grid */}
-            <FolderBrowser
-              libraryRoot={
-                settings.libraryFolders && settings.libraryFolders.length > 1
-                  ? `${settings.libraryFolders.length} folders (${settings.libraryFolders.map((f) => getPathBasename(f)).join(', ')})`
-                  : settings.defaultLibraryRoot
-              }
-              folders={visibleFolders}
-              selectedFolder={selectedFolder}
-              history={history}
-              loading={loading}
-              onSelectFolder={setSelectedFolder}
-              onChangeRoot={handleChangeRoot}
-              onRefresh={handleRefreshLibrary}
-              onPlayEpisode={(ep) => handlePlayEpisode(ep)}
-              onOpenWhisper={handleOpenWhisperForFolder}
-              onOpenInExplorer={(p) => window.electronAPI.openFolderInExplorer(p)}
-              onOpenFolderDetails={(folder) => setDetailSource({ kind: 'local', folder })}
-            />
+        {(visitedTabs.has('library') || currentTab === 'library') && <div className={`h-full overflow-y-auto ${currentTab === 'library' ? 'block' : 'hidden'}`}>
+          <div className="w-full">
+            {/* Library shelf: cards open the unified title page */}
+            <Suspense fallback={<div className="py-12 text-center text-sm text-zinc-500">Loading Library…</div>}>
+              <FolderBrowser
+                libraryRoot={
+                  settings.libraryFolders && settings.libraryFolders.length > 1
+                    ? `${settings.libraryFolders.length} folders (${settings.libraryFolders.map((f) => getPathBasename(f)).join(', ')})`
+                    : settings.defaultLibraryRoot
+                }
+                folders={visibleFolders}
+                history={history}
+                loading={loading}
+                onChangeRoot={handleChangeRoot}
+                onRefresh={handleRefreshLibrary}
+                onOpenFolderDetails={(folder) => setDetailSource({ kind: 'local', folder })}
+              />
+            </Suspense>
           </div>
-        </div>
+        </div>}
 
         {/* Schedule Tab View */}
-        <div className={`h-full overflow-y-auto ${currentTab === 'schedule' ? 'block' : 'hidden'}`}>
-          <ScheduleView
-            onSelectItem={(item) => setDetailSource({ kind: 'catalog', item })}
-            statusFor={statusFor}
-          />
-        </div>
+        {(visitedTabs.has('schedule') || currentTab === 'schedule') && <div className={`h-full overflow-y-auto ${currentTab === 'schedule' ? 'block' : 'hidden'}`}>
+          <Suspense fallback={<div className="flex h-full items-center justify-center text-sm text-zinc-500">Loading Schedule…</div>}>
+            <ScheduleView
+              onSelectItem={(item) => setDetailSource({ kind: 'catalog', item })}
+              statusFor={statusFor}
+            />
+          </Suspense>
+        </div>}
 
         {/* Downloads Tab View (storage usage + files-only deletion) */}
-        <div className={`h-full overflow-y-auto ${currentTab === 'downloads' ? 'block' : 'hidden'}`}>
-          <DownloadsView onRefreshLibrary={handleRefreshLibrary} />
-        </div>
+        {(visitedTabs.has('downloads') || currentTab === 'downloads') && <div className={`h-full overflow-y-auto ${currentTab === 'downloads' ? 'block' : 'hidden'}`}>
+          <Suspense fallback={<div className="flex h-full items-center justify-center text-sm text-zinc-500">Loading Downloads…</div>}>
+            <DownloadsView onRefreshLibrary={handleRefreshLibrary} folders={visibleFolders} />
+          </Suspense>
+        </div>}
 
         {/* Whisper Studio Tab View (Never unmounted so active jobs & terminal logs are preserved) */}
-        <div className={`h-full flex-1 min-h-0 ${currentTab === 'whisper' ? 'flex flex-col' : 'hidden'}`}>
-          <WhisperStudio
-            initialFolder={selectedFolder}
-            whisperExists={binaryStatus.whisperExists}
-            onRefreshLibrary={handleRefreshLibrary}
-            onOpenSettings={() => setSettingsOpen(true)}
-          />
-        </div>
+        {whisperMounted && (
+          <div className={`h-full flex-1 min-h-0 ${currentTab === 'whisper' ? 'flex flex-col' : 'hidden'}`}>
+            <Suspense fallback={<div className="flex h-full items-center justify-center text-sm text-zinc-500">Loading Whisper Studio…</div>}>
+              <WhisperStudio
+                initialFolder={selectedFolder}
+                whisperExists={binaryStatus.whisperExists}
+                onRefreshLibrary={handleRefreshLibrary}
+                onOpenSettings={() => setSettingsOpen(true)}
+              />
+            </Suspense>
+          </div>
+        )}
       </main>
 
       {/* Anime Detail Overlay (fixed z-40; the fullscreen player at z-50 stays above it).
           Intentionally kept while detailSource is set: unmounts during playback and
           re-appears right after the player closes. */}
       {detailSource && !activePlayerEpisode && (
+        <Suspense fallback={<div className="fixed inset-0 z-40 flex items-center justify-center bg-[#0b0c10] text-sm text-zinc-400">Loading title…</div>}>
         <AnimeDetailView
           source={detailSource}
+          initialDownloadEpisode={initialDownloadEpisode}
+          settings={settings}
+          p2pState={p2pState}
+          isFollowing={!!(detailSource.kind === 'catalog' && followedAnime.some((item) => item.anilistId === detailSource.item.anilistId))}
+          onToggleFollow={toggleFollowAnime}
+          onBackdropProgressChange={updateNavbarBackdropProgress}
           folders={visibleFolders}
           history={history}
           userEntries={userEntries}
-          onClose={() => setDetailSource(null)}
+          onClose={() => {
+            setInitialDownloadEpisode(null);
+            setDetailSource(null);
+          }}
           onPlayEpisode={handlePlayEpisode}
+          onOpenRelated={(item) => setDetailSource({
+            kind: 'catalog',
+            item: {
+              anilistId: item.anilistId,
+              title: item.title.english || item.title.romaji || '',
+              posterUrl: item.posterUrl,
+              bannerUrl: item.bannerUrl,
+              averageScore: item.averageScore,
+              episodesCount: item.episodesCount,
+              format: item.format || undefined,
+              status: item.status || undefined,
+              genres: item.genres,
+              seasonYear: item.seasonYear,
+            },
+          })}
           onLibraryChanged={handleRefreshLibrary}
           onOpenWhisper={(folder) => {
             setSelectedFolder(folder);
+            setInitialDownloadEpisode(null);
             setDetailSource(null);
             setCurrentTab('whisper');
           }}
         />
+        </Suspense>
       )}
 
       {/* Fullscreen Video Player Modal or Safe Recovery Screen (BUG-01) */}
       {activePlayerEpisode &&
         (currentPlayingFolder ? (
+          <Suspense fallback={<div className="fixed inset-0 z-50 flex items-center justify-center bg-[#0f0f12] text-sm text-zinc-400">Loading player…</div>}>
           <VideoPlayer
             episode={activePlayerEpisode}
             seasonEpisodes={currentPlayingFolder.episodes}
@@ -877,6 +1384,7 @@ export const App: React.FC = () => {
             onEpisodeChange={handlePlayerEpisodeChange}
             onEpisodeCompleted={handleEpisodeCompleted}
           />
+          </Suspense>
         ) : (
           <div className="fixed inset-0 z-50 bg-[#0f0f12] flex flex-col items-center justify-center p-6 text-center">
             <div className="bg-zinc-900 border border-zinc-800 rounded-2xl p-8 max-w-md shadow-2xl flex flex-col items-center">
@@ -905,12 +1413,12 @@ export const App: React.FC = () => {
       )}
 
       {/* Settings Modal */}
-      <SettingsModal
+      {settingsMounted && <Suspense fallback={null}><SettingsModal
         isOpen={settingsOpen}
         onClose={() => setSettingsOpen(false)}
         settings={settings}
         onSave={handleSaveSettings}
-      />
+      /></Suspense>}
     </div>
     </ToastProvider>
   );

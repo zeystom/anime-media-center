@@ -1,7 +1,7 @@
 Set fso = CreateObject("Scripting.FileSystemObject")
 Set WshShell = CreateObject("WScript.Shell")
 appDir = fso.GetParentFolderName(WScript.ScriptFullName)
-exePath = appDir & "\Anime Media Center.exe"
+exePath = appDir & "\Kaiko.exe"
 electronExe = appDir & "\node_modules\electron\dist\electron.exe"
 WshShell.CurrentDirectory = appDir
 

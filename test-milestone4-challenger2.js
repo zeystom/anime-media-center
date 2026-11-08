@@ -233,16 +233,16 @@ runTest('1.3 UpNextWidget renders without throwing when currentTime === 0 or epi
   assert(completed.includes('25:00 / 24:00'), 'Completed episode still renders its timecode readout');
 });
 
-// 1.4 Chip switching: 'Up Next' when isUpNext, 'Continue Watching' otherwise
-runTest('1.4 UpNextWidget renders UP NEXT when isUpNext is true and CONTINUE WATCHING otherwise', () => {
+// 1.4 Chip switching: 'Up next' when isUpNext, 'Continue playing' otherwise
+runTest('1.4 UpNextWidget renders UP NEXT when isUpNext is true and CONTINUE PLAYING otherwise', () => {
   const upNextHtml = cleanSsr(renderUpNext(upNextPayload({ isUpNext: true })));
-  assert(upNextHtml.includes('Up Next'), 'isUpNext=true must render the Up Next chip');
-  assert(!upNextHtml.includes('Continue Watching'), 'isUpNext=true must not render the Continue Watching chip');
+  assert(upNextHtml.includes('Up next'), 'isUpNext=true must render the Up next chip');
+  assert(!upNextHtml.includes('Continue playing'), 'isUpNext=true must not render the Continue playing chip');
   assert(upNextHtml.includes('uppercase'), 'Chip label must be presented uppercase');
 
   const continueHtml = cleanSsr(renderUpNext(upNextPayload({ isUpNext: false })));
-  assert(continueHtml.includes('Continue Watching'), 'isUpNext=false must render the Continue Watching chip');
-  assert(!continueHtml.includes('Up Next'), 'isUpNext=false must not render the Up Next chip');
+  assert(continueHtml.includes('Continue playing'), 'isUpNext=false must render the Continue playing chip');
+  assert(!continueHtml.includes('Up next'), 'isUpNext=false must not render the Up next chip');
 });
 
 // 1.5 Adversarial payload: null / undefined / '' poster & banner URLs
@@ -254,24 +254,24 @@ runTest('1.5 UpNextWidget renders poster fallback gracefully when posterUrl/bann
         html = cleanSsr(renderUpNext(upNextPayload({ posterUrl, bannerUrl })));
       }, `posterUrl=${posterUrl}, bannerUrl=${bannerUrl} must not crash the render`);
 
-      assert(html.includes('>F</span>'), 'Fallback initial of the series title must render when no poster resolves');
       assert(!html.includes('src="undefined"') && !html.includes('src="null"'), 'No broken undefined/null img src may be emitted');
+      assert(html.includes('Frieren'), 'Series title must remain visible when poster and banner are unavailable');
     }
   }
 });
 
 // 1.6 Adversarial payload: empty progress.episodeNumber (label fallback)
-runTest('1.6 UpNextWidget play button label falls back when progress.episodeNumber is empty', () => {
+runTest('1.6 UpNextWidget resume button label falls back when progress.episodeNumber is empty', () => {
   for (const episodeNumber of [undefined, null, '']) {
     const html = cleanSsr(renderUpNext(upNextPayload({ progress: { episodeNumber } })));
-    assert(html.includes('Play Episode'), `episodeNumber=${episodeNumber} must fall back to the "Play Episode" label`);
-    assert(html.includes('title="Play episode"'), `episodeNumber=${episodeNumber} must fall back to the "Play episode" tooltip`);
+    assert(html.includes('Resume episode'), `episodeNumber=${episodeNumber} must fall back to the "Resume episode" label`);
+    assert(html.includes('title="Resume episode"'), `episodeNumber=${episodeNumber} must fall back to the "Resume episode" tooltip`);
     assert(!html.includes('>undefined<') && !html.includes('>null<'), 'No raw undefined/null may leak into the DOM');
   }
 
   const labeled = cleanSsr(renderUpNext(upNextPayload({ progress: { episodeNumber: 1 } })));
-  assert(labeled.includes('Play 1'), 'Numeric episodeNumber renders as "Play 1"');
-  assert(labeled.includes('title="Play 1"'), 'Numeric episodeNumber renders the matching tooltip');
+  assert(labeled.includes('Resume 1'), 'Numeric episodeNumber renders as "Resume 1"');
+  assert(labeled.includes('title="Resume 1"'), 'Numeric episodeNumber renders the matching tooltip');
 });
 
 // 1.7 Render storm: 1,000 adversarial payload alternations remain stable (mirrors the old event-storm stress)

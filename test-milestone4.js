@@ -145,10 +145,10 @@ runTest('3.1 Dedicated search empty state rendered on 0 matches', () => {
   );
 });
 
-runTest('3.2 Selected anime episode grid NOT rendered when search query yields 0 results', () => {
+runTest('3.2 Library is a pure shelf: no selected-folder details/grid, cards map the filtered set only', () => {
   assert(
-    folderBrowserSrc.includes('filteredFolders.length > 0 && selectedFolder ? ('),
-    'FolderBrowser must only render selectedFolder details and grid when filteredFolders.length > 0'
+    folderBrowserSrc.includes('sortedFolders.map') && !folderBrowserSrc.includes('selectedFolder ? ('),
+    'FolderBrowser must render only the filtered poster shelf — the episode grid lives on the title page'
   );
 });
 
@@ -166,14 +166,14 @@ runTest('3.4 Poster carousel cards check folder.hasEmbeddedSubtitles', () => {
   );
 });
 
-runTest('3.5 Header subtitle badge soup consolidated into clean status pill reflecting embedded subs', () => {
+runTest('3.5 Subtitle status badges consolidated onto the shelf cards', () => {
   assert(
-    folderBrowserSrc.includes('selectedFolder.hasEmbeddedSubtitles'),
-    'FolderBrowser details header must check selectedFolder.hasEmbeddedSubtitles'
+    folderBrowserSrc.includes('folder.hasEmbeddedSubtitles'),
+    'Shelf cards must reflect embedded subtitle state'
   );
   assert(
-    folderBrowserSrc.includes('Dub Sub (SDH)') && folderBrowserSrc.includes('Embedded Subtitles'),
-    'FolderBrowser must render clean consolidated subtitle badges'
+    folderBrowserSrc.includes('Dub Sub') && folderBrowserSrc.includes('AI Sub') && folderBrowserSrc.includes('Ext Sub'),
+    'Shelf cards must render the clean consolidated subtitle badges (Dub Sub / AI Sub / Ext Sub)'
   );
 });
 
@@ -189,8 +189,8 @@ runTest('4.1 UpNextWidget is a compact resume banner with timecodes, chips and p
     'UpNextWidget must invoke onPlay with the episode and resume offset'
   );
   assert(
-    upNextWidgetSrc.includes("'Up Next'") && upNextWidgetSrc.includes("'Continue Watching'"),
-    'UpNextWidget must render both UP NEXT and CONTINUE WATCHING chip labels'
+    upNextWidgetSrc.includes("'Up next'") && upNextWidgetSrc.includes("'Continue playing'"),
+    'UpNextWidget must render both Up next and Continue playing chip labels'
   );
   assert(
     upNextWidgetSrc.includes('uppercase'),
@@ -199,19 +199,21 @@ runTest('4.1 UpNextWidget is a compact resume banner with timecodes, chips and p
 });
 
 runTest('4.2 HomeView composes the strict Home block order', () => {
+  // Downloaded Collection was removed from Home by design: Recently watched
+  // (with per-episode resume tiles) replaced it as the library-facing rail.
   assert(
     homeViewSrc.includes('UpNextWidget') &&
-      homeViewSrc.includes('DownloadedRail') &&
-      homeViewSrc.includes('SeasonHero') &&
+      !homeViewSrc.includes('DownloadedRail') &&
+      homeViewSrc.includes('RecentEpisodesRail') &&
       homeViewSrc.includes('CatalogRail'),
-    'HomeView must reference UpNextWidget, DownloadedRail, SeasonHero and CatalogRail'
+    'HomeView must reference UpNextWidget, RecentEpisodesRail and CatalogRail without DownloadedRail'
   );
-  const order = ['UpNextWidget', 'DownloadedRail', 'SeasonHero', 'CatalogRail'].map((name) =>
+  const order = ['<UpNextWidget', '<RecentEpisodesRail', '<HomeSchedulePreview', '<CatalogRail'].map((name) =>
     homeViewSrc.indexOf(name)
   );
   assert(
     order.every((idx, i) => idx !== -1 && (i === 0 || idx > order[i - 1])),
-    'HomeView must compose blocks in order: UpNextWidget, DownloadedRail, SeasonHero, CatalogRail'
+    'HomeView must compose blocks in order: UpNextWidget, RecentEpisodesRail, HomeSchedulePreview, CatalogRail'
   );
 });
 

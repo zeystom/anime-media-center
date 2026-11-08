@@ -35,6 +35,45 @@ export function formatDurationFriendly(seconds?: number): string {
   return `${mins}m`;
 }
 
+export interface RelativeAirDate {
+  /** "in 6 days" / "23 hours ago" */
+  label: string;
+  /** True when the air time is still in the future. */
+  future: boolean;
+}
+
+/**
+ * Human-relative airing time for ongoing shows: "23 hours ago" for aired
+ * episodes, "in 6 days" for upcoming ones (like AniList's episode list).
+ * Returns null when the date is missing or unparseable.
+ */
+export function formatRelativeAirDate(airDate: string | null | undefined, now = Date.now()): RelativeAirDate | null {
+  if (!airDate) return null;
+  const time = Date.parse(airDate);
+  if (!Number.isFinite(time)) return null;
+  const diff = time - now;
+  const abs = Math.abs(diff);
+  const MINUTE = 60_000;
+  const HOUR = 60 * MINUTE;
+  const DAY = 24 * HOUR;
+  const WEEK = 7 * DAY;
+  const MONTH = 30 * DAY;
+  const span = (value: number, unit: string) => `${value} ${unit}${value === 1 ? '' : 's'}`;
+  let label: string;
+  if (abs < HOUR) {
+    label = span(Math.max(1, Math.round(abs / MINUTE)), 'minute');
+  } else if (abs < DAY) {
+    label = span(Math.round(abs / HOUR), 'hour');
+  } else if (abs < WEEK) {
+    label = span(Math.round(abs / DAY), 'day');
+  } else if (abs < MONTH) {
+    label = span(Math.round(abs / WEEK), 'week');
+  } else {
+    label = span(Math.round(abs / MONTH), 'month');
+  }
+  return diff >= 0 ? { label: `in ${label}`, future: true } : { label: `${label} ago`, future: false };
+}
+
 /**
  * Cross-platform path basename extraction (supports both Windows '\' and POSIX '/').
  */

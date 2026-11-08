@@ -32,13 +32,18 @@ import assert from 'assert';
 import {
   buildQueryUrl,
   fetchProviderFeed,
+  fetchReleaseDescription,
+  inspectReleaseResults,
   searchProviders,
   rankReleasesForEpisode,
+  getEpisodeReleaseSizeWarning,
   importProvidersConfig,
   exportProvidersConfig,
   sanitizeSearchQuery,
   extractInfoHash,
+  computeTitleRelevance,
 } from './electron/indexers.ts';
+import { classifyRelease } from './src/lib/releaseParser/releaseClassification.ts';
 import { detectVpnStatus, clearVpnCache } from './electron/vpnGuard.ts';
 
 let passed = 0;
@@ -115,7 +120,9 @@ const RSS_FIXTURE = `<?xml version="1.0" encoding="UTF-8"?>
     <title>Example Feed</title>
     <item>
       <title>[Group] Example Anime - 05 [1080p]</title>
+      <description><![CDATA[<p>English Dub with English subtitles. 10bit HEVC.</p>]]></description>
       <link>https://mirror.example/get/1</link>
+      <guid>https://indexer.example/release/1</guid>
       <enclosure url="https://mirror.example/dl/1.torrent" length="734003200" type="application/x-bittorrent" />
       <pubDate>Tue, 04 Nov 2025 12:00:00 GMT</pubDate>
     </item>
@@ -169,6 +176,7 @@ const NYAA_FIXTURE = `<?xml version="1.0" encoding="UTF-8"?>
     <item>
       <title>[Group] Sousou no Frieren - 05 [1080p][HEVC].mkv</title>
       <link>https://nyaa.example/download/12345.torrent</link>
+      <guid>https://nyaa.example/view/12345</guid>
       <nyaa:infoHash>0123abcd0123abcd0123abcd0123abcd0123abcd</nyaa:infoHash>
       <nyaa:seeders>42</nyaa:seeders>
       <nyaa:leechers>3</nyaa:leechers>
@@ -306,6 +314,8 @@ async function main() {
       assert.strictEqual(r0.title, '[Group] Example Anime - 05 [1080p]');
       assert.strictEqual(r0.downloadUrl, 'https://mirror.example/dl/1.torrent', 'enclosure URL must win over link');
       assert.strictEqual(r0.sizeBytes, 734003200, 'size from enclosure length');
+      assert.match(r0.description, /English subtitles/, 'RSS description is preserved');
+      assert.strictEqual(r0.detailsUrl, 'https://indexer.example/release/1', 'permalink is retained separately from download URL');
       assert.strictEqual(r0.seeders, null, 'plain RSS has no seeders');
       assert.strictEqual(r0.leechers, null);
       assert.strictEqual(r0.pubDate, Date.parse('Tue, 04 Nov 2025 12:00:00 GMT'));
@@ -432,7 +442,7 @@ async function main() {
     );
   });
 
-  await runAsyncTest('2.9 Nyaa-style feed: nyaa:* namespaces, magnet built from infoHash, .torrent link kept', async () => {
+  await runAsyncTest('2.9 Nyaa-style feed: .torrent link preserves embedded trackers; infoHash is retained', async () => {
     let logs = [];
     const originalLog = console.log;
     installFetchMock((url, init, calls) => {
@@ -449,12 +459,9 @@ async function main() {
       assert.strictEqual(r0.providerId, 'prov-nyaa');
       assert.strictEqual(r0.providerName, 'Example Nyaa');
       assert.strictEqual(r0.title, '[Group] Sousou no Frieren - 05 [1080p][HEVC].mkv');
-      // nyaa:infoHash wins over the .torrent <link>: tracker-less magnet, DHT discovers peers.
-      assert.strictEqual(
-        r0.downloadUrl,
-        `magnet:?xt=urn:btih:0123abcd0123abcd0123abcd0123abcd0123abcd&dn=${encodeURIComponent('[Group] Sousou no Frieren - 05 [1080p][HEVC].mkv')}`,
-        'item must NOT be dropped: nyaa:infoHash → synthesized magnet with dn title'
-      );
+      assert.strictEqual(r0.detailsUrl, 'https://nyaa.example/view/12345', 'human release page is retained separately from the torrent URL');
+      assert.strictEqual(r0.downloadUrl, 'https://nyaa.example/download/12345.torrent', 'direct .torrent must be used so its announce list is preserved');
+      assert.strictEqual(r0.infoHash, '0123abcd0123abcd0123abcd0123abcd0123abcd', 'separate infoHash remains available for deduplication');
       assert.ok(
         Math.abs(r0.sizeBytes - 1.4 * 2 ** 30) <= 1,
         `nyaa:size "1.4 GiB" must parse to ~1.4*2^30 bytes, got ${r0.sizeBytes}`
@@ -680,23 +687,85 @@ async function main() {
   // =========================================================================
   console.log('\n--- SUITE 4: rankReleasesForEpisode ---');
 
-  runTest('4.1 exact title+episode match ranks first; season mismatch sinks; ties break by seeders', () => {
+  runTest('4.0 whole-word title relevance: "Monster" must not match "Pocket Monsters" (in-word substring)', () => {
+    const refs = ['Monster'];
+    assert.strictEqual(
+      computeTitleRelevance('[SOSSubs] Pocket Monsters (Pokemon) - Full Diamond & Pearl (Eps 1-193 + Movies 10-23 + Specials and Bonus Content) ENG SOFTSUB', refs),
+      'none',
+      '"monster" inside "monsters" is an in-word hit, not a title match',
+    );
+    assert.strictEqual(computeTitleRelevance('[Group] Monster - 01 [1080p]', refs), 'exact');
+    // The parser extracts "S2" into parsed.season, so the show name alone is
+    // an exact match; the season check happens separately in scoring.
+    assert.strictEqual(computeTitleRelevance('[Group] Monster S2 - 02 [1080p]', refs), 'exact');
+    assert.strictEqual(computeTitleRelevance('[Group] Monsters The Anime - 03 [1080p]', refs), 'none', 'pluralized title is a different word');
+    // A whole-season pack whose parsed title scores 'none' must never survive
+    // the automatic-selection relevance gate, even though classify-first
+    // ranking may float packs above single episodes.
+    const monster = makeResult('[Group] Monster - 01 [1080p]', 10);
+    const pokemon = makeResult('[SOSSubs] Pocket Monsters (Pokemon) - Full Diamond & Pearl (Eps 1-193 + Movies 10-23 + Specials and Bonus Content) ENG SOFTSUB', 400);
+    const ranked = rankReleasesForEpisode([pokemon, monster], { animeTitle: 'Monster', episode: 1 });
+    const annotated = ranked.map((r) => ({ ...r, titleRelevance: computeTitleRelevance(r.title, refs) }));
+    const autoPickable = annotated.filter((r) => r.titleRelevance !== 'none');
+    assert.strictEqual(autoPickable.length, 1, 'only the real Monster release stays auto-pickable');
+    assert.strictEqual(autoPickable[0].title, monster.title);
+  });
+
+  runTest('4.1 exact title+episode match ranks first; title relevance outranks release kind', () => {
     const ref = { animeTitle: 'Frieren Beyond Journeys End', season: 1, episode: 5 };
-    const r1 = makeResult('[SubsPlease] Frieren Beyond Journeys End - 05 [1080p]', 15); // 60 +25 +5 = 90
-    const r2 = makeResult('[Group] Frieren Beyond Journeys End - 12 [1080p]', 10);      // 60 -15 +5 = 50
-    const r3 = makeResult('[Group] Some Other Show - 05 [1080p]', 40);                  //  0 +25 +5 = 30
-    const r4 = makeResult('[SubsPlease] Frieren Beyond Journeys End S02E09 1080p', 99); // 60 -40 -15 +5 = 10
-    const r5 = makeResult('[Group] Frieren Sequel Show - 05', null);                    // ~5 +25 = 30
+    const r1 = makeResult('[SubsPlease] Frieren Beyond Journeys End - 05 [1080p]', 15); // exact 60 +25 +5 = 90
+    const r2 = makeResult('[Group] Frieren Beyond Journeys End - 12 [1080p]', 10);      // exact 60 -15 +5 = 50
+    const r3 = makeResult('[Group] Some Other Show - 05 [1080p]', 40);                  // none  0 +25 +5 = 30
+    const r4 = makeResult('[SubsPlease] Frieren Beyond Journeys End S02E09 1080p', 99); // exact 60 -40 -15 +5 = 10
+    const r5 = makeResult('[Group] Frieren Sequel Show - 05', null);                    // related 25 +25 = 50
     const input = [r3, r4, r2, r1, r5];
 
     const ranked = rankReleasesForEpisode(input, ref);
 
+    // Title relevance sorts above release kind: the same-show releases (exact)
+    // come first even when a wrong-season one has the most seeders, then the
+    // related title, then the unrelated one. Wrong-season r4 is dropped later
+    // by isExplicitEpisodeMismatch in the search pipeline.
     assert.strictEqual(ranked[0], r1, 'exact title + episode match must rank first');
     assert.strictEqual(ranked[1], r2, 'correct title + wrong episode ranks second');
-    assert.strictEqual(ranked[2], r3, 'wrong title + right episode next (seeders win the 30-point tie)');
-    assert.strictEqual(ranked[3], r5, 'token-overlap fallback ties with r3, no seeders → after');
-    assert.strictEqual(ranked[4], r4, 'season mismatch must sink even with the most seeders');
+    assert.strictEqual(ranked[2], r4, 'same-show wrong-season ranks third (filtered later by explicit-mismatch)');
+    assert.strictEqual(ranked[3], r5, 'related title (whole word) follows');
+    assert.strictEqual(ranked[4], r3, 'unrelated title sinks despite its higher seeder count');
     assert.strictEqual(ranked.length, input.length);
+  });
+
+  runTest('4.1a size floor is codec-aware and duration-proportional (no hard 80 MiB block for shorts/HEVC)', () => {
+    const warning = getEpisodeReleaseSizeWarning(76.82 * 1024 ** 2, 24);
+    assert.ok(warning && warning.includes('96 MiB'), '76.82 MiB is below the 24-minute H.264 floor (4 MB/min)');
+    assert.strictEqual(getEpisodeReleaseSizeWarning(450 * 1024 ** 2, 24), null);
+    assert.ok(getEpisodeReleaseSizeWarning(null, 24)?.includes('did not report'));
+    // A talky 8-minute episode: 8 min x 4 MB/min = 32 MiB floor — 75 MiB passes.
+    assert.strictEqual(getEpisodeReleaseSizeWarning(75 * 1024 ** 2, 8), null, 'no absolute 80 MiB block when the runtime is known');
+    assert.ok(getEpisodeReleaseSizeWarning(10 * 1024 ** 2, 8), '10 MiB for 8 minutes is still flagged (32 MiB floor)');
+    // HEVC density: 24 min x 2.5 MB/min = 60 MiB floor — a 70 MiB Judas-style encode passes.
+    assert.strictEqual(getEpisodeReleaseSizeWarning(70 * 1024 ** 2, 24, '[Judas] Show - 01 [1080p][hevc]'), null);
+    assert.ok(getEpisodeReleaseSizeWarning(70 * 1024 ** 2, 24, '[Group] Show - 01 [1080p x264]'), 'H.264 keeps the 96 MiB floor');
+    // Short-form show (3-minute episodes): 3 x 4 = 12 MiB floor — 15 MiB passes.
+    assert.strictEqual(getEpisodeReleaseSizeWarning(15 * 1024 ** 2, 3), null, 'short-form shows are not blocked by an absolute floor');
+  });
+
+  runTest('4.1b prefix relevance requires a season-shaped tail ("Monster Hunter" is another show)', () => {
+    const refs = ['Monster'];
+    assert.strictEqual(computeTitleRelevance('[Group] Monster Hunter - 01 [1080p]', refs), 'related',
+      'free-form tail words downgrade prefix to related (auto-pick refuses related)');
+    assert.strictEqual(computeTitleRelevance('[Group] Monster Musume no Iru Nichijou - 01', refs), 'related');
+    assert.strictEqual(computeTitleRelevance('[Group] Re:Monster - 01 [1080p]', refs), 'related',
+      'whole-word mention inside another title stays related, never prefix');
+    assert.strictEqual(computeTitleRelevance('[Group] Monster - 01 [1080p]', refs), 'exact');
+  });
+
+  runTest('4.1c a seasonless release sinks below a season-marked one for season>1 requests', () => {
+    const ref = { animeTitle: 'Show', season: 2, episode: 5 };
+    const marked = makeResult('[Group] Show S2 - 05 [1080p]', 5);     // exact 60 +15 +25 = 100
+    const seasonless = makeResult('[Group] Show - 05 [1080p]', 50);   // exact 60 -10 +25 = 75
+    const ranked = rankReleasesForEpisode([seasonless, marked], ref);
+    assert.strictEqual(ranked[0], marked, 'the season-marked release wins despite 10x fewer seeders');
+    assert.strictEqual(ranked[1], seasonless, 'the seasonless release stays available (relative order among them is fair)');
   });
 
   runTest('4.2 input array is never mutated and a new array is returned', () => {
@@ -712,30 +781,92 @@ async function main() {
     assert.strictEqual(input[0], r2, 'input keeps original order');
   });
 
-  runTest('4.3 empty animeTitle → input order returned unchanged (new array)', () => {
+  runTest('4.3 empty animeTitle still applies language ordering and seeder tie-break', () => {
     const a = makeResult('[Group] Some Other Show - 05 [1080p]', 1);
     const b = makeResult('[SubsPlease] Frieren Beyond Journeys End - 05 [1080p]', 99);
     const input = [a, b];
     const ranked = rankReleasesForEpisode(input, { animeTitle: '', season: 1, episode: 5 });
-    assert.deepStrictEqual(ranked, input);
+    assert.deepStrictEqual(ranked, [b, a]);
     assert.notStrictEqual(ranked, input, 'still a new array, not the input reference');
   });
 
-  runTest('4.4 punctuation-only animeTitle behaves like empty', () => {
+  runTest('4.4 punctuation-only animeTitle still applies language ordering', () => {
     const a = makeResult('[Group] Some Other Show - 05 [1080p]', 1);
     const b = makeResult('[SubsPlease] Frieren Beyond Journeys End - 05 [1080p]', 99);
     const ranked = rankReleasesForEpisode([a, b], { animeTitle: '!!!', season: 1, episode: 5 });
-    assert.deepStrictEqual(ranked, [a, b]);
+    assert.deepStrictEqual(ranked, [b, a]);
+  });
+
+  runTest('4.8 explicit English dub/subtitle confidence outranks ambiguous tags and seeders', () => {
+    const unknown = makeResult('[Group] Show S01E01 [Dual Audio][MultiSub]', 999);
+    const japanese = makeResult('[Group] Show S01E01 [Japanese Audio]', 1);
+    const englishSubs = makeResult('[Group] Show S01E01 [English Dub][English Subs]', 5);
+    const dubtitles = makeResult('[Group] Show S01E01 [English Dub][Dubtitles]', 2);
+    assert.deepStrictEqual(
+      rankReleasesForEpisode([unknown, japanese, englishSubs, dubtitles], { animeTitle: 'Show', season: 1, episode: 1 }),
+      [dubtitles, englishSubs, japanese, unknown],
+    );
+    assert.strictEqual(classifyRelease(unknown.title).languageGroup, 'unknown');
+  });
+
+  runTest('4.9 English dub without subtitle data precedes Japanese, then other known audio', () => {
+    const other = makeResult('[Group] Show S01E01 [French audio]', 999);
+    const japanese = makeResult('[Group] Show S01E01 [Japanese audio]', 1);
+    const dub = makeResult('[Group] Show S01E01 [English Dub]', 2);
+    assert.deepStrictEqual(
+      rankReleasesForEpisode([other, japanese, dub], { animeTitle: 'Show', season: 1, episode: 1 }),
+      [dub, japanese, other],
+    );
+  });
+
+  runTest('4.10 release type labels distinguish episodes, ranges, packs, movies, and OVAs', () => {
+    assert.strictEqual(classifyRelease('Show S02E03 [English Dub]').kind, 'episode');
+    assert.strictEqual(classifyRelease('Show 01-12 Complete [English Dub]').kind, 'season-pack');
+    assert.strictEqual(classifyRelease('Show S02E01-12 [English Dub]').kind, 'episode-range');
+    assert.strictEqual(classifyRelease('Show Movie [English Dub]').kind, 'movie');
+    assert.strictEqual(classifyRelease('Show OVA [English Dub]').kind, 'ova');
+  });
+
+  await runAsyncTest('4.11 detail page inspection enriches search results and stays on the configured source origin', async () => {
+    const original = globalThis.fetch;
+    let request = null;
+    globalThis.fetch = async (url, init) => {
+      request = { url: String(url), init };
+      return {
+        ok: true,
+        status: 200,
+        headers: new Headers({ 'content-type': 'text/html' }),
+        body: null,
+        text: async () => '<p>English Dubtitles and English audio</p>',
+      };
+    };
+    try {
+      const html = await fetchReleaseDescription('prov-rss', 'https://indexer.example/release/1', [rssProvider]);
+      assert.match(html, /English Dubtitles/);
+      assert.strictEqual(request.url, 'https://indexer.example/release/1');
+      const release = { ...makeResult('Show S01E01 1080p', 20), providerId: 'prov-rss', providerName: rssProvider.name, detailsUrl: 'https://indexer.example/release/1' };
+      const inspected = await inspectReleaseResults([release], [rssProvider], 5);
+      assert.strictEqual(classifyRelease(inspected[0].title, inspected[0].description).languageGroup, 'eng-dub-dubtitles');
+      await assert.rejects(
+        () => fetchReleaseDescription('prov-rss', 'https://other.example/release/1', [rssProvider]),
+        /outside the configured source/i,
+      );
+    } finally {
+      globalThis.fetch = original;
+    }
   });
 
   runTest('4.5 episode=null → batch/season-pack releases get +20 and float up', () => {
     const ref = { animeTitle: 'Show', season: null, episode: null };
-    const singleEpisode = makeResult('[Group] Show - 05 [1080p]', 5);      // title 60 + seeders 5 = 65
-    const rangePack = makeResult('[Group] Show - 01-12 [1080p]', 5);       // title 60 + multi-ep bonus 20 + 5 = 85
-    const batchPack = makeResult('[Group] Show Season Pack [Batch] [1080p]', 10); // containment 40 + batch bonus 20 + 5 = 65... plus seeders tie-break
+    const singleEpisode = makeResult('[Group] Show - 05 [1080p]', 5);      // exact 60 + 5 = 65
+    const rangePack = makeResult('[Group] Show - 01-12 [1080p]', 5);       // exact 60 + multi-ep bonus 20 + 5 = 85
+    const batchPack = makeResult('[Group] Show Season Pack [Batch] [1080p]', 10); // "Season Pack"/"Batch" are release decorations → exact 60 + 20 + 10 = 90
     const ranked = rankReleasesForEpisode([singleEpisode, batchPack, rangePack], ref);
-    assert.strictEqual(ranked[0], rangePack, 'multi-episode parse (01-12) must get the +20 batch bonus');
-    assert.strictEqual(ranked[1], batchPack, '/batch|season pack/ title match must also get +20');
+    // All three are the same show (decorations stripped before matching), so
+    // release-kind rank orders the packs above the single episode, then score
+    // (batch 90 / range 85 / single 65).
+    assert.strictEqual(ranked[0], batchPack, 'the season pack floats to the top');
+    assert.strictEqual(ranked[1], rangePack, 'the multi-episode range pack follows');
     assert.strictEqual(ranked[2], singleEpisode, 'plain single episode stays below batches');
     assert.strictEqual(ranked.length, 3);
   });
@@ -833,49 +964,23 @@ async function main() {
   });
 
   // =========================================================================
-  // 6. VPN guard (real os-based detection, no network)
+  // 6. VPN guard stub — the guard was intentionally removed (user manages
+  //    their own network safety); vpnGuard.ts keeps the API as a stub.
   // =========================================================================
-  console.log('\n--- SUITE 6: VPN guard ---');
+  console.log('\n--- SUITE 6: VPN guard stub ---');
 
-  runTest('6.1 detectVpnStatus returns the documented shape and caches within TTL', () => {
-    clearVpnCache();
+  runTest('6.1 detectVpnStatus stub reports active with no interfaces and clearVpnCache stays harmless', () => {
     const a = detectVpnStatus();
-    assert.strictEqual(typeof a.active, 'boolean');
+    assert.strictEqual(a.active, true, 'stub always reports active — nothing blocks P2P anymore');
     assert.ok(Array.isArray(a.interfaces), 'interfaces must be an array');
+    assert.strictEqual(a.interfaces.length, 0, 'stub reports no interfaces (no detection)');
     assert.strictEqual(typeof a.checkedAt, 'number');
     assert.ok(Number.isFinite(a.checkedAt));
-    for (const name of a.interfaces) {
-      assert.strictEqual(typeof name, 'string');
-      assert.ok(name.length > 0, 'interface names must be non-empty');
-    }
-    if (a.active) assert.ok(a.interfaces.length > 0, 'active status implies at least one reported interface');
 
+    clearVpnCache(); // kept for API compatibility — must not throw
     const b = detectVpnStatus();
-    assert.strictEqual(b.checkedAt, a.checkedAt, 'second call within 10s must be served from cache');
-  });
-
-  runTest('6.2 clearVpnCache forces a fresh detection', () => {
-    clearVpnCache();
-    const a = detectVpnStatus();
-    clearVpnCache();
-    const c = detectVpnStatus();
-    assert.notStrictEqual(c, a, 'after clear the cache must be rebuilt');
-    assert.ok(c.checkedAt >= a.checkedAt, 'fresh checkedAt must not go backwards');
-    assert.strictEqual(typeof c.active, 'boolean');
-    assert.ok(Array.isArray(c.interfaces));
-    assert.strictEqual(typeof c.checkedAt, 'number');
-  });
-
-  runTest('6.3 reported interfaces all match tunnel naming patterns', () => {
-    clearVpnCache();
-    const status = detectVpnStatus();
-    const pattern = /(tun|tap|wg|wireguard|vpn|ppp|tailscale|protonvpn|nord|mullvad|surfshark|expressvpn|openvpn)/i;
-    for (const name of status.interfaces) {
-      assert.ok(
-        pattern.test(name),
-        `interface "${name}" was reported but does not match the tunnel pattern`
-      );
-    }
+    assert.strictEqual(b.active, true);
+    assert.ok(b.checkedAt >= a.checkedAt, 'checkedAt must not go backwards');
   });
 
   // =========================================================================

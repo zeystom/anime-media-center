@@ -5,14 +5,15 @@
  * and hosts the live P2P download queue (torrent jobs via getP2pState /
  * onP2pStateChanged).
  */
-import React, { useCallback, useEffect, useMemo, useState } from 'react'
+import React, { useCallback, useEffect, useMemo, useRef, useState } from 'react'
 import { AlertTriangle, Check, Film, FolderOpen, HardDrive, Pause, Play, RefreshCw, Trash2, X } from 'lucide-react'
-import type { P2pState, StorageOverview, StorageTitleUsage, TorrentJob, TorrentJobStatus } from '../../types'
+import type { AnimeFolder, P2pState, StorageOverview, StorageTitleUsage, TorrentJob, TorrentJobStatus } from '../../types'
 import { formatFileSize } from '../../utils/format'
 import { showGlobalToast } from '../Toast'
 
 interface DownloadsViewProps {
   onRefreshLibrary: () => void
+  folders: AnimeFolder[]
 }
 
 /** Sort rank for queue ordering: active first, then queued, then terminal. */
@@ -62,7 +63,55 @@ function formatSpeedMBs(bytesPerSecond: number): string {
   return `${(bytesPerSecond / (1024 * 1024)).toFixed(1)} MB/s`
 }
 
-export const DownloadsView: React.FC<DownloadsViewProps> = ({ onRefreshLibrary }) => {
+function getJobDiagnostic(job: TorrentJob): string | null {
+  if (job.status === 'error') {
+    return job.error || 'The app could not start this download. Check the error details and try again.'
+  }
+  if (job.status === 'queued') return 'Waiting for a free download slot in the app.'
+  if (job.status === 'connecting') {
+    if ((job.stallRecoveryCount || 0) > 0) {
+      return `Refreshing peer connections to retry the missing data (attempt ${job.stallRecoveryCount}/2). The partial download is being kept.`
+    }
+    const reported = job.reportedSeeders == null
+      ? 'The indexer did not report a seed count.'
+      : job.reportedSeeders === 0
+        ? 'The indexer reported 0 seeders when searched; this release may be inactive.'
+        : `${job.providerName || 'The indexer'} reported ${job.reportedSeeders} seeders at search time; that count is not live.`
+    const waited = (job.connectingSeconds ?? 0) > 15
+      ? ` Waiting ${Math.floor((job.connectingSeconds ?? 0) / 60)}m ${String((job.connectingSeconds ?? 0) % 60).padStart(2, '0')}s for metadata.`
+      : ' Waiting for torrent metadata.'
+    const livePeers = ` App connected to ${job.peers || 0} live peers.`
+    const networkWarning = job.torrentWarning ? ` WebTorrent warning: ${job.torrentWarning}.` : ''
+    return `${reported}${waited}${livePeers}${networkWarning} If it stays here, check tracker/DHT access or try another release.`
+  }
+  if (job.status === 'downloading' && (job.noProgressSeconds || 0) >= 30) {
+    const elapsed = job.noProgressSeconds || 0
+    const waited = elapsed >= 60
+      ? `${Math.floor(elapsed / 60)}m ${String(elapsed % 60).padStart(2, '0')}s`
+      : `${elapsed}s`
+    if ((job.peers || 0) === 0) {
+      return `No data received for ${waited} and no peers are connected. The release may be inactive, or the network may be blocking BitTorrent.`
+    }
+    if (job.torrentWarning) {
+      return `No data received for ${waited}. WebTorrent reported: ${job.torrentWarning}`
+    }
+    if ((job.stallRecoveryCount || 0) >= 2 && (job.availableMissingPieces || 0) > 0) {
+      return `No data received for ${waited} after two peer refreshes. Peers advertise the remaining pieces, but none is arriving; check free disk space, network filtering, or try another source.`
+    }
+    if (job.missingPieces != null && job.availableMissingPieces != null) {
+      if (job.availableMissingPieces === 0 && job.missingPieces > 0) {
+        return `No data received for ${waited}. None of the ${job.peers} connected peers advertises the ${job.missingPieces} remaining piece${job.missingPieces === 1 ? '' : 's'}; this points to an incomplete swarm. The indexer's seed count is not live.`
+      }
+      if (job.availableMissingPieces > 0) {
+        return `No data received for ${waited}, although peers advertise ${job.availableMissingPieces} of ${job.missingPieces} missing pieces. Check the torrent error details, disk space, and network; the swarm does have some required pieces.`
+      }
+    }
+    return `No new data received for ${waited} despite ${job.peers} connected peers. They may not have the remaining pieces; the seed count from search time is not live. If this continues, try another release.`
+  }
+  return null
+}
+
+export const DownloadsView: React.FC<DownloadsViewProps> = ({ onRefreshLibrary, folders }) => {
   const [overview, setOverview] = useState<StorageOverview | null>(null)
   const [loading, setLoading] = useState<boolean>(false)
   const [confirmTarget, setConfirmTarget] = useState<StorageTitleUsage | null>(null)
@@ -72,6 +121,7 @@ export const DownloadsView: React.FC<DownloadsViewProps> = ({ onRefreshLibrary }
   const [p2pState, setP2pState] = useState<P2pState | null>(null)
   const [confirmCancelHash, setConfirmCancelHash] = useState<string | null>(null)
   const [cancellingHash, setCancellingHash] = useState<string | null>(null)
+  const [discardPartial, setDiscardPartial] = useState(false)
 
   const api = window.electronAPI
   const hasOverviewApi = typeof api?.getStorageOverview === 'function'
@@ -132,14 +182,16 @@ export const DownloadsView: React.FC<DownloadsViewProps> = ({ onRefreshLibrary }
 
   // Removes a job from the queue without touching the files on disk
   // (used by the cancel confirm strip and the completed-jobs clear button).
-  const handleRemoveJob = async (infoHash: string) => {
+  const handleRemoveJob = async (infoHash: string, removeFiles = false) => {
     const api = window.electronAPI
     if (!api?.cancelDownload) return
     setCancellingHash(infoHash)
     try {
-      const res = await api.cancelDownload(infoHash, false)
+      const res = await api.cancelDownload(infoHash, removeFiles)
       if (res?.success) {
-        showGlobalToast('Removed from queue — files stay on disk', 'success')
+        showGlobalToast(removeFiles
+          ? 'Removed from queue and deleted this release’s partial download data.'
+          : 'Removed from queue. Partial data and completed anime files stay on disk.', 'success')
       } else {
         showGlobalToast('Failed to remove the download', 'error')
       }
@@ -149,6 +201,7 @@ export const DownloadsView: React.FC<DownloadsViewProps> = ({ onRefreshLibrary }
     } finally {
       setCancellingHash(null)
       setConfirmCancelHash(null)
+      setDiscardPartial(false)
     }
   }
 
@@ -164,9 +217,19 @@ export const DownloadsView: React.FC<DownloadsViewProps> = ({ onRefreshLibrary }
     if (!confirmTarget || deleting) return
     setDeleting(true)
     try {
+      const normalizePath = (value: string) => value.replace(/[\\/]+$/, '').toLocaleLowerCase()
+      const jobsForTitle = (p2pState?.jobs ?? []).filter(
+        (job) => normalizePath(job.targetFolder) === normalizePath(confirmTarget.folderPath),
+      )
+      for (const job of jobsForTitle) {
+        const cancel = await window.electronAPI.cancelDownload(job.infoHash, true)
+        if (!cancel?.success) {
+          throw new Error(`Could not stop the active download before deleting the anime folder: ${cancel?.error || 'unknown error'}`)
+        }
+      }
       const res = await window.electronAPI.deleteAnimeFromPC(confirmTarget.folderPath)
       if (res?.success) {
-        showGlobalToast(`Freed ${formatFileSize(res.deletedBytes ?? confirmTarget.totalBytes)}`, 'success')
+        showGlobalToast(`Deleted anime files and stopped ${jobsForTitle.length} active download(s). Freed ${formatFileSize(res.deletedBytes ?? confirmTarget.totalBytes)}.`, 'success')
         // Remove the row locally so the list updates instantly, then resync.
         setOverview((prev) =>
           prev
@@ -183,7 +246,7 @@ export const DownloadsView: React.FC<DownloadsViewProps> = ({ onRefreshLibrary }
       }
     } catch (err) {
       console.error('Failed to delete anime from PC:', err)
-      showGlobalToast('Failed to delete files from PC', 'error')
+      showGlobalToast(err instanceof Error ? err.message : 'Failed to delete files from PC', 'error')
     } finally {
       setDeleting(false)
       setConfirmTarget(null)
@@ -209,12 +272,42 @@ export const DownloadsView: React.FC<DownloadsViewProps> = ({ onRefreshLibrary }
   const downloadingJobs = sortedJobs.filter((j) => j.status === 'downloading')
   const totalDownloadSpeed = downloadingJobs.reduce((acc, j) => acc + (j.downloadSpeed || 0), 0)
   const totalUploadSpeed = downloadingJobs.reduce((acc, j) => acc + (j.uploadSpeed || 0), 0)
+
+  // Queue-card covers: match a scanned library folder by anilistId; for jobs
+  // of titles not yet in the library, fetch the poster via catalog details
+  // (cached 24 h on the main side). One fetch per unique anilistId.
+  const [jobPosters, setJobPosters] = useState<Map<number, string>>(new Map());
+  const jobPosterFetchedRef = useRef<Set<number>>(new Set());
+  useEffect(() => {
+    const wanted = [...new Set((p2pState?.jobs ?? [])
+      .map((job) => job.anilistId)
+      .filter((id): id is number => id != null && !jobPosterFetchedRef.current.has(id) && !folders.some((f) => f.anilistId === id)))];
+    if (wanted.length === 0) return;
+    for (const id of wanted) jobPosterFetchedRef.current.add(id);
+    void (async () => {
+      const api = window.electronAPI;
+      if (!api?.getCatalogDetails) return;
+      for (const anilistId of wanted) {
+        try {
+          const details = await api.getCatalogDetails(anilistId);
+          if (details?.posterUrl) {
+            setJobPosters((prev) => { const m = new Map(prev); m.set(anilistId, details.posterUrl as string); return m; });
+          }
+        } catch {}
+      }
+    })();
+  }, [p2pState, folders]);
+
+  const jobCover = (job: TorrentJob): string | null => {
+    const folder = folders.find((f) => f.anilistId === job.anilistId);
+    return folder?.posterUrl || (job.anilistId != null ? jobPosters.get(job.anilistId) || null : null);
+  };
   const hasP2pApi =
     typeof window.electronAPI?.getP2pState === 'function' &&
     typeof window.electronAPI?.onP2pStateChanged === 'function'
 
   return (
-    <div className="mx-auto max-w-7xl px-6 py-6">
+    <div className="mx-auto w-full max-w-[1800px] px-4 py-6 sm:px-6 2xl:px-8">
       {/* Header */}
       <div className="flex flex-wrap items-center justify-between gap-3">
         <div>
@@ -278,20 +371,29 @@ export const DownloadsView: React.FC<DownloadsViewProps> = ({ onRefreshLibrary }
             </p>
           </div>
         ) : (
-          <div className="grid grid-cols-1 gap-2">
-            {sortedTitles.map((title) => (
+          <div className="grid grid-cols-1 gap-3 2xl:grid-cols-2 2xl:gap-4">
+            {sortedTitles.map((title) => {
+              // The storage overview carries no artwork — match the scanned
+              // library folder (same path) for the poster and canonical name.
+              const libraryFolder = folders.find((f) => f.folderPath === title.folderPath)
+              const poster = libraryFolder?.posterUrl || null
+              const displayTitle = libraryFolder?.canonicalTitle || title.folderName
+              return (
               <div
                 key={title.folderPath}
-                className="group flex items-center gap-3 rounded-xl border border-white/10 bg-zinc-900/70 px-3 py-2.5 transition-colors hover:border-zinc-700/80"
+                className="group flex items-center gap-3 rounded-xl border border-white/10 bg-zinc-900/70 px-3 py-3 transition-colors hover:border-zinc-700/80 2xl:gap-4 2xl:px-4 2xl:py-4"
               >
-                {/* Poster placeholder (storage overview carries no artwork) */}
-                <div className="flex h-14 w-10 shrink-0 items-center justify-center rounded-md bg-gradient-to-br from-zinc-800 to-zinc-950">
-                  <Film className="h-5 w-5 text-zinc-700" />
-                </div>
+                {poster ? (
+                  <img src={poster} alt="" loading="lazy" className="h-16 w-11 shrink-0 rounded-md object-cover 2xl:h-20 2xl:w-14" />
+                ) : (
+                  <div className="flex h-16 w-11 shrink-0 items-center justify-center rounded-md bg-gradient-to-br from-zinc-800 to-zinc-950 2xl:h-20 2xl:w-14">
+                    <Film className="h-5 w-5 text-zinc-700" />
+                  </div>
+                )}
 
                 <div className="min-w-0 flex-1">
-                  <p className="truncate text-sm font-semibold text-zinc-100" title={title.folderName}>
-                    {title.folderName}
+                  <p className="truncate text-sm font-semibold text-zinc-100 2xl:text-base" title={title.folderName}>
+                    {displayTitle}
                   </p>
                   <p className="mt-0.5 text-[11px] text-zinc-500">
                     {title.episodeCount} eps · {formatFileSize(title.totalBytes)}
@@ -302,12 +404,13 @@ export const DownloadsView: React.FC<DownloadsViewProps> = ({ onRefreshLibrary }
                   type="button"
                   onClick={() => setConfirmTarget(title)}
                   title="Delete files from PC"
-                  className="flex h-8 w-8 shrink-0 items-center justify-center rounded-full border border-red-500/30 bg-red-500/5 text-red-400 transition-colors hover:bg-red-500/20 hover:text-red-300"
+                  className="flex h-9 w-9 shrink-0 items-center justify-center rounded-full border border-red-500/30 bg-red-500/5 text-red-400 transition-colors hover:bg-red-500/20 hover:text-red-300 2xl:h-10 2xl:w-10"
                 >
                   <Trash2 className="h-4 w-4" />
                 </button>
               </div>
-            ))}
+              );
+            })}
           </div>
         )}
       </section>
@@ -352,7 +455,7 @@ export const DownloadsView: React.FC<DownloadsViewProps> = ({ onRefreshLibrary }
             </p>
           </div>
         ) : (
-          <div className="flex flex-col gap-2">
+          <div className="grid grid-cols-1 gap-3 2xl:grid-cols-2 2xl:gap-4">
             {sortedJobs.map((job) => {
               const chip = jobStatusChip(job.status)
               const canPause =
@@ -365,17 +468,28 @@ export const DownloadsView: React.FC<DownloadsViewProps> = ({ onRefreshLibrary }
               const confirming = confirmCancelHash === job.infoHash
               const progressPct = Math.max(0, Math.min(100, job.progress || 0))
               const showSpeeds = (job.downloadSpeed || 0) > 0 || (job.uploadSpeed || 0) > 0
+              const diagnostic = getJobDiagnostic(job)
 
               return (
                 <div
                   key={job.infoHash}
-                  className="rounded-xl border border-white/10 bg-zinc-900/70 px-3 py-2.5"
+                  className="rounded-xl border border-white/10 bg-zinc-900/70 px-3 py-3 2xl:px-4 2xl:py-4"
                 >
                   <div className="flex items-center gap-3">
+                    {(() => {
+                      const cover = jobCover(job);
+                      return cover ? (
+                        <img src={cover} alt="" loading="lazy" className="h-20 w-14 shrink-0 rounded-md object-cover 2xl:h-24 2xl:w-[4.25rem]" />
+                      ) : (
+                        <div className="flex h-20 w-14 shrink-0 items-center justify-center rounded-md bg-gradient-to-br from-zinc-800 to-zinc-950 2xl:h-24 2xl:w-[4.25rem]">
+                          <Film className="h-5 w-5 text-zinc-700" />
+                        </div>
+                      );
+                    })()}
                     <div className="min-w-0 flex-1">
                       <div className="flex items-center gap-1.5">
                         <p
-                          className="line-clamp-1 min-w-0 flex-1 text-sm font-semibold text-zinc-100"
+                          className="line-clamp-2 min-w-0 flex-1 text-sm font-semibold text-zinc-100 2xl:text-base"
                           title={job.title || job.name}
                         >
                           {job.title || job.name}
@@ -383,6 +497,11 @@ export const DownloadsView: React.FC<DownloadsViewProps> = ({ onRefreshLibrary }
                         {job.episode != null && (
                           <span className="shrink-0 rounded bg-zinc-800 px-1.5 py-0.5 text-[10px] font-bold text-zinc-300">
                             EP {job.episode}
+                          </span>
+                        )}
+                        {job.episode == null && job.season != null && (
+                          <span className="shrink-0 rounded bg-zinc-800 px-1.5 py-0.5 text-[10px] font-bold text-zinc-300">
+                            SEASON {job.season}
                           </span>
                         )}
                         <span
@@ -393,7 +512,7 @@ export const DownloadsView: React.FC<DownloadsViewProps> = ({ onRefreshLibrary }
                           {chip.label}
                         </span>
                       </div>
-                      <p className="mt-0.5 text-[11px] text-zinc-500">
+                      <p className="mt-1 text-[11px] text-zinc-500 2xl:text-xs">
                         {formatFileSize(job.downloadedBytes)} / {formatFileSize(job.totalBytes)} ·{' '}
                         {job.peers} peers
                         {showSpeeds && (
@@ -403,6 +522,21 @@ export const DownloadsView: React.FC<DownloadsViewProps> = ({ onRefreshLibrary }
                           </>
                         )}
                       </p>
+                      {job.releaseTitle && (
+                        <p className="mt-1 line-clamp-2 text-[10px] text-zinc-400 2xl:text-xs" title={job.releaseTitle}>
+                          Release: {job.releaseTitle}
+                        </p>
+                      )}
+                      {!!job.selectedFiles?.length && (
+                        <p className="mt-1 line-clamp-2 text-[10px] text-cyan-200/80 2xl:text-xs" title={job.selectedFiles.join('\n')}>
+                          Selected: {job.selectedFiles.slice(0, 2).join(', ')}{job.selectedFiles.length > 2 ? ` +${job.selectedFiles.length - 2} more` : ''}
+                        </p>
+                      )}
+                      {diagnostic && (
+                        <p className={`mt-1 text-[11px] leading-relaxed 2xl:text-xs ${job.status === 'error' ? 'text-red-300' : job.reportedSeeders === 0 || (job.noProgressSeconds || 0) >= 30 ? 'text-amber-300' : 'text-zinc-400'}`}>
+                          {diagnostic}
+                        </p>
+                      )}
                     </div>
 
                     <div className="flex shrink-0 items-center gap-1.5">
@@ -440,7 +574,7 @@ export const DownloadsView: React.FC<DownloadsViewProps> = ({ onRefreshLibrary }
                       {!isCompleted && (
                         <button
                           type="button"
-                          onClick={() => setConfirmCancelHash(job.infoHash)}
+                          onClick={() => { setDiscardPartial(false); setConfirmCancelHash(job.infoHash) }}
                           title="Remove from queue (files stay on disk)"
                           className="flex h-8 w-8 items-center justify-center rounded-full border border-red-500/30 bg-red-500/5 text-red-400 transition-colors hover:bg-red-500/20 hover:text-red-300"
                         >
@@ -451,7 +585,7 @@ export const DownloadsView: React.FC<DownloadsViewProps> = ({ onRefreshLibrary }
                   </div>
 
                   {/* Thin progress bar */}
-                  <div className="mt-2 h-1 w-full overflow-hidden rounded-full bg-zinc-800">
+                  <div className="mt-3 h-1.5 w-full overflow-hidden rounded-full bg-zinc-800">
                     <div
                       className="h-full rounded-full bg-red-500 transition-[width] duration-500"
                       style={{ width: `${progressPct}%` }}
@@ -462,23 +596,32 @@ export const DownloadsView: React.FC<DownloadsViewProps> = ({ onRefreshLibrary }
                   {confirming && (
                     <div className="mt-2 flex flex-wrap items-center justify-between gap-2 rounded-lg border border-red-500/30 bg-red-500/10 px-3 py-2">
                       <p className="text-[11px] font-semibold text-red-200">
-                        Remove from queue? Files stay on disk.
+                        Remove this release from the queue?
                       </p>
+                      <label className="flex items-center gap-2 text-[11px] text-zinc-300">
+                        <input
+                          type="checkbox"
+                          checked={discardPartial}
+                          onChange={(event) => setDiscardPartial(event.target.checked)}
+                          className="accent-red-500"
+                        />
+                        Delete this release’s partial download data
+                      </label>
                       <div className="flex items-center gap-2">
                         <button
                           type="button"
-                          onClick={() => setConfirmCancelHash(null)}
+                          onClick={() => { setConfirmCancelHash(null); setDiscardPartial(false) }}
                           className="rounded-lg bg-zinc-800 px-2.5 py-1 text-[11px] font-semibold text-zinc-300 transition-colors hover:bg-zinc-700 hover:text-white"
                         >
                           Keep
                         </button>
                         <button
                           type="button"
-                          onClick={() => handleRemoveJob(job.infoHash)}
+                          onClick={() => handleRemoveJob(job.infoHash, discardPartial)}
                           disabled={cancellingHash === job.infoHash}
                           className="rounded-lg bg-red-600 px-2.5 py-1 text-[11px] font-bold text-white transition-colors hover:bg-red-500 disabled:opacity-60"
                         >
-                          {cancellingHash === job.infoHash ? 'Removing…' : 'Remove'}
+                          {cancellingHash === job.infoHash ? 'Removing…' : discardPartial ? 'Delete data & remove' : 'Remove, keep data'}
                         </button>
                       </div>
                     </div>
@@ -508,10 +651,10 @@ export const DownloadsView: React.FC<DownloadsViewProps> = ({ onRefreshLibrary }
                 <AlertTriangle className="h-5 w-5 text-red-400" />
               </div>
               <div className="min-w-0">
-                <h3 className="text-sm font-bold text-white">Delete files from PC</h3>
+                <h3 className="text-sm font-bold text-white">Delete anime folder from PC</h3>
                 <p className="mt-1 text-xs leading-relaxed text-zinc-400">
-                  Delete <span className="font-semibold text-zinc-100">&ldquo;{confirmTarget.folderName}&rdquo;</span> from
-                  PC? This frees {formatFileSize(confirmTarget.totalBytes)}. Watch history and progress are kept.
+                  Permanently delete <span className="font-semibold text-zinc-100">&ldquo;{confirmTarget.folderName}&rdquo;</span> and its files from this PC?
+                  This frees {formatFileSize(confirmTarget.totalBytes)}. Any active downloads to this folder will be stopped; watch history and list progress are kept.
                 </p>
               </div>
             </div>

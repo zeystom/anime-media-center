@@ -3,37 +3,36 @@ import path from 'path';
 import fs from 'fs';
 import { fileURLToPath } from 'url';
 import { storage, autoDetectFfmpegPath, autoDetectWhisperPath } from './storage';
+import { resolveUserDataPath } from './userDataPath';
 import { streamServer } from './server';
 import { probeMkv, extractEmbeddedSubtitle, extractEmbeddedAss, extractEmbeddedFonts, filterFontsForAss, parseSrt, findPrecedingKeyframe, readMkvEmbeddedTitle, readContainerDuration, cleanupOldCaches } from './ffmpeg';
 import { whisperManager } from './whisper';
 import { findExternalSubtitles } from './subtitles';
-import { AnimeFolder, Episode, PlaybackProgress, SeasonPreference, VIDEO_EXTENSIONS, ReleaseSearchResult, ProviderReport } from './types';
+import { AnimeFolder, Episode, PlaybackProgress, SeasonPreference, VIDEO_EXTENSIONS, ReleaseSearchResult, ProviderReport, DiscoverCatalogParams } from './types';
 import { getKitsuMetadata, fetchAniSkipTimes } from './kitsu';
 import { extractEpisodeNumber } from './episodes';
+import { parseReleaseCore } from '../src/lib/releaseParser/regexEngine.ts';
 import { checkEpisodeDownloading, isFolderDownloading } from './torrents';
-import { getTrending, getPopularSeason, getAllTimePopular, getAiringSchedule, getRecommendations, searchCatalog, getCatalogDetails } from './catalog';
-import { fetchAniZipMappings } from './aniZip';
+import { getTrending, getPopularSeason, getAllTimePopular, getAiringSchedule, getRecommendations, getGenrePicks, getDiscoverCatalog, searchCatalog, getCatalogDetails, getCatalogFranchise } from './catalog';
+import { fetchRemoteEpisodes, isAniZipCacheFresh, setRemoteEpisodesUpdateListener } from './aniZip';
+import { warmFribbIndex } from './fribb';
 import { userLibrary, UserListStatus } from './userLibrary';
+import { getUpdatedAgeRatings, startAgeRatingsUpdater } from './ageRatings';
 import { computeDiskUsage, computeStorageOverview, deleteAnime, deleteEpisodes } from './libraryManager';
 import { syncBackupNow, getBackupStatus, detectRestoreState, restoreFromBackup, scheduleBackupSync } from './userDataBackup';
 import { exportWatchlist, importWatchlist, MAL_ONLY_ANILIST_ID_BASE } from './watchlistIO';
 import { initTorrentEngine, engineSetEnabled, engineAddDownload, enginePause, engineResume, engineCancel, engineGetState, engineShutdown } from './torrentEngine';
-import { detectVpnStatus } from './vpnGuard';
-import { searchProviders, rankReleasesForEpisode, sanitizeSearchQuery, extractInfoHash } from './indexers';
+import { searchProviders, rankReleasesForEpisode, isExplicitEpisodeMismatch, getEpisodeReleaseSizeWarning, sanitizeSearchQuery, extractInfoHash, fetchReleaseDescription, inspectReleaseResults, computeTitleRelevance } from './indexers';
 
 const __filename = fileURLToPath(import.meta.url);
 const __dirname = path.dirname(__filename);
 
-// Disable DirectComposition video hardware overlays (MPO) to prevent mailbox desync & black screen crashes on UI hovers
-app.commandLine.appendSwitch('disable-direct-composition-video-overlays');
-app.commandLine.appendSwitch('disable-features', 'DirectCompositionVideoOverlays');
-app.commandLine.appendSwitch('enable-gpu-rasterization');
-app.commandLine.appendSwitch('enable-zero-copy');
-app.commandLine.appendSwitch('ignore-gpu-blocklist');
-app.commandLine.appendSwitch('disable-backgrounding-occluded-windows');
-app.commandLine.appendSwitch('disable-renderer-backgrounding');
-
 let mainWindow: BrowserWindow | null = null;
+
+// Short-lived p2p search cache (provider fetches + description inspection are
+// episode-independent; draining a season queue fires one search per episode).
+const SEARCH_CACHE_TTL_MS = 120_000;
+const searchResultCache = new Map<string, { inspected: ReleaseSearchResult[]; reports: ProviderReport[]; fetchedAt: number }>();
 
 async function asyncPool<T, R>(poolLimit: number, array: T[], iteratorFn: (item: T) => Promise<R>): Promise<R[]> {
   const ret: Promise<R>[] = [];
@@ -69,6 +68,12 @@ function getEffectiveAnimeFolderName(folderPath: string, rootPath?: string): str
   }
 
   return base;
+}
+
+function isBonusVideoFile(fileName: string): boolean {
+  const parsed = parseReleaseCore(fileName)
+  return parsed.releaseType === 'NCOP' || parsed.releaseType === 'NCED' ||
+    /(?:^|[ ._()[\]-])(?:creditless|ncop|nced|opening|ending|trailer|preview|teaser|promo|pv|cm)(?:$|[ ._()[\]-])/i.test(fileName)
 }
 
 interface FolderSubtitleFlags {
@@ -118,7 +123,9 @@ async function scanFolderForEpisodes(folderPath: string, port: number, targetRoo
 
   try {
     const files = fs.readdirSync(folderPath);
-    const videoFiles = files.filter((f) => VIDEO_EXTENSIONS.some((ext) => f.toLowerCase().endsWith(ext)));
+    const videoFiles = files.filter((f) =>
+      VIDEO_EXTENSIONS.some((ext) => f.toLowerCase().endsWith(ext)) && !isBonusVideoFile(f)
+    );
     if (videoFiles.length === 0) {
       return [];
     }
@@ -173,13 +180,20 @@ async function scanFolderForEpisodes(folderPath: string, port: number, targetRoo
 
       // Extract official embedded MKV container title in <1ms as local fallback
       const embeddedTitle = readMkvEmbeddedTitle(fullPath);
-      const officialTitle = kitsuEp?.title || embeddedTitle || null;
+      const cleanOfficialTitle = (value: string | null | undefined): string | null => {
+        const title = value?.trim();
+        if (!title || title.length > 120 || /[\[\]]/.test(title) || /[\u3040-\u30ff\u3400-\u9fff]/u.test(title)) return null;
+        // Container titles sometimes contain the raw release filename instead
+        // of an episode name (e.g. [NF WebRip 2160p H265 ...]). Never surface
+        // those technical tags as the official title in the library UI.
+        if (/\b(?:2160p|1080p|720p|480p|web[- ]?rip|web[- ]?dl|bluray|bdrip|h\.?265|x265|hevc|e[- ]?ac[- ]?3|multi[- ]audio|dual[- ]audio|netflix|repack|proper)\b/i.test(title)) return null;
+        return title;
+      };
+      const officialTitle = cleanOfficialTitle(kitsuEp?.title) || cleanOfficialTitle(embeddedTitle);
 
-      // If standalone movie (1 file) or episode thumbnail missing, fall back to API banner or poster
-      const kitsuThumb =
-        kitsuEp?.thumbnailUrl ||
-        (videoFiles.length === 1 ? kitsuData?.bannerUrl || kitsuData?.posterUrl : null) ||
-        null;
+      // Episode stills stay episode-specific. A single file may be an
+      // incomplete season download, so never substitute the series poster.
+      const kitsuThumb = kitsuEp?.thumbnailUrl || null;
 
       episodes.push({
         filePath: fullPath,
@@ -215,7 +229,7 @@ async function scanFolderForEpisodes(folderPath: string, port: number, targetRoo
 function findMediaFolders(rootDir: string, maxDepth = 4): string[] {
   const mediaDirs: string[] = [];
   const visited = new Set<string>();
-  const ignoredPatterns = /^(?:\$recycle\.bin|system volume information|\.git|\.cache|node_modules|temp|tmp|\.idea|\.vscode)$/i;
+  const ignoredPatterns = /^(?:\.anime-center-staging|\$recycle\.bin|system volume information|\.git|\.cache|node_modules|temp|tmp|\.idea|\.vscode)$/i;
 
   function traverse(currentDir: string, depth: number) {
     if (depth > maxDepth || visited.has(currentDir)) return;
@@ -262,21 +276,32 @@ async function createWindow() {
     const iconPng = path.join(__dirname, '../app-icon.png');
     const appIcon = fs.existsSync(iconIco) ? iconIco : fs.existsSync(iconPng) ? iconPng : undefined;
 
-    // Start local streaming server
-    const serverPort = await streamServer.start();
+    // Start the local server in the background while the bootstrap window is visible.
+    void streamServer.start().catch((error) => {
+      console.error('[Electron] Failed to start local streaming server:', error);
+    });
 
     // Disable application menu completely to remove File, Edit, View, Window, Help
     Menu.setApplicationMenu(null);
 
-    mainWindow = new BrowserWindow({
+    const startup = app as typeof app & {
+      __kaikoStartupSplash?: BrowserWindow;
+      __kaikoStartupShownAt?: number;
+    };
+    mainWindow = startup.__kaikoStartupSplash || new BrowserWindow({
       width: 1400,
       height: 900,
       minWidth: 1024,
       minHeight: 700,
-      backgroundColor: '#0f0f12',
-      title: 'Anime Media Center & Whisper Studio',
+      show: false,
+      paintWhenInitiallyHidden: true,
+      backgroundColor: '#09080f',
+      title: 'Kaiko',
       icon: appIcon,
       autoHideMenuBar: true, // Auto-hide menu bar on Windows/Linux
+      // Hide the system title bar so the renderer can draw glass-styled window
+      // controls that share the live Navbar backdrop.
+      titleBarStyle: 'hidden',
       webPreferences: {
         preload: fs.existsSync(path.join(__dirname, 'preload.cjs'))
           ? path.join(__dirname, 'preload.cjs')
@@ -287,6 +312,8 @@ async function createWindow() {
         backgroundThrottling: false,
       },
     });
+    // Bootstrap already sized the reused window to the display work area.
+    // Maximizing a hidden HWND here can expose it before Chromium paints.
 
     // Monitor child processes for hardware GPU recovery
     app.on('child-process-gone', (_event: any, details: any) => {
@@ -296,12 +323,6 @@ async function createWindow() {
     mainWindow.setMenu(null);
     mainWindow.removeMenu();
 
-    // Open in maximized windowed mode (fills screen while keeping Windows taskbar visible)
-    mainWindow.maximize();
-    mainWindow.once('ready-to-show', () => {
-      mainWindow?.maximize();
-    });
-
     // Notify renderer of native window fullscreen transitions
     mainWindow.on('enter-full-screen', () => {
       mainWindow?.webContents.send('fullscreen-change', true);
@@ -309,7 +330,6 @@ async function createWindow() {
     mainWindow.on('leave-full-screen', () => {
       mainWindow?.webContents.send('fullscreen-change', false);
     });
-
     // Setup IPC Handlers (Guarded against duplicate registration)
     setupIpcHandlers();
 
@@ -342,11 +362,30 @@ async function createWindow() {
       console.error(`[Electron] Page failed to load: (${errorCode}) ${errorDescription}`);
     });
 
+    // Keep this single native window on the animated startup page for at least
+    // 2.3 seconds, then navigate the same WebContents to the app UI.
+    const elapsed = startup.__kaikoStartupShownAt ? Date.now() - startup.__kaikoStartupShownAt : 2300;
+    await new Promise((resolve) => setTimeout(resolve, Math.max(0, 2300 - elapsed)));
     if (process.env.VITE_DEV_SERVER_URL) {
-      mainWindow.loadURL(process.env.VITE_DEV_SERVER_URL);
+      await mainWindow.loadURL(process.env.VITE_DEV_SERVER_URL);
     } else {
-      mainWindow.loadFile(path.join(__dirname, '../dist/index.html'));
+      await mainWindow.loadFile(path.join(__dirname, '../dist/index.html'));
     }
+
+    // The startup animation and the main UI intentionally share one
+    // WebContents. Remove the splash document from Chromium's Back/Forward
+    // stack, otherwise a mouse Back click can restore the splash page and
+    // leave the user staring at a loading screen instead of the app.
+    if (!mainWindow.isDestroyed()) mainWindow.webContents.navigationHistory.clear();
+
+    // Refresh the local age-rating index in the background. On first install
+    // this starts immediately; the renderer keeps its bundled snapshot until
+    // the fresh copy is ready.
+    startAgeRatingsUpdater((ratings) => {
+      for (const win of BrowserWindow.getAllWindows()) {
+        if (!win.isDestroyed()) win.webContents.send('age-ratings:updated', ratings);
+      }
+    });
 
     mainWindow.on('closed', () => {
       mainWindow = null;
@@ -361,6 +400,8 @@ function setupIpcHandlers() {
   if (ipcHandlersSetup) return;
   ipcHandlersSetup = true;
 
+  ipcMain.handle('age-ratings:get-updated', () => getUpdatedAgeRatings());
+
   // Torrent engine (BYOC): only ever starts when the user enabled P2P and accepted the consent modal.
   initTorrentEngine({
     getSettings: () => storage.getSettings(),
@@ -369,7 +410,7 @@ function setupIpcHandlers() {
         mainWindow.webContents.send('p2p-state-changed', state);
       }
     },
-    persistDir: path.join(app.getPath('userData'), 'torrents'),
+    persistDir: path.join(resolveUserDataPath(), 'torrents'),
   });
 
   ipcMain.handle('get-settings', async () => {
@@ -465,6 +506,29 @@ function setupIpcHandlers() {
     return false;
   });
 
+  ipcMain.handle('get-library-cache', async (_event, rootPath?: string | string[]) => {
+    const settings = storage.getSettings();
+    const roots = Array.isArray(rootPath) && rootPath.length > 0
+      ? rootPath
+      : typeof rootPath === 'string' && rootPath.trim()
+        ? [rootPath.trim()]
+        : Array.isArray(settings.libraryFolders) && settings.libraryFolders.length > 0
+          ? settings.libraryFolders
+          : settings.defaultLibraryRoot ? [settings.defaultLibraryRoot] : [];
+    const cached = storage.getLibraryCache(roots);
+    if (!cached) return null;
+    const port = streamServer.getPort();
+    // The local media server chooses its port at runtime, so refresh cached
+    // thumbnail URLs without touching any media on the library drive.
+    return cached.map((folder) => ({
+      ...folder,
+      episodes: folder.episodes.map((episode) => ({
+        ...episode,
+        thumbnailUrl: `http://127.0.0.1:${port}/thumb?file=${encodeURIComponent(episode.filePath)}&type=card${episode.duration ? `&duration=${episode.duration}` : ''}`,
+      })),
+    }));
+  });
+
   ipcMain.handle('scan-library', async (_event, rootPath?: string | string[]) => {
     const settings = storage.getSettings();
     let targetRoots: string[] = [];
@@ -508,7 +572,17 @@ function setupIpcHandlers() {
           const hasEmbSubCount = episodes.filter((e) => e.hasEmbeddedSubtitles).length;
 
           const effectiveName = getEffectiveAnimeFolderName(folderPath, targetRoot);
-          const kitsuData = await getKitsuMetadata(effectiveName);
+          // Bind folder metadata to an AniList entry that can hold every
+          // scanned file: rebroadcast/extended editions share their title
+          // with shorter originals (Haruhi 2006 14-ep vs the 2009 28-ep).
+          const maxEpisodeNumber = episodes.reduce((max, ep) => {
+            const n = parseInt(String(ep?.episodeNumber ?? ''), 10);
+            return Number.isFinite(n) && n > max ? n : max;
+          }, 0);
+          const kitsuData = await getKitsuMetadata(
+            effectiveName,
+            maxEpisodeNumber > 0 ? maxEpisodeNumber : episodes.length || null
+          );
 
           return {
             folderPath,
@@ -546,6 +620,7 @@ function setupIpcHandlers() {
       a.folderName.localeCompare(b.folderName, undefined, { sensitivity: 'base', numeric: true })
     );
 
+    storage.saveLibraryCache(uniqueRoots, animeFolders);
     return animeFolders;
   });
 
@@ -728,6 +803,10 @@ function setupIpcHandlers() {
     return getAllTimePopular();
   });
 
+  ipcMain.handle('catalog:genre-picks', async () => {
+    return getGenrePicks();
+  });
+
   ipcMain.handle('catalog:airing-schedule', async (_event, weekOffset?: number) => {
     return getAiringSchedule(Number.isFinite(weekOffset) ? Number(weekOffset) : 0);
   });
@@ -746,13 +825,48 @@ function setupIpcHandlers() {
     return searchCatalog(query);
   });
 
+  ipcMain.handle('catalog:discover', async (_event, params: DiscoverCatalogParams) => {
+    const librarySeeds = Object.values(userLibrary.getAll())
+      .filter((entry) => (entry.status === 'watching' || entry.status === 'completed') && entry.anilistId < MAL_ONLY_ANILIST_ID_BASE)
+      .map((entry) => entry.anilistId);
+    return getDiscoverCatalog(params, librarySeeds);
+  });
+
   ipcMain.handle('catalog:details', async (_event, anilistId: number) => {
     return getCatalogDetails(anilistId);
   });
 
-  ipcMain.handle('metadata:remote-episodes', async (_event, anilistId: number) => {
-    return fetchAniZipMappings(anilistId);
+  ipcMain.handle('catalog:franchise', async (_event, anilistId: number) => {
+    return getCatalogFranchise(anilistId);
   });
+
+  ipcMain.handle('metadata:remote-episodes', async (_event, anilistId: number) => {
+    return fetchRemoteEpisodes(anilistId);
+  });
+
+  // The episodes pipeline pushes progressive payloads: the first usable
+  // snapshot arrives within ~1 s, retries/Kitsu pages push further updates.
+  setRemoteEpisodesUpdateListener((anilistId, result) => {
+    for (const win of BrowserWindow.getAllWindows()) {
+      if (!win.isDestroyed()) win.webContents.send('metadata:remote-episodes-updated', anilistId, result);
+    }
+  });
+
+  // Hover-prefetch: warm the pipeline while the cursor rests on a card.
+  // Debounce lives in the renderer; here a fresh-cache skip + a small interval
+  // guard keep a rail sweep from producing any network traffic.
+  let lastWarmStartedAt = 0;
+  ipcMain.on('metadata:remote-episodes-warm', (_event, anilistId: number) => {
+    const id = Math.trunc(Number(anilistId));
+    if (!Number.isFinite(id) || id <= 0) return;
+    if (isAniZipCacheFresh(id)) return;
+    if (Date.now() - lastWarmStartedAt < 700) return;
+    lastWarmStartedAt = Date.now();
+    void fetchRemoteEpisodes(id).catch(() => {});
+  });
+
+  const fribbWarmTimer = setTimeout(() => void warmFribbIndex(), 5000);
+  fribbWarmTimer.unref?.();
 
   // ---- User Library (watching/completed/planning/dropped statuses + scores) ----
   ipcMain.handle('user-library:get-all', async () => {
@@ -861,10 +975,6 @@ function setupIpcHandlers() {
     return engineSetEnabled(false);
   });
 
-  ipcMain.handle('p2p:vpn-status', async () => {
-    return detectVpnStatus();
-  });
-
   ipcMain.handle('p2p:search', async (_event, params: {
     title: string
     aliases?: string[]
@@ -872,6 +982,7 @@ function setupIpcHandlers() {
     season?: number | null
     episode?: number | null
     episodeCount?: number | null
+    episodeDurationMinutes?: number | null
     queryOverride?: string
   }) => {
     const settings = storage.getSettings();
@@ -879,11 +990,20 @@ function setupIpcHandlers() {
     if (providers.length === 0) return { results: [], reports: [], queries: [] };
     const title = params && typeof params.title === 'string' ? params.title : '';
     // Build the query set: manual override wins; otherwise the sanitized
-    // primary title plus romaji/english aliases (max 3 queries).
+    // primary title plus romaji/english aliases (max 3 queries). Romaji and
+    // English titles carry most Nyaa releases, so CJK aliases sort below them
+    // and the 3-query cap can never drop the main title.
     const override = params && typeof params.queryOverride === 'string' ? params.queryOverride : '';
-    const candidates = override.trim()
+    const isCjk = (value: string) => /[\u3040-\u30ff\u3400-\u4dbf\u4e00-\u9fff]/.test(value);
+    const rawCandidates = override.trim()
       ? [override]
       : [title, ...(Array.isArray(params?.aliases) ? (params.aliases as string[]) : [])];
+    const candidates = override.trim()
+      ? rawCandidates
+      : [
+          ...rawCandidates.filter((value) => !!value && !isCjk(value)),
+          ...rawCandidates.filter((value) => !!value && isCjk(value)),
+        ];
     const queries: string[] = [];
     for (const candidate of candidates) {
       const sanitized = sanitizeSearchQuery(candidate || '');
@@ -891,41 +1011,100 @@ function setupIpcHandlers() {
       if (queries.length >= 3) break;
     }
     if (queries.length === 0) return { results: [], reports: [], queries: [] };
-    // Search every query across all enabled providers, merging and deduping by infoHash.
-    const allResults: ReleaseSearchResult[] = [];
-    const attemptReports: ProviderReport[] = [];
-    const seen = new Set<string>();
-    for (const query of queries) {
-      const { results, reports } = await searchProviders(providers, {
-        query,
+    const refs = [title, ...(Array.isArray(params?.aliases) ? (params.aliases as string[]) : [])];
+    const withRelevance = (list: ReleaseSearchResult[]) =>
+      list.map((release) => ({ ...release, titleRelevance: computeTitleRelevance(release.title, refs) }));
+
+    // Short-lived cache: draining a season queue fires one search per episode,
+    // and provider fetches + description inspections are the expensive part
+    // (they are episode-independent). Ranking and episode-dependent filters
+    // re-run per request below.
+    const cacheKey = queries.join(' || ');
+    let cached = searchResultCache.get(cacheKey);
+    if (!cached || Date.now() - cached.fetchedAt > SEARCH_CACHE_TTL_MS) {
+      // Search every query across all enabled providers, merging and deduping by infoHash.
+      const allResults: ReleaseSearchResult[] = [];
+      const attemptReports: ProviderReport[] = [];
+      const seen = new Set<string>();
+      for (const query of queries) {
+        const { results, reports } = await searchProviders(providers, {
+          query,
+          season: params?.season ?? null,
+          episode: params?.episode ?? null,
+        });
+        for (const result of results) {
+          const key = extractInfoHash(result.downloadUrl) || `${result.title.toLowerCase()}|${result.sizeBytes ?? ''}`;
+          if (seen.has(key)) continue;
+          seen.add(key);
+          allResults.push(result);
+        }
+        attemptReports.push(...reports);
+      }
+      // One report per provider across queries: an ok report wins, otherwise keep the first error.
+      const reportByProvider = new Map<string, ProviderReport>();
+      for (const report of attemptReports) {
+        const existing = reportByProvider.get(report.providerId);
+        if (!existing || (!existing.ok && report.ok)) reportByProvider.set(report.providerId, report);
+      }
+      // Wrong-show results (titleRelevance 'none') are dropped BEFORE the
+      // description inspection so its request budget is spent on the right
+      // show only.
+      const relevant = withRelevance(rankReleasesForEpisode(allResults, {
+        animeTitle: title,
         season: params?.season ?? null,
         episode: params?.episode ?? null,
-      });
-      for (const result of results) {
-        const key = extractInfoHash(result.downloadUrl) || `${result.title.toLowerCase()}|${result.sizeBytes ?? ''}`;
-        if (seen.has(key)) continue;
-        seen.add(key);
-        allResults.push(result);
+      })).filter((release) => release.titleRelevance !== 'none');
+      // Feed metadata is frequently incomplete. Inspect the strongest candidates
+      // before ranking so automatic mode cannot mistake an unknown track list for
+      // a confirmed English dub/sub release.
+      const inspectedResults = await inspectReleaseResults(relevant, providers, 40);
+      cached = { inspected: inspectedResults, reports: [...reportByProvider.values()], fetchedAt: Date.now() };
+      searchResultCache.set(cacheKey, cached);
+      if (searchResultCache.size > 24) {
+        const oldest = [...searchResultCache.entries()].sort((a, b) => a[1].fetchedAt - b[1].fetchedAt)[0];
+        if (oldest) searchResultCache.delete(oldest[0]);
       }
-      attemptReports.push(...reports);
     }
-    // One report per provider across queries: an ok report wins, otherwise keep the first error.
-    const reportByProvider = new Map<string, ProviderReport>();
-    for (const report of attemptReports) {
-      const existing = reportByProvider.get(report.providerId);
-      if (!existing || (!existing.ok && report.ok)) reportByProvider.set(report.providerId, report);
-    }
-    const ranked = rankReleasesForEpisode(allResults, {
+    // Per-request ranking of the cached inspected set for THIS episode, then
+    // the episode-dependent filter (explicit wrong-episode titles).
+    const ranked = withRelevance(rankReleasesForEpisode(cached.inspected, {
       animeTitle: title,
       season: params?.season ?? null,
       episode: params?.episode ?? null,
-    });
-    console.log(`[P2P] search "${queries.join('" / "')}" -> ${ranked.length} results from ${providers.length} provider(s)`);
-    return { results: ranked, reports: [...reportByProvider.values()], queries };
+    }));
+    const compatible = params?.episode == null
+      ? ranked
+      : ranked.filter((release) => !isExplicitEpisodeMismatch(release, params.episode!));
+    console.log(`[P2P] search "${queries.join('" / "')}" -> ${compatible.length} episode-compatible results (${ranked.length - compatible.length} wrong-episode result(s) skipped)`);
+    const annotated = compatible.map((release) => ({
+      ...release,
+      sizeWarning: params?.episode != null
+        ? getEpisodeReleaseSizeWarning(release.sizeBytes, params?.episodeDurationMinutes, release.title)
+        : null,
+    }))
+    const results = [
+      ...annotated.filter((release) => !release.sizeWarning),
+      ...annotated.filter((release) => !!release.sizeWarning),
+    ]
+    return {
+      results,
+      reports: cached.reports,
+      queries,
+      skippedWrongEpisodeCount: ranked.length - compatible.length,
+    };
   });
 
   ipcMain.handle('p2p:add-download', async (_event, params) => {
     return engineAddDownload(params || ({} as any));
+  });
+
+  ipcMain.handle('p2p:release-description', async (_event, params: { providerId?: string; url?: string }) => {
+    const settings = storage.getSettings();
+    return fetchReleaseDescription(
+      typeof params?.providerId === 'string' ? params.providerId : '',
+      typeof params?.url === 'string' ? params.url : '',
+      Array.isArray(settings.rssProviders) ? settings.rssProviders : [],
+    );
   });
 
   ipcMain.handle('p2p:pause', async (_event, infoHash: string) => {
@@ -966,9 +1145,7 @@ app.on('window-all-closed', () => {
   userLibrary.flush();
   streamServer.stop();
   whisperManager.cancel();
-  if (process.platform !== 'darwin') {
-    app.quit();
-  }
+  if (process.platform !== 'darwin') app.quit();
 });
 
 app.on('before-quit', () => {

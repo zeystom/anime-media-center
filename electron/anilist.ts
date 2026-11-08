@@ -27,7 +27,9 @@ export interface AniListNextAiringEpisode {
 /** Raw AniList media object as returned by the MEDIA_FIELDS fragment below. */
 export interface AniListMedia {
   id: number;
+  type?: string;
   idMal: number | null;
+  countryOfOrigin: string | null;
   title: AniListTitle | null;
   synonyms: string[] | null;
   coverImage: { extraLarge: string | null; large: string | null } | null;
@@ -36,14 +38,32 @@ export interface AniListMedia {
   genres: string[] | null;
   tags: AniListTag[] | null;
   averageScore: number | null;
+  popularity: number | null;
+  trending: number | null;
   episodes: number | null;
   duration: number | null;
   format: string | null;
   status: string | null;
+  isAdult?: boolean;
   season: string | null;
   seasonYear: number | null;
+  startDate: AniListDate | null;
   nextAiringEpisode: AniListNextAiringEpisode | null;
   studios: { nodes: { name: string }[] } | null;
+  relations?: { edges: { relationType: string; node: AniListMedia | null }[] } | null;
+}
+
+/** Raw AniList FuzzyDateInt triple (year/month/day may be individually null). */
+export interface AniListDate {
+  year: number | null;
+  month: number | null;
+  day: number | null;
+}
+
+export interface AniListFranchiseNode {
+  id: number;
+  type?: string;
+  relations?: { edges: { relationType: string; node: AniListFranchiseNode | null }[] } | null;
 }
 
 /** Raw AniList airing schedule entry (media fragment included). */
@@ -81,6 +101,7 @@ const MEDIA_FIELDS_FRAGMENT = `
   fragment MediaFields on Media {
     id
     idMal
+    countryOfOrigin
     title {
       romaji
       english
@@ -99,11 +120,19 @@ const MEDIA_FIELDS_FRAGMENT = `
       rank
     }
     averageScore
+    popularity
+    trending
     episodes
     duration
     format
     status
+    isAdult
     season
+    startDate {
+      year
+      month
+      day
+    }
     seasonYear
     nextAiringEpisode {
       episode
@@ -119,9 +148,9 @@ const MEDIA_FIELDS_FRAGMENT = `
 `;
 
 const TRENDING_QUERY = `
-  query ($page: Int, $perPage: Int) {
+  query ($page: Int, $perPage: Int, $countryOfOrigin: CountryCode) {
     Page(page: $page, perPage: $perPage) {
-      media(type: ANIME, sort: TRENDING_DESC, isAdult: false) {
+      media(type: ANIME, sort: TRENDING_DESC, isAdult: false, countryOfOrigin: $countryOfOrigin) {
         ...MediaFields
       }
     }
@@ -130,9 +159,9 @@ const TRENDING_QUERY = `
 `;
 
 const POPULAR_SEASON_QUERY = `
-  query ($season: MediaSeason, $seasonYear: Int, $page: Int, $perPage: Int) {
+  query ($season: MediaSeason, $seasonYear: Int, $page: Int, $perPage: Int, $countryOfOrigin: CountryCode) {
     Page(page: $page, perPage: $perPage) {
-      media(season: $season, seasonYear: $seasonYear, type: ANIME, sort: POPULARITY_DESC, isAdult: false) {
+      media(season: $season, seasonYear: $seasonYear, type: ANIME, sort: POPULARITY_DESC, isAdult: false, countryOfOrigin: $countryOfOrigin) {
         ...MediaFields
       }
     }
@@ -141,9 +170,31 @@ const POPULAR_SEASON_QUERY = `
 `;
 
 const ALL_TIME_POPULAR_QUERY = `
-  query ($page: Int, $perPage: Int) {
+  query ($page: Int, $perPage: Int, $countryOfOrigin: CountryCode) {
     Page(page: $page, perPage: $perPage) {
-      media(type: ANIME, sort: POPULARITY_DESC, isAdult: false) {
+      media(type: ANIME, sort: POPULARITY_DESC, isAdult: false, countryOfOrigin: $countryOfOrigin) {
+        ...MediaFields
+      }
+    }
+  }
+  ${MEDIA_FIELDS_FRAGMENT}
+`;
+
+const DISCOVER_QUERY = `
+  query (
+    $page: Int, $perPage: Int, $search: String, $season: MediaSeason,
+    $seasonYear: Int, $genreIn: [String], $formatIn: [MediaFormat],
+    $status: MediaStatus, $minScore: Int, $sort: [MediaSort],
+    $countryOfOrigin: CountryCode, $isAdult: Boolean
+  ) {
+    Page(page: $page, perPage: $perPage) {
+      pageInfo { hasNextPage }
+      media(
+        type: ANIME, search: $search, season: $season, seasonYear: $seasonYear,
+        genre_in: $genreIn, format_in: $formatIn, status: $status,
+        averageScore_greater: $minScore, sort: $sort, isAdult: $isAdult,
+        countryOfOrigin: $countryOfOrigin
+      ) {
         ...MediaFields
       }
     }
@@ -202,6 +253,28 @@ const DETAILS_QUERY = `
   query ($id: Int) {
     Media(id: $id, type: ANIME) {
       ...MediaFields
+    }
+  }
+  ${MEDIA_FIELDS_FRAGMENT}
+`;
+
+// Fetch only graph IDs/types here. Requesting full media objects recursively
+// made AniList's response enormous and could fail/timeout before related anime
+// were returned. Catalog fields are fetched once in a compact second request.
+const FRANCHISE_GRAPH_QUERY = `
+  query ($id: Int) {
+    Media(id: $id, type: ANIME) {
+      relations {
+        edges { relationType node { id type relations { edges { relationType node { id type } } } } }
+      }
+    }
+  }
+`;
+
+const FRANCHISE_MEDIA_QUERY = `
+  query ($ids: [Int], $perPage: Int) {
+    Page(page: 1, perPage: $perPage) {
+      media(id_in: $ids, type: ANIME, isAdult: false) { ...MediaFields }
     }
   }
   ${MEDIA_FIELDS_FRAGMENT}
@@ -302,6 +375,119 @@ interface PageMediaResult {
   Page?: { media?: (AniListMedia | null)[] | null } | null;
 }
 
+export async function queryDiscoverCatalog(params: {
+  page: number;
+  perPage: number;
+  pageCount?: number;
+  search?: string;
+  season?: AniListSeason;
+  seasonYear?: number;
+  genre?: string;
+  format?: string;
+  status?: string;
+  minScore?: number;
+  sort: string;
+  countryOfOrigin?: 'JP';
+  isAdult?: boolean;
+}): Promise<{ items: AniListMedia[]; hasNextPage: boolean }> {
+  type DiscoverPageResult = {
+    media?: (AniListMedia | null)[] | null;
+    pageInfo?: { hasNextPage?: boolean | null } | null;
+  } | null;
+  const pageCount = Math.max(1, Math.min(5, Math.floor(Number(params.pageCount) || 1)));
+  const firstPage = Math.max(1, Math.floor(params.page));
+  const perPage = clampPerPage(params.perPage, 24);
+  const commonVariables = {
+    perPage,
+    search: params.search?.trim() || undefined,
+    season: params.season,
+    seasonYear: params.seasonYear,
+    genre: params.genre ? [params.genre] : undefined,
+    formatIn: params.format ? [params.format] : undefined,
+    status: params.status,
+    // AniList exposes averageScore_greater (strictly greater); subtract one
+    // so the UI's "70+" filter includes titles scored exactly 70.
+    minScore: params.minScore && params.minScore > 0 ? Math.max(0, Math.min(100, Math.floor(params.minScore) - 1)) : undefined,
+    sort: [params.sort],
+    countryOfOrigin: params.countryOfOrigin,
+    isAdult: params.isAdult,
+  };
+  let pages: DiscoverPageResult[];
+
+  if (pageCount === 1) {
+    const data = await runAniListQuery<{
+      Page?: DiscoverPageResult;
+    }>(DISCOVER_QUERY, { ...commonVariables, page: firstPage });
+    pages = [data.Page ?? null];
+  } else {
+    // Fetch adjacent AniList pages as GraphQL aliases in one HTTP request.
+    // The API limits requests per minute, so rating filters should not pay
+    // one full rate-limit interval for every page just to find local matches.
+    const pageVariables = Array.from({ length: pageCount }, (_, index) => `$page${index}: Int!`);
+    const pageSelections = Array.from({ length: pageCount }, (_, index) => `
+      page${index}: Page(page: $page${index}, perPage: $perPage) {
+        pageInfo { hasNextPage }
+        media(
+          type: ANIME, search: $search, season: $season, seasonYear: $seasonYear,
+          genre_in: $genre, format_in: $formatIn, status: $status,
+          averageScore_greater: $minScore, sort: $sort, isAdult: $isAdult,
+          countryOfOrigin: $countryOfOrigin
+        ) { ...MediaFields }
+      }
+    `).join('\n');
+    const query = `query (${[
+      ...pageVariables,
+      '$perPage: Int!', '$search: String', '$season: MediaSeason', '$seasonYear: Int',
+      '$genre: [String]', '$formatIn: [MediaFormat]', '$status: MediaStatus',
+      '$minScore: Int', '$sort: [MediaSort]', '$countryOfOrigin: CountryCode', '$isAdult: Boolean',
+    ].join(', ')}) { ${pageSelections} } ${MEDIA_FIELDS_FRAGMENT}`;
+    const data = await runAniListQuery<Record<string, DiscoverPageResult>>(query, {
+      ...commonVariables,
+      ...Object.fromEntries(Array.from({ length: pageCount }, (_, index) => [`page${index}`, firstPage + index])),
+    });
+    pages = Array.from({ length: pageCount }, (_, index) => data[`page${index}`] ?? null);
+  }
+
+  const unique = new Map<number, AniListMedia>();
+  for (const page of pages) {
+    for (const media of page?.media ?? []) {
+      if (media && !unique.has(media.id)) unique.set(media.id, media);
+    }
+  }
+  return {
+    items: [...unique.values()],
+    hasNextPage: pages[pages.length - 1]?.pageInfo?.hasNextPage === true,
+  };
+}
+
+/**
+ * Fetches randomized genre candidate pages with one AniList request. The page
+ * for each genre is selected by the caller so the pool changes on refresh.
+ */
+export async function queryGenreCandidates(genres: { genre: string; page: number }[], perPage = 50): Promise<Record<string, AniListMedia[]>> {
+  const selections = genres.map((_, index) => `
+    genre${index}: Page(page: $page${index}, perPage: $perPage) {
+      media(type: ANIME, genre_in: [$genre${index}], sort: POPULARITY_DESC, isAdult: false, countryOfOrigin: JP) {
+        ...MediaFields
+      }
+    }
+  `).join('\n');
+  const variables = [
+    ...genres.map((_, index) => `$page${index}: Int!`),
+    ...genres.map((_, index) => `$genre${index}: String!`),
+    '$perPage: Int!',
+  ];
+  const query = `query (${variables.join(', ')}) { ${selections} } ${MEDIA_FIELDS_FRAGMENT}`;
+  const data = await runAniListQuery<Record<string, { media?: (AniListMedia | null)[] | null } | null>>(query, {
+    perPage: clampPerPage(perPage, 50),
+    ...Object.fromEntries(genres.flatMap((entry, index) => [[`page${index}`, entry.page], [`genre${index}`, entry.genre]])),
+  });
+  return Object.fromEntries(genres.map((entry, index) => [
+    entry.genre,
+    (data[`genre${index}`]?.media ?? []).filter((media): media is AniListMedia => !!media),
+  ]));
+}
+
 /**
  * Fetches currently trending anime sorted by TRENDING_DESC.
  */
@@ -309,6 +495,7 @@ export async function queryTrending(perPage = 24): Promise<AniListMedia[]> {
   const data = await runAniListQuery<PageMediaResult>(TRENDING_QUERY, {
     page: 1,
     perPage: clampPerPage(perPage, 24),
+    countryOfOrigin: 'JP',
   });
   return (data.Page?.media ?? []).filter((m): m is AniListMedia => !!m);
 }
@@ -322,6 +509,7 @@ export async function queryPopularSeason(season: AniListSeason, seasonYear: numb
     seasonYear,
     page: 1,
     perPage: clampPerPage(perPage, 24),
+    countryOfOrigin: 'JP',
   });
   return (data.Page?.media ?? []).filter((m): m is AniListMedia => !!m);
 }
@@ -333,6 +521,7 @@ export async function queryAllTimePopular(perPage = 24): Promise<AniListMedia[]>
   const data = await runAniListQuery<PageMediaResult>(ALL_TIME_POPULAR_QUERY, {
     page: 1,
     perPage: clampPerPage(perPage, 24),
+    countryOfOrigin: 'JP',
   });
   return (data.Page?.media ?? []).filter((m): m is AniListMedia => !!m);
 }
@@ -409,4 +598,19 @@ export async function querySearch(search: string, perPage = 24): Promise<AniList
 export async function queryDetails(id: number): Promise<AniListMedia | null> {
   const data = await runAniListQuery<{ Media?: AniListMedia | null } | null>(DETAILS_QUERY, { id });
   return data?.Media ?? null;
+}
+
+export async function queryFranchise(id: number): Promise<AniListFranchiseNode | null> {
+  const data = await runAniListQuery<{ Media?: AniListFranchiseNode | null } | null>(FRANCHISE_GRAPH_QUERY, { id });
+  return data?.Media ?? null;
+}
+
+export async function queryFranchiseMedia(ids: number[]): Promise<AniListMedia[]> {
+  const unique = [...new Set(ids.filter((id) => Number.isInteger(id) && id > 0))].slice(0, 50);
+  if (unique.length === 0) return [];
+  const data = await runAniListQuery<{ Page?: { media?: (AniListMedia | null)[] | null } | null }>(FRANCHISE_MEDIA_QUERY, {
+    ids: unique,
+    perPage: unique.length,
+  });
+  return (data.Page?.media ?? []).filter((item): item is AniListMedia => !!item);
 }

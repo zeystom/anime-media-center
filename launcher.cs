@@ -3,7 +3,7 @@ using System.Diagnostics;
 using System.IO;
 using System.Windows.Forms;
 
-namespace AnimeMediaCenter
+namespace Kaiko
 {
     static class Program
     {
@@ -13,7 +13,7 @@ namespace AnimeMediaCenter
             try
             {
                 string appDir = AppDomain.CurrentDomain.BaseDirectory.TrimEnd('\\', '/');
-                string exePath = Path.Combine(appDir, "Anime Media Center.exe");
+                string exePath = Path.Combine(appDir, "Kaiko.exe");
                 string iconPath = Path.Combine(appDir, "app-icon.ico");
                 string electronExe = Path.Combine(appDir, @"node_modules\electron\dist\electron.exe");
 
@@ -22,7 +22,7 @@ namespace AnimeMediaCenter
                 {
                     DialogResult res = MessageBox.Show(
                         "Зависимости приложения еще не установлены (node_modules отсутствует).\n\nЗапустить автоматическую установку (npm install && npm run build)?",
-                        "Anime Media Center — Первый запуск",
+                        "Kaiko — Первый запуск",
                         MessageBoxButtons.YesNo,
                         MessageBoxIcon.Information
                     );
@@ -50,7 +50,7 @@ namespace AnimeMediaCenter
                 {
                     MessageBox.Show(
                         "Не удалось найти electron.exe.\nПожалуйста, выполните команду 'npm install' в папке проекта.",
-                        "Anime Media Center — Ошибка",
+                        "Kaiko — Ошибка",
                         MessageBoxButtons.OK,
                         MessageBoxIcon.Error
                     );
@@ -88,7 +88,7 @@ namespace AnimeMediaCenter
             }
             catch (Exception ex)
             {
-                MessageBox.Show("Ошибка запуска приложения:\n" + ex.Message, "Anime Media Center", MessageBoxButtons.OK, MessageBoxIcon.Error);
+                MessageBox.Show("Ошибка запуска приложения:\n" + ex.Message, "Kaiko", MessageBoxButtons.OK, MessageBoxIcon.Error);
             }
         }
 
@@ -99,8 +99,8 @@ namespace AnimeMediaCenter
                 string desktop = Environment.GetFolderPath(Environment.SpecialFolder.DesktopDirectory);
                 string startMenu = Environment.GetFolderPath(Environment.SpecialFolder.Programs);
 
-                string desktopLnk = Path.Combine(desktop, "Anime Media Center.lnk");
-                string startMenuLnk = Path.Combine(startMenu, "Anime Media Center.lnk");
+                string desktopLnk = Path.Combine(desktop, "Kaiko.lnk");
+                string startMenuLnk = Path.Combine(startMenu, "Kaiko.lnk");
 
                 if ((!File.Exists(desktopLnk) && Directory.Exists(desktop)) ||
                     (!File.Exists(startMenuLnk) && Directory.Exists(startMenu)))
@@ -116,7 +116,7 @@ namespace AnimeMediaCenter
                             sc.TargetPath = exePath;
                             sc.WorkingDirectory = appDir;
                             if (File.Exists(iconPath)) sc.IconLocation = iconPath + ",0";
-                            sc.Description = "Anime Media Center & Whisper Studio";
+                            sc.Description = "Kaiko anime library and media center";
                             sc.Save();
                         }
 
@@ -126,7 +126,7 @@ namespace AnimeMediaCenter
                             sc.TargetPath = exePath;
                             sc.WorkingDirectory = appDir;
                             if (File.Exists(iconPath)) sc.IconLocation = iconPath + ",0";
-                            sc.Description = "Anime Media Center & Whisper Studio";
+                            sc.Description = "Kaiko anime library and media center";
                             sc.Save();
                         }
                     }

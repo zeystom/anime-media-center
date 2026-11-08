@@ -19,16 +19,15 @@ import {
   Upload,
   Save,
   Share2,
-  ShieldCheck,
-  ShieldAlert,
   Gauge,
   Rss,
 } from 'lucide-react';
 import { AppSettings } from '../types';
-import type { P2pState, VpnStatus, RssProvider } from '../types';
+import type { P2pState, RssProvider } from '../types';
 import { showGlobalToast } from './Toast';
 import { P2pConsentModal } from './P2P/P2pConsentModal';
 import { formatFileSize } from '../utils/format';
+import { TORRENT_LANGUAGES, type TorrentLanguageCode } from '../lib/releaseParser/releaseClassification';
 
 interface BackupStatusInfo {
   exists: boolean;
@@ -95,8 +94,14 @@ export const SettingsModal: React.FC<SettingsModalProps> = ({
       ? [settings.defaultLibraryRoot]
       : []
   );
-  const [hideDownloadingAnime, setHideDownloadingAnime] = useState<boolean>(
-    settings.hideDownloadingAnime ?? false
+  const [releaseSelectionMode, setReleaseSelectionMode] = useState<'automatic' | 'manual'>(
+    settings.releaseSelectionMode ?? 'automatic'
+  );
+  const [preferredAudioLanguages, setPreferredAudioLanguages] = useState<TorrentLanguageCode[]>(
+    (settings.preferredTorrentAudioLanguages ?? ['en']) as TorrentLanguageCode[]
+  );
+  const [preferredSubtitleLanguages, setPreferredSubtitleLanguages] = useState<TorrentLanguageCode[]>(
+    (settings.preferredTorrentSubtitleLanguages ?? ['en']) as TorrentLanguageCode[]
   );
 
   const [binaryStatus, setBinaryStatus] = useState<{
@@ -121,15 +126,9 @@ export const SettingsModal: React.FC<SettingsModalProps> = ({
   const [p2pState, setP2pState] = useState<P2pState | null>(null);
   const [p2pBusy, setP2pBusy] = useState(false);
   const [showP2pConsent, setShowP2pConsent] = useState(false);
-  const [requireVpn, setRequireVpn] = useState<boolean>(settings.requireVpnForP2p ?? true);
-  const [blockNoVpn, setBlockNoVpn] = useState<boolean>(settings.vpnBlockDownload ?? true);
-  const [vpnStatus, setVpnStatus] = useState<VpnStatus | null>(null);
-  const [vpnChecking, setVpnChecking] = useState(false);
 
   // Limits draft (kept as strings while typing; committed via setP2pLimits on blur)
   const [limitMaxConcurrent, setLimitMaxConcurrent] = useState('2');
-  const [limitDownload, setLimitDownload] = useState('0');
-  const [limitUpload, setLimitUpload] = useState('0');
   const [limitSeedMinutes, setLimitSeedMinutes] = useState('0');
 
   // Indexers (BYOC) draft
@@ -148,7 +147,9 @@ export const SettingsModal: React.FC<SettingsModalProps> = ({
           ? [settings.defaultLibraryRoot]
           : []
       );
-      setHideDownloadingAnime(settings.hideDownloadingAnime ?? false);
+      setReleaseSelectionMode(settings.releaseSelectionMode ?? 'automatic');
+      setPreferredAudioLanguages((settings.preferredTorrentAudioLanguages ?? ['en']) as TorrentLanguageCode[]);
+      setPreferredSubtitleLanguages((settings.preferredTorrentSubtitleLanguages ?? ['en']) as TorrentLanguageCode[]);
 
       // Check existence of external binaries
       window.electronAPI
@@ -189,12 +190,6 @@ export const SettingsModal: React.FC<SettingsModalProps> = ({
     }
   }, [isOpen]);
 
-  // Keep VPN-related toggles in sync with persisted settings
-  useEffect(() => {
-    setRequireVpn(settings.requireVpnForP2p ?? true);
-    setBlockNoVpn(settings.vpnBlockDownload ?? true);
-  }, [settings]);
-
   // P2P: load engine state when the modal opens
   useEffect(() => {
     if (!isOpen) return;
@@ -207,8 +202,6 @@ export const SettingsModal: React.FC<SettingsModalProps> = ({
         if (cancelled) return;
         setP2pState(state);
         setLimitMaxConcurrent(String(state.limits.maxConcurrent));
-        setLimitDownload(String(state.limits.downloadSpeedMBps));
-        setLimitUpload(String(state.limits.uploadSpeedMBps));
         setLimitSeedMinutes(String(state.limits.seedMinutes));
       })
       .catch(() => {});
@@ -217,9 +210,9 @@ export const SettingsModal: React.FC<SettingsModalProps> = ({
     };
   }, [isOpen]);
 
-  // P2P: load indexer draft once the engine is enabled
+  // P2P: load indexer draft when modal opens (and when engine is enabled)
   useEffect(() => {
-    if (!isOpen || !p2pState?.enabled) return;
+    if (!isOpen) return;
     const api = window.electronAPI;
     if (!api?.getP2pProviders) return;
     let cancelled = false;
@@ -232,29 +225,7 @@ export const SettingsModal: React.FC<SettingsModalProps> = ({
     return () => {
       cancelled = true;
     };
-  }, [isOpen, p2pState?.enabled]);
-
-  // P2P: poll VPN status every 15s while the engine is enabled
-  useEffect(() => {
-    if (!isOpen || !p2pState?.enabled) return;
-    const api = window.electronAPI;
-    if (!api?.getVpnStatus) return;
-    let cancelled = false;
-    const fetchVpn = () => {
-      api
-        .getVpnStatus()
-        .then((status) => {
-          if (!cancelled) setVpnStatus(status);
-        })
-        .catch(() => {});
-    };
-    fetchVpn();
-    const interval = window.setInterval(fetchVpn, 15000);
-    return () => {
-      cancelled = true;
-      window.clearInterval(interval);
-    };
-  }, [isOpen, p2pState?.enabled]);
+  }, [isOpen]);
 
   // Save any pending uncommitted path changes before closing
   const handleClose = () => {
@@ -510,9 +481,12 @@ export const SettingsModal: React.FC<SettingsModalProps> = ({
       const state = await api.getP2pState();
       setP2pState(state);
       setLimitMaxConcurrent(String(state.limits.maxConcurrent));
-      setLimitDownload(String(state.limits.downloadSpeedMBps));
-      setLimitUpload(String(state.limits.uploadSpeedMBps));
       setLimitSeedMinutes(String(state.limits.seedMinutes));
+      // Also refresh providers if engine is enabled
+      if (state.enabled && api.getP2pProviders) {
+        const providers = await api.getP2pProviders();
+        setProvidersDraft(Array.isArray(providers) ? providers : []);
+      }
     } catch {
       // keep last known state
     }
@@ -564,32 +538,6 @@ export const SettingsModal: React.FC<SettingsModalProps> = ({
     }
   };
 
-  const handleRefreshVpn = async () => {
-    const api = window.electronAPI;
-    if (!api?.getVpnStatus || vpnChecking) return;
-    setVpnChecking(true);
-    try {
-      const status = await api.getVpnStatus();
-      setVpnStatus(status);
-    } catch {
-      // keep last known status
-    } finally {
-      setVpnChecking(false);
-    }
-  };
-
-  const handleRequireVpnToggle = () => {
-    const next = !requireVpn;
-    setRequireVpn(next);
-    onSave({ requireVpnForP2p: next });
-  };
-
-  const handleBlockNoVpnToggle = () => {
-    const next = !blockNoVpn;
-    setBlockNoVpn(next);
-    onSave({ vpnBlockDownload: next });
-  };
-
   const parseClampedInt = (raw: string, min: number, max: number, fallback: number): number => {
     const parsed = Math.round(Number(raw));
     if (!Number.isFinite(parsed)) return fallback;
@@ -598,18 +546,14 @@ export const SettingsModal: React.FC<SettingsModalProps> = ({
 
   const commitLimits = async (patch: {
     maxConcurrent?: number;
-    downloadSpeedMBps?: number;
-    uploadSpeedMBps?: number;
     seedMinutes?: number;
   }) => {
     const api = window.electronAPI;
     if (!api?.setP2pLimits) return;
     const current =
-      p2pState?.limits ?? { maxConcurrent: 2, downloadSpeedMBps: 0, uploadSpeedMBps: 0, seedMinutes: 0 };
+      p2pState?.limits ?? { maxConcurrent: 2, seedMinutes: 0 };
     const limits = {
       maxConcurrent: patch.maxConcurrent ?? current.maxConcurrent,
-      downloadSpeedMBps: patch.downloadSpeedMBps ?? current.downloadSpeedMBps,
-      uploadSpeedMBps: patch.uploadSpeedMBps ?? current.uploadSpeedMBps,
       seedMinutes: patch.seedMinutes ?? current.seedMinutes,
     };
     try {
@@ -625,22 +569,6 @@ export const SettingsModal: React.FC<SettingsModalProps> = ({
     setLimitMaxConcurrent(String(value));
     if (p2pState && value !== p2pState.limits.maxConcurrent) {
       commitLimits({ maxConcurrent: value });
-    }
-  };
-
-  const handleDownloadLimitBlur = () => {
-    const value = parseClampedInt(limitDownload, 0, 100000, p2pState?.limits.downloadSpeedMBps ?? 0);
-    setLimitDownload(String(value));
-    if (p2pState && value !== p2pState.limits.downloadSpeedMBps) {
-      commitLimits({ downloadSpeedMBps: value });
-    }
-  };
-
-  const handleUploadLimitBlur = () => {
-    const value = parseClampedInt(limitUpload, 0, 100000, p2pState?.limits.uploadSpeedMBps ?? 0);
-    setLimitUpload(String(value));
-    if (p2pState && value !== p2pState.limits.uploadSpeedMBps) {
-      commitLimits({ uploadSpeedMBps: value });
     }
   };
 
@@ -694,16 +622,25 @@ export const SettingsModal: React.FC<SettingsModalProps> = ({
       showGlobalToast(validationError, 'error');
       return;
     }
+    const providersToSave = providersDraft.map((p) => ({
+      ...p,
+      name: p.name.trim(),
+      urlTemplate: p.urlTemplate.trim(),
+    }));
     setProvidersBusy(true);
     try {
-      const res = await api.saveP2pProviders(
-        providersDraft.map((p) => ({ ...p, name: p.name.trim(), urlTemplate: p.urlTemplate.trim() }))
-      );
+      const res = await api.saveP2pProviders(providersToSave);
       if (res?.success) {
         showGlobalToast(
-          `Saved ${providersDraft.length} provider${providersDraft.length === 1 ? '' : 's'}`,
+          `Saved ${providersToSave.length} provider${providersToSave.length === 1 ? '' : 's'}`,
           'success'
         );
+        // Update parent settings to keep UI in sync
+        onSave({ rssProviders: providersToSave });
+        // Refresh providers from backend to update UI state
+        api.getP2pProviders().then((providers) => {
+          if (!providersBusy) setProvidersDraft(Array.isArray(providers) ? providers : []);
+        }).catch(() => {});
       } else {
         showGlobalToast(res?.error || 'Failed to save providers', 'error');
       }
@@ -832,7 +769,7 @@ export const SettingsModal: React.FC<SettingsModalProps> = ({
                   <span>Anime Media Folders ({libraryFolders.length})</span>
                 </label>
                 <p className="text-[11px] text-zinc-400">
-                  Add directories across different drives (e.g. D:\films, E:\Anime). All folders will be scanned together.
+                  Add directories across different drives (e.g. D:\films, E:\Anime). Incomplete downloads stay hidden and appear here when ready.
                 </p>
               </div>
 
@@ -911,20 +848,6 @@ export const SettingsModal: React.FC<SettingsModalProps> = ({
               )}
             </div>
 
-            {/* Filter option: hide downloading torrents */}
-            <label className="flex items-center space-x-2.5 pt-1.5 text-xs text-zinc-300 hover:text-zinc-100 cursor-pointer select-none transition-colors">
-              <input
-                type="checkbox"
-                checked={hideDownloadingAnime}
-                onChange={(e) => {
-                  const checked = e.target.checked;
-                  setHideDownloadingAnime(checked);
-                  onSave({ hideDownloadingAnime: checked });
-                }}
-                className="w-4 h-4 rounded border-zinc-700 bg-zinc-900 text-red-600 focus:ring-0 focus:ring-offset-0 cursor-pointer accent-red-600"
-              />
-              <span>Hide downloading / incomplete torrent releases from library</span>
-            </label>
           </div>
 
           {/* Section: External Tools & AI Engine */}
@@ -1276,76 +1199,62 @@ export const SettingsModal: React.FC<SettingsModalProps> = ({
               />
             </div>
 
-            {p2pState?.enabled ? (
-              <>
-                {/* VPN protection card */}
-                <div className="space-y-2.5 rounded-xl bg-zinc-900/90 border border-white/10 p-3.5">
-                  <div className="flex items-center justify-between gap-2">
-                    <p className="flex items-center space-x-2 text-xs font-semibold text-zinc-200">
-                      <ShieldCheck className="w-3.5 h-3.5 text-zinc-400" />
-                      <span>VPN Protection</span>
-                    </p>
-                    <div className="flex items-center space-x-2 min-w-0">
-                      <span
-                        className={`w-2 h-2 rounded-full shrink-0 ${
-                          vpnStatus === null ? 'bg-amber-400' : vpnStatus.active ? 'bg-emerald-400' : 'bg-red-500'
-                        }`}
-                      />
-                      <span
-                        className={`text-[11px] font-medium truncate max-w-[230px] ${
-                          vpnStatus !== null && vpnStatus.active ? 'text-emerald-300' : vpnStatus === null ? 'text-amber-300' : 'text-red-300'
-                        }`}
-                        title={
-                          vpnStatus === null
-                            ? 'Checking VPN status…'
-                            : vpnStatus.active
-                            ? `VPN tunnel detected on: ${vpnStatus.interfaces.join(', ') || 'unknown interfaces'}`
-                            : 'No VPN tunnel detected — torrent traffic could expose your IP'
-                        }
-                      >
-                        {vpnStatus === null
-                          ? 'Checking VPN…'
-                          : vpnStatus.active
-                          ? `VPN detected${vpnStatus.interfaces.length ? ` (${vpnStatus.interfaces.join(', ')})` : ''}`
-                          : 'No VPN tunnel detected'}
-                      </span>
-                      <button
-                        type="button"
-                        onClick={handleRefreshVpn}
-                        disabled={vpnChecking}
-                        className="p-1 rounded-lg text-zinc-500 hover:text-zinc-200 hover:bg-zinc-800 transition-colors shrink-0 disabled:opacity-50"
-                        title="Re-check VPN status now"
-                      >
-                        <RefreshCw className={`w-3 h-3 ${vpnChecking ? 'animate-spin' : ''}`} />
-                      </button>
-                    </div>
-                  </div>
-
-                  <div className="flex items-center justify-between gap-3 rounded-lg bg-zinc-950/70 border border-white/5 px-3 py-2">
-                    <div className="min-w-0">
-                      <p className="text-xs font-medium text-zinc-200">Require VPN for downloads</p>
-                      <p className="text-[10px] text-zinc-500">Refuse to start torrents unless a VPN tunnel is active.</p>
-                    </div>
-                    <ToggleSwitch
-                      checked={requireVpn}
-                      onChange={handleRequireVpnToggle}
-                      label="Require VPN for downloads"
-                    />
-                  </div>
-
-                  <div className="flex items-center justify-between gap-3 rounded-lg bg-zinc-950/70 border border-white/5 px-3 py-2">
-                    <div className="min-w-0">
-                      <p className="text-xs font-medium text-zinc-200">Block downloads without VPN</p>
-                      <p className="text-[10px] text-zinc-500">Refuse adding torrents while no VPN interface is detected.</p>
-                    </div>
-                    <ToggleSwitch
-                      checked={blockNoVpn}
-                      onChange={handleBlockNoVpnToggle}
-                      label="Block downloads without VPN"
-                    />
+            <div className="space-y-2 rounded-xl bg-zinc-900/90 border border-white/10 p-3.5">
+              <div>
+                <p className="text-xs font-semibold text-zinc-200">Release selection</p>
+                <p className="mt-0.5 text-[10px] text-zinc-500">
+                  Automatic picks the highest-ranked match by language, title accuracy, video quality and seeders.
+                </p>
+              </div>
+              <div className="grid grid-cols-2 gap-2">
+                {([
+                  ['automatic', 'Automatic'],
+                  ['manual', 'Choose manually'],
+                ] as const).map(([mode, label]) => (
+                  <button
+                    key={mode}
+                    type="button"
+                    onClick={() => {
+                      setReleaseSelectionMode(mode);
+                      onSave({ releaseSelectionMode: mode });
+                    }}
+                    className={`rounded-lg border px-3 py-2 text-xs font-semibold transition-colors ${
+                      releaseSelectionMode === mode
+                        ? 'border-red-500/50 bg-red-500/15 text-red-200'
+                        : 'border-white/10 bg-zinc-950/50 text-zinc-400 hover:bg-zinc-800 hover:text-zinc-200'
+                    }`}
+                  >
+                    {label}{mode === 'automatic' ? ' (default)' : ''}
+                  </button>
+                ))}
+              </div>
+              <p className="pt-1 text-[10px] font-semibold uppercase tracking-wide text-zinc-500">Automatic search languages</p>
+              {([
+                ['Audio', preferredAudioLanguages, setPreferredAudioLanguages, 'preferredTorrentAudioLanguages'],
+                ['Subtitles', preferredSubtitleLanguages, setPreferredSubtitleLanguages, 'preferredTorrentSubtitleLanguages'],
+              ] as const).map(([label, selected, setSelected, settingKey]) => (
+                <div key={label} className="space-y-1.5">
+                  <p className="text-[10px] text-zinc-400">{label}</p>
+                  <div className="grid grid-cols-2 gap-1.5 sm:grid-cols-5">
+                    {TORRENT_LANGUAGES.map((language) => {
+                      const checked = selected.includes(language.code);
+                      return <label key={language.code} className={`flex cursor-pointer items-center gap-1.5 rounded-md border px-2 py-1.5 text-[10px] transition ${checked ? 'border-rose-400/30 bg-rose-500/10 text-rose-100' : 'border-white/5 bg-zinc-950/40 text-zinc-400 hover:text-zinc-200'}`}>
+                        <input type="checkbox" checked={checked} onChange={() => {
+                          const next = checked ? selected.filter((code) => code !== language.code) : [...selected, language.code];
+                          setSelected(next);
+                          onSave({ [settingKey]: next });
+                        }} className="accent-rose-500" />
+                        {language.label}
+                      </label>;
+                    })}
                   </div>
                 </div>
+              ))}
+              <p className="text-[10px] text-zinc-500">Manual search shows all releases; use its audio and subtitle filters to narrow results.</p>
+            </div>
 
+            {p2pState?.enabled ? (
+              <>
                 {/* Speed & Limits card */}
                 <div className="space-y-2.5 rounded-xl bg-zinc-900/90 border border-white/10 p-3.5">
                   <p className="flex items-center space-x-2 text-xs font-semibold text-zinc-200">
@@ -1383,43 +1292,9 @@ export const SettingsModal: React.FC<SettingsModalProps> = ({
                       </select>
                       <p className="text-[10px] text-zinc-500">How long to keep seeding once done.</p>
                     </div>
-                    <div className="space-y-1">
-                      <label className="text-[10px] font-medium text-zinc-400">
-                        Download speed limit MB/s <span className="text-zinc-600">(0 = Unlimited)</span>
-                      </label>
-                      <input
-                        type="number"
-                        min={0}
-                        value={limitDownload}
-                        onChange={(e) => setLimitDownload(e.target.value)}
-                        onBlur={handleDownloadLimitBlur}
-                        onKeyDown={(e) => {
-                          if (e.key === 'Enter') (e.target as HTMLInputElement).blur();
-                        }}
-                        className="w-full px-3 py-2 rounded-lg bg-zinc-950/70 border border-white/10 text-xs text-zinc-200 focus:outline-none focus:border-zinc-500"
-                      />
-                    </div>
-                    <div className="space-y-1">
-                      <label className="text-[10px] font-medium text-zinc-400">
-                        Upload speed limit MB/s <span className="text-zinc-600">(0 = Unlimited)</span>
-                      </label>
-                      <input
-                        type="number"
-                        min={0}
-                        value={limitUpload}
-                        onChange={(e) => setLimitUpload(e.target.value)}
-                        onBlur={handleUploadLimitBlur}
-                        onKeyDown={(e) => {
-                          if (e.key === 'Enter') (e.target as HTMLInputElement).blur();
-                        }}
-                        className="w-full px-3 py-2 rounded-lg bg-zinc-950/70 border border-white/10 text-xs text-zinc-200 focus:outline-none focus:border-zinc-500"
-                      />
-                    </div>
                   </div>
                   <p className="text-[10px] text-zinc-500">Changes apply live to the torrent engine.</p>
                 </div>
-
-                {/* Indexers (BYOC) card */}
                 <div className="space-y-2.5 rounded-xl bg-zinc-900/90 border border-white/10 p-3.5">
                   <div className="flex items-center justify-between">
                     <p className="flex items-center space-x-2 text-xs font-semibold text-zinc-200">

@@ -2,10 +2,12 @@ export * from '../../electron/types';
 
 export type {
   CatalogItem,
+  CatalogRelatedTitle,
   AiringEntry,
   CatalogNextAiringEpisode,
+  GenrePickRail,
 } from '../../electron/catalog';
-export type { RemoteEpisodeInfo } from '../../electron/aniZip';
+export type { RemoteEpisodeInfo, RemoteEpisodesResult } from '../../electron/aniZip';
 export type { UserLibraryEntry, UserListStatus } from '../../electron/userLibrary';
 
 // Storage overview shapes (implemented by electron/libraryManager.ts — structurally identical)
@@ -25,8 +27,8 @@ export interface StorageOverview {
   freeBytes: number | null;
 }
 
-import type { CatalogItem, AiringEntry } from '../../electron/catalog';
-import type { RemoteEpisodeInfo } from '../../electron/aniZip';
+import type { CatalogItem, CatalogRelatedTitle, AiringEntry, DiscoverCatalogPage, GenrePickRail } from '../../electron/catalog';
+import type { RemoteEpisodeInfo, RemoteEpisodesResult } from '../../electron/aniZip';
 import type { UserLibraryEntry, UserListStatus } from '../../electron/userLibrary';
 import type { P2pState, VpnStatus, ReleaseSearchResult, RssProvider, AppSettings, ReleaseSearchResponse } from '../../electron/types';
 
@@ -36,6 +38,11 @@ export interface StreamInfo {
 }
 
 export interface ElectronAPI {
+  minimizeWindow: () => Promise<void>;
+  toggleMaximizeWindow: () => Promise<boolean>;
+  closeWindow: () => Promise<void>;
+  isWindowMaximized: () => Promise<boolean>;
+  onWindowMaximizedChange: (callback: (isMaximized: boolean) => void) => () => void;
   getSettings: () => Promise<import('../../electron/types').AppSettings>;
   updateSettings: (settings: Partial<import('../../electron/types').AppSettings>) => Promise<import('../../electron/types').AppSettings>;
   browseFolder: (defaultPath?: string) => Promise<string | null>;
@@ -48,6 +55,7 @@ export interface ElectronAPI {
   }>;
   autoDetectBinaries: () => Promise<{ ffmpegPath: string; whisperPath: string }>;
   openExternalUrl: (url: string) => Promise<boolean>;
+  getLibraryCache: (rootPath?: string | string[]) => Promise<import('../../electron/types').AnimeFolder[] | null>;
   scanLibrary: (rootPath?: string | string[]) => Promise<import('../../electron/types').AnimeFolder[]>;
   getFolderEpisodes: (folderPath: string) => Promise<import('../../electron/types').Episode[]>;
   probeVideo: (filePath: string) => Promise<import('../../electron/types').VideoMetadata>;
@@ -71,15 +79,25 @@ export interface ElectronAPI {
   setFullScreen: (flag: boolean) => Promise<boolean>;
   isFullScreen: () => Promise<boolean>;
   onFullScreenChange: (callback: (isFull: boolean) => void) => () => void;
+  /** Fired on progressive episodes-pipeline pushes (first snapshot, hedge
+   *  page, retries, final) — the payload is delivered with the event. */
+  onRemoteEpisodesUpdated: (callback: (anilistId: number, result: RemoteEpisodesResult) => void) => () => void;
+  /** Fire-and-forget hover prefetch of the episodes pipeline. */
+  warmRemoteEpisodes: (anilistId: number) => void;
   // Catalog & Metadata Service
   getCatalogTrending: () => Promise<CatalogItem[]>;
   getCatalogSeason: () => Promise<CatalogItem[]>;
   getCatalogAllTime: () => Promise<CatalogItem[]>;
+  getCatalogGenrePicks: () => Promise<GenrePickRail[]>;
   getAiringSchedule: (weekOffset?: number) => Promise<AiringEntry[]>;
   getCatalogRecommendations: (seeds?: number[]) => Promise<CatalogItem[]>;
   searchCatalog: (query: string) => Promise<CatalogItem[]>;
+  getDiscoverCatalog: (params: import('../../electron/types').DiscoverCatalogParams) => Promise<DiscoverCatalogPage>;
   getCatalogDetails: (anilistId: number) => Promise<CatalogItem | null>;
-  getRemoteEpisodes: (anilistId: number) => Promise<RemoteEpisodeInfo[]>;
+  getUpdatedAgeRatings: () => Promise<Record<string, number>>;
+  onAgeRatingsUpdated: (callback: (ratings: Record<string, number>) => void) => () => void;
+  getCatalogFranchise: (anilistId: number) => Promise<CatalogRelatedTitle[]>;
+  getRemoteEpisodes: (anilistId: number) => Promise<RemoteEpisodesResult>;
   // User Library
   getUserLibrary: () => Promise<Record<number, UserLibraryEntry>>;
   setUserLibraryStatus: (anilistId: number, idMal: number | null, titleSnapshot: string, status: UserListStatus) => Promise<UserLibraryEntry | null>;
@@ -105,11 +123,12 @@ export interface ElectronAPI {
   enableP2p: () => Promise<{ success: boolean; error?: string }>;
   disableP2p: () => Promise<{ success: boolean }>;
   getVpnStatus: () => Promise<VpnStatus>;
-  searchReleases: (params: { title: string; aliases?: string[]; anilistId?: number | null; season?: number | null; episode?: number | null; episodeCount?: number | null; queryOverride?: string }) => Promise<ReleaseSearchResponse>;
-  addDownload: (params: { item: ReleaseSearchResult; title: string; anilistId?: number | null; episode?: number | null; targetFolder?: string }) => Promise<{ success: boolean; infoHash?: string; error?: string }>;
+  searchReleases: (params: { title: string; aliases?: string[]; anilistId?: number | null; season?: number | null; episode?: number | null; episodeCount?: number | null; episodeDurationMinutes?: number | null; queryOverride?: string }) => Promise<ReleaseSearchResponse>;
+  fetchReleaseDescription: (params: { providerId: string; url: string }) => Promise<string>;
+  addDownload: (params: { item: ReleaseSearchResult; title: string; anilistId?: number | null; episode?: number | null; season?: number | null; targetFolder?: string; downloadRoot?: string }) => Promise<{ success: boolean; infoHash?: string; error?: string }>;
   pauseDownload: (infoHash: string) => Promise<{ success: boolean }>;
   resumeDownload: (infoHash: string) => Promise<{ success: boolean }>;
-  cancelDownload: (infoHash: string, removeFiles?: boolean) => Promise<{ success: boolean }>;
+  cancelDownload: (infoHash: string, removeFiles?: boolean) => Promise<{ success: boolean; error?: string }>;
   setP2pLimits: (limits: { maxConcurrent?: number; downloadSpeedMBps?: number; uploadSpeedMBps?: number; seedMinutes?: number }) => Promise<AppSettings>;
   getP2pProviders: () => Promise<RssProvider[]>;
   saveP2pProviders: (providers: RssProvider[]) => Promise<{ success: boolean; error?: string }>;

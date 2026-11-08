@@ -2,6 +2,7 @@ import { spawn, ChildProcess } from 'child_process';
 import fs from 'fs';
 import path from 'path';
 import { app, BrowserWindow } from 'electron';
+import { resolveUserDataPath } from './userDataPath';
 import { WhisperLogMessage, WhisperQueueItem, WhisperStatus } from './types';
 import { storage } from './storage';
 import { probeMkv, invalidateProbeCache } from './ffmpeg';
@@ -335,7 +336,7 @@ export class WhisperManager {
     mainWindow: BrowserWindow
   ): Promise<void> {
     const fileId = path.parse(item.filePath).name.replace(/[^a-zA-Z0-9_-]/g, '_');
-    const tmpDir = path.join(app.getPath('userData'), 'whisper_tmp', runId, fileId);
+    const tmpDir = path.join(resolveUserDataPath(), 'whisper_tmp', runId, fileId);
 
     fs.mkdirSync(tmpDir, { recursive: true });
 

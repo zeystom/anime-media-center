@@ -10,6 +10,15 @@ const __dirname = path.dirname(__filename);
 
 export default defineConfig({
   base: './',
+  build: {
+    rollupOptions: {
+      output: {
+        manualChunks(id) {
+          if (id.replace(/\\/g, '/').endsWith('/src/data/age-ratings.json')) return 'age-ratings';
+        },
+      },
+    },
+  },
   worker: {
     format: 'es',
   },
@@ -31,7 +40,7 @@ export default defineConfig({
     },
     electron([
       {
-        entry: 'electron/main.ts',
+        entry: 'electron/bootstrap.ts',
         vite: {
           build: {
             outDir: 'dist-electron',

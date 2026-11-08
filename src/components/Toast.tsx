@@ -1,7 +1,7 @@
 import React, { createContext, useContext, useState, useCallback, useEffect, useRef } from 'react';
 import { Info, CheckCircle2, AlertTriangle, AlertCircle, X } from 'lucide-react';
 
-export type ToastType = 'info' | 'success' | 'warning' | 'error';
+export type ToastType = 'info' | 'success' | 'warning' | 'error' | 'purple';
 
 export interface ToastItem {
   id: string;
@@ -117,6 +117,8 @@ export const ToastProvider: React.FC<{ children: React.ReactNode }> = ({ childre
                 ? 'bg-zinc-900/95 border-amber-500/40 text-amber-100 shadow-amber-950/30'
                 : t.type === 'success'
                 ? 'bg-zinc-900/95 border-emerald-500/40 text-emerald-100 shadow-emerald-950/30'
+                : t.type === 'purple'
+                ? 'bg-zinc-900/95 border-violet-500/40 text-violet-100 shadow-violet-950/30'
                 : 'bg-zinc-900/95 border-zinc-700/60 text-zinc-100 shadow-black/40'
             }`}
           >
@@ -124,6 +126,7 @@ export const ToastProvider: React.FC<{ children: React.ReactNode }> = ({ childre
               {t.type === 'error' && <AlertCircle className="w-5 h-5 text-rose-400" />}
               {t.type === 'warning' && <AlertTriangle className="w-5 h-5 text-amber-400" />}
               {t.type === 'success' && <CheckCircle2 className="w-5 h-5 text-emerald-400" />}
+              {t.type === 'purple' && <CheckCircle2 className="w-5 h-5 text-violet-400" />}
               {t.type === 'info' && <Info className="w-5 h-5 text-blue-400" />}
             </div>
             <div className="flex-1 font-medium leading-snug">{t.message}</div>

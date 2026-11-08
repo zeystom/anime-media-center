@@ -141,6 +141,7 @@ function rawMedia(id, overrides = {}) {
   return {
     id,
     idMal: 1000 + id,
+    countryOfOrigin: 'JP',
     title: { romaji: `Romaji ${id}`, english: `English ${id}`, native: `Native ${id}` },
     synonyms: [`Alt ${id}`],
     coverImage: { extraLarge: `https://img/poster-${id}-xl.jpg`, large: `https://img/poster-${id}.jpg` },
@@ -221,6 +222,22 @@ function anilistHandler(url, init) {
       },
     });
   }
+  if (query.includes('relations') && query.includes('Media(id: $id')) {
+    return jsonResponse(200, { data: { Media: {
+      id: vars.id,
+      relations: { edges: [
+        { relationType: 'SEQUEL', node: { id: 201, type: 'ANIME', relations: { edges: [] } } },
+        // Real AniList data labels every manga->anime edge ADAPTATION.
+        { relationType: 'ADAPTATION', node: { id: 900, type: 'MANGA', relations: { edges: [
+          { relationType: 'ADAPTATION', node: { id: 202, type: 'ANIME' } },
+          { relationType: 'CHARACTER', node: { id: 999, type: 'ANIME' } },
+        ] } } },
+      ] },
+    } } });
+  }
+  if (query.includes('id_in: $ids')) {
+    return jsonResponse(200, { data: { Page: { media: (vars.ids || []).map((id) => rawMedia(id, { format: 'TV' })) } } });
+  }
   if (query.includes('SEARCH_MATCH')) {
     return jsonResponse(200, { data: { Page: { media: SEARCH_FIXTURE.slice((page - 1) * perPage, page * perPage) } } });
   }
@@ -228,6 +245,22 @@ function anilistHandler(url, init) {
     return jsonResponse(200, { data: { Media: vars.id === DETAILS_FIXTURE.id ? DETAILS_FIXTURE : null } });
   }
   return jsonResponse(400, { errors: [{ message: 'test handler: unrecognized query' }] });
+}
+
+{
+  const catalog = await freshCatalog();
+  fetchHandler = anilistHandler;
+  resetFetchCalls();
+  resetDiskCache();
+  await runTest('getCatalogFranchise fetches anime relations via compact graph and excludes character links', async () => {
+    const related = await catalog.getCatalogFranchise(100);
+    assert.deepStrictEqual(related.map((item) => item.anilistId), [201, 202]);
+    assert.strictEqual(related.find((item) => item.anilistId === 201)?.relationType, 'SEQUEL');
+    // Manga-hop children keep the neutral RELATED label: real manga->anime
+    // edges are always ADAPTATION, which is meaningless anime-to-anime.
+    assert.strictEqual(related.find((item) => item.anilistId === 202)?.relationType, 'RELATED');
+    assert.strictEqual(anilistCalls().length, 2, 'graph IDs and media details are fetched in two bounded requests');
+  });
 }
 
 // ---------------------------------------------------------------------------
@@ -332,8 +365,8 @@ await runTest('getAiringWeekRange math (Monday 00:00 local, 7 days, offset)', as
     assert.strictEqual(anilistCalls().length, 1, 'TTL cache must prevent the second network call');
     assert.deepStrictEqual(second, first);
 
-    assert.ok(fs.existsSync(diskCacheFile('catalog_trending.json')), 'disk cache file must be written');
-    const raw = JSON.parse(fs.readFileSync(diskCacheFile('catalog_trending.json'), 'utf-8'));
+    assert.ok(fs.existsSync(diskCacheFile('catalog_trending_jp.json')), 'disk cache file must be written');
+    const raw = JSON.parse(fs.readFileSync(diskCacheFile('catalog_trending_jp.json'), 'utf-8'));
     assert.ok(typeof raw.fetchedAt === 'number');
     assert.ok(Array.isArray(raw.data) && raw.data[0].anilistId === 11);
   });
@@ -429,7 +462,7 @@ await runTest('getAiringWeekRange math (Monday 00:00 local, 7 days, offset)', as
   const staleItem = catalog.normalizeMedia(rawMedia(111));
   fs.mkdirSync(METADATA_CACHE_DIR, { recursive: true });
   fs.writeFileSync(
-    diskCacheFile('catalog_trending.json'),
+    diskCacheFile('catalog_trending_jp.json'),
     JSON.stringify({ data: [staleItem], fetchedAt: Date.now() - 31 * 60 * 1000 }),
     'utf-8'
   );
@@ -597,6 +630,60 @@ const FRIEREN_PAYLOAD = {
     const again = await aniZip.fetchAniZipMappings(154587);
     assert.strictEqual(anizipCalls().length, 0);
     assert.deepStrictEqual(again, eps);
+  });
+}
+
+{
+  const aniZip = await freshAniZip();
+  fetchHandler = (url) => {
+    if (url.includes('anilist_id=206814')) {
+      return jsonResponse(200, { episodes: {}, mappings: { anilist_id: 206814, kitsu_id: 50497 } });
+    }
+    if (url.startsWith('https://graphql.anilist.co')) {
+      return jsonResponse(200, { data: { Media: {
+        episodes: 2,
+        title: { english: 'The God of Destruction', romaji: 'The God of Destruction', native: null },
+        synonyms: [],
+        streamingEpisodes: [],
+      } } });
+    }
+    if (url.endsWith('/anime/50497')) {
+      return jsonResponse(200, { data: { attributes: {
+        canonicalTitle: 'The God of Destruction',
+        titles: { en: 'The God of Destruction', en_jp: 'The God of Destruction' },
+        abbreviatedTitles: [],
+        episodeCount: 2,
+      } } });
+    }
+    if (url.includes('/anime/50497/episodes')) {
+      return jsonResponse(200, {
+        data: [
+          { attributes: { number: 1, titles: { en: 'The God Who Destroys' }, canonicalTitle: 'The God Who Destroys', airdate: '2026-10-11', length: 23, thumbnail: { large: 'https://img/kitsu-1.jpg' } } },
+          { attributes: { number: 2, titles: { en: 'The God of Destruction Heads to the Planet of the Kai' }, airdate: '2026-10-18', length: 23, thumbnail: { large: 'https://img/kitsu-2.jpg' } } },
+          { attributes: { number: 3, titles: {}, canonicalTitle: null, airdate: null, length: 23, thumbnail: null } },
+        ],
+        links: { next: null },
+      });
+    }
+    return jsonResponse(404, {});
+  };
+  resetFetchCalls();
+  resetDiskCache();
+
+  await runTest('fetchRemoteEpisodes accepts only a verified Kitsu mapping and excludes out-of-range episodes', async () => {
+    // The payload shape is { episodes, airedThrough, nextAiringAt, ... } — the
+    // airing context rides along with the list (consumed by AnimeDetailView).
+    const { episodes } = await aniZip.fetchRemoteEpisodes(206814);
+    assert.deepStrictEqual(episodes.map((episode) => episode.number), [1, 2]);
+    assert.strictEqual(episodes[0].title, 'The God Who Destroys');
+    assert.strictEqual(episodes[0].thumbnailUrl, 'https://img/kitsu-1.jpg');
+    assert.strictEqual(episodes[1].title, 'The God of Destruction Heads to the Planet of the Kai');
+    assert.strictEqual(anizipCalls().length, 1);
+    assert.strictEqual(fetchCalls.filter((call) => call.url.includes('kitsu.io/api/edge/anime/50497/episodes')).length, 1);
+    assert.strictEqual(anilistCalls().length, 1, 'AniList identity/count is checked before using Kitsu metadata');
+    const cached = JSON.parse(fs.readFileSync(diskCacheFile('anizip_206814.json'), 'utf-8'));
+    assert.strictEqual(String(cached.kitsuId), '50497');
+    assert.strictEqual(cached.episodes.length, 2);
   });
 }
 

@@ -12,6 +12,7 @@ import fs from 'fs';
 import path from 'path';
 import { app } from 'electron';
 import { registerMainServices } from './userDataBackup';
+import { resolveUserDataPath } from './userDataPath';
 
 export type UserListStatus = 'watching' | 'completed' | 'planning' | 'dropped' | 'paused';
 
@@ -125,7 +126,7 @@ export class UserLibrary {
       return this.resolvedBaseDir;
     }
     try {
-      this.resolvedBaseDir = app ? app.getPath('userData') : path.join(process.env.APPDATA || '', 'anime-media-center');
+      this.resolvedBaseDir = app ? resolveUserDataPath() : path.join(process.env.APPDATA || '', 'anime-media-center');
     } catch {
       this.resolvedBaseDir = path.join(process.env.APPDATA || '', 'anime-media-center');
     }

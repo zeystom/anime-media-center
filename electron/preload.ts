@@ -1,7 +1,16 @@
 import { contextBridge, ipcRenderer } from 'electron';
-import { AppSettings, PlaybackProgress, SeasonPreference } from './types';
+import { AppSettings, PlaybackProgress, SeasonPreference, DiscoverCatalogParams } from './types';
 
 contextBridge.exposeInMainWorld('electronAPI', {
+  minimizeWindow: () => ipcRenderer.invoke('window:minimize'),
+  toggleMaximizeWindow: () => ipcRenderer.invoke('window:toggle-maximize'),
+  closeWindow: () => ipcRenderer.invoke('window:close'),
+  isWindowMaximized: () => ipcRenderer.invoke('window:is-maximized'),
+  onWindowMaximizedChange: (callback: (isMaximized: boolean) => void) => {
+    const handler = (_event: Electron.IpcRendererEvent, isMaximized: boolean) => callback(isMaximized);
+    ipcRenderer.on('window:maximized-change', handler);
+    return () => ipcRenderer.removeListener('window:maximized-change', handler);
+  },
   getSettings: () => ipcRenderer.invoke('get-settings'),
   updateSettings: (settings: Partial<AppSettings>) => ipcRenderer.invoke('update-settings', settings),
   browseFolder: (defaultPath?: string) => ipcRenderer.invoke('browse-folder', defaultPath),
@@ -11,6 +20,7 @@ contextBridge.exposeInMainWorld('electronAPI', {
     ipcRenderer.invoke('check-binaries', paths),
   autoDetectBinaries: () => ipcRenderer.invoke('auto-detect-binaries'),
   openExternalUrl: (url: string) => ipcRenderer.invoke('open-external-url', url),
+  getLibraryCache: (rootPath?: string | string[]) => ipcRenderer.invoke('get-library-cache', rootPath),
   scanLibrary: (rootPath?: string | string[]) => ipcRenderer.invoke('scan-library', rootPath),
   getFolderEpisodes: (folderPath: string) => ipcRenderer.invoke('get-folder-episodes', folderPath),
   probeVideo: (filePath: string) => ipcRenderer.invoke('probe-video', filePath),
@@ -60,14 +70,31 @@ contextBridge.exposeInMainWorld('electronAPI', {
     ipcRenderer.on('fullscreen-change', handler);
     return () => ipcRenderer.removeListener('fullscreen-change', handler);
   },
+  onRemoteEpisodesUpdated: (callback: (anilistId: number, result: import('./aniZip').RemoteEpisodesResult) => void) => {
+    const handler = (_event: any, anilistId: number, result: import('./aniZip').RemoteEpisodesResult) => callback(anilistId, result);
+    ipcRenderer.on('metadata:remote-episodes-updated', handler);
+    return () => ipcRenderer.removeListener('metadata:remote-episodes-updated', handler);
+  },
+  warmRemoteEpisodes: (anilistId: number) => {
+    ipcRenderer.send('metadata:remote-episodes-warm', anilistId);
+  },
   // Catalog & Metadata Service
   getCatalogTrending: () => ipcRenderer.invoke('catalog:trending'),
   getCatalogSeason: () => ipcRenderer.invoke('catalog:season'),
   getCatalogAllTime: () => ipcRenderer.invoke('catalog:all-time'),
+  getCatalogGenrePicks: () => ipcRenderer.invoke('catalog:genre-picks'),
   getAiringSchedule: (weekOffset?: number) => ipcRenderer.invoke('catalog:airing-schedule', weekOffset),
   getCatalogRecommendations: (seeds?: number[]) => ipcRenderer.invoke('catalog:recommendations', seeds),
   searchCatalog: (query: string) => ipcRenderer.invoke('catalog:search', query),
+  getDiscoverCatalog: (params: DiscoverCatalogParams) => ipcRenderer.invoke('catalog:discover', params),
   getCatalogDetails: (anilistId: number) => ipcRenderer.invoke('catalog:details', anilistId),
+  getUpdatedAgeRatings: (): Promise<Record<string, number>> => ipcRenderer.invoke('age-ratings:get-updated'),
+  onAgeRatingsUpdated: (callback: (ratings: Record<string, number>) => void) => {
+    const listener = (_event: Electron.IpcRendererEvent, ratings: Record<string, number>) => callback(ratings);
+    ipcRenderer.on('age-ratings:updated', listener);
+    return () => ipcRenderer.removeListener('age-ratings:updated', listener);
+  },
+  getCatalogFranchise: (anilistId: number) => ipcRenderer.invoke('catalog:franchise', anilistId),
   getRemoteEpisodes: (anilistId: number) => ipcRenderer.invoke('metadata:remote-episodes', anilistId),
   // User Library
   getUserLibrary: () => ipcRenderer.invoke('user-library:get-all'),
@@ -97,15 +124,16 @@ contextBridge.exposeInMainWorld('electronAPI', {
   acceptP2pConsent: () => ipcRenderer.invoke('p2p:accept-consent'),
   enableP2p: () => ipcRenderer.invoke('p2p:enable'),
   disableP2p: () => ipcRenderer.invoke('p2p:disable'),
-  getVpnStatus: () => ipcRenderer.invoke('p2p:vpn-status'),
   searchReleases: (params: { title: string; aliases?: string[]; anilistId?: number | null; season?: number | null; episode?: number | null; episodeCount?: number | null; queryOverride?: string }) =>
     ipcRenderer.invoke('p2p:search', params),
-  addDownload: (params: { item: import('./types').ReleaseSearchResult; title: string; anilistId?: number | null; episode?: number | null; targetFolder?: string }) =>
+  fetchReleaseDescription: (params: { providerId: string; url: string }) =>
+    ipcRenderer.invoke('p2p:release-description', params) as Promise<string>,
+  addDownload: (params: { item: import('./types').ReleaseSearchResult; title: string; anilistId?: number | null; episode?: number | null; season?: number | null; targetFolder?: string; downloadRoot?: string }) =>
     ipcRenderer.invoke('p2p:add-download', params),
   pauseDownload: (infoHash: string) => ipcRenderer.invoke('p2p:pause', infoHash),
   resumeDownload: (infoHash: string) => ipcRenderer.invoke('p2p:resume', infoHash),
   cancelDownload: (infoHash: string, removeFiles?: boolean) => ipcRenderer.invoke('p2p:cancel', infoHash, removeFiles),
-  setP2pLimits: (limits: { maxConcurrent?: number; downloadSpeedMBps?: number; uploadSpeedMBps?: number; seedMinutes?: number }) =>
+  setP2pLimits: (limits: { maxConcurrent?: number; seedMinutes?: number }) =>
     ipcRenderer.invoke('p2p:set-limits', limits),
   getP2pProviders: () => ipcRenderer.invoke('p2p:get-providers'),
   saveP2pProviders: (providers: import('./types').RssProvider[]) => ipcRenderer.invoke('p2p:save-providers', providers),

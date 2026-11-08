@@ -125,6 +125,28 @@ export interface SeasonPreference {
   subSyncOffset: number;          // in seconds (-0.5, 0.5, etc.)
 }
 
+export type DiscoverSeason = 'WINTER' | 'SPRING' | 'SUMMER' | 'FALL';
+export type DiscoverMode = 'season' | 'trending' | 'popular' | 'recommended' | 'search';
+export type DiscoverSort = 'RECOMMENDATION' | 'POPULARITY_DESC' | 'TRENDING_DESC' | 'SCORE_DESC' | 'TITLE_ROMAJI' | 'SEARCH_MATCH';
+export type DiscoverAgeRating = 'ALL' | 'G' | 'PG' | 'PG-13' | 'R-17+' | 'R+' | 'NR';
+
+export interface DiscoverCatalogParams {
+  mode: DiscoverMode;
+  search?: string;
+  searchScope?: 'all' | 'season';
+  /** False disables the season/year constraint in the non-search seasonal view. */
+  seasonFilterEnabled?: boolean;
+  year?: number;
+  season?: DiscoverSeason;
+  genre?: string;
+  format?: 'TV' | 'TV_SHORT' | 'MOVIE' | 'SPECIAL' | 'OVA' | 'ONA' | 'MUSIC';
+  status?: 'FINISHED' | 'RELEASING' | 'NOT_YET_RELEASED' | 'CANCELLED' | 'HIATUS';
+  minScore?: number;
+  ageRating?: DiscoverAgeRating;
+  sort?: DiscoverSort;
+  page?: number;
+}
+
 export interface AppSettings {
   ffmpegPath: string;
   whisperPath: string;
@@ -138,19 +160,22 @@ export interface AppSettings {
   subtitlesBgStyle?: 'none' | 'translucent' | 'semi' | 'solid';
   subtitlesOutlineWidth?: 'thin' | 'medium' | 'thick' | 'heavy' | 'none';
   subtitlesOutlineColor?: string;
+  /** Legacy setting retained only so older settings files remain readable; incomplete titles are always hidden. */
   hideDownloadingAnime?: boolean;
 
   // ---- P2P / BitTorrent (BYOC — user provides their own indexers) ----
   enableP2P?: boolean;              // default false — the torrent engine never starts until the user opts in
   p2pConsentAcceptedAt?: number | null;
-  requireVpnForP2p?: boolean;       // default true — VPN tunnel is required
-  vpnBlockDownload?: boolean;       // default true — refuse starting downloads without a VPN tunnel
   maxConcurrentDownloads?: number;  // default 2
+  seedMinutesAfterComplete?: number; // 0 = stop seeding immediately once the download completes
   downloadSpeedLimitMBps?: number;  // 0 = unlimited
   uploadSpeedLimitMBps?: number;    // 0 = unlimited
-  seedMinutesAfterComplete?: number; // 0 = stop seeding immediately once the download completes
   rssProviders?: RssProvider[];     // user-provided RSS/Torznab indexers — NO defaults, nothing hardcoded
   downloadTargetFolder?: string;    // optional override; defaults to the first library folder
+  releaseSelectionMode?: 'automatic' | 'manual'; // automatically queue the best ranked release, or let the user choose
+  /** Languages accepted by automatic release matching; an empty list accepts any explicitly detected language. */
+  preferredTorrentAudioLanguages?: string[];
+  preferredTorrentSubtitleLanguages?: string[];
 }
 
 // ---- P2P shared types ----
@@ -174,7 +199,19 @@ export interface ReleaseSearchResult {
   providerName: string;
   title: string;
   downloadUrl: string; // magnet: URI or http(s) URL to a .torrent file
+  /** Infohash supplied separately by RSS indexers, even when downloadUrl is a .torrent URL. */
+  infoHash?: string;
+  /** Optional description supplied by RSS/Torznab. May contain HTML. */
+  description?: string | null;
+  /** Optional human-readable release page URL, separate from the torrent URL. */
+  detailsUrl?: string | null;
   sizeBytes: number | null;
+  /** Warning attached by the app when an episode result is implausibly small for its runtime. */
+  sizeWarning?: string | null;
+  /** Whole-word title relevance vs the searched title/aliases, attached by the
+   *  ranking step ('none' = the release names a different show, e.g.
+   *  "Pocket Monsters" for a "Monster" search). */
+  titleRelevance?: 'exact' | 'prefix' | 'related' | 'none';
   seeders: number | null;
   leechers: number | null;
   pubDate: number | null;
@@ -192,6 +229,7 @@ export interface ReleaseSearchResponse {
   results: ReleaseSearchResult[];
   reports: ProviderReport[];   // one per ATTEMPTED provider; empty when zero enabled providers
   queries: string[];           // sanitized queries actually used (first = primary)
+  skippedWrongEpisodeCount?: number;
 }
 
 export type TorrentJobStatus = 'queued' | 'connecting' | 'downloading' | 'paused' | 'seeding' | 'completed' | 'error';
@@ -200,6 +238,8 @@ export interface TorrentJob {
   infoHash: string;
   name: string;
   title: string;
+  releaseTitle?: string;
+  selectedFiles?: string[];
   anilistId: number | null;
   targetFolder: string;
   magnetUri: string;
@@ -210,10 +250,25 @@ export interface TorrentJob {
   downloadSpeed: number; // bytes/sec
   uploadSpeed: number;   // bytes/sec
   peers: number;
+  /** Seed count advertised by the indexer when the user picked the release; not a live swarm check. */
+  reportedSeeders?: number | null;
+  providerName?: string;
+  connectingSeconds?: number;
+  /** Seconds since the selected torrent data last increased during this run. */
+  noProgressSeconds?: number;
+  /** Piece availability among currently connected peers, when WebTorrent exposes it. */
+  missingPieces?: number;
+  availableMissingPieces?: number;
+  stallRecoveryCount?: number;
+  torrentWarning?: string;
   episode: number | null;
+  /** All selectively requested episodes when a batch torrent serves several cards. */
+  episodes?: number[];
+  season?: number | null;
   error?: string;
   addedAt: number;
   completedAt?: number | null;
+  filesProgress?: Array<{ name: string; progress: number; length: number }>;
 }
 
 export interface P2pState {
@@ -222,8 +277,6 @@ export interface P2pState {
   jobs: TorrentJob[];
   limits: {
     maxConcurrent: number;
-    downloadSpeedMBps: number;
-    uploadSpeedMBps: number;
     seedMinutes: number;
   };
 }

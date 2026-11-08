@@ -1,9 +1,10 @@
 /**
  * BYOC indexer client (RSS 2.0 / Torznab / Nyaa-style) for the P2P search flow.
  *
- * LEGAL/CLEANLINESS NOTE: this module ships ZERO tracker or indexer URLs.
- * Every endpoint comes exclusively from user configuration
- * (RssProvider.urlTemplate). Nothing is hardcoded, defaulted, or suggested.
+ * No indexer endpoints or feeds are bundled: every search endpoint comes from
+ * user configuration (RssProvider.urlTemplate). The torrent engine may add a
+ * separate public tracker fallback only to trackerless magnet links; see
+ * ensureMagnetTrackers in torrentEngine.ts.
  *
  * Feed handling is deliberately tolerant:
  * - plain RSS 2.0 enclosures, Torznab's per-item `<attr name="..." value="..."/>`
@@ -11,9 +12,9 @@
  *   `<nyaa:size>`, … — fast-xml-parser keeps them as literal keys with colons)
  *   are all normalized into ReleaseSearchResult;
  * - Nyaa-style feeds put a plain http(s) .torrent URL in `<link>` (NOT a magnet)
- *   and carry the swarm hash in `<nyaa:infoHash>`, so an item without a magnet:
- *   link must never be dropped — the hash is turned into a tracker-less magnet
- *   (DHT discovers peers) and .torrent URLs are passed through as-is;
+ *   and carry the swarm hash in `<nyaa:infoHash>`; preserve that .torrent URL
+ *   so the embedded announce list is available to the torrent engine, while
+ *   retaining the infohash separately for deduplication;
  * - searchProviders fans out with allSettled and returns per-provider reports so
  *   a single broken indexer (HTTP 403 / Cloudflare, timeout, bad XML) never
  *   sinks the whole search and never fails silently.
@@ -22,11 +23,15 @@
 import { XMLParser, XMLValidator } from 'fast-xml-parser';
 import type { RssProvider, ReleaseSearchResult, ProviderReport } from './types.ts';
 import { parseReleaseSync } from '../src/lib/releaseParser/index.ts';
+import { classifyRelease } from '../src/lib/releaseParser/releaseClassification.ts';
+import { releaseDescriptionToText } from '../src/lib/releaseParser/releaseClassification.ts';
 
 /** Per-request timeout for indexer feeds. */
 const FETCH_TIMEOUT_MS = 12_000;
 /** Upper bound of normalized items kept per provider feed. */
 const MAX_ITEMS_PER_PROVIDER = 50;
+const MAX_RELEASE_PAGE_BYTES = 512 * 1024;
+const MAX_RELEASE_PAGE_REDIRECTS = 3;
 /** Upper bound of providers accepted by importProvidersConfig. */
 const MAX_PROVIDERS = 20;
 
@@ -225,7 +230,7 @@ export async function searchProviders(
       return;
     }
     for (const result of outcome.value) {
-      const key = extractInfoHash(result.downloadUrl) ?? dedupeKey(result);
+      const key = result.infoHash ?? extractInfoHash(result.downloadUrl) ?? dedupeKey(result);
       if (seen.has(key)) continue;
       seen.add(key);
       merged.push(result);
@@ -245,14 +250,15 @@ const BATCH_TITLE_RE = /batch|season\s*(pack|1[- ]?\d+)|complete/i;
  *   (Jaccard over 3+ char tokens) ratio x30;
  * - (b) season: known on both sides → equal +15, mismatch -40;
  * - (c) episode: parsed numbers include the reference → +25, mismatch -15;
- * - (d) seeders present +5;
- * - (e) season-download bonus: when ref.episode is null, titles matching
+ * - (d) season-download bonus: when ref.episode is null, titles matching
  *   /batch|season pack|complete/ or multi-episode parses get +20 so batches
  *   float up for whole-season downloads.
- * Ties break by seeders desc, then keep input order (stable sort). The input
+ * Results first sort by explicit audio/subtitle confidence. Inside each group,
+ * relevance is scored first and ties break by seeders desc, then input order.
+ * The input
  * array is NEVER filtered or mutated — every input element is returned, just
- * reordered; a new array is returned. When ref.animeTitle is empty the input
- * order is returned unchanged.
+ * reordered; a new array is returned. Language priority still applies when
+ * the anime title is empty.
  */
 export function rankReleasesForEpisode(
   results: ReleaseSearchResult[],
@@ -260,14 +266,92 @@ export function rankReleasesForEpisode(
 ): ReleaseSearchResult[] {
   if (!Array.isArray(results)) return [];
   const refNorm = normalizeMatch(typeof ref?.animeTitle === 'string' ? ref.animeTitle : '');
-  if (!refNorm) return [...results];
-  const scored = results.map((result) => ({ result, score: scoreRelease(result, ref, refNorm) }));
+  const scored = results.map((result) => ({
+    result,
+    relevance: computeTitleRelevance(result.title, [typeof ref?.animeTitle === 'string' ? ref.animeTitle : '']),
+    rank: classifyRelease(result.title, result.description).rank,
+    score: scoreRelease(result, ref, refNorm),
+    quality: qualityRank(result),
+  }));
+  // Title relevance outranks release-kind: a verified-dub spin-off must never
+  // float above the real show just because its kind classifies better.
   scored.sort(
     (a, b) =>
+      TITLE_RELEVANCE_RANK[b.relevance] - TITLE_RELEVANCE_RANK[a.relevance] ||
+      a.rank - b.rank ||
       b.score - a.score ||
+      b.quality - a.quality ||
       (b.result.seeders ?? -1) - (a.result.seeders ?? -1)
   );
   return scored.map((entry) => entry.result);
+}
+
+/** Reject a release from a single-episode search when its title clearly names another episode. */
+export function isExplicitEpisodeMismatch(result: ReleaseSearchResult, episode: number): boolean {
+  if (!Number.isFinite(episode) || episode <= 0) return false
+  const title = typeof result?.title === 'string' ? result.title : ''
+  const hasExplicitEpisode =
+    /\bS\d{1,2}E\d{1,4}(?:\.5)?\b/i.test(title) ||
+    /\b\d{1,2}x\d{1,4}(?:\.5)?\b/i.test(title) ||
+    /\b(?:EP|Episode|E)[ ._-]*0*\d{1,4}(?:\.5)?\b/i.test(title) ||
+    /\s-\s0*\d{1,4}(?:\.5)?(?:\s*[-–~]\s*0*\d{1,4})?(?=\s|[([{]|$)/i.test(title)
+  if (!hasExplicitEpisode) return false
+  const parsed = parseReleaseSync(title)
+  const numbers = parsed.episodeNumbers || []
+  const containsEpisode = numbers.includes(episode) || (
+    typeof parsed.episodeNumber === 'number' && typeof parsed.episodeEnd === 'number' &&
+    episode >= parsed.episodeNumber && episode <= parsed.episodeEnd
+  )
+  return numbers.length > 0 && !containsEpisode
+}
+
+/** Resolution tie-breaker used after title/episode accuracy and language certainty. */
+function qualityRank(result: ReleaseSearchResult): number {
+  const parsed = parseReleaseSync(result.title)
+  const resolution = (parsed.resolution || result.title).toLowerCase()
+  if (/\b(?:4320p|8k)\b/.test(resolution)) return 5
+  if (/\b(?:2160p|4k|uhd)\b/.test(resolution)) return 4
+  if (/\b(?:1440p|2k)\b/.test(resolution)) return 3
+  if (/\b1080p\b/.test(resolution)) return 2
+  if (/\b720p\b/.test(resolution)) return 1
+  return 0
+}
+
+/**
+ * Flag implausibly small episode releases before automatic selection. The
+ * expected size is duration × codec density: H.264 ≈ 4 MB/min, HEVC/AV1 ≈
+ * 2.5 MB/min (Judas/PSA-style encodes on dialogue-heavy episodes land at
+ * 60-90 MB for 24 minutes and are legitimate). Short-form shows (3-12 min)
+ * are never blocked by an absolute floor when the runtime is known; the 80 MB
+ * floor only applies when the duration is unknown. Multi-episode packs must
+ * clear the floor for every episode they list. Manual selection remains
+ * available so short-form titles and unusually compressed encodes are never
+ * silently removed from the user's options.
+ */
+export function getEpisodeReleaseSizeWarning(
+  sizeBytes: number | null,
+  durationMinutes: number | null | undefined,
+  title?: string,
+): string | null {
+  if (sizeBytes == null || !Number.isFinite(sizeBytes) || sizeBytes <= 0) {
+    return 'The indexer did not report this release size. Automatic episode selection skipped it; review it manually.'
+  }
+  const rawTitle = typeof title === 'string' ? title : '';
+  // HEVC/AV1 encodes run ~2.5 MB/min at 1080p on dialogue-heavy episodes.
+  const perMinuteMb = /x26[5]|h\.?265|hevc|\bav1\b/i.test(rawTitle) ? 2.5 : 4;
+  const duration = typeof durationMinutes === 'number' && Number.isFinite(durationMinutes) && durationMinutes > 0
+    ? durationMinutes
+    : null;
+  const durationKnown = duration != null;
+  let expectedMb = duration != null ? duration * perMinuteMb : 80;
+  // A multi-episode pack must clear the floor for every episode it lists
+  // (per-episode lists only; a range like "Eps 1-193" gives two endpoints, so
+  // it is not multiplied — such packs are large anyway).
+  const listedEpisodes = rawTitle ? parseReleaseSync(rawTitle).episodeNumbers.length : 0;
+  if (duration != null && listedEpisodes > 2) expectedMb *= Math.min(listedEpisodes, 200);
+  const minimumBytes = Math.max(expectedMb, 8) * 1024 ** 2;
+  if (sizeBytes >= minimumBytes) return null
+  return `This release is unusually small for the episode(s) it claims (under ${Math.ceil(minimumBytes / 1024 ** 2)} MiB). Review it before downloading.`
 }
 
 /**
@@ -363,11 +447,11 @@ function parseFeedItems(xmlText: string): Record<string, unknown>[] {
  * Normalize one raw feed item into a ReleaseSearchResult, or null when the
  * item has no usable download source (skipped — the raw-vs-parsed feed log
  * counts it). downloadUrl resolution order:
- *   (a) nyaa:infoHash present → tracker-less magnet built from it (DHT
- *       discovers peers; no announce URLs are ever hardcoded);
+ *   (a) direct .torrent enclosure/link → used as-is, preserving the tracker
+ *       announce list embedded in the torrent file;
  *   (b) magnet: link/enclosure → passed through untouched;
- *   (c) http(s) link/enclosure (.torrent file) → used as-is. Nyaa-style feeds
- *       put the .torrent URL in <link>, so a magnet-less item is kept.
+ *   (c) nyaa:infoHash present without a .torrent URL → tracker-less magnet;
+ *   (d) other http(s) link/enclosure → used as-is.
  * sizeBytes prefers the Torznab size attr, then nyaa:size ("1.4 GiB" →
  * bytes), then enclosure length/size. seeders/leechers come from Torznab
  * attrs with nyaa:* elements as fallback (null when absent). pubDate becomes
@@ -377,15 +461,29 @@ function normalizeFeedItem(item: Record<string, unknown>, provider: RssProvider)
   const attrs = collectTorznabAttrs(item);
   const enclosure = asRecord(item.enclosure);
   const enclosureUrl = enclosure ? readXmlAttribute(enclosure, '@_url').trim() : '';
+  const enclosureType = enclosure ? readXmlAttribute(enclosure, '@_type').trim().toLowerCase() : '';
   const link = readXmlText(item.link).trim();
   const title = readXmlText(item.title).trim();
+  const description = (readXmlText(item.description) || readXmlText(item['content:encoded'])).slice(0, 20_000) || null;
 
   const nyaaInfoHash = toInfoHashOrNull(item['nyaa:infoHash']);
+  const detailsUrl = extractDetailsUrl(item, link, nyaaInfoHash !== null);
   let downloadUrl: string | null = null;
-  if (nyaaInfoHash) {
-    downloadUrl = `magnet:?xt=urn:btih:${nyaaInfoHash}&dn=${encodeURIComponent(title)}`;
+  const isTorrentFileUrl = (value: string) => {
+    if (!/^https?:\/\//i.test(value)) return false;
+    try { return /\.torrent$/i.test(new URL(value).pathname); } catch { return false; }
+  };
+  const torrentEnclosure = /^https?:\/\//i.test(enclosureUrl) && (
+    isTorrentFileUrl(enclosureUrl) || /bittorrent|x-torrent/i.test(enclosureType)
+  );
+  if (torrentEnclosure) {
+    downloadUrl = enclosureUrl;
+  } else if (isTorrentFileUrl(link)) {
+    downloadUrl = link;
   } else if (enclosureUrl.toLowerCase().startsWith('magnet:') || link.toLowerCase().startsWith('magnet:')) {
     downloadUrl = enclosureUrl.toLowerCase().startsWith('magnet:') ? enclosureUrl : link;
+  } else if (nyaaInfoHash) {
+    downloadUrl = `magnet:?xt=urn:btih:${nyaaInfoHash}&dn=${encodeURIComponent(title)}`;
   } else if (/^https?:\/\//i.test(enclosureUrl)) {
     downloadUrl = enclosureUrl;
   } else if (/^https?:\/\//i.test(link)) {
@@ -403,11 +501,134 @@ function normalizeFeedItem(item: Record<string, unknown>, provider: RssProvider)
     providerName: provider.name,
     title,
     downloadUrl,
+    ...(nyaaInfoHash ? { infoHash: nyaaInfoHash } : {}),
+    description,
+    detailsUrl,
     sizeBytes: torznabSize ?? nyaaSizeBytes ?? enclosureLength ?? enclosureSize,
     seeders: toIntOrNull(attrs.seeders) ?? toIntOrNull(item['nyaa:seeders']),
     leechers: toIntOrNull(attrs.leechers) ?? toIntOrNull(item['nyaa:leechers']),
     pubDate: Number.isNaN(pubDateMs) ? null : pubDateMs,
   };
+}
+
+/** Find a human-readable release page without mistaking a .torrent URL for it. */
+function extractDetailsUrl(item: Record<string, unknown>, link: string, hasNyaaHash: boolean): string | null {
+  const guidNode = item.guid;
+  const guidRecord = asRecord(guidNode);
+  const guidIsPermalink = !guidRecord || String(guidRecord['@_isPermaLink'] ?? 'true').toLowerCase() !== 'false';
+  const candidates = [
+    ...(guidIsPermalink ? [readXmlText(guidNode).trim()] : []),
+    ...(hasNyaaHash ? [link] : []),
+  ];
+  for (const candidate of candidates) {
+    try {
+      const parsed = new URL(candidate);
+      if (!['http:', 'https:'].includes(parsed.protocol) || parsed.username || parsed.password) continue;
+      if (/\.(?:torrent|nzb)(?:$|[?#])/i.test(parsed.href)) continue;
+      return parsed.toString();
+    } catch {
+      // Non-URL GUIDs are normal in RSS and are not release-page links.
+    }
+  }
+  return null;
+}
+
+/**
+ * Fetch one release detail page only after the user requests it. Requests are
+ * restricted to the configured provider's origin and redirects cannot leave
+ * that origin, preventing feed-supplied URLs from becoming arbitrary IPC fetches.
+ */
+export async function fetchReleaseDescription(
+  providerId: string,
+  rawUrl: string,
+  providers: RssProvider[],
+  timeoutMs = FETCH_TIMEOUT_MS,
+): Promise<string> {
+  const provider = providers.find((entry) => entry.id === providerId && entry.enabled);
+  if (!provider) throw new Error('Release source is no longer enabled.');
+  let configuredOrigin: string;
+  try {
+    configuredOrigin = new URL(provider.urlTemplate.replace('{query}', 'query')).origin;
+  } catch {
+    throw new Error('Release source has an invalid URL.');
+  }
+  const assertAllowedUrl = (value: string): URL => {
+    let parsed: URL;
+    try { parsed = new URL(value); } catch { throw new Error('Invalid release page URL.'); }
+    if (!['http:', 'https:'].includes(parsed.protocol) || parsed.username || parsed.password || parsed.origin !== configuredOrigin) {
+      throw new Error('Release page is outside the configured source.');
+    }
+    return parsed;
+  };
+  let pageUrl = assertAllowedUrl(rawUrl);
+  const fetchImpl = await resolveFetch();
+  let response: Response | null = null;
+  for (let hop = 0; hop <= MAX_RELEASE_PAGE_REDIRECTS; hop++) {
+    response = await fetchImpl(pageUrl.toString(), {
+      headers: { ...REQUEST_HEADERS, Accept: 'text/html,application/xhtml+xml,application/xml,text/plain;q=0.9,*/*;q=0.5' },
+      signal: AbortSignal.timeout(Math.max(1_000, Math.min(FETCH_TIMEOUT_MS, timeoutMs))),
+      redirect: 'manual',
+    });
+    if (![301, 302, 303, 307, 308].includes(response.status)) break;
+    const location = response.headers.get('location');
+    if (!location || hop === MAX_RELEASE_PAGE_REDIRECTS) throw new Error('Release page redirected too many times.');
+    pageUrl = assertAllowedUrl(new URL(location, pageUrl).toString());
+  }
+  if (!response?.ok) throw new Error(`Release page returned HTTP ${response?.status ?? 'unknown'}.`);
+  const contentType = response.headers.get('content-type') || '';
+  if (contentType && !/(?:html|xml|text|json)/i.test(contentType)) throw new Error('Release source did not return a text description.');
+  const contentLength = Number(response.headers.get('content-length'));
+  if (Number.isFinite(contentLength) && contentLength > MAX_RELEASE_PAGE_BYTES) throw new Error('Release page is too large to inspect.');
+  if (!response.body) return (await response.text()).slice(0, MAX_RELEASE_PAGE_BYTES);
+  const reader = response.body.getReader();
+  const chunks: Uint8Array[] = [];
+  let total = 0;
+  while (total < MAX_RELEASE_PAGE_BYTES) {
+    const { done, value } = await reader.read();
+    if (done) break;
+    if (!value) continue;
+    const chunk = value.subarray(0, MAX_RELEASE_PAGE_BYTES - total);
+    chunks.push(chunk);
+    total += chunk.length;
+    if (chunk.length < value.length) break;
+  }
+  await reader.cancel().catch(() => undefined);
+  const bytes = new Uint8Array(total);
+  let offset = 0;
+  for (const chunk of chunks) { bytes.set(chunk, offset); offset += chunk.length; }
+  return new TextDecoder().decode(bytes);
+}
+
+/**
+ * Inspect detail pages for the best-matching search results before ranking and
+ * automatic selection. RSS feeds often omit language tracks, so relying on
+ * them alone can silently choose a release without English subtitles.
+ */
+export async function inspectReleaseResults(
+  results: ReleaseSearchResult[],
+  providers: RssProvider[],
+  limit = 20,
+): Promise<ReleaseSearchResult[]> {
+  const output = [...results];
+  const candidates = output
+    .map((result, index) => ({ result, index, classification: classifyRelease(result.title, result.description) }))
+    .filter(({ result, classification }) => !!result.detailsUrl && !(classification.languageGroup === 'eng-dub-dubtitles' || classification.languageGroup === 'eng-dub-subs'))
+    .slice(0, Math.max(0, Math.min(40, Math.floor(limit))));
+  let cursor = 0;
+  const workers = Array.from({ length: Math.min(8, candidates.length) }, async () => {
+    while (cursor < candidates.length) {
+      const candidate = candidates[cursor++];
+      try {
+        const raw = await fetchReleaseDescription(candidate.result.providerId, candidate.result.detailsUrl!, providers, 5_500);
+        const text = releaseDescriptionToText(raw);
+        if (text) output[candidate.index] = { ...candidate.result, description: [candidate.result.description || '', text].filter(Boolean).join('\n').slice(0, 40_000) };
+      } catch (error) {
+        console.info(`[Indexers] Could not inspect release description (${candidate.result.providerName}): ${error instanceof Error ? error.message : String(error)}`);
+      }
+    }
+  });
+  await Promise.all(workers);
+  return output;
 }
 
 /**
@@ -429,6 +650,19 @@ function collectTorznabAttrs(item: Record<string, unknown>): Record<string, stri
   return attrs;
 }
 
+/** Season number from markers the shared parser may leave on the floor: a
+ *  bare "S2" in "[Group] Show S2 - 05" is stripped from animeTitle without
+ *  populating parsed.season, but it must still count for season scoring. */
+function rawTitleSeason(title: string): number | null {
+  const patterns = [/\bS(\d{1,2})(?:E\d{1,4})?\b/i, /\bSeason\s*0*(\d{1,2})\b/i, /\b(\d{1,2})(?:st|nd|rd|th)\s+Season\b/i];
+  for (const pattern of patterns) {
+    const match = pattern.exec(title);
+    const n = Number(match?.[1]);
+    if (Number.isInteger(n) && n > 0) return n;
+  }
+  return null;
+}
+
 /** Score one result against the episode reference (see rankReleasesForEpisode). */
 function scoreRelease(
   result: ReleaseSearchResult,
@@ -437,23 +671,47 @@ function scoreRelease(
 ): number {
   const parsed = parseReleaseSync(result.title);
   let score = 0;
-  const parsedNorm = normalizeMatch(parsed.animeTitle ?? '');
+  const parsedNorm = releaseShowName(result.title) || normalizeMatch(parsed.animeTitle ?? '');
   if (refNorm && parsedNorm) {
     if (parsedNorm === refNorm) {
       score += 60;
-    } else if (parsedNorm.includes(refNorm) || refNorm.includes(parsedNorm)) {
+    } else if (titleRelevanceOf(parsedNorm, refNorm) === 'prefix') {
+      // Same show with decorations ("Monster S2", "The Apothecary Diaries").
       score += 40;
+    } else if (titleRelevanceOf(parsedNorm, refNorm) === 'related') {
+      // Whole-word mention inside the title, not name-aligned.
+      score += 25;
     } else {
+      // No whole-word hit at all — a different show ("Pocket Monsters" for a
+      // "Monster" search). Substring-inside-word matches score nothing.
       score += tokenOverlap(refNorm, parsedNorm) * 30;
     }
   }
-  if (ref?.season !== null && ref?.season !== undefined && parsed.season !== null) {
-    score += parsed.season === ref.season ? 15 : -40;
+  const season = parsed.season ?? rawTitleSeason(result.title);
+  if (ref?.season !== null && ref?.season !== undefined && season !== null) {
+    score += season === ref.season ? 15 : -40;
   }
   if (ref?.episode !== null && ref?.episode !== undefined && parsed.episodeNumbers.length > 0) {
-    score += parsed.episodeNumbers.includes(ref.episode) ? 25 : -15;
+    const isBatchTitle = BATCH_TITLE_RE.test(result.title);
+    const matchesEpisode = parsed.episodeNumbers.includes(ref.episode) || (
+      typeof parsed.episodeNumber === 'number' && typeof parsed.episodeEnd === 'number' &&
+      ref.episode >= parsed.episodeNumber && ref.episode <= parsed.episodeEnd
+    )
+    if (isBatchTitle && !matchesEpisode) {
+      // Batch titles carry volume/count hints, not episode listings — a batch
+      // may still contain the episode, so never sink it for the numbers in
+      // its title.
+    } else {
+      score += matchesEpisode ? 25 : -15;
+    }
   }
-  if (result.seeders !== null && result.seeders !== undefined) score += 5;
+  // A seasonless release for a season>1 request is season-ambiguous: the
+  // episode number may belong to an earlier season. Marker-bearing releases
+  // must win; when only ambiguous ones exist they stay available (relative
+  // order among them is unchanged by a uniform penalty).
+  if (ref?.season != null && ref.season > 1 && season == null) {
+    score -= 10;
+  }
   // Season-download helper: with no specific episode requested, batch /
   // season-pack / complete releases (or multi-episode parses) float up so
   // whole-season downloads surface before single episodes.
@@ -466,6 +724,105 @@ function scoreRelease(
 /** Lowercase, strip non-alphanumeric characters, collapse to single spaces. */
 function normalizeMatch(value: string): string {
   return value.toLowerCase().replace(/[^\p{L}\p{N}]+/gu, ' ').trim();
+}
+
+/** Title relevance of a release against the reference title(s), best across
+ *  title + aliases. Whole-word only: a substring inside a longer word does
+ *  not count, so "Monster" does not match "Pocket Monsters" (∋ "monster"
+ *  inside "monsters"). 'prefix' — one normalized title starts with the other
+ *  at a word boundary (release decorations follow the show name); 'related' —
+ *  whole-word containment somewhere; 'none' — no whole-word hit. */
+export type TitleRelevance = 'exact' | 'prefix' | 'related' | 'none';
+
+const isAlnumChar = (ch: string | undefined) => !!ch && /[\p{L}\p{N}]/u.test(ch);
+const wordBoundaryAfter = (haystack: string, end: number) => !isAlnumChar(haystack[end]);
+
+function containsWholeWord(haystack: string, needle: string): boolean {
+  if (!needle) return false;
+  let from = 0;
+  for (;;) {
+    const at = haystack.indexOf(needle, from);
+    if (at === -1) return false;
+    if ((at === 0 || !isAlnumChar(haystack[at - 1])) && wordBoundaryAfter(haystack, at + needle.length)) return true;
+    from = at + 1;
+  }
+}
+
+const TITLE_RELEVANCE_RANK: Record<TitleRelevance, number> = { exact: 3, prefix: 2, related: 1, none: 0 };
+
+/** Release-kind decorations ("Season Pack", "Batch", "Complete", bare season
+ *  numbers) are stripped from the tail of a parsed show name before title
+ *  matching — they describe the RELEASE, not the show, so "[Group] Show
+ *  Season Pack" must title-match exactly like "[Group] Show - 05". */
+const DECORATION_TOKEN_RE = /^(?:batch|complete|pack|season|part|(?:19|20)\d{2}|\d{1,4})$/i;
+
+function stripTrailingDecorations(normalized: string): string {
+  const tokens = normalized.split(' ').filter(Boolean);
+  while (tokens.length > 0 && DECORATION_TOKEN_RE.test(tokens[tokens.length - 1])) tokens.pop();
+  return tokens.join(' ').trim();
+}
+
+/** The show name a release title advertises: parser-extracted animeTitle with
+ *  trailing release-kind decorations removed. */
+function releaseShowName(resultTitle: string): string {
+  const raw = typeof resultTitle === 'string' ? resultTitle : '';
+  const parsed = parseReleaseSync(raw);
+  return stripTrailingDecorations(normalizeMatch(parsed.animeTitle ?? ''));
+}
+
+/** The tail a release appends to the show name must be season/part/year/batch
+ *  shaped — free-form words ("Monster Hunter", "Monster Musume") make it a
+ *  different show, which must never count as a title prefix match. */
+const SEASONISH_TOKEN_RE = /^(?:s\d{1,3}|season|part|cour|final|batch|complete|pack|(?:19|20)\d{2}|\d{1,4})$/i;
+const ORDINAL_TOKEN_RE = /^\d{1,4}(?:st|nd|rd|th)$/i;
+
+function seasonishTail(tail: string): boolean {
+  const tokens = tail.split(/[\s,.:()[\]_-]+/).filter(Boolean);
+  if (tokens.length === 0) return true;
+  return tokens.every((token) => SEASONISH_TOKEN_RE.test(token) || ORDINAL_TOKEN_RE.test(token));
+}
+
+function titleRelevanceOf(candidate: string, ref: string): TitleRelevance {
+  if (!candidate || !ref) return 'none';
+  if (candidate === ref) return 'exact';
+  // The release extends the show name — only with season/part/year markers.
+  // "Monster S2" is a prefix; "Monster Hunter" is another show.
+  if (candidate.startsWith(ref) && wordBoundaryAfter(candidate, ref.length) && seasonishTail(candidate.slice(ref.length))) {
+    return 'prefix';
+  }
+  // The release lacks a tail the reference carries (a season marker etc.) —
+  // season-ambiguous, so never 'prefix' (a wrong-season pack must not pass).
+  if (containsWholeWord(candidate, ref) || containsWholeWord(ref, candidate)) return 'related';
+  return 'none';
+}
+
+function bestTitleRelevance(candidates: string[], refs: string[]): TitleRelevance {
+  let best: TitleRelevance = 'none';
+  for (const ref of refs) {
+    const normRef = normalizeMatch(ref);
+    if (!normRef) continue;
+    for (const candidate of candidates) {
+      const relevance = titleRelevanceOf(candidate, normRef);
+      if (TITLE_RELEVANCE_RANK[relevance] > TITLE_RELEVANCE_RANK[best]) {
+        best = relevance;
+        if (best === 'exact') return best;
+      }
+    }
+  }
+  return best;
+}
+
+/** Whole-word title relevance of a raw release title against the searched
+ *  title/aliases — attached to search results so automatic selection can
+ *  refuse releases that name a different show. The parsed show name (group
+ *  tag and episode markers stripped) is the primary candidate; the raw
+ *  normalized title backs it up. */
+export function computeTitleRelevance(resultTitle: string, refs: string[]): TitleRelevance {
+  const raw = typeof resultTitle === 'string' ? resultTitle : '';
+  return bestTitleRelevance(
+    [releaseShowName(raw), stripTrailingDecorations(normalizeMatch(raw))].filter((candidate) => !!candidate),
+    refs,
+  );
 }
 
 /** Jaccard overlap of 3+ character tokens between two normalized strings (0..1). */

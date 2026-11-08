@@ -22,7 +22,7 @@
  * 5. UpNextWidget & HomeView adversarial invariants (Phase 3 UI refactor, replaces the deleted
  *    Phase 2 hero resume banner dedup suite): progress-bar zero-guards (no NaN/Infinity for
  *    duration 0, negative, NaN, Infinity), startAt resume semantics (0 when completed,
- *    NaN-coalesced otherwise), 'Recommended For You' rail gating, and App.tsx fully free of the
+ *    NaN-coalesced otherwise), genre rail/library exclusion invariants, and App.tsx fully free of the
  *    deleted hero component and the obsolete movie-hero-active-change dedup channel.
  * 6. App.tsx Escape key routing under active modals and drawers.
  */
@@ -373,8 +373,8 @@ runTest('3.5 Search empty state logic invariants in FolderBrowser', () => {
   assert(folderBrowserSrc.includes('No anime found matching'), 'Must display specific no match message');
   assert(folderBrowserSrc.includes('Clear Search'), 'Must display Clear Search action');
 
-  // Invariant 2: Episode grid strictly suppressed when 0 folders match
-  assert(folderBrowserSrc.includes('filteredFolders.length > 0 && selectedFolder ? ('), 'Episode grid guarded by filteredFolders.length > 0');
+  // Invariant 2: Poster shelf and its no-results state use the filtered set.
+  assert(folderBrowserSrc.includes('sortedFolders.length > 0 ? ('), 'Poster shelf renders only when filtered results exist');
 
   // Invariant 3: "No Anime Folders Found" box strictly reserved for genuinely unconfigured library
   assert(folderBrowserSrc.includes('folders.length === 0 ? ('), 'Unconfigured box guarded strictly by folders.length === 0');
@@ -540,24 +540,13 @@ runTest('5.2 UpNextWidget play handler honors startAt semantics: 0 when complete
   assert.strictEqual(computeUpNextStartAt({ completed: false, currentTime: 240 }), 240, 'Mid-episode progress resumes from currentTime');
 });
 
-runTest('5.3 HomeView hides the "Recommended For You" rail when items are empty and loading is false', () => {
-  // Source-level invariant: the rail is gated behind a showRecommended predicate
-  const showRecommendedMatch = homeViewSrc.match(/const showRecommended = ([^;]+);/);
-  assert(showRecommendedMatch, 'HomeView must define a showRecommended gate');
-  assert(
-    showRecommendedMatch[1].includes('recommended.loading') && showRecommendedMatch[1].includes('recommended.items.length'),
-    'showRecommended must combine the loading state with the item count'
-  );
-  assert(
-    homeViewSrc.includes('showRecommended && ('),
-    '"Recommended For You" rail must be rendered only when showRecommended is true'
-  );
-
-  // Behavioral replication of the gate predicate
-  const showRecommended = (section) => section.loading || section.items.length > 0;
-  assert.strictEqual(showRecommended({ loading: false, items: [] }), false, 'Empty items + not loading must hide the rail');
-  assert.strictEqual(showRecommended({ loading: true, items: [] }), true, 'Loading state must still surface the rail skeleton');
-  assert.strictEqual(showRecommended({ loading: false, items: [{}] }), true, 'Non-empty items must show the rail');
+runTest('5.3 HomeView builds genre-based discovery rails and excludes library/history titles', () => {
+  assert(homeViewSrc.includes('useGenrePicks()'), 'HomeView must load the cached genre picks');
+  assert(homeViewSrc.includes('const visibleGenreRails = useMemo'), 'HomeView must derive visible genre rails');
+  assert(homeViewSrc.includes('items: rail.items.filter((item) => !excludedAnimeIds.has(item.anilistId))'), 'Titles already tracked in the library or history must be excluded');
+  assert(homeViewSrc.includes('(genrePicks.loading || rail.items.length > 0)'), 'Genre shelves should show skeletons while loading and hide empty settled results');
+  assert(homeViewSrc.includes('title={rail.genre}'), 'Each shelf should be named for its genre');
+  assert(!homeViewSrc.includes('Recommended For You'), 'The removed personalized recommendation shelf must stay removed');
 });
 
 runTest('5.4 App renders HomeView on the home tab and contains no trace of the deleted hero component or the dedup event channel', () => {

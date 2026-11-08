@@ -30,20 +30,20 @@ const EpisodeDrawerItem: React.FC<EpisodeItemProps> = ({
   isCurrentRef,
 }) => {
   const [imgError, setImgError] = useState(false);
-  const [activeImgUrl, setActiveImgUrl] = useState(episode.kitsuThumbnail || episode.thumbnailUrl);
+  const [activeImgUrl, setActiveImgUrl] = useState(episode.thumbnailUrl || episode.kitsuThumbnail);
   const [retryCount, setRetryCount] = useState(0);
   const parsed = useMemo(() => cleanEpisodeTitle(episode.fileName), [episode.fileName]);
 
   useEffect(() => {
-    setActiveImgUrl(episode.kitsuThumbnail || episode.thumbnailUrl);
+    setActiveImgUrl(episode.thumbnailUrl || episode.kitsuThumbnail);
     setImgError(false);
     setRetryCount(0);
   }, [episode.kitsuThumbnail, episode.thumbnailUrl]);
 
   const handleImgError = () => {
-    if (activeImgUrl === episode.kitsuThumbnail && episode.thumbnailUrl) {
-      setActiveImgUrl(episode.thumbnailUrl);
-    } else if (retryCount < 3 && episode.thumbnailUrl) {
+    if (activeImgUrl === episode.thumbnailUrl && episode.kitsuThumbnail) {
+      setActiveImgUrl(episode.kitsuThumbnail);
+    } else if (activeImgUrl === episode.thumbnailUrl && retryCount < 3 && episode.thumbnailUrl) {
       setTimeout(() => {
         setRetryCount((c) => c + 1);
         setActiveImgUrl(`${episode.thumbnailUrl}&retry=${Date.now()}`);

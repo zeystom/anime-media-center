@@ -26,6 +26,7 @@ import {
 import type { ProviderReport, ReleaseSearchResult } from '../../types'
 import type { ParsedRelease } from '../../lib/releaseParser/types.ts'
 import { formatEpisodeNumberPart, parseReleaseCore } from '../../lib/releaseParser/regexEngine.ts'
+import { classifyRelease, TORRENT_LANGUAGES, type ReleaseClassification, type ReleaseKind, type TorrentLanguageCode } from '../../lib/releaseParser/releaseClassification.ts'
 import { formatFileSize } from '../../utils/format'
 
 interface ReleasePickerModalProps {
@@ -38,6 +39,7 @@ interface ReleasePickerModalProps {
   episode?: number | null
   /** Episode count of the season when known — extra context for the search. */
   episodeCount?: number | null
+  episodeDurationMinutes?: number | null
   /** Alternative titles (romaji/english) tried alongside the main query. */
   aliases?: string[]
   onCancel: () => void
@@ -45,9 +47,9 @@ interface ReleasePickerModalProps {
 }
 
 const SKELETON_ROWS = 6
-const BATCH_TITLE_RE = /batch|season\s*pack|complete/i
-
 type ReleaseTab = 'all' | 'batches' | 'episodes'
+type ReleaseTypeFilter = 'all' | ReleaseKind
+type ReleaseLanguageFilter = 'all' | 'unknown' | TorrentLanguageCode
 
 const RELEASE_TABS: Array<{ id: ReleaseTab; label: string }> = [
   { id: 'all', label: 'All Releases' },
@@ -64,23 +66,12 @@ const TAB_EMPTY_TEXT: Record<ReleaseTab, string> = {
 interface ClassifiedRelease {
   result: ReleaseSearchResult
   parsed: ParsedRelease
+  classification: ReleaseClassification
   kind: 'batch' | 'episode' | 'other'
 }
 
 /** Sky chip label for episode info: "EP 05" for a single, "E 01-12" for a range. */
-function buildEpisodeChip(parsed: ParsedRelease): string | null {
-  if (parsed.episodeNumbers.length > 1) {
-    const first = parsed.episodeNumbers[0]
-    const last = parsed.episodeNumbers[parsed.episodeNumbers.length - 1]
-    return `E ${formatEpisodeNumberPart(first)}-${formatEpisodeNumberPart(last)}`
-  }
-  if (parsed.episodeNumber != null) {
-    return `EP ${formatEpisodeNumberPart(parsed.episodeNumber)}`
-  }
-  return null
-}
-
-/** Release badges for a row, capped at 4 (group, resolution, video term, episode). */
+/** Technical tags only; language and release kind are classified separately. */
 function buildReleaseChips(parsed: ParsedRelease): Array<{ label: string; className: string }> {
   const chips: Array<{ label: string; className: string }> = []
   if (parsed.releaseGroup) {
@@ -95,12 +86,19 @@ function buildReleaseChips(parsed: ParsedRelease): Array<{ label: string; classN
   if (parsed.videoTerm) {
     chips.push({ label: parsed.videoTerm, className: 'bg-zinc-800 text-zinc-400' })
   }
-  const episodeChip = buildEpisodeChip(parsed)
-  if (episodeChip) {
-    chips.push({ label: episodeChip, className: 'bg-sky-500/15 text-sky-300' })
-  }
-  return chips.slice(0, 4)
+  return chips.slice(0, 3)
 }
+
+const TYPE_FILTERS: Array<{ value: ReleaseTypeFilter; label: string }> = [
+  { value: 'all', label: 'All release types' },
+  { value: 'episode', label: 'Single episodes' },
+  { value: 'episode-range', label: 'Episode ranges' },
+  { value: 'season-pack', label: 'Season packs' },
+  { value: 'movie', label: 'Movies' },
+  { value: 'ova', label: 'OVA / OAD' },
+  { value: 'special', label: 'Specials' },
+  { value: 'unknown', label: 'Unknown type' },
+]
 
 export const ReleasePickerModal: React.FC<ReleasePickerModalProps> = ({
   open,
@@ -109,6 +107,7 @@ export const ReleasePickerModal: React.FC<ReleasePickerModalProps> = ({
   season,
   episode,
   episodeCount,
+  episodeDurationMinutes,
   aliases,
   onCancel,
   onPicked,
@@ -122,6 +121,10 @@ export const ReleasePickerModal: React.FC<ReleasePickerModalProps> = ({
   const [activeQuery, setActiveQuery] = useState('')
   const [filter, setFilter] = useState('')
   const [tab, setTab] = useState<ReleaseTab>('all')
+  const [typeFilter, setTypeFilter] = useState<ReleaseTypeFilter>('all')
+  const [audioFilter, setAudioFilter] = useState<ReleaseLanguageFilter>('all')
+  const [subtitleFilter, setSubtitleFilter] = useState<ReleaseLanguageFilter>('all')
+  const [inspectionState, setInspectionState] = useState<Record<string, { loading?: boolean; error?: string }>>({})
 
   const searchGenRef = useRef(0)
 
@@ -165,6 +168,7 @@ export const ReleasePickerModal: React.FC<ReleasePickerModalProps> = ({
           season: season ?? null,
           episode: episode ?? null,
           episodeCount: episodeCount ?? null,
+          episodeDurationMinutes: episodeDurationMinutes ?? null,
           queryOverride,
         })
         .then((res) => {
@@ -173,6 +177,9 @@ export const ReleasePickerModal: React.FC<ReleasePickerModalProps> = ({
           setReports(Array.isArray(res?.reports) ? res.reports : [])
           setActiveQuery(res?.queries?.[0] || queryOverride || title)
           setTab('all')
+          setTypeFilter('all')
+          setAudioFilter('all')
+          setSubtitleFilter('all')
           setLoading(false)
         })
         .catch((err) => {
@@ -182,16 +189,25 @@ export const ReleasePickerModal: React.FC<ReleasePickerModalProps> = ({
           setReports([])
           setActiveQuery(queryOverride || title)
           setTab('all')
+          setTypeFilter('all')
+          setAudioFilter('all')
+          setSubtitleFilter('all')
           setFatalError(err instanceof Error && err.message ? err.message : 'Release search failed.')
           setLoading(false)
         })
     },
-    [title, aliases, anilistId, season, episode, episodeCount],
+    [title, aliases, anilistId, season, episode, episodeCount, episodeDurationMinutes],
   )
 
   // Reset the client-side filter each time the picker opens.
   useEffect(() => {
-    if (open) setFilter('')
+    if (open) {
+      setFilter('')
+      setTypeFilter('all')
+      setAudioFilter('all')
+      setSubtitleFilter('all')
+      setInspectionState({})
+    }
   }, [open])
 
   // Search while open; re-runs when the key params change (e.g. the picker is
@@ -205,31 +221,54 @@ export const ReleasePickerModal: React.FC<ReleasePickerModalProps> = ({
   const failedReports = useMemo(() => reports.filter((r) => !r.ok), [reports])
   const firstFailure = failedReports.length > 0 ? (failedReports[0].error ?? 'unknown error') : null
 
-  // Client-side classification (parseReleaseCore is wasm-free, renderer-safe).
+  // Client-side classification uses the same explicit-token parser as main-process ranking.
   const classified = useMemo<ClassifiedRelease[]>(
     () =>
       results.map((result) => {
         const parsed = parseReleaseCore(result.title || '')
-        const isBatch =
-          parsed.releaseType === 'Batch' ||
-          parsed.episodeNumbers.length > 1 ||
-          BATCH_TITLE_RE.test(result.title || '')
-        const kind: ClassifiedRelease['kind'] = isBatch
+        const classification = classifyRelease(result.title || '', result.description)
+        const kind: ClassifiedRelease['kind'] = classification.kind === 'season-pack' || classification.kind === 'episode-range'
           ? 'batch'
-          : parsed.episodeNumber != null
+          : classification.kind === 'episode'
             ? 'episode'
             : 'other'
-        return { result, parsed, kind }
+        return { result, parsed, classification, kind }
       }),
     [results],
   )
 
-  // Local substring filter composes with the tab filter.
+  // Preserve backend's match ordering inside each audio/subtitle priority group.
+  const languageSorted = useMemo(() => [...classified].sort((a, b) => {
+    const priorityDiff = a.classification.rank - b.classification.rank
+    if (priorityDiff) return priorityDiff
+    if (!!a.result.sizeWarning !== !!b.result.sizeWarning) return a.result.sizeWarning ? 1 : -1
+    if (episode != null) {
+      const aMatch = a.parsed.episodeNumbers.includes(episode) ? 1 : 0
+      const bMatch = b.parsed.episodeNumbers.includes(episode) ? 1 : 0
+      if (aMatch !== bMatch) return bMatch - aMatch
+    }
+    if (season != null) {
+      const aMatch = a.parsed.season === season ? 1 : 0
+      const bMatch = b.parsed.season === season ? 1 : 0
+      if (aMatch !== bMatch) return bMatch - aMatch
+    }
+    return (b.result.seeders ?? -1) - (a.result.seeders ?? -1)
+  }), [classified, episode, season])
+
+  // Local search and controls compose; unclassified items naturally stay last.
   const normalizedFilter = filter.trim().toLowerCase()
   const filterMatched = useMemo(() => {
-    if (!normalizedFilter) return classified
-    return classified.filter((c) => (c.result.title || '').toLowerCase().includes(normalizedFilter))
-  }, [classified, normalizedFilter])
+    return languageSorted.filter((item) => {
+      if (normalizedFilter && !(item.result.title || '').toLowerCase().includes(normalizedFilter)
+        && !(item.result.description || '').toLowerCase().includes(normalizedFilter)) return false
+      if (audioFilter === 'unknown' && item.classification.audioLanguageCodes.length > 0) return false
+      if (audioFilter !== 'all' && audioFilter !== 'unknown' && !item.classification.audioLanguageCodes.includes(audioFilter)) return false
+      if (subtitleFilter === 'unknown' && item.classification.subtitleLanguageCodes.length > 0) return false
+      if (subtitleFilter !== 'all' && subtitleFilter !== 'unknown' && !item.classification.subtitleLanguageCodes.includes(subtitleFilter)) return false
+      if (typeFilter !== 'all' && item.classification.kind !== typeFilter) return false
+      return true
+    })
+  }, [languageSorted, normalizedFilter, audioFilter, subtitleFilter, typeFilter])
 
   const tabCounts = useMemo(
     () => ({
@@ -263,6 +302,31 @@ export const ReleasePickerModal: React.FC<ReleasePickerModalProps> = ({
     const query = activeQuery.trim()
     if (!query || loading) return
     runSearch(query)
+  }
+
+  const checkReleaseDescription = async (release: ReleaseSearchResult) => {
+    if (!release.detailsUrl || !window.electronAPI?.fetchReleaseDescription) return
+    const key = `${release.providerId}|${release.downloadUrl}`
+    setInspectionState((previous) => ({ ...previous, [key]: { loading: true } }))
+    try {
+      const description = await window.electronAPI.fetchReleaseDescription({ providerId: release.providerId, url: release.detailsUrl })
+      const before = classifyRelease(release.title, release.description)
+      const after = classifyRelease(release.title, description)
+      const addedAudioInfo = after.audioLabels.some((label) => !before.audioLabels.includes(label))
+      const addedSubtitleInfo = before.subtitleLabel == null && after.subtitleLabel != null
+      if (!addedAudioInfo && !addedSubtitleInfo) {
+        throw new Error('No additional explicit audio or subtitle information was found on this page.')
+      }
+      setResults((previous) => previous.map((item) => item.providerId === release.providerId && item.downloadUrl === release.downloadUrl
+        ? { ...item, description }
+        : item))
+      setInspectionState((previous) => ({ ...previous, [key]: {} }))
+    } catch (error) {
+      setInspectionState((previous) => ({
+        ...previous,
+        [key]: { error: error instanceof Error ? error.message : 'Could not inspect the release page.' },
+      }))
+    }
   }
 
   const renderQueryEditor = () => (
@@ -368,6 +432,38 @@ export const ReleasePickerModal: React.FC<ReleasePickerModalProps> = ({
           </div>
         )}
 
+        {!loading && results.length > 0 && (
+          <div className="flex flex-wrap items-center gap-2 px-5 pt-2">
+            <select
+              aria-label="Filter by release type"
+              value={typeFilter}
+              onChange={(event) => setTypeFilter(event.target.value as ReleaseTypeFilter)}
+              className="min-w-40 rounded-lg border border-white/10 bg-zinc-900 px-2.5 py-1.5 text-[11px] font-semibold text-zinc-200 outline-none focus:border-indigo-400/50"
+            >
+              {TYPE_FILTERS.map((option) => <option key={option.value} value={option.value}>{option.label}</option>)}
+            </select>
+            <select
+              aria-label="Filter by audio language"
+              value={audioFilter}
+              onChange={(event) => setAudioFilter(event.target.value as ReleaseLanguageFilter)}
+              className="min-w-36 rounded-lg border border-white/10 bg-zinc-900 px-2.5 py-1.5 text-[11px] font-semibold text-zinc-200 outline-none focus:border-indigo-400/50"
+            >
+              <option value="all">Any audio</option><option value="unknown">Audio not listed</option>
+              {TORRENT_LANGUAGES.map((option) => <option key={option.code} value={option.code}>{option.label} audio</option>)}
+            </select>
+            <select
+              aria-label="Filter by subtitle language"
+              value={subtitleFilter}
+              onChange={(event) => setSubtitleFilter(event.target.value as ReleaseLanguageFilter)}
+              className="min-w-36 rounded-lg border border-white/10 bg-zinc-900 px-2.5 py-1.5 text-[11px] font-semibold text-zinc-200 outline-none focus:border-indigo-400/50"
+            >
+              <option value="all">Any subtitles</option><option value="unknown">Subtitles not listed</option>
+              {TORRENT_LANGUAGES.map((option) => <option key={option.code} value={option.code}>{option.label} subtitles</option>)}
+            </select>
+            <span className="ml-auto text-[10px] text-zinc-500">Language filters use release title and details</span>
+          </div>
+        )}
+
         {/* Results */}
         <div className="min-h-0 flex-1 overflow-y-auto px-5 py-3">
           {loading ? (
@@ -452,8 +548,29 @@ export const ReleasePickerModal: React.FC<ReleasePickerModalProps> = ({
                 </div>
               ) : (
                 visible.map((item, index) => {
-                  const { result, parsed } = item
+                  const { result, parsed, classification } = item
                   const chips = buildReleaseChips(parsed)
+                  const inspectionKey = `${result.providerId}|${result.downloadUrl}`
+                  const inspection = inspectionState[inspectionKey]
+                  const needsInspection = classification.audioLabels.length === 0 || classification.subtitleLabel == null
+                  const languageBadges = classification.languageGroup === 'eng-dub-dubtitles'
+                    ? ['English Dub', 'Dubtitles']
+                    : classification.languageGroup === 'eng-dub-subs'
+                      ? ['English Dub', 'English Subs']
+                      : classification.languageGroup === 'eng-dub'
+                        ? ['English Dub']
+                        : classification.languageGroup === 'japanese'
+                          ? ['Japanese Audio']
+                          : classification.languageGroup === 'other'
+                            ? [...classification.audioLabels, ...(classification.subtitleLabel ? [classification.subtitleLabel] : [])]
+                            : []
+                  const languageBadgeClass = classification.rank <= 1
+                    ? 'border border-emerald-400/25 bg-emerald-500/15 text-emerald-200'
+                    : classification.languageGroup === 'eng-dub'
+                      ? 'border border-sky-400/25 bg-sky-500/15 text-sky-200'
+                      : classification.languageGroup === 'japanese'
+                        ? 'border border-violet-400/25 bg-violet-500/15 text-violet-200'
+                        : 'border border-amber-400/25 bg-amber-500/10 text-amber-200'
                   return (
                     <div
                       key={`${result.providerId}-${result.downloadUrl}-${index}`}
@@ -468,7 +585,21 @@ export const ReleasePickerModal: React.FC<ReleasePickerModalProps> = ({
                           >
                             {result.title}
                           </p>
-                          {chips.length > 0 && (
+                          {classification.hasLanguageInfo && (
+                            <div className="mt-1.5 flex flex-wrap items-center gap-1">
+                              {classification.kindLabel && (
+                                <span className="rounded border border-indigo-300/25 bg-indigo-500/15 px-1.5 py-0.5 text-[10px] font-bold text-indigo-200">
+                                  {classification.kindLabel}
+                                </span>
+                              )}
+                              {languageBadges.map((label) => (
+                                <span key={label} className={`rounded px-1.5 py-0.5 text-[10px] font-bold ${languageBadgeClass}`}>
+                                  {label}
+                                </span>
+                              ))}
+                            </div>
+                          )}
+                          {classification.hasLanguageInfo && chips.length > 0 && (
                             <div className="mt-1 flex flex-wrap items-center gap-1">
                               {chips.map((chip, chipIndex) => (
                                 <span
@@ -479,6 +610,12 @@ export const ReleasePickerModal: React.FC<ReleasePickerModalProps> = ({
                                 </span>
                               ))}
                             </div>
+                          )}
+                          {result.sizeWarning && (
+                            <p className="mt-1.5 flex items-center gap-1 text-[10px] font-semibold text-amber-300" title={result.sizeWarning}>
+                              <AlertTriangle className="h-3 w-3 shrink-0" />
+                              {result.sizeWarning}
+                            </p>
                           )}
                           <div className="mt-1 flex flex-wrap items-center gap-2 text-[11px]">
                             <span className="rounded bg-zinc-800 px-1.5 py-0.5 text-[10px] font-semibold text-zinc-400">
@@ -504,6 +641,19 @@ export const ReleasePickerModal: React.FC<ReleasePickerModalProps> = ({
                               {result.sizeBytes != null ? formatFileSize(result.sizeBytes) : '—'}
                             </span>
                           </div>
+                          {needsInspection && result.detailsUrl && (
+                            <div className="mt-1.5">
+                              <button
+                                type="button"
+                                disabled={inspection?.loading}
+                                onClick={(event) => { event.stopPropagation(); void checkReleaseDescription(result) }}
+                                className="rounded-md border border-indigo-400/25 bg-indigo-500/10 px-2 py-1 text-[10px] font-bold text-indigo-200 transition hover:bg-indigo-500/20 disabled:cursor-wait disabled:opacity-60"
+                              >
+                                {inspection?.loading ? 'Checking description…' : inspection?.error ? 'Retry description check' : 'Check release description'}
+                              </button>
+                              {inspection?.error && <p className="mt-1 text-[10px] leading-snug text-amber-300/90">{inspection.error}</p>}
+                            </div>
+                          )}
                         </div>
                         <button
                           type="button"

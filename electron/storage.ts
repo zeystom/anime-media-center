@@ -2,8 +2,9 @@ import fs from 'fs';
 import path from 'path';
 import { execSync } from 'child_process';
 import { app } from 'electron';
-import { AppSettings, PlaybackProgress, SeasonPreference } from './types';
+import { AnimeFolder, AppSettings, PlaybackProgress, SeasonPreference } from './types';
 import { registerMainServices } from './userDataBackup';
+import { resolveUserDataPath } from './userDataPath';
 
 /**
  * Object keys that must never be written through dynamic assignment when
@@ -11,6 +12,12 @@ import { registerMainServices } from './userDataBackup';
  * assignment like `out['__proto__'] = x` would mutate the prototype).
  */
 const UNSAFE_RECORD_KEYS = ['__proto__', 'constructor', 'prototype'];
+const TORRENT_LANGUAGE_CODES = new Set(['en', 'ja', 'de', 'fr', 'es', 'it', 'ru', 'pt', 'zh', 'ko']);
+
+function normalizeTorrentLanguages(value: unknown, fallback: string[]): string[] {
+  if (!Array.isArray(value)) return fallback;
+  return [...new Set(value.filter((language): language is string => typeof language === 'string' && TORRENT_LANGUAGE_CODES.has(language)))];
+}
 
 const exePathCache = new Map<string, { path: string | null; time: number }>();
 
@@ -206,6 +213,7 @@ export class StorageService {
   private settingsFile: string;
   private historyFile: string;
   private seasonRulesFile: string;
+  private libraryCacheFile: string;
 
   private cachedSettings: AppSettings | null = null;
   private settingsMtime: number = 0;
@@ -217,7 +225,7 @@ export class StorageService {
 
   constructor() {
     try {
-      this.baseDir = app ? app.getPath('userData') : path.join(process.env.APPDATA || '', 'anime-media-center');
+      this.baseDir = app ? resolveUserDataPath() : path.join(process.env.APPDATA || '', 'anime-media-center');
     } catch {
       this.baseDir = path.join(process.env.APPDATA || '', 'anime-media-center');
     }
@@ -229,6 +237,28 @@ export class StorageService {
     this.settingsFile = path.join(this.baseDir, 'settings.json');
     this.historyFile = path.join(this.baseDir, 'history.json');
     this.seasonRulesFile = path.join(this.baseDir, 'season-rules.json');
+    this.libraryCacheFile = path.join(this.baseDir, 'library-cache.json');
+  }
+
+  getLibraryCache(roots: string[]): AnimeFolder[] | null {
+    try {
+      if (!fs.existsSync(this.libraryCacheFile)) return null;
+      const parsed = JSON.parse(fs.readFileSync(this.libraryCacheFile, 'utf-8'));
+      const normalize = (items: string[]) => items.map((item) => path.resolve(item).toLowerCase()).sort();
+      if (!Array.isArray(parsed?.roots) || !Array.isArray(parsed?.folders)) return null;
+      if (JSON.stringify(normalize(parsed.roots)) !== JSON.stringify(normalize(roots))) return null;
+      return parsed.folders as AnimeFolder[];
+    } catch {
+      return null;
+    }
+  }
+
+  saveLibraryCache(roots: string[], folders: AnimeFolder[]): void {
+    try {
+      saveJsonSync(this.libraryCacheFile, { version: 1, roots, folders, savedAt: Date.now() });
+    } catch (error) {
+      console.warn('[Storage] Could not save library scan cache:', error);
+    }
   }
 
   getThumbnailDir(): string {
@@ -286,7 +316,21 @@ export class StorageService {
           ffmpegPath = autoDetectFfmpegPath(whisperPath);
         }
 
+        // Start from everything persisted on disk, then normalize the known
+        // fields below. The P2P block (enableP2P, p2pConsentAcceptedAt,
+        // rssProviders, limits, downloadTargetFolder) is intentionally not in
+        // the normalizer — rebuilding `res` from a fixed whitelist made every
+        // partial updateSettings() drop the other persisted blocks (provider
+        // and engine settings were lost after restart).
+        const persisted: Partial<AppSettings> =
+          parsed && typeof parsed === 'object' && !Array.isArray(parsed)
+            ? Object.fromEntries(
+                Object.entries(parsed).filter(([key]) => !UNSAFE_RECORD_KEYS.includes(key))
+              )
+            : {};
+
         const res: AppSettings = {
+          ...persisted,
           ffmpegPath,
           whisperPath,
           defaultLibraryRoot,
@@ -299,7 +343,9 @@ export class StorageService {
           subtitlesBgStyle: parsed.subtitlesBgStyle || 'none',
           subtitlesOutlineWidth: parsed.subtitlesOutlineWidth || 'thick',
           subtitlesOutlineColor: parsed.subtitlesOutlineColor || '#000000',
-          hideDownloadingAnime: parsed.hideDownloadingAnime ?? false,
+          releaseSelectionMode: parsed.releaseSelectionMode === 'manual' ? 'manual' : 'automatic',
+          preferredTorrentAudioLanguages: normalizeTorrentLanguages(parsed.preferredTorrentAudioLanguages, ['en']),
+          preferredTorrentSubtitleLanguages: normalizeTorrentLanguages(parsed.preferredTorrentSubtitleLanguages, ['en']),
         };
 
         this.cachedSettings = res;
@@ -327,7 +373,12 @@ export class StorageService {
       subtitlesBgStyle: 'none',
       subtitlesOutlineWidth: 'thick',
       subtitlesOutlineColor: '#000000',
-      hideDownloadingAnime: false,
+      releaseSelectionMode: 'automatic',
+      preferredTorrentAudioLanguages: ['en'],
+      preferredTorrentSubtitleLanguages: ['en'],
+      enableP2P: false,
+      p2pConsentAcceptedAt: null,
+      rssProviders: [],
     };
     this.cachedSettings = defaults;
     return defaults;
