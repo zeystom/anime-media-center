@@ -22,6 +22,8 @@ import { storage } from './storage.ts';
 import { runAniListQuery } from './anilist';
 import { getFribbIndex, lookupFribbIds } from './fribb.ts';
 
+const ANI_ZIP_CACHE_NORMALIZER_VERSION = 2;
+
 export interface RemoteEpisodeInfo {
   number: number;
   title: string | null;
@@ -67,7 +69,7 @@ const INCOMPLETE_REVALIDATE_AFTER_MS = 2 * 60 * 1000;
 // interleave official shorts/specials — e.g. AoT's "Chimi Chara Theater" rows —
 // into the main episode numbering. ani.zip/AniDB is curated and never does
 // this, so these patterns only gate rows SOURCED from platform listings.
-const JUNK_TITLE_RE = /chimi\s*chara|chibi\s*(?:chara|theater)|picture\s*drama/i;
+const JUNK_TITLE_RE = /chimi\s*chara|chibi\s*(?:chara|theater)|picture\s*drama|music\s*video/i;
 
 interface MemoryEpisodes {
   episodes: RemoteEpisodeInfo[];
@@ -139,8 +141,13 @@ export function normalizeAniZipEpisodes(payload: any): RemoteEpisodeInfo[] {
   const byNumber = new Map<number, RemoteEpisodeInfo>();
   for (const [key, ep] of source) {
     if (!ep || typeof ep !== 'object') continue;
-    const number = Number(ep.episodeNumber ?? ep.number ?? ep.episode ?? key);
-    if (!Number.isInteger(number) || number <= 0) continue;
+    // `episodeNumber` can be the absolute season number (12–22 for a cour
+    // split into a separate AniList entry). Prefer the entry's own number or
+    // map key so each part remains numbered 1..N in the UI.
+    const number = [ep.number, ep.episode, key, ep.episodeNumber]
+      .map((candidate) => Number(candidate))
+      .find((candidate) => Number.isInteger(candidate) && candidate > 0);
+    if (number == null) continue;
 
     const runtimeRaw = ep.runtime ?? ep.length;
     const runtime = Number(runtimeRaw);
@@ -163,7 +170,7 @@ export function normalizeAniZipEpisodes(payload: any): RemoteEpisodeInfo[] {
  * Reads the disk cache for an anilist ID. Returns { episodes, fetchedAt } or
  * null; never throws.
  */
-function readDiskCache(anilistId: number): { episodes: RemoteEpisodeInfo[]; fetchedAt: number; kitsuId?: string | null; episodeCount?: number | null; nextAiringAt: number | null } | null {
+function readDiskCache(anilistId: number): { episodes: RemoteEpisodeInfo[]; fetchedAt: number; kitsuId?: string | null; episodeCount?: number | null; normalizerVersion: number; nextAiringAt: number | null } | null {
   try {
     const cacheFile = path.join(storage.getMetadataCacheDir(), `anizip_${anilistId}.json`);
     if (!fs.existsSync(cacheFile)) return null;
@@ -179,7 +186,7 @@ function readDiskCache(anilistId: number): { episodes: RemoteEpisodeInfo[]; fetc
     const episodeCount = Number.isInteger(parsed.episodeCount) && parsed.episodeCount > 0 ? parsed.episodeCount : null;
     const nextAiringAt = typeof parsed.nextAiringAt === 'number' && parsed.nextAiringAt > 0 ? parsed.nextAiringAt : null;
     if (episodeCount) aniZipEpisodeCountCache.set(anilistId, episodeCount);
-    return { episodes, fetchedAt: parsed.fetchedAt, kitsuId, episodeCount, nextAiringAt };
+    return { episodes, fetchedAt: parsed.fetchedAt, kitsuId, episodeCount, normalizerVersion: Number.isInteger(parsed.normalizerVersion) ? parsed.normalizerVersion : 0, nextAiringAt };
   } catch {
     return null;
   }
@@ -275,6 +282,10 @@ interface AiringContextSnapshot {
    *  served-from-cache context can still validate a Kitsu mapping. */
   identityTitles: string[];
   identitySeason: number | null;
+  /** AniList episode titles/thumbnails are independent of the airing schedule.
+   *  Persist them too, so a fresh schedule cache never suppresses the query
+   *  that supplies episode artwork. `null` means this has not been fetched. */
+  streamEpisodes: { number: number; title: string | null; thumbnailUrl: string | null }[] | null;
 }
 
 function readAiringContext(anilistId: number): (AiringContextSnapshot & { fetchedAt: number }) | null {
@@ -296,6 +307,15 @@ function readAiringContext(anilistId: number): (AiringContextSnapshot & { fetche
       posterUrl: typeof parsed.posterUrl === 'string' && parsed.posterUrl ? parsed.posterUrl : null,
       identityTitles: Array.isArray(parsed.identityTitles) ? parsed.identityTitles.filter((t: unknown): t is string => typeof t === 'string' && !!t) : [],
       identitySeason: Number.isInteger(parsed.identitySeason) ? Number(parsed.identitySeason) : null,
+      streamEpisodes: Array.isArray(parsed.streamEpisodes)
+        ? parsed.streamEpisodes
+          .filter((episode: any) => Number.isInteger(episode?.number) && episode.number > 0)
+          .map((episode: any) => ({
+            number: Number(episode.number),
+            title: typeof episode.title === 'string' && episode.title ? episode.title : null,
+            thumbnailUrl: typeof episode.thumbnailUrl === 'string' && episode.thumbnailUrl ? episode.thumbnailUrl : null,
+          }))
+        : null,
       schedule,
       fetchedAt: parsed.fetchedAt,
     };
@@ -339,7 +359,7 @@ export async function fetchAniZipMappings(anilistId: number, options: { bypassCa
   if (disk?.kitsuId) kitsuIdMemoryCache.set(id, disk.kitsuId);
   if (disk?.episodeCount) aniZipEpisodeCountCache.set(id, disk.episodeCount);
   if (bypassCache && disk) disk.episodes = [];
-  if (!bypassCache && disk && cacheEntryFresh(disk) && snapshotServeable(disk.episodes, disk.fetchedAt)) {
+  if (!bypassCache && disk?.normalizerVersion === ANI_ZIP_CACHE_NORMALIZER_VERSION && cacheEntryFresh(disk) && snapshotServeable(disk.episodes, disk.fetchedAt)) {
     serveSourceById.set(id, 'cache');
     memoryCache.set(id, { episodes: disk.episodes, fetchedAt: disk.fetchedAt, nextAiringAt: disk.nextAiringAt });
     return disk.episodes;
@@ -361,7 +381,12 @@ export async function fetchAniZipMappings(anilistId: number, options: { bypassCa
       if (!res.ok) {
         throw new Error(`ani.zip returned HTTP ${res.status}`);
       }
-      const json = await res.json();
+      let json: any = await res.json();
+      // ani.zip currently responds with a JSON-encoded JSON string. `res.json()`
+      // parses only the outer layer, so decode the inner object as well.
+      if (typeof json === 'string') {
+        try { json = JSON.parse(json); } catch { /* keep malformed payload unhandled below */ }
+      }
       const episodes = normalizeAniZipEpisodes(json);
       const rawEpisodeCount = Number(json?.episodeCount);
       const episodeCount = Number.isInteger(rawEpisodeCount) && rawEpisodeCount > 0 ? rawEpisodeCount : null;
@@ -378,7 +403,7 @@ export async function fetchAniZipMappings(anilistId: number, options: { bypassCa
       try {
         fs.writeFileSync(
           path.join(storage.getMetadataCacheDir(), `anizip_${id}.json`),
-          JSON.stringify({ anilistId: id, fetchedAt: Date.now(), kitsuId: kitsuId || null, episodeCount, nextAiringAt: disk?.nextAiringAt ?? null, episodes }, null, 2),
+          JSON.stringify({ anilistId: id, fetchedAt: Date.now(), normalizerVersion: ANI_ZIP_CACHE_NORMALIZER_VERSION, kitsuId: kitsuId || null, episodeCount, nextAiringAt: disk?.nextAiringAt ?? null, episodes }, null, 2),
           'utf-8'
         );
       } catch {}
@@ -604,6 +629,9 @@ async function runRemoteEpisodesPipeline(anilistId: number, notify: (payload: Re
   // dates a year off). Rows airing far before the season start are junk.
   let seasonStartAt: number | null = cachedContext?.seasonStartAt ?? null;
   const streamEpisodes = new Map<number, { title: string | null; thumbnailUrl: string | null }>();
+  for (const episode of cachedContext?.streamEpisodes || []) {
+    streamEpisodes.set(episode.number, { title: episode.title, thumbnailUrl: episode.thumbnailUrl });
+  }
   // AniList's per-episode airing times (episode -> ms epoch, aired + future
   // slots). The schedule spine of the merge below — ani.zip only enriches it
   // (same approach as Hayase's makeEpisodeList).
@@ -618,7 +646,7 @@ async function runRemoteEpisodesPipeline(anilistId: number, notify: (payload: Re
   // (429 storms made every page crawl). Finished titles hold for the full TTL;
   // airing ones refresh exactly at the next airing slot (+ grace).
   const nowMs = Date.now();
-  const contextStands = !!cachedContext && (
+  const contextStands = !!cachedContext && cachedContext.streamEpisodes !== null && (
     cachedContext.nextAiringAt != null
       ? nowMs < cachedContext.nextAiringAt + AIRING_GRACE_MS
       : nowMs - cachedContext.fetchedAt < CACHE_TTL_MS
@@ -985,7 +1013,17 @@ async function runRemoteEpisodesPipeline(anilistId: number, notify: (payload: Re
     try {
       fs.writeFileSync(
         path.join(storage.getMetadataCacheDir(), `anizip_${id}.json`),
-        JSON.stringify({ anilistId: id, fetchedAt, kitsuId: kitsuId ?? null, episodeCount: maxEpisode, nextAiringAt, episodes: final.episodes }, null, 2),
+        JSON.stringify({
+          anilistId: id,
+          fetchedAt,
+          normalizerVersion: serveSourceById.get(id) === 'cache'
+            ? (readDiskCache(id)?.normalizerVersion ?? 0)
+            : ANI_ZIP_CACHE_NORMALIZER_VERSION,
+          kitsuId: kitsuId ?? null,
+          episodeCount: maxEpisode,
+          nextAiringAt,
+          episodes: final.episodes,
+        }, null, 2),
         'utf-8',
       );
     } catch {}
@@ -998,6 +1036,9 @@ async function runRemoteEpisodesPipeline(anilistId: number, notify: (payload: Re
     posterUrl: final.posterUrl,
     identityTitles: identity.titles,
     identitySeason: identity.season,
+    streamEpisodes: contextFailed
+      ? cachedContext?.streamEpisodes ?? null
+      : [...streamEpisodes].map(([number, episode]) => ({ number, ...episode })),
     schedule: [...scheduleByNumber].map(([episode, airingAt]) => ({ episode, airingAt })),
   });
   pushBest();

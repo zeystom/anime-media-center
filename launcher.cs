@@ -111,39 +111,24 @@ namespace Kaiko
         {
             try
             {
-                string desktop = Environment.GetFolderPath(Environment.SpecialFolder.DesktopDirectory);
-                string startMenu = Environment.GetFolderPath(Environment.SpecialFolder.Programs);
-
-                string desktopLnk = Path.Combine(desktop, "Kaiko.lnk");
-                string startMenuLnk = Path.Combine(startMenu, "Kaiko.lnk");
-
-                if ((!File.Exists(desktopLnk) && Directory.Exists(desktop)) ||
-                    (!File.Exists(startMenuLnk) && Directory.Exists(startMenu)))
+                // Refresh both links on launch so an older shortcut without the
+                // matching AppUserModelID cannot make Windows label the taskbar
+                // button as Electron.
+                string scriptPath = Path.Combine(appDir, "install-shortcuts.ps1");
+                if (File.Exists(scriptPath))
                 {
-                    Type shellType = Type.GetTypeFromProgID("WScript.Shell");
-                    if (shellType != null)
+                    ProcessStartInfo shortcutInfo = new ProcessStartInfo(
+                        "powershell.exe",
+                        "-NoProfile -ExecutionPolicy Bypass -File \"" + scriptPath + "\"")
                     {
-                        dynamic shell = Activator.CreateInstance(shellType);
-
-                        if (!File.Exists(desktopLnk) && Directory.Exists(desktop))
-                        {
-                            dynamic sc = shell.CreateShortcut(desktopLnk);
-                            sc.TargetPath = exePath;
-                            sc.WorkingDirectory = appDir;
-                            if (File.Exists(iconPath)) sc.IconLocation = iconPath + ",0";
-                            sc.Description = "Kaiko anime library and media center";
-                            sc.Save();
-                        }
-
-                        if (!File.Exists(startMenuLnk) && Directory.Exists(startMenu))
-                        {
-                            dynamic sc = shell.CreateShortcut(startMenuLnk);
-                            sc.TargetPath = exePath;
-                            sc.WorkingDirectory = appDir;
-                            if (File.Exists(iconPath)) sc.IconLocation = iconPath + ",0";
-                            sc.Description = "Kaiko anime library and media center";
-                            sc.Save();
-                        }
+                        WorkingDirectory = appDir,
+                        UseShellExecute = false,
+                        CreateNoWindow = true,
+                        WindowStyle = ProcessWindowStyle.Hidden
+                    };
+                    using (Process shortcutProcess = Process.Start(shortcutInfo))
+                    {
+                        if (shortcutProcess != null) shortcutProcess.WaitForExit(10000);
                     }
                 }
             }

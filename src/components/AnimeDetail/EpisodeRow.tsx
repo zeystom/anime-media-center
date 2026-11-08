@@ -52,7 +52,7 @@ function fileProgressForEpisode(job: TorrentJob | undefined, episodeNumber: numb
 
 /** 16:9 episode tile shared visually with Library, with local and torrent state. */
 export const EpisodeRow: React.FC<EpisodeRowProps> = ({
-  number, title, isFeatureFilm = false, thumbnailUrl, fallbackThumbnailUrl, airDate, local, remoteOnly = false, unaired = false, ongoing = false, watched = false,
+  number, title, isFeatureFilm = false, thumbnailUrl, fallbackThumbnailUrl, airDate, local, remoteOnly = false, unaired = false, watched = false,
   isDownloading = false, downloadProgress, playbackProgress, torrentJob, queuedForSearch = false,
   onPlay, onWhisper, onDownload, onDownloadLongPress, downloadRoots = [], selectedDownloadRoot, onSelectDownloadRoot, onDelete,
 }) => {
@@ -170,6 +170,26 @@ export const EpisodeRow: React.FC<EpisodeRowProps> = ({
         {playbackProgress && playbackProgress.currentTime > 0 && downloaded && !downloadActive && (
           <div className="absolute bottom-0 left-0 right-0 h-1.5 bg-black/60"><div className={`h-full ${playbackProgress.completed ? 'bg-emerald-400' : 'bg-rose-500'}`} style={{ width: `${watchedPercent}%` }} /></div>
         )}
+
+        {!isFeatureFilm && (playbackProgress?.currentTime || local?.duration || local?.hasExternalSrt || local?.hasEmbeddedDubtitles || local?.hasEmbeddedSubtitles) && (
+          <div className="pointer-events-none absolute left-3 top-3 z-10 flex max-w-[calc(100%-1.5rem)] items-center gap-1.5">
+            {(local?.hasEmbeddedDubtitles || local?.hasEmbeddedSubtitles || local?.hasExternalSrt) && (
+              <span className={`inline-flex shrink-0 items-center gap-1 rounded-md border px-1.5 py-1 text-[10px] font-semibold shadow-sm backdrop-blur-md ${local.hasEmbeddedDubtitles ? 'border-purple-200/25 bg-[#17121f]/85 text-purple-100' : 'border-emerald-200/25 bg-[#101b19]/85 text-emerald-100'}`}>
+                <Subtitles className="h-3 w-3" />
+                {local.hasEmbeddedDubtitles ? 'Dub Sub' : local.hasEmbeddedSubtitles ? 'Sub' : 'Ext Sub'}
+              </span>
+            )}
+            {playbackProgress?.currentTime ? (
+              <span className="truncate rounded-md border border-white/15 bg-black/75 px-1.5 py-1 font-mono text-[10px] font-medium text-white shadow-sm backdrop-blur-md">
+                {formatTime(playbackProgress.currentTime)} / {formatTime(playbackProgress.duration || local?.duration || 0)}
+              </span>
+            ) : local?.duration ? (
+              <span className="inline-flex shrink-0 items-center gap-1 rounded-md border border-white/15 bg-black/75 px-1.5 py-1 font-mono text-[10px] font-medium text-white shadow-sm backdrop-blur-md">
+                <Clock3 className="h-3 w-3" />{formatTime(local.duration)}
+              </span>
+            ) : null}
+          </div>
+        )}
       </div>
 
       {isFeatureFilm ? (
@@ -211,11 +231,14 @@ export const EpisodeRow: React.FC<EpisodeRowProps> = ({
       ) : (
         <div className="p-3">
           <h3 className="line-clamp-1 min-h-5 text-xs font-semibold text-zinc-100" title={displayTitle}>{displayTitle}</h3>
+          {relativeAir && (
+            <p className={`mt-1 truncate text-[10px] font-medium ${relativeAir.future ? 'text-cyan-200/80' : 'text-zinc-400'}`} title={airDateLabel || undefined}>
+              {relativeAir.future ? `Airs ${relativeAir.label}` : `Aired ${relativeAir.label}`}
+            </p>
+          )}
           <div className="mt-2 flex min-h-5 items-center justify-between gap-2 text-[10px]">
             <div className="flex min-w-0 items-center gap-1.5">
-              {local?.hasEmbeddedDubtitles && <span className="inline-flex items-center gap-1 rounded border border-purple-400/30 bg-purple-400/10 px-1.5 py-0.5 text-purple-200"><Subtitles className="h-3 w-3" />Dub Sub</span>}
-              {local?.hasEmbeddedSubtitles && !local.hasEmbeddedDubtitles && <span className="inline-flex items-center gap-1 rounded border border-emerald-400/25 bg-emerald-400/10 px-1.5 py-0.5 text-emerald-200"><Subtitles className="h-3 w-3" />Sub</span>}
-              {watched ? <span className="inline-flex items-center gap-1 text-emerald-300"><CheckCircle2 className="h-3 w-3" />Watched</span> : playbackProgress?.currentTime ? <span className="truncate font-mono text-zinc-300">{formatTime(playbackProgress.currentTime)} / {formatTime(playbackProgress.duration || local?.duration || 0)}</span> : local || downloaded ? <span className="text-zinc-400">Downloaded</span> : unaired ? <span className="text-zinc-500" title={airDateLabel || undefined}>{relativeAir?.future ? relativeAir.label : `Airs ${airDateLabel || 'soon'}`}</span> : ongoing && relativeAir && !relativeAir.future ? <span className="text-zinc-500" title={airDateLabel || undefined}>{relativeAir.label}</span> : remoteOnly ? <span className="text-zinc-500">Not downloaded</span> : null}
+              {watched ? <span className="inline-flex items-center gap-1 text-emerald-300"><CheckCircle2 className="h-3 w-3" />Watched</span> : local || downloaded ? <span className="text-zinc-400">Downloaded</span> : unaired && !relativeAir ? <span className="text-zinc-500" title={airDateLabel || undefined}>Airs soon</span> : remoteOnly ? <span className="text-zinc-500">Not downloaded</span> : null}
             </div>
             <div className="flex shrink-0 items-center gap-1">
               {onWhisper && <button type="button" onClick={onWhisper} title="Generate subtitles" className="flex h-7 w-7 items-center justify-center rounded-full border border-indigo-400/25 text-indigo-200 transition hover:bg-indigo-400/15"><Wand2 className="h-3.5 w-3.5" /></button>}

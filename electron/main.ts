@@ -312,6 +312,15 @@ async function createWindow() {
         backgroundThrottling: false,
       },
     });
+    if (process.platform === 'win32' && appIcon) {
+      const relaunchPath = app.isPackaged ? process.execPath : path.join(app.getAppPath(), 'Kaiko.exe');
+      mainWindow.setAppDetails({
+        appId: 'com.animemediacenter.app',
+        appIconPath: appIcon,
+        relaunchCommand: `"${relaunchPath}"`,
+        relaunchDisplayName: 'Kaiko',
+      });
+    }
     // Bootstrap already sized the reused window to the display work area.
     // Maximizing a hidden HWND here can expose it before Chromium paints.
 

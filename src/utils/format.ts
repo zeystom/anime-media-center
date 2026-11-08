@@ -43,7 +43,7 @@ export interface RelativeAirDate {
 }
 
 /**
- * Human-relative airing time for ongoing shows: "23 hours ago" for aired
+ * Human-relative airing time: "23 hours ago" / "2 weeks ago" for aired
  * episodes, "in 6 days" for upcoming ones (like AniList's episode list).
  * Returns null when the date is missing or unparseable.
  */
@@ -66,10 +66,12 @@ export function formatRelativeAirDate(airDate: string | null | undefined, now = 
     label = span(Math.round(abs / HOUR), 'hour');
   } else if (abs < WEEK) {
     label = span(Math.round(abs / DAY), 'day');
-  } else if (abs < MONTH) {
+  } else if (abs < MONTH * 12) {
     label = span(Math.round(abs / WEEK), 'week');
-  } else {
+  } else if (abs < MONTH * 24) {
     label = span(Math.round(abs / MONTH), 'month');
+  } else {
+    label = span(Math.round(abs / (MONTH * 12)), 'year');
   }
   return diff >= 0 ? { label: `in ${label}`, future: true } : { label: `${label} ago`, future: false };
 }

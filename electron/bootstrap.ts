@@ -19,6 +19,13 @@ app.commandLine.appendSwitch('ignore-gpu-blocklist');
 app.commandLine.appendSwitch('disable-backgrounding-occluded-windows');
 app.commandLine.appendSwitch('disable-renderer-backgrounding');
 
+// Electron inherits its executable name in the Windows taskbar context menu
+// during development unless the branded app name/AUMID are set before startup.
+app.setName('Kaiko');
+if (process.platform === 'win32') {
+  app.setAppUserModelId('com.animemediacenter.app');
+}
+
 if (!app.requestSingleInstanceLock()) {
   app.quit();
 } else {
@@ -61,6 +68,15 @@ if (!app.requestSingleInstanceLock()) {
         backgroundThrottling: false,
       },
     });
+    if (process.platform === 'win32') {
+      const relaunchPath = app.isPackaged ? process.execPath : path.join(app.getAppPath(), 'Kaiko.exe');
+      splash.setAppDetails({
+        appId: 'com.animemediacenter.app',
+        appIconPath: icon,
+        relaunchCommand: `"${relaunchPath}"`,
+        relaunchDisplayName: 'Kaiko',
+      });
+    }
     splash.setMenu(null);
     splash.removeMenu();
     // Opacity is zero from construction, so maximize can establish the final

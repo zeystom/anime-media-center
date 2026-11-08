@@ -988,7 +988,6 @@ export const AnimeDetailView: React.FC<AnimeDetailViewProps> = ({
 
   const showBanner = !!hero.bannerUrl && !bgFailed
   const showPoster = !!hero.posterUrl && !posterFailed
-  const singleFileMovie = isFeatureFilm && localRows.length === 1
   const reportBackdropProgress = (container: HTMLDivElement) => {
     const heroElement = container.querySelector<HTMLElement>('[data-backdrop-hero]')
     if (!heroElement) {
@@ -1210,11 +1209,11 @@ export const AnimeDetailView: React.FC<AnimeDetailViewProps> = ({
 
             {/* Actions row */}
             <div className="mt-6 flex flex-wrap items-center gap-3 sm:mt-auto sm:pt-6">
-              {!singleFileMovie && <button
+              <button
                 type="button"
                 onClick={handlePlayResume}
                 disabled={!resumeEpisode}
-                title={resumeEpisode ? 'Play the first unwatched local episode' : 'No local episodes on this PC yet'}
+                title={resumeEpisode ? (isFeatureFilm ? 'Play or resume this movie' : 'Play the first unwatched local episode') : 'No local episodes on this PC yet'}
                 className={`flex select-none items-center gap-2 rounded-xl px-6 py-3 text-sm font-bold shadow-lg transition-all active:scale-[0.98] ${
                   resumeEpisode
                   ? 'text-white hover:scale-[1.02]'
@@ -1224,9 +1223,9 @@ export const AnimeDetailView: React.FC<AnimeDetailViewProps> = ({
               >
                 <Play className="h-4 w-4 fill-current" />
                 <span>
-                  {resumeStartAt && resumeProgress ? `Resume from ${formatTime(resumeProgress.currentTime)}` : 'Play'}
+                  {resumeStartAt && resumeProgress ? `Resume from ${formatTime(resumeProgress.currentTime)}` : isFeatureFilm ? 'Play movie' : 'Play'}
                 </span>
-              </button>}
+              </button>
 
               {anilistId != null && followEligible && (
                 <button
@@ -1279,7 +1278,7 @@ export const AnimeDetailView: React.FC<AnimeDetailViewProps> = ({
                     className={`flex select-none items-center gap-2 border border-cyan-400/30 bg-cyan-400/10 px-4 py-3 text-xs font-bold text-cyan-200 transition-all hover:bg-cyan-400/20 disabled:cursor-default disabled:opacity-60 ${downloadRoots.length > 1 ? 'rounded-l-xl border-r-0' : 'rounded-xl'}`}
                   >
                     {downloadedSeason ? <CheckCircle className="h-4 w-4" /> : <Download className="h-4 w-4" />}
-                    <span>{queueing ? 'Searching…' : downloadedSeason ? 'Season downloaded' : 'Download season'}</span>
+                    <span>{queueing ? 'Searching…' : downloadedSeason ? (isFeatureFilm ? 'Movie downloaded' : 'Season downloaded') : isFeatureFilm ? 'Download movie' : 'Download season'}</span>
                   </DownloadActionButton>
                   {downloadRoots.length > 1 && (
                     <>
@@ -1320,7 +1319,7 @@ export const AnimeDetailView: React.FC<AnimeDetailViewProps> = ({
                   className="flex cursor-not-allowed select-none items-center gap-2 rounded-xl border border-zinc-700/40 bg-zinc-800/40 px-4 py-3 text-xs font-bold text-zinc-500 opacity-70"
                 >
                   <Download className="h-4 w-4" />
-                  <span>Download season</span>
+                  <span>{isFeatureFilm ? 'Download movie' : 'Download season'}</span>
                 </button>
               )}
             </div>
@@ -1363,7 +1362,9 @@ export const AnimeDetailView: React.FC<AnimeDetailViewProps> = ({
         </div>
       </div>
 
-      {/* Episode list */}
+      {/* Movies use the hero Play/Resume action; an episode-style movie card
+          only repeats the same action and creates a one-item section. */}
+      {!isFeatureFilm && <>
       <section
         ref={episodesSectionRef}
         className="mx-auto w-full max-w-7xl scroll-mt-4 px-6 pb-16"
@@ -1389,19 +1390,8 @@ export const AnimeDetailView: React.FC<AnimeDetailViewProps> = ({
           </p>
         ) : (
           <>
-            <div className={singleFileMovie ? 'flex' : `grid gap-3 ${isFeatureFilm ? 'grid-cols-1' : 'grid-cols-1 sm:grid-cols-2 xl:grid-cols-3 2xl:grid-cols-4'}`}>
-              {singleFileMovie ? (
-                <button
-                  type="button"
-                  onClick={handlePlayResume}
-                  disabled={!resumeEpisode}
-                  className="inline-flex items-center gap-2.5 rounded-xl px-6 py-3.5 text-sm font-bold text-white shadow-lg transition hover:-translate-y-0.5 hover:brightness-110 disabled:cursor-not-allowed disabled:opacity-50"
-                  style={{ background: `linear-gradient(110deg, hsl(${themeHue} 72% 48%), hsl(${(themeHue + 24) % 360} 82% 60%))`, boxShadow: `0 12px 30px hsla(${themeHue}, 70%, 45%, .28)` }}
-                >
-                  <Play className="h-4 w-4 fill-current" />
-                  {resumeStartAt ? 'Resume movie' : 'Play movie'}
-                </button>
-              ) : visibleEpisodeRows.map((row) => {
+            <div className="grid gap-3 grid-cols-1 sm:grid-cols-2 xl:grid-cols-3 2xl:grid-cols-4">
+              {visibleEpisodeRows.map((row) => {
                 const local = row.local
                 const progress = local ? history[local.filePath] : undefined
                 const startAt =
@@ -1496,6 +1486,7 @@ export const AnimeDetailView: React.FC<AnimeDetailViewProps> = ({
           </>
         )}
       </section>
+      </>}
 
       <section className="mx-auto w-full max-w-7xl px-6 pb-16">
         <div className="mb-4 flex items-end justify-between gap-4">
