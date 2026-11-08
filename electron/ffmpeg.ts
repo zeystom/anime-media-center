@@ -753,16 +753,27 @@ export async function extractEmbeddedFonts(
     fs.mkdirSync(fontsDir, { recursive: true });
   }
 
+  // Remember successful scans even when the file contains no attachments.
+  // Without this marker a fontless MKV launches FFmpeg on every player open.
+  const scanCompleteMarker = path.join(fontsDir, '.scan-complete');
+
   // Check if fonts are already extracted
   const existingFiles = fs.readdirSync(fontsDir).filter((f) => /\.(ttf|otf|ttc|woff2?)$/i.test(f));
-  if (existingFiles.length === 0) {
+  if (existingFiles.length === 0 && !fs.existsSync(scanCompleteMarker)) {
     await new Promise<void>((resolve) => {
       const p = spawn(
         ffmpegPath,
         ['-hide_banner', '-y', '-dump_attachment:t', '', '-i', filePath, '-vn', '-an', '-t', '0', '-f', 'null', '-'],
         { cwd: fontsDir, windowsHide: true, stdio: ['ignore', 'ignore', 'ignore'] }
       );
-      p.on('close', () => resolve());
+      p.on('close', (code) => {
+        if (code === 0) {
+          try {
+            fs.writeFileSync(scanCompleteMarker, 'ok');
+          } catch {}
+        }
+        resolve();
+      });
       p.on('error', () => resolve());
     });
   }

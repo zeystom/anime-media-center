@@ -5,7 +5,7 @@ import { fileURLToPath } from 'url';
 import { storage, autoDetectFfmpegPath, autoDetectWhisperPath } from './storage';
 import { resolveUserDataPath } from './userDataPath';
 import { streamServer } from './server';
-import { probeMkv, extractEmbeddedSubtitle, extractEmbeddedAss, extractEmbeddedFonts, filterFontsForAss, parseSrt, findPrecedingKeyframe, readMkvEmbeddedTitle, readContainerDuration, cleanupOldCaches } from './ffmpeg';
+import { probeMkv, extractEmbeddedSubtitle, extractEmbeddedAss, extractEmbeddedFonts, filterFontsForAss, parseSrt, readMkvEmbeddedTitle, readContainerDuration, cleanupOldCaches } from './ffmpeg';
 import { whisperManager } from './whisper';
 import { findExternalSubtitles } from './subtitles';
 import { AnimeFolder, Episode, PlaybackProgress, SeasonPreference, VIDEO_EXTENSIONS, ReleaseSearchResult, ProviderReport, DiscoverCatalogParams } from './types';
@@ -672,7 +672,7 @@ function setupIpcHandlers() {
     const port = streamServer.getPort();
 
     if (isExternal && externalPath && fs.existsSync(externalPath)) {
-      const content = fs.readFileSync(externalPath, 'utf-8');
+      const content = await fs.promises.readFile(externalPath, 'utf-8');
       const ext = path.extname(externalPath).toLowerCase();
       if (ext === '.ass' || ext === '.ssa') {
         const rawFonts = await extractEmbeddedFonts(filePath, settings.ffmpegPath, port);
@@ -747,8 +747,10 @@ function setupIpcHandlers() {
   });
 
   ipcMain.handle('get-stream-url', async (_event, filePath: string, audioTrackIndex: number, startTime: number) => {
-    const settings = storage.getSettings();
-    const actualStartTime = await findPrecedingKeyframe(filePath, startTime, settings.ffmpegPath);
+    // FFmpeg already seeks to the closest preceding keyframe when the stream
+    // starts. Spawning a second FFmpeg process to probe that keyframe made
+    // every button/timeline seek wait on disk and often returned bad PTS math.
+    const actualStartTime = Math.max(0, Number.isFinite(startTime) ? startTime : 0);
     const port = streamServer.getPort();
     // Pass the keyframe-aligned actualStartTime to the server, not the raw startTime.
     // This ensures FFmpeg seeks to the exact same keyframe that actualStartTime represents,

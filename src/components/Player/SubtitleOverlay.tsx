@@ -1,6 +1,42 @@
 import React, { useMemo } from 'react';
 import { SubtitleCue } from '../../types';
 
+interface CueIndex {
+  cues: SubtitleCue[];
+  prefixMaxEnd: number[];
+}
+
+function buildCueIndex(cues: SubtitleCue[]): CueIndex {
+  const sorted = [...cues].sort((a, b) => a.start - b.start);
+  const prefixMaxEnd: number[] = [];
+  let maxEnd = -Infinity;
+  for (let i = 0; i < sorted.length; i += 1) {
+    maxEnd = Math.max(maxEnd, sorted[i].end);
+    prefixMaxEnd.push(maxEnd);
+  }
+  return { cues: sorted, prefixMaxEnd };
+}
+
+function findActiveCues(index: CueIndex, time: number, limit: number): SubtitleCue[] {
+  const { cues, prefixMaxEnd } = index;
+  let low = 0;
+  let high = cues.length;
+  while (low < high) {
+    const mid = (low + high) >>> 1;
+    if (cues[mid].start <= time) low = mid + 1;
+    else high = mid;
+  }
+
+  const found: SubtitleCue[] = [];
+  for (let i = low - 1; i >= 0 && found.length < limit; i -= 1) {
+    // Since this is a prefix maximum, no earlier cue can still be active.
+    if (prefixMaxEnd[i] < time) break;
+    const cue = cues[i];
+    if (time <= cue.end) found.push(cue);
+  }
+  return found.reverse();
+}
+
 interface SubtitleOverlayProps {
   currentTime: number;
   mainCues: SubtitleCue[];
@@ -95,20 +131,20 @@ export const SubtitleOverlay: React.FC<SubtitleOverlayProps> = ({
 }) => {
   // Apply sync offset to current playback time
   const adjustedTime = currentTime + syncOffset;
+  const mainCueIndex = useMemo(() => buildCueIndex(mainCues || []), [mainCues]);
+  const topCueIndex = useMemo(() => buildCueIndex(topCues || []), [topCues]);
 
-  // Find all active main dialogue cues (Bottom, up to 3 overlapping cues)
+  // Binary search the cue timeline instead of scanning every subtitle on each update.
   const activeMainCues = useMemo(() => {
-    if (!mainCues || mainCues.length === 0) return [];
-    return mainCues
-      .filter((cue) => adjustedTime >= cue.start && adjustedTime <= cue.end)
-      .slice(0, 3);
-  }, [mainCues, adjustedTime]);
+    if (mainCueIndex.cues.length === 0) return [];
+    return findActiveCues(mainCueIndex, adjustedTime, 3);
+  }, [mainCueIndex, adjustedTime]);
 
   // Find active signs/forced cue (Top)
   const activeTopCue = useMemo(() => {
-    if (!topSubEnabled || !topCues || topCues.length === 0) return null;
-    return topCues.find(cue => adjustedTime >= cue.start && adjustedTime <= cue.end);
-  }, [topCues, adjustedTime, topSubEnabled]);
+    if (!topSubEnabled || topCueIndex.cues.length === 0) return null;
+    return findActiveCues(topCueIndex, adjustedTime, 1)[0] || null;
+  }, [topCueIndex, adjustedTime, topSubEnabled]);
 
   // Background style classes
   const bgClass = useMemo(() => {

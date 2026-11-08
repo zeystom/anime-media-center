@@ -6,6 +6,8 @@ import { formatTime, cleanEpisodeTitle, cleanSeriesTitle, formatEpisodeDisplayTi
 interface EpisodeDrawerProps {
   isOpen: boolean;
   onClose: () => void;
+  closeOnBackdrop: boolean;
+  closeOnMouseLeave: boolean;
   episodes: Episode[];
   currentEpisode: Episode;
   history: Record<string, PlaybackProgress>;
@@ -157,6 +159,8 @@ const EpisodeDrawerItem: React.FC<EpisodeItemProps> = ({
 export const EpisodeDrawer: React.FC<EpisodeDrawerProps> = ({
   isOpen,
   onClose,
+  closeOnBackdrop,
+  closeOnMouseLeave,
   episodes,
   currentEpisode,
   history,
@@ -203,13 +207,14 @@ export const EpisodeDrawer: React.FC<EpisodeDrawerProps> = ({
       className={`fixed inset-0 z-50 flex justify-end bg-black/80 backdrop-blur-sm transition-opacity duration-300 ease-out select-none ${
         isOpen ? 'opacity-100 pointer-events-auto' : 'opacity-0 pointer-events-none'
       }`}
-      onClick={onClose}
+      onClick={closeOnBackdrop ? onClose : undefined}
     >
       <div
         className={`w-full sm:max-w-md md:max-w-[480px] h-full bg-[#101014]/95 backdrop-blur-2xl border-l border-white/10 p-6 flex flex-col shadow-[-25px_0_60px_rgba(0,0,0,0.85)] transition-transform duration-400 ease-[cubic-bezier(0.16,1,0.3,1)] transform ${
           isOpen ? 'translate-x-0' : 'translate-x-full'
         }`}
         onClick={(e) => e.stopPropagation()}
+        onMouseLeave={closeOnMouseLeave ? onClose : undefined}
       >
         {/* Header */}
         <div className="flex items-center justify-between pb-4 border-b border-zinc-800/80">

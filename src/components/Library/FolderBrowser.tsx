@@ -14,8 +14,10 @@ interface FolderBrowserProps {
   onChangeRoot?: () => void;
   onRefresh: () => void;
   /** Card click navigates to the unified title page — episodes live there. */
-  onOpenFolderDetails: (folder: AnimeFolder) => void;
+  onOpenFolderDetails: (folder: AnimeFolder, collectionOnly?: boolean) => void;
 }
+
+type LibraryAnimeFolder = AnimeFolder & { collectionOnly?: boolean };
 
 type SortMode = 'recent' | 'title' | 'score' | 'episodes' | 'size';
 type CollectionFilter = 'all' | 'favourites' | 'followed' | 'watching';
@@ -94,10 +96,55 @@ export const FolderBrowser: React.FC<FolderBrowserProps> = ({
   const isFavourite = (folder: AnimeFolder) => favouriteAnime.some((item) => matchesAnime(folder, item));
   const isFollowed = (folder: AnimeFolder) => followedAnime.some((item) => matchesAnime(folder, { ...item, titleKey: titleKey(item.title) }));
 
+  // Build the visible collection from both on-disk titles and saved collection
+  // entries. Favourites/follows are user data, so deleting local video files
+  // must not remove the title from Library.
+  const libraryFolders = useMemo<LibraryAnimeFolder[]>(() => {
+    const savedOnly = new Map<string, LibraryAnimeFolder>();
+    const hasLocalMatch = (item: { anilistId: number | null; title: string }) => folders.some((folder) =>
+      (item.anilistId != null && folder.anilistId === item.anilistId) ||
+      titleKey(folder.canonicalTitle || folder.folderName) === titleKey(item.title)
+    );
+    const addSaved = (item: { anilistId: number | null; title: string; posterUrl: string | null; episodesCount?: number | null }) => {
+      if (!item.title.trim() || hasLocalMatch(item)) return;
+      const normalizedTitle = titleKey(item.title);
+      const existing = [...savedOnly.values()].find((folder) =>
+        (item.anilistId != null && folder.anilistId === item.anilistId) ||
+        titleKey(folder.canonicalTitle || folder.folderName) === normalizedTitle
+      );
+      if (existing) {
+        if (!existing.anilistId && item.anilistId != null) existing.anilistId = item.anilistId;
+        if (!existing.posterUrl && item.posterUrl) existing.posterUrl = item.posterUrl;
+        existing.totalEpisodes = Math.max(existing.totalEpisodes || 0, item.episodesCount || 0);
+        return;
+      }
+      const idKey = item.anilistId != null ? `id-${item.anilistId}` : `title-${normalizedTitle}`;
+      savedOnly.set(idKey, {
+        folderPath: `kaiko-collection:${idKey}`,
+        folderName: item.title,
+        canonicalTitle: item.title,
+        anilistId: item.anilistId ?? undefined,
+        posterUrl: item.posterUrl,
+        bannerUrl: null,
+        synopsis: null,
+        genres: [],
+        averageScore: null,
+        episodes: [],
+        totalEpisodes: item.episodesCount || 0,
+        hasSubtitlesCount: 0,
+        collectionOnly: true,
+      });
+    };
+
+    favouriteAnime.forEach((item) => addSaved(item));
+    followedAnime.forEach((item) => addSaved(item));
+    return [...folders, ...savedOnly.values()];
+  }, [folders, favouriteAnime, followedAnime]);
+
   // Live real-time filter across folder titles, canonical API titles, and genres
   const filteredFolders = useMemo(() => {
     const q = searchQuery.toLowerCase().trim();
-    return folders.filter((f) => {
+    return libraryFolders.filter((f) => {
       const stat = folderWatchStats(f, history);
       if (collectionFilter === 'favourites' && !isFavourite(f)) return false;
       if (collectionFilter === 'followed' && !isFollowed(f)) return false;
@@ -109,7 +156,7 @@ export const FolderBrowser: React.FC<FolderBrowserProps> = ({
       const genresMatch = (f.genres || []).some((g) => g.toLowerCase().includes(q));
       return canonical.includes(q) || cleaned.includes(q) || raw.includes(q) || genresMatch;
     });
-  }, [folders, history, searchQuery, collectionFilter, favouriteAnime, followedAnime]);
+  }, [libraryFolders, history, searchQuery, collectionFilter, favouriteAnime, followedAnime]);
 
   const stats = useMemo(() => {
     let episodes = 0;
@@ -118,7 +165,7 @@ export const FolderBrowser: React.FC<FolderBrowserProps> = ({
     let watching = 0;
     let favourites = 0;
     let followed = 0;
-    for (const folder of folders) {
+    for (const folder of libraryFolders) {
       const stat = folderWatchStats(folder, history);
       episodes += folder.episodes.length;
       sizeBytes += stat.sizeBytes;
@@ -128,7 +175,7 @@ export const FolderBrowser: React.FC<FolderBrowserProps> = ({
       else if (stat.started) watching += 1;
     }
     return { episodes, sizeBytes, finished, watching, favourites, followed };
-  }, [folders, history, favouriteAnime, followedAnime]);
+  }, [libraryFolders, history, favouriteAnime, followedAnime]);
 
   const sortedFolders = useMemo(() => {
     const list = [...filteredFolders];
@@ -163,7 +210,7 @@ export const FolderBrowser: React.FC<FolderBrowserProps> = ({
         </div>
       </section>
 
-      {folders.length === 0 ? (
+      {libraryFolders.length === 0 ? (
         <div className="flex flex-col items-center justify-center rounded-2xl border border-zinc-800/80 bg-zinc-900/40 p-16 text-center shadow-lg">
           <FolderOpen className="w-12 h-12 text-zinc-600 mb-4" />
           <h3 className="text-lg font-bold text-zinc-200">Your library is empty</h3>
@@ -190,7 +237,7 @@ export const FolderBrowser: React.FC<FolderBrowserProps> = ({
                   <Film className="h-5 w-5 text-violet-300" />
                   <span>Anime Collection</span>
                   <span className="rounded-full border border-violet-300/20 bg-violet-300/10 px-2.5 py-1 font-mono text-xs font-semibold text-violet-200">
-                    {folders.length}
+                    {libraryFolders.length}
                   </span>
                 </h3>
                 <button
@@ -212,7 +259,7 @@ export const FolderBrowser: React.FC<FolderBrowserProps> = ({
                 <span aria-hidden="true" className="mx-1 h-5 w-px bg-white/15" />
                 <div role="group" aria-label="Filter anime collection" className="inline-flex flex-wrap items-center gap-1 rounded-xl border border-white/[0.08] bg-black/25 p-1">
                   {([
-                    ['all', 'All', folders.length],
+                    ['all', 'All', libraryFolders.length],
                     ['favourites', 'Favourites', stats.favourites],
                     ['followed', 'Followed', stats.followed],
                     ['watching', 'Watching', stats.watching],
@@ -284,7 +331,7 @@ export const FolderBrowser: React.FC<FolderBrowserProps> = ({
                 return (
                   <div
                     key={folder.folderPath}
-                    onClick={() => onOpenFolderDetails(folder)}
+                    onClick={() => onOpenFolderDetails(folder, Boolean(folder.collectionOnly))}
                     className="group relative aspect-[2/3] min-w-0 cursor-pointer select-none transition-transform duration-300 ease-out hover:-translate-y-1 hover:scale-[1.015] active:scale-[0.99]"
                   >
                     {/* Inner Card Container with Guaranteed Chromium Border-Radius Clip */}
@@ -323,7 +370,11 @@ export const FolderBrowser: React.FC<FolderBrowserProps> = ({
 
                       {/* Top Badges: Subtitle Status & Episode Count */}
                       <div className="absolute top-2.5 left-2.5 right-2.5 flex items-center justify-between pointer-events-none z-10">
-                        {folder.isDownloading ? (
+                        {folder.collectionOnly ? (
+                          <span className="px-2 py-0.5 rounded-md text-[10px] font-bold bg-zinc-800/90 text-zinc-300 backdrop-blur-md border border-zinc-700/60">
+                            Saved
+                          </span>
+                        ) : folder.isDownloading ? (
                           <span
                             title={folder.downloadProgress !== undefined ? `Downloading (${folder.downloadProgress}%)` : 'Downloading'}
                             className="w-6 h-6 rounded-md bg-amber-500/95 text-white shadow-md border border-amber-400/40 backdrop-blur-md flex items-center justify-center"
@@ -351,7 +402,11 @@ export const FolderBrowser: React.FC<FolderBrowserProps> = ({
                             No Sub
                           </span>
                         )}
-                        {stat.finished ? (
+                        {folder.collectionOnly ? (
+                          <span className="px-2 py-0.5 rounded-md text-[10px] font-bold bg-black/80 text-zinc-300 border border-white/15 backdrop-blur-md">
+                            NO FILES
+                          </span>
+                        ) : stat.finished ? (
                           <span title="Fully watched" className="flex items-center gap-1 px-2 py-0.5 rounded-md text-[10px] font-bold bg-emerald-500/95 text-white shadow-md border border-emerald-400/40 backdrop-blur-md">
                             <CheckCircle2 className="w-3 h-3" /> Watched
                           </span>
@@ -398,7 +453,9 @@ export const FolderBrowser: React.FC<FolderBrowserProps> = ({
                           </div>
                         )}
                         <p className="text-[10px] text-zinc-400 truncate">
-                          {folder.isDownloading && folder.downloadProgress !== undefined
+                        {folder.collectionOnly
+                          ? 'Saved · not downloaded'
+                          : folder.isDownloading && folder.downloadProgress !== undefined
                             ? `Downloading ${folder.downloadProgress}%`
                             : stat.finished
                               ? 'Watched'

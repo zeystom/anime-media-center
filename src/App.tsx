@@ -9,6 +9,7 @@ import { useLocalStatus } from './hooks/useLocalStatus';
 import { ToastProvider, showGlobalToast } from './components/Toast';
 import { getPathBasename, getPathDirname, formatFileSize } from './utils/format';
 import { toRailItem } from './hooks/useCatalog';
+import type { RailItem } from './hooks/useCatalog';
 import type { AppNotification, FavouriteAnime, FollowedAnime } from './types/notifications';
 
 const AnimeDetailView = lazy(() => import('./components/AnimeDetail/AnimeDetailView').then((module) => ({ default: module.AnimeDetailView })));
@@ -1320,7 +1321,21 @@ export const App: React.FC = () => {
                 loading={loading}
                 onChangeRoot={handleChangeRoot}
                 onRefresh={handleRefreshLibrary}
-                onOpenFolderDetails={(folder) => setDetailSource({ kind: 'local', folder })}
+                onOpenFolderDetails={(folder, collectionOnly) => {
+                  if (collectionOnly && folder.anilistId != null) {
+                    const item: RailItem = {
+                      anilistId: folder.anilistId,
+                      title: folder.canonicalTitle || folder.folderName,
+                      posterUrl: folder.posterUrl || null,
+                      bannerUrl: folder.bannerUrl || null,
+                      averageScore: folder.averageScore ?? null,
+                      episodesCount: folder.totalEpisodes || null,
+                    };
+                    setDetailSource({ kind: 'catalog', item });
+                  } else {
+                    setDetailSource({ kind: 'local', folder });
+                  }
+                }}
               />
             </Suspense>
           </div>

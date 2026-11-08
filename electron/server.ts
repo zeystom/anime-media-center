@@ -355,6 +355,7 @@ export class LocalStreamServer {
         'Content-Type': 'video/mp4',
         'Transfer-Encoding': 'chunked',
         'Accept-Ranges': 'none',
+        'Access-Control-Allow-Origin': '*',
         'Cache-Control': 'no-cache, no-store',
         'Connection': 'close',
       });

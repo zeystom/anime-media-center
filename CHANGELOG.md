@@ -1,5 +1,12 @@
 # Changelog
 
+## 1.0.3 — Library and player improvements
+
+- Added Favourites and Followed collection filters to the Library; saved titles remain visible even when their video files are not on this PC.
+- Improved episode seeking so repeated 5-second skips build on the intended position and keep the last frame visible while the next stream starts.
+- Improved subtitle synchronization between episodes and reduced repeated subtitle-font scans for files without embedded fonts.
+- Made the episode drawer opened from the screen edge close when the pointer moves away; the Episodes button retains click-to-close behavior.
+
 ## 1.0.0 — Initial public release
 
 - Rebranded the Windows desktop app as Kaiko, with its own icon, launcher, installer, and startup animation.

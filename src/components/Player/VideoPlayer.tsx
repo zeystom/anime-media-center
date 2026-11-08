@@ -265,6 +265,8 @@ export const VideoPlayer: React.FC<VideoPlayerProps> = ({
   onEpisodeCompleted,
 }) => {
   const videoRef = useRef<HTMLVideoElement>(null);
+  const seekFrameRef = useRef<HTMLCanvasElement>(null);
+  const [showSeekFrame, setShowSeekFrame] = useState(false);
   const containerRef = useRef<HTMLDivElement>(null);
 
   // filePath already reported through onEpisodeCompleted (fires once per episode)
@@ -309,7 +311,9 @@ export const VideoPlayer: React.FC<VideoPlayerProps> = ({
 
   // Stable ref for timers and event listeners to avoid re-renders
   const timeRef = useRef(currentAbsoluteTime);
-  timeRef.current = currentAbsoluteTime;
+  // While a seek is being debounced or its stream URL is being prepared, keep
+  // the user's target time instead of replacing it with stale video events.
+  const pendingSeekTargetRef = useRef<number | null>(null);
 
   // Track selection
   const [selectedAudioIndex, setSelectedAudioIndex] = useState<number>(0);
@@ -358,6 +362,23 @@ export const VideoPlayer: React.FC<VideoPlayerProps> = ({
   const [topCues, setTopCues] = useState<SubtitleCue[]>([]);
   const [isMainAssActive, setIsMainAssActive] = useState<boolean>(false);
   const [isTopAssActive, setIsTopAssActive] = useState<boolean>(false);
+  const pendingSubtitleFileRef = useRef<string | null>(episode.filePath);
+  const subtitleReadyFileRef = useRef<string | null>(null);
+  const activeStreamFileRef = useRef<string | null>(null);
+
+  // Hold playback at episode boundaries until that episode's selected subtitle
+  // tracks are ready, so the opening seconds cannot run ahead without captions.
+  useEffect(() => {
+    pendingSubtitleFileRef.current = episode.filePath;
+    subtitleReadyFileRef.current = null;
+    setSubtitlesLoading(true);
+    setMainCues([]);
+    setTopCues([]);
+    setLoadedAssContent('');
+    setIsMainAssActive(false);
+    setIsTopAssActive(false);
+    videoRef.current?.pause();
+  }, [episode.filePath]);
 
   // JASSUB WebAssembly ASS Engine
   const jassubRef = useRef<JASSUB | null>(null);
@@ -370,6 +391,7 @@ export const VideoPlayer: React.FC<VideoPlayerProps> = ({
   // UI Drawer / Modals
   const [isTrackControlsOpen, setIsTrackControlsOpen] = useState<boolean>(false);
   const [isEpisodeDrawerOpen, setIsEpisodeDrawerOpen] = useState<boolean>(false);
+  const [episodeDrawerOpenMode, setEpisodeDrawerOpenMode] = useState<'button' | 'edge'>('button');
   const [autoPlayNext, setAutoPlayNext] = useState<boolean>(settings.autoPlayNext);
   const [playbackError, setPlaybackError] = useState<string | null>(null);
 
@@ -649,7 +671,7 @@ export const VideoPlayer: React.FC<VideoPlayerProps> = ({
         );
 
         if (!isMounted) return;
-        applyStream(streamUrl, actualStartTime);
+        applyStream(streamUrl, actualStartTime, episode.filePath);
         setLoading(false);
       } catch (err: any) {
         console.error('Failed to probe or setup video:', err);
@@ -673,7 +695,17 @@ export const VideoPlayer: React.FC<VideoPlayerProps> = ({
     let isCancelled = false;
 
     async function loadSubtitles() {
-      if (!metadata) return;
+      // Do not leave the previous episode's cues visible while the next
+      // episode's subtitle track is being extracted and parsed.
+      setMainCues([]);
+      setTopCues([]);
+      setLoadedAssContent('');
+      setIsMainAssActive(false);
+      setIsTopAssActive(false);
+      if (!metadata || metadata.filePath !== episode.filePath) {
+        setSubtitlesLoading(true);
+        return;
+      }
 
       const video = videoRef.current;
       const port = serverPortRef.current;
@@ -790,7 +822,9 @@ export const VideoPlayer: React.FC<VideoPlayerProps> = ({
             // Ensure timeOffset is 100% synchronized to the actual stream keyframe
             jassub.timeOffset = streamStartTimeRef.current + syncOffsetRef.current;
 
-            jassub.ready.catch((err) => {
+            try {
+              await jassub.ready;
+            } catch (err) {
               console.warn('[VideoPlayer] JASSUB worker init failed, using HTML subtitle overlay fallback:', err);
               if (jassubRef.current === jassub) {
                 try {
@@ -800,7 +834,7 @@ export const VideoPlayer: React.FC<VideoPlayerProps> = ({
                 setIsMainAssActive(false);
                 setIsTopAssActive(false);
               }
-            });
+            }
           } catch (err) {
             console.warn('[VideoPlayer] Error creating JASSUB instance, falling back to HTML overlay:', err);
             setIsMainAssActive(false);
@@ -815,6 +849,13 @@ export const VideoPlayer: React.FC<VideoPlayerProps> = ({
       } finally {
         if (!isCancelled) {
           setSubtitlesLoading(false);
+          if (metadata?.filePath === episode.filePath) {
+            subtitleReadyFileRef.current = episode.filePath;
+            if (pendingSubtitleFileRef.current === episode.filePath && activeStreamFileRef.current === episode.filePath) {
+              pendingSubtitleFileRef.current = null;
+              videoRef.current?.play().catch(() => {});
+            }
+          }
         }
       }
     }
@@ -828,7 +869,7 @@ export const VideoPlayer: React.FC<VideoPlayerProps> = ({
         jassubRef.current = null;
       }
     };
-  }, [metadata, selectedMainSubId, selectedTopSubId, topSubEnabled]);
+  }, [metadata, selectedMainSubId, selectedTopSubId, topSubEnabled, episode.filePath]);
 
   // Player Unmount Cleanup: Stop video, destroy JASSUB, and terminate all backend FFmpeg streams
   useEffect(() => {
@@ -912,12 +953,30 @@ export const VideoPlayer: React.FC<VideoPlayerProps> = ({
   const seekSeqRef = useRef<number>(0);
 
   // Safely apply stream URL and update playback timestamps
-  const applyStream = useCallback((url: string, actualStartTime: number) => {
+  const applyStream = useCallback((url: string, actualStartTime: number, filePath: string) => {
     const video = videoRef.current;
     if (!video) return;
 
-    // 1. Immediately align state and ref timestamps with the exact demuxed keyframe
+    // Keep the last decoded frame visible while FFmpeg starts the replacement
+    // stream, avoiding the noticeable black flash on every seek.
+    if (video.readyState >= HTMLMediaElement.HAVE_CURRENT_DATA && video.videoWidth > 0) {
+      const canvas = seekFrameRef.current;
+      const context = canvas?.getContext('2d');
+      if (canvas && context) {
+        try {
+          canvas.width = video.videoWidth;
+          canvas.height = video.videoHeight;
+          context.drawImage(video, 0, 0, canvas.width, canvas.height);
+          setShowSeekFrame(true);
+        } catch {
+          setShowSeekFrame(false);
+        }
+      }
+    }
+
+    // 1. Align state and refs with the requested stream start timestamp.
     timeRef.current = actualStartTime;
+    pendingSeekTargetRef.current = null;
     streamStartTimeRef.current = actualStartTime;
     setStreamStartTime(actualStartTime);
     setVideoElementTime(0);
@@ -946,8 +1005,17 @@ export const VideoPlayer: React.FC<VideoPlayerProps> = ({
       video.pause();
     } catch {}
 
-    // 3. Set new source and play
+    // 3. Start the replacement stream unless the new episode is waiting for
+    // its selected subtitles to finish loading.
     video.src = url;
+    activeStreamFileRef.current = filePath;
+
+    if (pendingSubtitleFileRef.current === filePath && subtitleReadyFileRef.current !== filePath) {
+      video.pause();
+      setIsPlaying(false);
+      return;
+    }
+    if (pendingSubtitleFileRef.current === filePath) pendingSubtitleFileRef.current = null;
 
     const playPromise = video.play();
     if (playPromise !== undefined) {
@@ -972,6 +1040,7 @@ export const VideoPlayer: React.FC<VideoPlayerProps> = ({
       const seq = ++seekSeqRef.current;
       const clamped = Math.max(0, Math.min(targetTime, duration));
       timeRef.current = clamped;
+      pendingSeekTargetRef.current = clamped;
 
       try {
         const { url, actualStartTime } = await window.electronAPI.getStreamUrl(
@@ -983,8 +1052,9 @@ export const VideoPlayer: React.FC<VideoPlayerProps> = ({
         // If another seek was initiated in the meantime, discard
         if (seq !== seekSeqRef.current) return;
 
-        applyStream(url, actualStartTime);
+        applyStream(url, actualStartTime, episode.filePath);
       } catch (err) {
+        if (seq === seekSeqRef.current) pendingSeekTargetRef.current = null;
         console.error('Failed to seek stream:', err);
       }
     },
@@ -1021,34 +1091,25 @@ export const VideoPlayer: React.FC<VideoPlayerProps> = ({
     }
   }, [isFullscreen]);
 
-  // Smart Skip Delta (With 180ms debounce for rapid keystrokes like Arrow/J/L)
+  // Coalesce key repeats, but keep each delta based on the latest intended time.
   const handleSkip = useCallback(
     (deltaSec: number, label: string) => {
-      const nextTime = Math.max(0, Math.min(timeRef.current + deltaSec, duration));
+      const baseTime = pendingSeekTargetRef.current ?? timeRef.current;
+      const nextTime = Math.max(0, Math.min(baseTime + deltaSec, duration));
       timeRef.current = nextTime;
+      pendingSeekTargetRef.current = nextTime;
       showRipple(deltaSec > 0 ? 'seek-forward' : 'seek-backward', label);
 
       if (seekDebounceRef.current) {
         clearTimeout(seekDebounceRef.current);
       }
 
-      seekDebounceRef.current = setTimeout(async () => {
-        const seq = ++seekSeqRef.current;
-        try {
-          const { url, actualStartTime } = await window.electronAPI.getStreamUrl(
-            episode.filePath,
-            selectedAudioIndex,
-            nextTime
-          );
-
-          if (seq !== seekSeqRef.current) return;
-          applyStream(url, actualStartTime);
-        } catch (err) {
-          console.error('Failed to skip stream:', err);
-        }
-      }, 180);
+      seekDebounceRef.current = setTimeout(() => {
+        seekDebounceRef.current = null;
+        void handleSeek(nextTime);
+      }, 90);
     },
-    [duration, episode.filePath, selectedAudioIndex, applyStream]
+    [duration, handleSeek, showRipple]
   );
 
   // Periodic Save of Playback History (Every 3 seconds)
@@ -1160,7 +1221,7 @@ export const VideoPlayer: React.FC<VideoPlayerProps> = ({
         );
 
         if (seq !== seekSeqRef.current) return;
-        applyStream(url, actualStartTime);
+        applyStream(url, actualStartTime, episode.filePath);
       } catch (err) {
         console.error('Failed to switch audio track:', err);
       }
@@ -1329,6 +1390,7 @@ export const VideoPlayer: React.FC<VideoPlayerProps> = ({
           break;
         case 'KeyE':
           e.preventDefault();
+          setEpisodeDrawerOpenMode('button');
           setIsEpisodeDrawerOpen((prev) => !prev);
           break;
         case 'KeyF':
@@ -1417,10 +1479,16 @@ export const VideoPlayer: React.FC<VideoPlayerProps> = ({
       {/* Native Video Element */}
       <video
         ref={videoRef}
+        crossOrigin="anonymous"
         playsInline
+        onLoadedData={() => setShowSeekFrame(false)}
         onTimeUpdate={() => {
           if (videoRef.current) {
-            setVideoElementTime(videoRef.current.currentTime);
+            const elementTime = videoRef.current.currentTime;
+            setVideoElementTime(elementTime);
+            if (pendingSeekTargetRef.current === null) {
+              timeRef.current = streamStartTimeRef.current + elementTime;
+            }
           }
         }}
         onPlay={() => {
@@ -1431,12 +1499,20 @@ export const VideoPlayer: React.FC<VideoPlayerProps> = ({
         }}
         onPause={() => setIsPlaying(false)}
         onEnded={handleEnded}
-        onError={handleVideoError}
+        onError={(event) => {
+          setShowSeekFrame(false);
+          handleVideoError(event);
+        }}
         className="w-full h-full object-contain pointer-events-none bg-black"
         style={{
           transform: 'translateZ(0)',
           backfaceVisibility: 'hidden',
         }}
+      />
+      <canvas
+        ref={seekFrameRef}
+        aria-hidden="true"
+        className={`absolute inset-0 z-[1] h-full w-full object-contain pointer-events-none ${showSeekFrame ? 'block' : 'hidden'}`}
       />
 
       {/* GPU Compositor Keep-Alive: ensures Chromium presents video frames even when UI is hidden & mouse is still */}
@@ -1630,7 +1706,10 @@ export const VideoPlayer: React.FC<VideoPlayerProps> = ({
           <div className="flex items-center space-x-3">
             {/* Episodes Drawer Toggle Button */}
             <button
-              onClick={() => setIsEpisodeDrawerOpen((prev) => !prev)}
+              onClick={() => {
+                setEpisodeDrawerOpenMode('button');
+                setIsEpisodeDrawerOpen((prev) => !prev);
+              }}
               className="flex items-center space-x-2 px-3 py-1.5 rounded-xl bg-zinc-900/80 hover:bg-zinc-800 text-zinc-200 hover:text-white border border-white/15 text-xs font-medium transition-all shadow-sm cursor-pointer"
               aria-label="Episodes (E)"
               title="Episodes (E)"
@@ -1739,7 +1818,10 @@ export const VideoPlayer: React.FC<VideoPlayerProps> = ({
       {/* Right Edge Magnetic Peek Arc (Organic elastic curve following cursor & snapping open) */}
       <MagneticEpisodePeek
         isOpen={isEpisodeDrawerOpen}
-        onOpen={() => setIsEpisodeDrawerOpen(true)}
+        onOpen={() => {
+          setEpisodeDrawerOpenMode('edge');
+          setIsEpisodeDrawerOpen(true);
+        }}
         areControlsVisible={areControlsVisible}
         episodeCount={seasonEpisodes.length}
         onActivity={resetControlsTimer}
@@ -1781,6 +1863,8 @@ export const VideoPlayer: React.FC<VideoPlayerProps> = ({
       <EpisodeDrawer
         isOpen={isEpisodeDrawerOpen}
         onClose={() => setIsEpisodeDrawerOpen(false)}
+        closeOnBackdrop={episodeDrawerOpenMode === 'button'}
+        closeOnMouseLeave={episodeDrawerOpenMode === 'edge'}
         episodes={seasonEpisodes}
         currentEpisode={episode}
         history={history}
