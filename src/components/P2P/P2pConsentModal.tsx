@@ -7,7 +7,7 @@
  */
 import React, { useEffect, useState } from 'react'
 import { motion } from 'framer-motion'
-import { Eye, Power, Scale, ShieldAlert, ShieldCheck } from 'lucide-react'
+import { Eye, Power, Scale, ShieldAlert } from 'lucide-react'
 
 export interface P2pConsentModalProps {
   onAccept: () => void
@@ -16,7 +16,6 @@ export interface P2pConsentModalProps {
 
 const WARNING_ROWS: Array<{ icon: React.ElementType; text: string }> = [
   { icon: Eye, text: 'Your IP address is visible to peers and your ISP while torrenting.' },
-  { icon: ShieldCheck, text: 'Use a VPN tunnel — the app can block downloads when no VPN is detected.' },
   { icon: Scale, text: 'You are responsible for what you download and share in your country.' },
   { icon: Power, text: 'P2P stays OFF until you explicitly enable it here.' },
 ]

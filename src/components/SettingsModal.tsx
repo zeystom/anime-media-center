@@ -1168,7 +1168,7 @@ export const SettingsModal: React.FC<SettingsModalProps> = ({
                 <span>P2P &amp; Downloads</span>
               </label>
               <p className="text-[11px] text-zinc-400">
-                BitTorrent engine with VPN protection, speed limits and your own RSS/Torznab indexers.
+                BitTorrent engine with speed limits and your own RSS/Torznab indexers.
               </p>
             </div>
 
@@ -1417,7 +1417,7 @@ export const SettingsModal: React.FC<SettingsModalProps> = ({
               </>
             ) : (
               <p className="text-[10px] text-zinc-500 px-1">
-                The engine is off. Enable it above to configure VPN protection, speed limits and indexers.
+                The engine is off. Enable it above to configure speed limits and indexers.
                 No indexers are bundled — you bring your own RSS/Torznab sources.
               </p>
             )}

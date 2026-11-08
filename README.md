@@ -27,9 +27,9 @@ Kaiko organizes anime files already on your drives, finds catalog information, a
 
 ## Torrent and indexer model
 
-Torrent downloads are an optional feature. The application includes the WebTorrent client; it is **not** a front end for an external qBittorrent or Transmission installation. You provide and configure your own RSS/Torznab indexer endpoints in **Settings → P2P & Downloads**. No feeds or credentials are shipped in the repository, and the engine will not start until you enable it and accept the in-app notice.
+Torrent downloads are an optional feature. The application includes the WebTorrent client; it is **not** a front end for an external qBittorrent or Transmission installation. You provide and configure your own RSS/Torznab indexer endpoints in **Settings → P2P & Downloads**. No indexer feeds or credentials are shipped in the repository, and the engine will not start until you enable it and accept the in-app notice.
 
-For a magnet link that contains no tracker address, the engine appends a small public-tracker fallback list to improve peer discovery. Magnets that already contain trackers keep their own tracker list. This fallback does not provide search results or download content. You are responsible for the sources you configure and the material you download or share; check the laws that apply where you live.
+For a magnet link that contains no tracker address, the engine appends a small list of public tracker addresses bundled with the app to improve peer discovery. Magnets that already contain trackers keep their own tracker list. Trackers only help peers find each other; they do not provide search results or host download content. You are responsible for the sources you configure and the material you download or share; check the laws that apply where you live.
 
 ## Install the Windows app
 
