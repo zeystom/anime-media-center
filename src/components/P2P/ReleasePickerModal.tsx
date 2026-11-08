@@ -126,7 +126,6 @@ export const ReleasePickerModal: React.FC<ReleasePickerModalProps> = ({
   const [typeFilter, setTypeFilter] = useState<ReleaseTypeFilter>('all')
   const [audioFilter, setAudioFilter] = useState<ReleaseLanguageFilter>('all')
   const [subtitleFilter, setSubtitleFilter] = useState<ReleaseLanguageFilter>('all')
-  const [inspectionState, setInspectionState] = useState<Record<string, { loading?: boolean; error?: string }>>({})
 
   const searchGenRef = useRef(0)
 
@@ -209,7 +208,6 @@ export const ReleasePickerModal: React.FC<ReleasePickerModalProps> = ({
       setTypeFilter('all')
       setAudioFilter('all')
       setSubtitleFilter('all')
-      setInspectionState({})
     }
   }, [open])
 
@@ -305,31 +303,6 @@ export const ReleasePickerModal: React.FC<ReleasePickerModalProps> = ({
     const query = activeQuery.trim()
     if (!query || loading) return
     runSearch(query)
-  }
-
-  const checkReleaseDescription = async (release: ReleaseSearchResult) => {
-    if (!release.detailsUrl || !window.electronAPI?.fetchReleaseDescription) return
-    const key = `${release.providerId}|${release.downloadUrl}`
-    setInspectionState((previous) => ({ ...previous, [key]: { loading: true } }))
-    try {
-      const description = await window.electronAPI.fetchReleaseDescription({ providerId: release.providerId, url: release.detailsUrl })
-      const before = classifyRelease(release.title, release.description)
-      const after = classifyRelease(release.title, description)
-      const addedAudioInfo = after.audioLabels.some((label) => !before.audioLabels.includes(label))
-      const addedSubtitleInfo = before.subtitleLabel == null && after.subtitleLabel != null
-      if (!addedAudioInfo && !addedSubtitleInfo) {
-        throw new Error('No additional explicit audio or subtitle information was found on this page.')
-      }
-      setResults((previous) => previous.map((item) => item.providerId === release.providerId && item.downloadUrl === release.downloadUrl
-        ? { ...item, description }
-        : item))
-      setInspectionState((previous) => ({ ...previous, [key]: {} }))
-    } catch (error) {
-      setInspectionState((previous) => ({
-        ...previous,
-        [key]: { error: error instanceof Error ? error.message : 'Could not inspect the release page.' },
-      }))
-    }
   }
 
   const renderQueryEditor = () => (
@@ -553,9 +526,6 @@ export const ReleasePickerModal: React.FC<ReleasePickerModalProps> = ({
                 visible.map((item, index) => {
                   const { result, parsed, classification } = item
                   const chips = buildReleaseChips(parsed)
-                  const inspectionKey = `${result.providerId}|${result.downloadUrl}`
-                  const inspection = inspectionState[inspectionKey]
-                  const needsInspection = classification.audioLabels.length === 0 || classification.subtitleLabel == null
                   const languageBadges = classification.languageGroup === 'eng-dub-dubtitles'
                     ? ['English Dub', 'Dubtitles']
                     : classification.languageGroup === 'eng-dub-subs'
@@ -644,19 +614,6 @@ export const ReleasePickerModal: React.FC<ReleasePickerModalProps> = ({
                               {result.sizeBytes != null ? formatFileSize(result.sizeBytes) : '—'}
                             </span>
                           </div>
-                          {needsInspection && result.detailsUrl && (
-                            <div className="mt-1.5">
-                              <button
-                                type="button"
-                                disabled={inspection?.loading}
-                                onClick={(event) => { event.stopPropagation(); void checkReleaseDescription(result) }}
-                                className="rounded-md border border-indigo-400/25 bg-indigo-500/10 px-2 py-1 text-[10px] font-bold text-indigo-200 transition hover:bg-indigo-500/20 disabled:cursor-wait disabled:opacity-60"
-                              >
-                                {inspection?.loading ? 'Checking description…' : inspection?.error ? 'Retry description check' : 'Check release description'}
-                              </button>
-                              {inspection?.error && <p className="mt-1 text-[10px] leading-snug text-amber-300/90">{inspection.error}</p>}
-                            </div>
-                          )}
                         </div>
                         <button
                           type="button"

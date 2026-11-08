@@ -30,3 +30,11 @@ export interface FollowedAnime {
   status: string
   episodesCount: number | null
 }
+
+export interface FavouriteAnime {
+  /** AniList id when available; titleKey keeps local-only titles addressable. */
+  anilistId: number | null
+  titleKey: string
+  title: string
+  posterUrl: string | null
+}

@@ -1150,6 +1150,9 @@ function setupIpcHandlers() {
 
   ipcMain.handle('p2p:save-providers', async (_event, providers) => {
     storage.updateSettings({ rssProviders: Array.isArray(providers) ? providers : [] });
+    // Provider URLs are part of the search environment. Discard old failures
+    // immediately so a corrected indexer can be retried without restarting.
+    searchResultCache.clear();
     return { success: true };
   });
 }

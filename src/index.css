@@ -166,6 +166,27 @@ canvas.JASSUB {
 }
 
 /* Animated border beam on the Downloads nav tab while a download is running */
+@keyframes release-search-ring-rotate {
+  from { transform: rotate(-90deg); }
+  to { transform: rotate(270deg); }
+}
+@keyframes release-search-ring-dash {
+  0% { stroke-dasharray: 2 194; stroke-dashoffset: 0; }
+  45% { stroke-dasharray: 70 126; stroke-dashoffset: -18; }
+  100% { stroke-dasharray: 2 194; stroke-dashoffset: -196; }
+}
+.release-search-ring {
+  transform-box: fill-box;
+  transform-origin: center;
+  animation: release-search-ring-rotate 1.8s linear infinite;
+}
+.release-search-ring__arc {
+  animation: release-search-ring-dash 1.8s cubic-bezier(.4, 0, .2, 1) infinite;
+}
+@media (prefers-reduced-motion: reduce) {
+  .release-search-ring, .release-search-ring__arc { animation-duration: 3.6s; }
+}
+
 @keyframes download-beam-spin {
   from { transform: rotate(0deg); }
   to { transform: rotate(360deg); }

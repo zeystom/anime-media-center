@@ -8,7 +8,7 @@
  */
 import React, { useEffect, useLayoutEffect, useMemo, useRef, useState } from 'react'
 import { motion } from 'framer-motion'
-import { AlertTriangle, Bell, BellRing, CheckCircle, Download, Film, MoreHorizontal, Play, Star, Trash2, Wand2, X } from 'lucide-react'
+import { AlertTriangle, Bell, BellRing, CheckCircle, Download, Film, Heart, MoreHorizontal, Play, Star, Trash2, Wand2, X } from 'lucide-react'
 import type {
   AnimeFolder,
   AppSettings,
@@ -23,7 +23,7 @@ import type {
   UserListStatus,
 } from '../../types'
 import type { RailItem } from '../../hooks/useCatalog'
-import type { FollowedAnime } from '../../types/notifications'
+import type { FavouriteAnime, FollowedAnime } from '../../types/notifications'
 import { findLocalFolder, useLocalStatus } from '../../hooks/useLocalStatus'
 import { useUserLibrary } from '../../hooks/useUserLibrary'
 import { StatusBadges } from '../common/StatusBadges'
@@ -57,6 +57,8 @@ export interface AnimeDetailViewProps {
   onOpenRelated: (item: CatalogRelatedTitle) => void
   isFollowing: boolean
   onToggleFollow: (anime: FollowedAnime, follow: boolean) => void
+  isFavourite: boolean
+  onToggleFavourite: (anime: FavouriteAnime, favourite: boolean) => void
   onBackdropProgressChange?: (progress: number) => void
 }
 
@@ -107,6 +109,10 @@ function stripHtml(raw: string | null | undefined): string | null {
   return text || null
 }
 
+function animeTitleKey(value: string): string {
+  return value.toLocaleLowerCase().replace(/\b(season|s)\s*\d+\b/g, '').replace(/[^\p{L}\p{N}]+/gu, '')
+}
+
 function torrentJobForEpisode(jobs: P2pState['jobs'], anilistId: number | null, episode: number) {
   if (anilistId == null) return undefined
   return jobs.find((job) => {
@@ -129,6 +135,13 @@ function matchesPreferredReleaseLanguages(result: ReleaseSearchResult, audioPref
     ? subtitlePreferences.some((code) => classification.subtitleLanguageCodes.includes(code as TorrentLanguageCode))
     : classification.subtitleLanguageCodes.length > 0
   return audioMatch && subtitleMatch
+}
+
+function isEnglishDubFallback(result: ReleaseSearchResult, audioPreferences: string[], subtitlePreferences: string[]): boolean {
+  if (!audioPreferences.includes('en') || !subtitlePreferences.includes('en')) return false
+  const classification = classifyRelease(result.title, result.description)
+  return classification.audioLanguageCodes.includes('en')
+    && !classification.subtitleLanguageCodes.includes('en')
 }
 
 const MetaChip: React.FC<{ children: React.ReactNode; className?: string; title?: string }> = ({ children, className, title }) => (
@@ -155,6 +168,8 @@ export const AnimeDetailView: React.FC<AnimeDetailViewProps> = ({
   onOpenRelated,
   isFollowing,
   onToggleFollow,
+  isFavourite,
+  onToggleFavourite,
   onBackdropProgressChange,
 }) => {
   const [details, setDetails] = useState<CatalogItem | null>(null)
@@ -851,10 +866,18 @@ export const AnimeDetailView: React.FC<AnimeDetailViewProps> = ({
       // Automatic selection requires the release to actually name this show:
       // 'related' (a whole-word mention, e.g. "Re:Monster" for "Monster") and
       // 'none' are refused — only exact/prefix titles may auto-download.
-      const best = response?.results?.find((release) => !release.sizeWarning
+      const validSeasonRelease = (release: ReleaseSearchResult) => !release.sizeWarning
         && (release.titleRelevance == null || release.titleRelevance === 'exact' || release.titleRelevance === 'prefix')
-        && matchesPreferredReleaseLanguages(release, settings.preferredTorrentAudioLanguages ?? ['en'], settings.preferredTorrentSubtitleLanguages ?? ['en'])
-        && ['season-pack', 'episode-range'].includes(classifyRelease(release.title, release.description).kind))
+        && ['season-pack', 'episode-range'].includes(classifyRelease(release.title, release.description).kind)
+      const audioPreferences = settings.preferredTorrentAudioLanguages ?? ['en']
+      const subtitlePreferences = settings.preferredTorrentSubtitleLanguages ?? ['en']
+      const seasonReleases = response?.results ?? []
+      const best = seasonReleases.find((release) => validSeasonRelease(release)
+        && matchesPreferredReleaseLanguages(release, audioPreferences, subtitlePreferences))
+        ?? seasonReleases.find((release) => validSeasonRelease(release)
+          && isEnglishDubFallback(release, audioPreferences, subtitlePreferences))
+      const usedEnglishDubFallback = !!best
+        && !matchesPreferredReleaseLanguages(best, audioPreferences, subtitlePreferences)
       if (!best) {
         if (response?.results?.length) {
           showGlobalToast('No season release matched your automatic audio and subtitle preferences. Choose a release manually.', 'warning')
@@ -866,7 +889,8 @@ export const AnimeDetailView: React.FC<AnimeDetailViewProps> = ({
         return
       }
       const result = await api.addDownload({ item: best, title: hero.title, anilistId, episode: null, season: seasonHint, ...downloadLocation() })
-      if (result?.success) showGlobalToast(`Season download queued: ${best.title}`, 'success')
+      if (result?.success && usedEnglishDubFallback) showGlobalToast(`Season download queued with English dub: ${best.title}. No release with both English dub and English subtitles was found. You can create subtitles in Whisper Studio.`, 'warning')
+      else if (result?.success) showGlobalToast(`Season download queued: ${best.title}`, 'success')
       else showGlobalToast(result?.error || 'Failed to queue the season download', 'error')
     } catch (err) {
       console.error('Automatic release selection failed:', err)
@@ -903,9 +927,14 @@ export const AnimeDetailView: React.FC<AnimeDetailViewProps> = ({
         // Same title-relevance gate as the season auto-pick: only exact/prefix
         // releases may auto-download; 'related' ("Re:Monster", spin-offs) and
         // 'none' ("Pocket Monsters") are refused.
-        const best = response?.results?.find((release) => !release.sizeWarning
-          && (release.titleRelevance == null || release.titleRelevance === 'exact' || release.titleRelevance === 'prefix')
-          && matchesPreferredReleaseLanguages(release, settings.preferredTorrentAudioLanguages ?? ['en'], settings.preferredTorrentSubtitleLanguages ?? ['en']))
+        const automaticCandidates = (response?.results ?? []).filter((release) => !release.sizeWarning
+          && (release.titleRelevance == null || release.titleRelevance === 'exact' || release.titleRelevance === 'prefix'))
+        const audioPreferences = settings.preferredTorrentAudioLanguages ?? ['en']
+        const subtitlePreferences = settings.preferredTorrentSubtitleLanguages ?? ['en']
+        const best = automaticCandidates.find((release) => matchesPreferredReleaseLanguages(release, audioPreferences, subtitlePreferences))
+          ?? automaticCandidates.find((release) => isEnglishDubFallback(release, audioPreferences, subtitlePreferences))
+        const usedEnglishDubFallback = !!best
+          && !matchesPreferredReleaseLanguages(best, audioPreferences, subtitlePreferences)
         if (!best && response?.results?.length) {
           showGlobalToast(`No release matched your automatic audio and subtitle preferences for episode ${episode}. Choose manually.`, 'warning')
           setPickerState({ episode })
@@ -919,7 +948,8 @@ export const AnimeDetailView: React.FC<AnimeDetailViewProps> = ({
           return
         }
         const result = await api.addDownload({ item: best, title: hero.title, anilistId, episode, season: seasonHint, ...downloadLocation() })
-        if (result?.success) showGlobalToast(`Episode ${episode} queued: ${best.title}`, 'success')
+        if (result?.success && usedEnglishDubFallback) showGlobalToast(`Episode ${episode} queued with English dub: ${best.title}. No release with both English dub and English subtitles was found. You can create subtitles in Whisper Studio.`, 'warning')
+        else if (result?.success) showGlobalToast(`Episode ${episode} queued: ${best.title}`, 'success')
         else showGlobalToast(result?.error || `Failed to queue episode ${episode}`, 'error')
       } catch (err) {
         console.error(`Automatic release search failed for episode ${episode}:`, err)
@@ -1243,6 +1273,22 @@ export const AnimeDetailView: React.FC<AnimeDetailViewProps> = ({
                   <span>{isFollowing ? 'Following' : 'Follow'}</span>
                 </button>
               )}
+
+              <button
+                type="button"
+                onClick={() => onToggleFavourite({
+                  anilistId,
+                  titleKey: animeTitleKey(hero.title),
+                  title: hero.title,
+                  posterUrl: hero.posterUrl,
+                }, !isFavourite)}
+                aria-pressed={isFavourite}
+                title={isFavourite ? 'Remove from favourites' : 'Add to favourites'}
+                className={`flex select-none items-center gap-2 rounded-xl border px-4 py-3 text-xs font-bold transition-all hover:scale-[1.02] active:scale-[0.98] ${isFavourite ? 'border-rose-400/35 bg-rose-400/20 text-rose-100' : 'border-rose-400/25 bg-rose-400/10 text-rose-200 hover:bg-rose-400/20'}`}
+              >
+                <Heart className={`h-4 w-4 ${isFavourite ? 'fill-current' : ''}`} />
+                <span>{isFavourite ? 'Favourite' : 'Add to favourites'}</span>
+              </button>
 
               {localFolder && (
                 <button

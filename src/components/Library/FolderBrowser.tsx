@@ -1,12 +1,15 @@
 import React, { useMemo, useState } from 'react';
-import { RefreshCw, Film, Search, Star, X, ArrowDownToLine, CheckCircle2, FolderOpen, ArrowUpDown } from 'lucide-react';
+import { RefreshCw, Film, Search, Star, X, ArrowDownToLine, CheckCircle2, FolderOpen, ArrowUpDown, Heart, Bell } from 'lucide-react';
 import { AnimeFolder, PlaybackProgress } from '../../types';
+import type { FavouriteAnime, FollowedAnime } from '../../types/notifications';
 import { cleanSeriesTitle, formatFileSize, isFolderMovie } from '../../utils/format';
 
 interface FolderBrowserProps {
   libraryRoot?: string;
   folders: AnimeFolder[];
   history: Record<string, PlaybackProgress>;
+  followedAnime: FollowedAnime[];
+  favouriteAnime: FavouriteAnime[];
   loading: boolean;
   onChangeRoot?: () => void;
   onRefresh: () => void;
@@ -15,6 +18,7 @@ interface FolderBrowserProps {
 }
 
 type SortMode = 'recent' | 'title' | 'score' | 'episodes' | 'size';
+type CollectionFilter = 'all' | 'favourites' | 'followed' | 'watching';
 
 const SORT_LABELS: Record<SortMode, string> = {
   recent: 'Recently watched',
@@ -72,6 +76,8 @@ function folderWatchStats(folder: AnimeFolder, history: Record<string, PlaybackP
 export const FolderBrowser: React.FC<FolderBrowserProps> = ({
   folders,
   history,
+  followedAnime,
+  favouriteAnime,
   loading,
   onChangeRoot,
   onRefresh,
@@ -79,34 +85,50 @@ export const FolderBrowser: React.FC<FolderBrowserProps> = ({
 }) => {
   const [searchQuery, setSearchQuery] = useState<string>('');
   const [sortMode, setSortMode] = useState<SortMode>('recent');
+  const [collectionFilter, setCollectionFilter] = useState<CollectionFilter>('all');
+
+  const titleKey = (value: string) => value.toLocaleLowerCase().replace(/\b(season|s)\s*\d+\b/g, '').replace(/[^\p{L}\p{N}]+/gu, '');
+  const matchesAnime = (folder: AnimeFolder, item: { anilistId: number | null; title: string; titleKey?: string }) =>
+    (folder.anilistId != null && folder.anilistId === item.anilistId) ||
+    (item.titleKey ? titleKey(folder.canonicalTitle || folder.folderName) === item.titleKey : titleKey(folder.canonicalTitle || folder.folderName) === titleKey(item.title));
+  const isFavourite = (folder: AnimeFolder) => favouriteAnime.some((item) => matchesAnime(folder, item));
+  const isFollowed = (folder: AnimeFolder) => followedAnime.some((item) => matchesAnime(folder, { ...item, titleKey: titleKey(item.title) }));
 
   // Live real-time filter across folder titles, canonical API titles, and genres
   const filteredFolders = useMemo(() => {
-    if (!searchQuery.trim()) return folders;
     const q = searchQuery.toLowerCase().trim();
     return folders.filter((f) => {
+      const stat = folderWatchStats(f, history);
+      if (collectionFilter === 'favourites' && !isFavourite(f)) return false;
+      if (collectionFilter === 'followed' && !isFollowed(f)) return false;
+      if (collectionFilter === 'watching' && (!stat.started || stat.finished)) return false;
+      if (!q) return true;
       const canonical = (f.canonicalTitle || '').toLowerCase();
       const cleaned = cleanSeriesTitle(f.folderName).toLowerCase();
       const raw = f.folderName.toLowerCase();
       const genresMatch = (f.genres || []).some((g) => g.toLowerCase().includes(q));
       return canonical.includes(q) || cleaned.includes(q) || raw.includes(q) || genresMatch;
     });
-  }, [folders, searchQuery]);
+  }, [folders, history, searchQuery, collectionFilter, favouriteAnime, followedAnime]);
 
   const stats = useMemo(() => {
     let episodes = 0;
     let sizeBytes = 0;
     let finished = 0;
     let watching = 0;
+    let favourites = 0;
+    let followed = 0;
     for (const folder of folders) {
       const stat = folderWatchStats(folder, history);
       episodes += folder.episodes.length;
       sizeBytes += stat.sizeBytes;
+      if (isFavourite(folder)) favourites += 1;
+      if (isFollowed(folder)) followed += 1;
       if (stat.finished) finished += 1;
       else if (stat.started) watching += 1;
     }
-    return { episodes, sizeBytes, finished, watching };
-  }, [folders, history]);
+    return { episodes, sizeBytes, finished, watching, favourites, followed };
+  }, [folders, history, favouriteAnime, followedAnime]);
 
   const sortedFolders = useMemo(() => {
     const list = [...filteredFolders];
@@ -184,12 +206,28 @@ export const FolderBrowser: React.FC<FolderBrowserProps> = ({
               <div className="flex flex-wrap items-center gap-2 text-xs">
                 <span className="rounded-full border border-white/10 bg-black/30 px-3 py-1 font-mono text-zinc-300">{stats.episodes} episodes</span>
                 <span className="rounded-full border border-white/10 bg-black/30 px-3 py-1 font-mono text-zinc-300">{formatFileSize(stats.sizeBytes)}</span>
-                {stats.watching > 0 && (
-                  <span className="rounded-full border border-rose-400/25 bg-rose-500/10 px-3 py-1 font-mono text-rose-200">{stats.watching} watching</span>
-                )}
                 {stats.finished > 0 && (
                   <span className="rounded-full border border-emerald-400/25 bg-emerald-500/10 px-3 py-1 font-mono text-emerald-200">{stats.finished} finished</span>
                 )}
+                <span aria-hidden="true" className="mx-1 h-5 w-px bg-white/15" />
+                <div role="group" aria-label="Filter anime collection" className="inline-flex flex-wrap items-center gap-1 rounded-xl border border-white/[0.08] bg-black/25 p-1">
+                  {([
+                    ['all', 'All', folders.length],
+                    ['favourites', 'Favourites', stats.favourites],
+                    ['followed', 'Followed', stats.followed],
+                    ['watching', 'Watching', stats.watching],
+                  ] as [CollectionFilter, string, number][]).map(([value, label, count]) => (
+                    <button
+                      key={value}
+                      type="button"
+                      onClick={() => setCollectionFilter(value)}
+                      aria-pressed={collectionFilter === value}
+                      className={`rounded-lg px-2.5 py-1.5 font-semibold transition-colors ${collectionFilter === value ? 'border border-violet-300/25 bg-violet-400/15 text-violet-100 shadow-sm' : 'border border-transparent text-zinc-400 hover:bg-white/[0.06] hover:text-zinc-100'}`}
+                    >
+                      {label} <span className="ml-0.5 opacity-70">{count}</span>
+                    </button>
+                  ))}
+                </div>
               </div>
             </div>
 
@@ -328,6 +366,13 @@ export const FolderBrowser: React.FC<FolderBrowserProps> = ({
                         )}
                       </div>
 
+                      {(isFavourite(folder) || isFollowed(folder)) && (
+                        <div className="absolute left-2.5 top-10 z-10 flex flex-wrap gap-1.5 pointer-events-none">
+                          {isFavourite(folder) && <span title="Favourite" className="inline-flex items-center gap-1 rounded-md border border-rose-300/30 bg-rose-950/85 px-1.5 py-1 text-[9px] font-bold text-rose-100 shadow-md backdrop-blur"><Heart className="h-3 w-3 fill-current" />Favourite</span>}
+                          {isFollowed(folder) && <span title="Followed for new episode alerts" className="inline-flex items-center gap-1 rounded-md border border-emerald-300/30 bg-emerald-950/85 px-1.5 py-1 text-[9px] font-bold text-emerald-100 shadow-md backdrop-blur"><Bell className="h-3 w-3" />Followed</span>}
+                        </div>
+                      )}
+
                       {/* Bottom Text, Watch Progress & Score */}
                       <div className="absolute bottom-0 left-0 right-0 p-3 pointer-events-none z-10 flex flex-col justify-end space-y-1.5">
                         {folder.averageScore && (
@@ -368,21 +413,21 @@ export const FolderBrowser: React.FC<FolderBrowserProps> = ({
               })}
             </div>
           ) : (
-            searchQuery.trim() && (
+            (searchQuery.trim() || collectionFilter !== 'all') && (
               <div className="flex flex-col items-center justify-center py-16 text-center rounded-2xl border border-zinc-800/80 bg-zinc-900/40 p-8 shadow-lg">
                 <Search className="w-10 h-10 text-zinc-500 mb-3" />
                 <h3 className="text-base font-semibold text-zinc-200">
-                  No anime found matching <span className="text-red-400 font-bold">"{searchQuery}"</span>
+                  {searchQuery.trim() ? <>No anime found matching <span className="text-red-400 font-bold">"{searchQuery}"</span></> : `No anime in ${collectionFilter === 'favourites' ? 'Favourites' : collectionFilter === 'followed' ? 'Followed' : 'Watching'}`}
                 </h3>
                 <p className="text-xs text-zinc-400 max-w-sm mt-1">
-                  Try searching with a different title, keyword, or genre tag.
+                  Try another filter or search, or clear the current selection.
                 </p>
                 <button
                   type="button"
-                  onClick={() => setSearchQuery('')}
+                  onClick={() => { setSearchQuery(''); setCollectionFilter('all'); }}
                   className="mt-4 px-4 py-2 rounded-xl bg-zinc-800 hover:bg-zinc-700 text-zinc-200 hover:text-white text-xs font-semibold border border-white/10 transition-colors shadow-sm"
                 >
-                  Clear Search
+                  Reset filters
                 </button>
               </div>
             )

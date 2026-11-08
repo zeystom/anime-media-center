@@ -136,7 +136,7 @@ export const EpisodeRow: React.FC<EpisodeRowProps> = ({
         {downloadActive && !torrentFailed && (
           <div className="absolute inset-0 flex flex-col items-center justify-center">
             <div className="relative flex h-[76px] w-[76px] items-center justify-center">
-              <svg viewBox="0 0 72 72" className={`absolute inset-0 h-full w-full -rotate-90 ${ringPercent == null ? 'animate-[spin_1.3s_linear_infinite]' : ''}`}>
+              <svg viewBox="0 0 72 72" className={`absolute inset-0 h-full w-full ${ringPercent == null ? 'release-search-ring' : '-rotate-90'}`}>
                 <defs>
                   <linearGradient id={`ep-ring-${ringGradientId}`} x1="0%" y1="0%" x2="100%" y2="100%">
                     <stop offset="0%" stopColor="#67e8f9" />
@@ -146,7 +146,7 @@ export const EpisodeRow: React.FC<EpisodeRowProps> = ({
                 </defs>
                 <circle cx="36" cy="36" r={ringRadius} fill="none" stroke="black" strokeOpacity="0.45" strokeWidth="5" />
                 {ringPercent == null ? (
-                  <circle cx="36" cy="36" r={ringRadius} fill="none" stroke={`url(#ep-ring-${ringGradientId})`} strokeWidth="5" strokeLinecap="round" strokeDasharray="40 155" />
+                  <circle cx="36" cy="36" r={ringRadius} fill="none" stroke={`url(#ep-ring-${ringGradientId})`} strokeWidth="5" strokeLinecap="round" className="release-search-ring__arc" />
                 ) : (
                   <circle cx="36" cy="36" r={ringRadius} fill="none" stroke={`url(#ep-ring-${ringGradientId})`} strokeWidth="5" strokeLinecap="round" strokeDasharray={ringCircumference} strokeDashoffset={ringCircumference * (1 - ringPercent / 100)} className="transition-[stroke-dashoffset] duration-500 ease-out" />
                 )}

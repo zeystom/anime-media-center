@@ -112,15 +112,20 @@ function pickEpisodeTitle(ep: any): string | null {
     if (title) return title;
   }
   if (t && typeof t === 'object') {
-    for (const [locale, value] of Object.entries(t)) {
-      const normalizedLocale = locale.toLowerCase().replace(/_/g, '-');
-      if (normalizedLocale === 'en' || normalizedLocale.startsWith('en-')) {
-        const title = englishTitle(value);
-        if (title) return title;
-      }
+    const entries = Object.entries(t);
+    const localeRank = (locale: string) => {
+      const normalized = locale.toLowerCase().replace(/_/g, '-');
+      if (normalized === 'en' || normalized.startsWith('en-')) return 0;
+      if (['x-jat', 'ja-ro', 'romaji', 'romanized', 'title-romaji'].includes(normalized)) return 1;
+      return 2;
+    };
+    for (const [locale, value] of entries.sort(([a], [b]) => localeRank(a) - localeRank(b))) {
+      if (localeRank(locale) > 1) continue;
+      const title = englishTitle(value);
+      if (title) return title;
     }
   }
-  return englishTitle(ep?.titleEn ?? ep?.title_en);
+  return englishTitle(ep?.titleEn ?? ep?.title_en ?? ep?.titleRomaji ?? ep?.title_romaji);
 }
 
 /**
@@ -496,7 +501,7 @@ async function fetchKitsuEpisodes(
       if (!attrs || typeof attrs !== 'object') continue;
       const number = Number(attrs.number);
       if (!Number.isInteger(number) || number <= 0) continue;
-      const title = englishTitle(attrs.titles?.en ?? attrs.titles?.en_us ?? attrs.canonicalTitle);
+      const title = englishTitle(attrs.titles?.en ?? attrs.titles?.en_us ?? attrs.titles?.en_jp ?? attrs.canonicalTitle);
       const thumbnail = attrs.thumbnail?.large ?? attrs.thumbnail?.original ?? attrs.thumbnail?.medium;
       const thumbnailUrl = typeof thumbnail === 'string' && thumbnail ? thumbnail : null;
       const rawAirDate = attrs.airdate ?? attrs.airDate ?? null;
@@ -703,9 +708,12 @@ async function runRemoteEpisodesPipeline(anilistId: number, notify: (payload: Re
     for (const item of media?.streamingEpisodes || []) {
       // AniList often provides only "Episode 15" with a perfectly usable
       // thumbnail. Keep that image even without an episode-specific title.
-      const match = item.title?.match(/^\s*(?:Episode|Ep\.?|E)\s*0*(\d+)(?:\s*[-–—:.]\s*(.+?))?\s*$/i);
-      const title = match ? englishTitle(match[2]) : null;
-      const number = Number(match?.[1]);
+      const rawTitle = typeof item.title === 'string' ? item.title.trim() : '';
+      const labelMatch = rawTitle.match(/(?:^|\b)(?:Episode|Ep\.?|E)\s*#?\s*0*(\d+)\b(?:\s*[-–—:|.]\s*(.+?))?\s*$/i);
+      const numericPrefixMatch = rawTitle.match(/^\s*#?\s*0*(\d+)\s*[-–—:|.)]\s*(.+?)\s*$/i);
+      const labelSuffixMatch = rawTitle.match(/^\s*(.+?)\s*[-–—:|]\s*(?:Episode|Ep\.?|E)\s*#?\s*0*(\d+)\s*$/i);
+      const number = Number(labelMatch?.[1] ?? numericPrefixMatch?.[1] ?? labelSuffixMatch?.[2]);
+      const title = englishTitle(labelMatch?.[2] ?? numericPrefixMatch?.[2] ?? labelSuffixMatch?.[1] ?? '');
       const thumbnailUrl = typeof item.thumbnail === 'string' && item.thumbnail ? item.thumbnail : null;
       if (Number.isInteger(number) && number > 0 && (title || thumbnailUrl)) {
         streamEpisodes.set(number, { title, thumbnailUrl });

@@ -9,7 +9,7 @@ import { useLocalStatus } from './hooks/useLocalStatus';
 import { ToastProvider, showGlobalToast } from './components/Toast';
 import { getPathBasename, getPathDirname, formatFileSize } from './utils/format';
 import { toRailItem } from './hooks/useCatalog';
-import type { AppNotification, FollowedAnime } from './types/notifications';
+import type { AppNotification, FavouriteAnime, FollowedAnime } from './types/notifications';
 
 const AnimeDetailView = lazy(() => import('./components/AnimeDetail/AnimeDetailView').then((module) => ({ default: module.AnimeDetailView })));
 const VideoPlayer = lazy(() => import('./components/Player/VideoPlayer').then((module) => ({ default: module.VideoPlayer })));
@@ -57,6 +57,7 @@ function findLastWatchedFolder(
 const NOTIFICATIONS_STORAGE_KEY = 'anime-center.notifications.v1';
 const AIRING_WATCH_STORAGE_KEY = 'anime-center.airing-watch.v1';
 const FOLLOWED_ANIME_STORAGE_KEY = 'anime-center.followed-anime.v1';
+const FAVOURITE_ANIME_STORAGE_KEY = 'kaiko.favourite-anime.v1';
 
 function readNotifications(): AppNotification[] {
   try {
@@ -72,6 +73,17 @@ function readFollowedAnime(): FollowedAnime[] {
     const parsed = JSON.parse(localStorage.getItem(FOLLOWED_ANIME_STORAGE_KEY) || '[]');
     return Array.isArray(parsed)
       ? parsed.filter((item) => item && Number.isInteger(item.anilistId) && typeof item.title === 'string')
+      : [];
+  } catch {
+    return [];
+  }
+}
+
+function readFavouriteAnime(): FavouriteAnime[] {
+  try {
+    const parsed = JSON.parse(localStorage.getItem(FAVOURITE_ANIME_STORAGE_KEY) || '[]');
+    return Array.isArray(parsed)
+      ? parsed.filter((item) => item && typeof item.titleKey === 'string' && typeof item.title === 'string')
       : [];
   } catch {
     return [];
@@ -159,13 +171,20 @@ export const App: React.FC = () => {
   const [userEntries, setUserEntries] = useState<Record<number, UserLibraryEntry>>({});
   const [notifications, setNotifications] = useState<AppNotification[]>(readNotifications);
   const [followedAnime, setFollowedAnime] = useState<FollowedAnime[]>(readFollowedAnime);
+  const [favouriteAnime, setFavouriteAnime] = useState<FavouriteAnime[]>(readFavouriteAnime);
   const [initialDownloadEpisode, setInitialDownloadEpisode] = useState<number | null>(null);
   const [loading, setLoading] = useState<boolean>(true);
   const [binaryStatus, setBinaryStatus] = useState<{ ffmpegExists: boolean; whisperExists: boolean }>({
     ffmpegExists: true,
     whisperExists: true,
   });
-  const [bannerDismissed, setBannerDismissed] = useState<boolean>(false);
+  const [bannerDismissed, setBannerDismissed] = useState<boolean>(() => {
+    try {
+      return window.localStorage.getItem('kaiko:missing-tools-notice-dismissed') === 'true';
+    } catch {
+      return false;
+    }
+  });
 
   // Keep visited tabs mounted so their state survives navigation, but don't
   // mount hidden pages (and start their catalog work) during the cold launch.
@@ -233,6 +252,10 @@ export const App: React.FC = () => {
     try { localStorage.setItem(FOLLOWED_ANIME_STORAGE_KEY, JSON.stringify(followedAnime)); } catch {}
   }, [followedAnime]);
 
+  useEffect(() => {
+    try { localStorage.setItem(FAVOURITE_ANIME_STORAGE_KEY, JSON.stringify(favouriteAnime)); } catch {}
+  }, [favouriteAnime]);
+
   const markNotificationRead = useCallback((id: string) => {
     setNotifications((previous) => previous.map((item) => item.id === id ? { ...item, read: true } : item));
   }, []);
@@ -263,6 +286,15 @@ export const App: React.FC = () => {
       posterUrl: anime.posterUrl,
     });
   }, [addNotification]);
+
+  const toggleFavouriteAnime = useCallback((anime: FavouriteAnime, favourite: boolean) => {
+    setFavouriteAnime((previous) => favourite
+      ? previous.some((item) => (anime.anilistId != null && item.anilistId === anime.anilistId) || item.titleKey === anime.titleKey)
+        ? previous.map((item) => (anime.anilistId != null && item.anilistId === anime.anilistId) || item.titleKey === anime.titleKey ? anime : item)
+        : [anime, ...previous]
+      : previous.filter((item) => !((anime.anilistId != null && item.anilistId === anime.anilistId) || item.titleKey === anime.titleKey)));
+    showGlobalToast(favourite ? `${anime.title} added to favourites` : `${anime.title} removed from favourites`, 'success');
+  }, []);
 
   const checkBinariesStatus = useCallback(async (appSettings: AppSettings) => {
     if (!window.electronAPI) return;
@@ -1195,7 +1227,10 @@ export const App: React.FC = () => {
                     Open Settings
                   </button>
                   <button
-                    onClick={() => setBannerDismissed(true)}
+                    onClick={() => {
+                      setBannerDismissed(true);
+                      try { window.localStorage.setItem('kaiko:missing-tools-notice-dismissed', 'true'); } catch { /* storage may be unavailable */ }
+                    }}
                     className="p-1 rounded-lg text-amber-400/80 hover:text-amber-200 hover:bg-amber-500/20 transition-colors"
                     title="Dismiss warning"
                   >
@@ -1280,6 +1315,8 @@ export const App: React.FC = () => {
                 }
                 folders={visibleFolders}
                 history={history}
+                followedAnime={followedAnime}
+                favouriteAnime={favouriteAnime}
                 loading={loading}
                 onChangeRoot={handleChangeRoot}
                 onRefresh={handleRefreshLibrary}
@@ -1331,8 +1368,15 @@ export const App: React.FC = () => {
           initialDownloadEpisode={initialDownloadEpisode}
           settings={settings}
           p2pState={p2pState}
-          isFollowing={!!(detailSource.kind === 'catalog' && followedAnime.some((item) => item.anilistId === detailSource.item.anilistId))}
+          isFollowing={followedAnime.some((item) => item.anilistId === (detailSource.kind === 'catalog' ? detailSource.item.anilistId : detailSource.folder.anilistId))}
           onToggleFollow={toggleFollowAnime}
+          isFavourite={favouriteAnime.some((item) => {
+            const id = detailSource.kind === 'catalog' ? detailSource.item.anilistId : detailSource.folder.anilistId;
+            const title = detailSource.kind === 'catalog' ? detailSource.item.title : (detailSource.folder.canonicalTitle || detailSource.folder.folderName);
+            const titleKey = title.toLocaleLowerCase().replace(/\b(season|s)\s*\d+\b/g, '').replace(/[^\p{L}\p{N}]+/gu, '');
+            return (id != null && item.anilistId === id) || item.titleKey === titleKey;
+          })}
+          onToggleFavourite={toggleFavouriteAnime}
           onBackdropProgressChange={updateNavbarBackdropProgress}
           folders={visibleFolders}
           history={history}

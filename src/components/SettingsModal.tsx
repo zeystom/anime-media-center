@@ -1,4 +1,5 @@
 import React, { useState, useEffect, useRef } from 'react';
+import { createPortal } from 'react-dom';
 import {
   X,
   Settings as SettingsIcon,
@@ -726,9 +727,9 @@ export const SettingsModal: React.FC<SettingsModalProps> = ({
     }
   };
 
-  return (
+  return createPortal((
     <div
-      className="fixed inset-0 z-50 flex items-center justify-center p-4 bg-black/80 animate-in fade-in duration-150"
+      className="fixed inset-0 z-[100] flex items-center justify-center p-4 bg-black/80 animate-in fade-in duration-150"
       onClick={handleClose}
     >
       <div
@@ -751,6 +752,7 @@ export const SettingsModal: React.FC<SettingsModalProps> = ({
           </div>
 
           <button
+            type="button"
             onClick={handleClose}
             className="p-1.5 rounded-lg text-zinc-400 hover:text-white hover:bg-zinc-800 transition-colors"
           >
@@ -1453,5 +1455,5 @@ export const SettingsModal: React.FC<SettingsModalProps> = ({
         )}
       </div>
     </div>
-  );
+  ), document.body);
 };
