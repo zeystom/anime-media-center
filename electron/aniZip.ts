@@ -57,6 +57,11 @@ const AIRING_GRACE_MS = 10 * 60 * 1000;
 // are served only briefly — ani.zip data propagates gradually and a later
 // response is often richer, so a partial cache must not outlive this window.
 const INCOMPLETE_SNAPSHOT_TTL_MS = 6 * 60 * 60 * 1000;
+// If an incomplete cache has already had time to settle, revalidate it once
+// in the background. Some mappings (including DanMachi cour listings) gain
+// titles/stills after the initial AniZip snapshot, and serving that partial
+// snapshot forever made the episode grid look permanently empty.
+const INCOMPLETE_REVALIDATE_AFTER_MS = 2 * 60 * 1000;
 
 // Streaming-platform listings (AniList streamingEpisodes mirrors Crunchyroll)
 // interleave official shorts/specials — e.g. AoT's "Chimi Chara Theater" rows —
@@ -567,6 +572,7 @@ export function isAniZipCacheFresh(anilistId: number): boolean {
 
 async function runRemoteEpisodesPipeline(anilistId: number, notify: (payload: RemoteEpisodesResult) => void): Promise<RemoteEpisodesResult> {
   const id = Math.trunc(Number(anilistId));
+  const aniZipCacheAtStart = memoryCache.get(id) ?? readDiskCache(id);
   void getFribbIndex(); // self-heal the local ID index when the startup warm missed
 
   // Stage 1 — start the ani.zip fetch immediately and race it against the
@@ -597,7 +603,7 @@ async function runRemoteEpisodesPipeline(anilistId: number, notify: (payload: Re
   // S3, served the previous season's TVDB entry — different titles and air
   // dates a year off). Rows airing far before the season start are junk.
   let seasonStartAt: number | null = cachedContext?.seasonStartAt ?? null;
-  const streamEpisodes = new Map<number, { title: string; thumbnailUrl: string | null }>();
+  const streamEpisodes = new Map<number, { title: string | null; thumbnailUrl: string | null }>();
   // AniList's per-episode airing times (episode -> ms epoch, aired + future
   // slots). The schedule spine of the merge below — ani.zip only enriches it
   // (same approach as Hayase's makeEpisodeList).
@@ -667,10 +673,15 @@ async function runRemoteEpisodesPipeline(anilistId: number, notify: (payload: Re
       season: identityTitles.map(explicitSeason).find((season) => season != null) ?? null,
     };
     for (const item of media?.streamingEpisodes || []) {
-      const match = item.title?.match(/^\s*(?:Episode|Ep\.?|E)\s*0*(\d+)\s*[-–—:.]\s*(.+?)\s*$/i);
+      // AniList often provides only "Episode 15" with a perfectly usable
+      // thumbnail. Keep that image even without an episode-specific title.
+      const match = item.title?.match(/^\s*(?:Episode|Ep\.?|E)\s*0*(\d+)(?:\s*[-–—:.]\s*(.+?))?\s*$/i);
       const title = match ? englishTitle(match[2]) : null;
       const number = Number(match?.[1]);
-      if (title && Number.isInteger(number) && number > 0) streamEpisodes.set(number, { title, thumbnailUrl: item.thumbnail || null });
+      const thumbnailUrl = typeof item.thumbnail === 'string' && item.thumbnail ? item.thumbnail : null;
+      if (Number.isInteger(number) && number > 0 && (title || thumbnailUrl)) {
+        streamEpisodes.set(number, { title, thumbnailUrl });
+      }
     }
     for (const node of media?.airingSchedule?.nodes || []) {
       const number = Number(node?.episode);
@@ -907,11 +918,17 @@ async function runRemoteEpisodesPipeline(anilistId: number, notify: (payload: Re
   // freshly-aired episode untitled, a wrong-season crosswalk, empty). A
   // poisoned or partial NETWORK read is retried with the cache bypassed —
   // each attempt is a fresh roll, merged monotonically and pushed only when
-  // it filled something. Cache-served reads never retry: partial caches
-  // refresh on their own TTL, and re-rolling per view open made long seasons
-  // crawl.
-  if (serveSourceById.get(id) === 'network') {
-    for (let attempt = 0; attempt < 2; attempt += 1) {
+  // it filled something. Complete cache-served reads do not retry; aged
+  // incomplete caches get one bounded revalidation to heal empty cards.
+  const shouldRevalidateIncomplete = serveSourceById.get(id) === 'cache'
+    && !!aniZipCacheAtStart
+    && Date.now() - aniZipCacheAtStart.fetchedAt >= INCOMPLETE_REVALIDATE_AFTER_MS
+    && !snapshotComplete(aniZipCacheAtStart.episodes);
+  if (serveSourceById.get(id) === 'network' || shouldRevalidateIncomplete) {
+    // Network snapshots can be retried twice to ride out a provider flap;
+    // cached partials get one refresh per view-open to avoid request storms.
+    const maxAttempts = shouldRevalidateIncomplete ? 1 : 2;
+    for (let attempt = 0; attempt < maxAttempts; attempt += 1) {
       const knownAired = airedThrough ?? scopedAniZip.length;
       const incomplete = scopedAniZip.length < knownAired ||
         scopedAniZip.some((episode) => episode.number <= knownAired && (!episode.title || !episode.thumbnailUrl));
@@ -955,14 +972,20 @@ async function runRemoteEpisodesPipeline(anilistId: number, notify: (payload: Re
 
   const final = buildCurrentPayload();
   if (final.episodes.length > 0) {
+    // Preserve the age of an incomplete cache across opens; otherwise writing
+    // the merged fallback rows with a fresh timestamp could postpone its
+    // bounded revalidation indefinitely.
+    const fetchedAt = serveSourceById.get(id) === 'cache' && !snapshotComplete(final.episodes)
+      ? aniZipCacheAtStart?.fetchedAt ?? Date.now()
+      : Date.now();
     // Only the FINAL merged snapshot is persisted as the ani.zip rows cache —
     // intermediate progressive payloads (Kitsu page 1 alone etc.) must not
     // pin an incomplete list for its TTL.
-    memoryCache.set(id, { episodes: final.episodes, fetchedAt: Date.now(), nextAiringAt });
+    memoryCache.set(id, { episodes: final.episodes, fetchedAt, nextAiringAt });
     try {
       fs.writeFileSync(
         path.join(storage.getMetadataCacheDir(), `anizip_${id}.json`),
-        JSON.stringify({ anilistId: id, fetchedAt: Date.now(), kitsuId: kitsuId ?? null, episodeCount: maxEpisode, nextAiringAt, episodes: final.episodes }, null, 2),
+        JSON.stringify({ anilistId: id, fetchedAt, kitsuId: kitsuId ?? null, episodeCount: maxEpisode, nextAiringAt, episodes: final.episodes }, null, 2),
         'utf-8',
       );
     } catch {}

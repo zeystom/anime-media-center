@@ -471,6 +471,12 @@ export const AnimeDetailView: React.FC<AnimeDetailViewProps> = ({
     return parsedSeason
   }, [parsedSeason, hero.title])
 
+  const partHint = useMemo(() => {
+    const match = /\b(?:part|cour)\s*0*(\d{1,2})\b/i.exec(hero.title)
+    const part = Number(match?.[1])
+    return Number.isInteger(part) && part > 0 ? part : null
+  }, [hero.title])
+
   // Alias titles (romaji/english) for release searches: deduped case-
   // insensitively and minus the display title that is already searched as the
   // primary query. Memoized so ReleasePickerModal's search effect (which keys
@@ -841,7 +847,7 @@ export const AnimeDetailView: React.FC<AnimeDetailViewProps> = ({
     if (!api?.searchReleases || !api.addDownload) return
     setQueueing(true)
     try {
-      const response = await api.searchReleases({ title: hero.title, aliases: searchAliases, anilistId, season: seasonHint, episode: null, episodeCount: details?.episodesCount ?? null, episodeDurationMinutes: details?.durationMinutes ?? null })
+      const response = await api.searchReleases({ title: hero.title, aliases: searchAliases, anilistId, season: seasonHint, part: partHint, episode: null, episodeCount: details?.episodesCount ?? null, episodeDurationMinutes: details?.durationMinutes ?? null })
       // Automatic selection requires the release to actually name this show:
       // 'related' (a whole-word mention, e.g. "Re:Monster" for "Monster") and
       // 'none' are refused — only exact/prefix titles may auto-download.
@@ -893,7 +899,7 @@ export const AnimeDetailView: React.FC<AnimeDetailViewProps> = ({
     void (async () => {
       let holdForManualPick = false
       try {
-        const response = await api.searchReleases({ title: hero.title, aliases: searchAliases, anilistId, season: seasonHint, episode, episodeCount: details?.episodesCount ?? null, episodeDurationMinutes: details?.durationMinutes ?? null })
+        const response = await api.searchReleases({ title: hero.title, aliases: searchAliases, anilistId, season: seasonHint, part: partHint, episode, episodeCount: details?.episodesCount ?? null, episodeDurationMinutes: details?.durationMinutes ?? null })
         // Same title-relevance gate as the season auto-pick: only exact/prefix
         // releases may auto-download; 'related' ("Re:Monster", spin-offs) and
         // 'none' ("Pocket Monsters") are refused.
@@ -1681,6 +1687,7 @@ export const AnimeDetailView: React.FC<AnimeDetailViewProps> = ({
         title={hero.title}
         anilistId={anilistId}
         season={seasonHint}
+        part={partHint}
         episode={pickerState?.episode ?? null}
         episodeCount={details?.episodesCount ?? null}
         episodeDurationMinutes={details?.durationMinutes ?? null}

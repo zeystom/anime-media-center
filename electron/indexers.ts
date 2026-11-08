@@ -50,6 +50,7 @@ const REQUEST_HEADERS: Record<string, string> = {
 export interface ProviderSearchParams {
   query: string;
   season?: number | null;
+  part?: number | null;
   episode?: number | null;
 }
 
@@ -262,7 +263,7 @@ const BATCH_TITLE_RE = /batch|season\s*(pack|1[- ]?\d+)|complete/i;
  */
 export function rankReleasesForEpisode(
   results: ReleaseSearchResult[],
-  ref: { animeTitle: string; season?: number | null; episode?: number | null }
+  ref: { animeTitle: string; season?: number | null; part?: number | null; episode?: number | null }
 ): ReleaseSearchResult[] {
   if (!Array.isArray(results)) return [];
   const refNorm = normalizeMatch(typeof ref?.animeTitle === 'string' ? ref.animeTitle : '');
@@ -303,6 +304,20 @@ export function isExplicitEpisodeMismatch(result: ReleaseSearchResult, episode: 
     episode >= parsed.episodeNumber && episode <= parsed.episodeEnd
   )
   return numbers.length > 0 && !containsEpisode
+}
+
+/** Returns the explicit cour/part marker in a title, if present. */
+export function explicitReleasePart(title: string): number | null {
+  const match = /\b(?:part|cour)\s*0*(\d{1,2})\b/i.exec(typeof title === 'string' ? title : '');
+  const part = Number(match?.[1]);
+  return Number.isInteger(part) && part > 0 ? part : null;
+}
+
+/** A title that explicitly advertises a different cour/part cannot match. */
+export function isExplicitPartMismatch(result: ReleaseSearchResult, part: number | null | undefined): boolean {
+  if (!Number.isInteger(part) || Number(part) <= 0) return false;
+  const explicitPart = explicitReleasePart(result?.title || '');
+  return explicitPart != null && explicitPart !== Number(part);
 }
 
 /** Resolution tie-breaker used after title/episode accuracy and language certainty. */
@@ -666,7 +681,7 @@ function rawTitleSeason(title: string): number | null {
 /** Score one result against the episode reference (see rankReleasesForEpisode). */
 function scoreRelease(
   result: ReleaseSearchResult,
-  ref: { season?: number | null; episode?: number | null },
+  ref: { season?: number | null; part?: number | null; episode?: number | null },
   refNorm: string
 ): number {
   const parsed = parseReleaseSync(result.title);
@@ -690,6 +705,11 @@ function scoreRelease(
   const season = parsed.season ?? rawTitleSeason(result.title);
   if (ref?.season !== null && ref?.season !== undefined && season !== null) {
     score += season === ref.season ? 15 : -40;
+  }
+  if (ref?.part != null) {
+    const part = explicitReleasePart(result.title);
+    if (part != null) score += part === ref.part ? 24 : -100;
+    else score -= 8; // ambiguous full-season names stay available below exact cour matches
   }
   if (ref?.episode !== null && ref?.episode !== undefined && parsed.episodeNumbers.length > 0) {
     const isBatchTitle = BATCH_TITLE_RE.test(result.title);

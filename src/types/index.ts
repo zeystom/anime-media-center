@@ -123,7 +123,7 @@ export interface ElectronAPI {
   enableP2p: () => Promise<{ success: boolean; error?: string }>;
   disableP2p: () => Promise<{ success: boolean }>;
   getVpnStatus: () => Promise<VpnStatus>;
-  searchReleases: (params: { title: string; aliases?: string[]; anilistId?: number | null; season?: number | null; episode?: number | null; episodeCount?: number | null; episodeDurationMinutes?: number | null; queryOverride?: string }) => Promise<ReleaseSearchResponse>;
+  searchReleases: (params: { title: string; aliases?: string[]; anilistId?: number | null; season?: number | null; part?: number | null; episode?: number | null; episodeCount?: number | null; episodeDurationMinutes?: number | null; queryOverride?: string }) => Promise<ReleaseSearchResponse>;
   fetchReleaseDescription: (params: { providerId: string; url: string }) => Promise<string>;
   addDownload: (params: { item: ReleaseSearchResult; title: string; anilistId?: number | null; episode?: number | null; season?: number | null; targetFolder?: string; downloadRoot?: string }) => Promise<{ success: boolean; infoHash?: string; error?: string }>;
   pauseDownload: (infoHash: string) => Promise<{ success: boolean }>;

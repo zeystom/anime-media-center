@@ -17,11 +17,15 @@ namespace Kaiko
                 string iconPath = Path.Combine(appDir, "app-icon.ico");
                 string electronExe = Path.Combine(appDir, @"node_modules\electron\dist\electron.exe");
 
-                // Check if node_modules or electron exists
-                if (!File.Exists(electronExe))
+                // The root Kaiko.exe is a project launcher, so it relies on
+                // the local Electron runtime and external main-process modules.
+                // electron.exe alone is not enough: a pruned node_modules can
+                // open the splash and then fail while importing the main app.
+                bool hasRuntimeDependencies = HasRuntimeDependencies(appDir);
+                if (!File.Exists(electronExe) || !hasRuntimeDependencies)
                 {
                     DialogResult res = MessageBox.Show(
-                        "Зависимости приложения еще не установлены (node_modules отсутствует).\n\nЗапустить автоматическую установку (npm install && npm run build)?",
+                        "Не найдены все зависимости Kaiko. Возможно, папка node_modules неполная.\n\nВосстановить зависимости автоматически (npm install)?",
                         "Kaiko — Первый запуск",
                         MessageBoxButtons.YesNo,
                         MessageBoxIcon.Information
@@ -29,7 +33,7 @@ namespace Kaiko
 
                     if (res == DialogResult.Yes)
                     {
-                        ProcessStartInfo npmInfo = new ProcessStartInfo("cmd.exe", "/c npm install && npm run build")
+                        ProcessStartInfo npmInfo = new ProcessStartInfo("cmd.exe", "/c npm install")
                         {
                             WorkingDirectory = appDir,
                             UseShellExecute = true
@@ -46,10 +50,10 @@ namespace Kaiko
                     }
                 }
 
-                if (!File.Exists(electronExe))
+                if (!File.Exists(electronExe) || !HasRuntimeDependencies(appDir))
                 {
                     MessageBox.Show(
-                        "Не удалось найти electron.exe.\nПожалуйста, выполните команду 'npm install' в папке проекта.",
+                        "Не удалось восстановить зависимости Kaiko.\nПроверьте подключение к интернету и выполните 'npm install' в папке проекта.",
                         "Kaiko — Ошибка",
                         MessageBoxButtons.OK,
                         MessageBoxIcon.Error
@@ -90,6 +94,17 @@ namespace Kaiko
             {
                 MessageBox.Show("Ошибка запуска приложения:\n" + ex.Message, "Kaiko", MessageBoxButtons.OK, MessageBoxIcon.Error);
             }
+        }
+
+        static bool HasRuntimeDependencies(string appDir)
+        {
+            string[] requiredPackages = { "fast-xml-parser", "webtorrent" };
+            foreach (string packageName in requiredPackages)
+            {
+                string packageJson = Path.Combine(appDir, "node_modules", packageName, "package.json");
+                if (!File.Exists(packageJson)) return false;
+            }
+            return true;
         }
 
         static void EnsureShortcuts(string appDir, string exePath, string iconPath)

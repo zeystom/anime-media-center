@@ -35,6 +35,7 @@ interface ReleasePickerModalProps {
   title: string
   anilistId: number | null
   season?: number | null
+  part?: number | null
   /** null = whole season / pack. */
   episode?: number | null
   /** Episode count of the season when known — extra context for the search. */
@@ -105,6 +106,7 @@ export const ReleasePickerModal: React.FC<ReleasePickerModalProps> = ({
   title,
   anilistId,
   season,
+  part,
   episode,
   episodeCount,
   episodeDurationMinutes,
@@ -166,6 +168,7 @@ export const ReleasePickerModal: React.FC<ReleasePickerModalProps> = ({
           aliases: aliases ?? [],
           anilistId,
           season: season ?? null,
+          part: part ?? null,
           episode: episode ?? null,
           episodeCount: episodeCount ?? null,
           episodeDurationMinutes: episodeDurationMinutes ?? null,
@@ -196,7 +199,7 @@ export const ReleasePickerModal: React.FC<ReleasePickerModalProps> = ({
           setLoading(false)
         })
     },
-    [title, aliases, anilistId, season, episode, episodeCount, episodeDurationMinutes],
+    [title, aliases, anilistId, season, part, episode, episodeCount, episodeDurationMinutes],
   )
 
   // Reset the client-side filter each time the picker opens.

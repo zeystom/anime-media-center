@@ -22,7 +22,7 @@ import { computeDiskUsage, computeStorageOverview, deleteAnime, deleteEpisodes }
 import { syncBackupNow, getBackupStatus, detectRestoreState, restoreFromBackup, scheduleBackupSync } from './userDataBackup';
 import { exportWatchlist, importWatchlist, MAL_ONLY_ANILIST_ID_BASE } from './watchlistIO';
 import { initTorrentEngine, engineSetEnabled, engineAddDownload, enginePause, engineResume, engineCancel, engineGetState, engineShutdown } from './torrentEngine';
-import { searchProviders, rankReleasesForEpisode, isExplicitEpisodeMismatch, getEpisodeReleaseSizeWarning, sanitizeSearchQuery, extractInfoHash, fetchReleaseDescription, inspectReleaseResults, computeTitleRelevance } from './indexers';
+import { searchProviders, rankReleasesForEpisode, isExplicitEpisodeMismatch, explicitReleasePart, isExplicitPartMismatch, getEpisodeReleaseSizeWarning, sanitizeSearchQuery, extractInfoHash, fetchReleaseDescription, inspectReleaseResults, computeTitleRelevance } from './indexers';
 
 const __filename = fileURLToPath(import.meta.url);
 const __dirname = path.dirname(__filename);
@@ -980,6 +980,7 @@ function setupIpcHandlers() {
     aliases?: string[]
     anilistId?: number | null
     season?: number | null
+    part?: number | null
     episode?: number | null
     episodeCount?: number | null
     episodeDurationMinutes?: number | null
@@ -989,6 +990,8 @@ function setupIpcHandlers() {
     const providers = (Array.isArray(settings.rssProviders) ? settings.rssProviders : []).filter((p) => p.enabled);
     if (providers.length === 0) return { results: [], reports: [], queries: [] };
     const title = params && typeof params.title === 'string' ? params.title : '';
+    const titlePart = explicitReleasePart(title);
+    const requestedPart = Number.isInteger(params?.part) && Number(params.part) > 0 ? Number(params.part) : titlePart;
     // Build the query set: manual override wins; otherwise the sanitized
     // primary title plus romaji/english aliases (max 3 queries). Romaji and
     // English titles carry most Nyaa releases, so CJK aliases sort below them
@@ -1030,6 +1033,7 @@ function setupIpcHandlers() {
         const { results, reports } = await searchProviders(providers, {
           query,
           season: params?.season ?? null,
+          part: requestedPart,
           episode: params?.episode ?? null,
         });
         for (const result of results) {
@@ -1052,6 +1056,7 @@ function setupIpcHandlers() {
       const relevant = withRelevance(rankReleasesForEpisode(allResults, {
         animeTitle: title,
         season: params?.season ?? null,
+        part: requestedPart,
         episode: params?.episode ?? null,
       })).filter((release) => release.titleRelevance !== 'none');
       // Feed metadata is frequently incomplete. Inspect the strongest candidates
@@ -1070,12 +1075,14 @@ function setupIpcHandlers() {
     const ranked = withRelevance(rankReleasesForEpisode(cached.inspected, {
       animeTitle: title,
       season: params?.season ?? null,
+      part: requestedPart,
       episode: params?.episode ?? null,
     }));
-    const compatible = params?.episode == null
-      ? ranked
-      : ranked.filter((release) => !isExplicitEpisodeMismatch(release, params.episode!));
-    console.log(`[P2P] search "${queries.join('" / "')}" -> ${compatible.length} episode-compatible results (${ranked.length - compatible.length} wrong-episode result(s) skipped)`);
+    const compatible = ranked.filter((release) =>
+      !isExplicitPartMismatch(release, requestedPart) &&
+      (params?.episode == null || !isExplicitEpisodeMismatch(release, params.episode))
+    );
+    console.log(`[P2P] search "${queries.join('" / "')}" -> ${compatible.length} compatible results (${ranked.length - compatible.length} wrong-part/episode result(s) skipped)`);
     const annotated = compatible.map((release) => ({
       ...release,
       sizeWarning: params?.episode != null
