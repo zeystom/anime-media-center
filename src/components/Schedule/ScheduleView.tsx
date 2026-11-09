@@ -1,14 +1,16 @@
-import React, { useEffect, useMemo, useState } from 'react'
-import { CalendarDays, ChevronLeft, ChevronRight, Film, RotateCcw } from 'lucide-react'
+import React, { useEffect, useMemo, useState, useCallback } from 'react'
+import { Bell, CalendarDays, ChevronLeft, ChevronRight, Film, RotateCcw } from 'lucide-react'
 import type { AiringEntry } from '../../types'
 import type { RailItem } from '../../hooks/useCatalog'
 import { toRailItem, useAiringSchedule } from '../../hooks/useCatalog'
 import type { LocalBadgeState, LocalStatusRef } from '../../hooks/useLocalStatus'
+import type { FollowedAnime } from '../../types/notifications'
 import { StatusBadges } from '../common/StatusBadges'
 
 export interface ScheduleViewProps {
   onSelectItem: (item: RailItem) => void
   statusFor: (ref: LocalStatusRef) => LocalBadgeState | null
+  followedAnime?: FollowedAnime[]
 }
 
 interface ScheduleEntry {
@@ -50,15 +52,20 @@ function formatEntryTime(unixSeconds: number): string {
   })
 }
 
+const titleKey = (value: string): string =>
+  value.toLocaleLowerCase().replace(/\b(season|s)\s*\d+\b/g, '').replace(/[^\p{L}\p{N}]+/gu, '')
+
 /**
  * One airing entry inside a day card: 40px poster, EP chip + local time,
  * clamped title and local-status badges. Clicking selects the title.
+ * Followed titles are emphasized with a crimson outline, bell badge and rose styling.
  */
 const ScheduleEntryRow: React.FC<{
   item: ScheduleEntry
+  isFollowed?: boolean
   statusFor: (ref: LocalStatusRef) => LocalBadgeState | null
   onSelect: (item: RailItem) => void
-}> = ({ item, statusFor, onSelect }) => {
+}> = ({ item, isFollowed = false, statusFor, onSelect }) => {
   const [imgError, setImgError] = useState(false)
 
   useEffect(() => {
@@ -75,9 +82,15 @@ const ScheduleEntryRow: React.FC<{
   return (
     <div
       onClick={() => onSelect(item.rail)}
-      className="flex cursor-pointer items-center gap-2.5 rounded-lg p-1.5 transition-colors hover:bg-zinc-800/60"
+      className={`group relative flex cursor-pointer items-center gap-2.5 rounded-lg p-1.5 transition-all ${
+        isFollowed
+          ? 'border border-rose-500/40 bg-gradient-to-r from-rose-500/15 via-rose-500/[0.05] to-transparent shadow-sm shadow-rose-950/30 hover:border-rose-400/60 hover:bg-rose-500/20'
+          : 'border border-transparent hover:bg-zinc-800/60'
+      }`}
     >
-      <div className="aspect-[2/3] w-10 shrink-0 overflow-hidden rounded bg-zinc-950">
+      <div className={`relative aspect-[2/3] w-10 shrink-0 overflow-hidden rounded bg-zinc-950 ${
+        isFollowed ? 'ring-1 ring-rose-500/40' : ''
+      }`}>
         {showPoster ? (
           <img
             src={item.rail.posterUrl || ''}
@@ -95,12 +108,32 @@ const ScheduleEntryRow: React.FC<{
 
       <div className="min-w-0 flex-1">
         <div className="flex items-center gap-1.5">
-          <span className="rounded bg-zinc-800 px-1.5 py-0.5 text-[10px] font-bold text-zinc-300">
+          <span
+            className={`rounded px-1.5 py-0.5 text-[10px] font-bold ${
+              isFollowed ? 'bg-rose-500/25 text-rose-200' : 'bg-zinc-800 text-zinc-300'
+            }`}
+          >
             EP {item.entry.episode ?? '?'}
           </span>
-          <span className="font-mono text-[11px] text-zinc-400">{formatEntryTime(item.entry.airingAt)}</span>
+          <span className={`font-mono text-[11px] ${isFollowed ? 'text-rose-200/90 font-medium' : 'text-zinc-400'}`}>
+            {formatEntryTime(item.entry.airingAt)}
+          </span>
+          {isFollowed && (
+            <span
+              title="Followed series"
+              className="ml-auto inline-flex shrink-0 items-center gap-1 rounded bg-rose-500/20 px-1.5 py-0.5 text-[9px] font-bold text-rose-300 border border-rose-500/30 shadow-xs"
+            >
+              <Bell className="h-2.5 w-2.5 fill-rose-300 text-rose-300" />
+              <span>Followed</span>
+            </span>
+          )}
         </div>
-        <p className="mt-0.5 truncate text-xs font-medium text-zinc-200" title={item.rail.title}>
+        <p
+          className={`mt-0.5 truncate text-xs font-medium transition-colors ${
+            isFollowed ? 'text-white font-semibold group-hover:text-rose-200' : 'text-zinc-200'
+          }`}
+          title={item.rail.title}
+        >
           {item.rail.title}
         </p>
         {badges && <StatusBadges state={badges} size="sm" className="mt-1" />}
@@ -115,8 +148,9 @@ const ScheduleEntryRow: React.FC<{
  * ChevronRight), a 'This week' / date-range label and a reset button. Entries
  * are resolved through statusFor for local badges and handed to onSelectItem
  * (as RailItems) on click.
+ * Followed titles are given priority sorting to appear first in each day's column.
  */
-export const ScheduleView: React.FC<ScheduleViewProps> = ({ onSelectItem, statusFor }) => {
+export const ScheduleView: React.FC<ScheduleViewProps> = ({ onSelectItem, statusFor, followedAnime }) => {
   const [weekOffset, setWeekOffset] = useState(0)
   const { entries, loading, error, refresh } = useAiringSchedule(weekOffset)
 
@@ -146,8 +180,34 @@ export const ScheduleView: React.FC<ScheduleViewProps> = ({ onSelectItem, status
   const rangeLabel = `${formatShortDate(weekStart, !sameYear)} – ${formatShortDate(weekEnd, !sameYear)}`
   const todayKey = dayKey(new Date())
 
+  const followedSet = useMemo(() => {
+    if (!followedAnime || followedAnime.length === 0) return null
+    const idSet = new Set<number>()
+    const keySet = new Set<string>()
+    for (const f of followedAnime) {
+      if (f.anilistId) idSet.add(f.anilistId)
+      if (f.title) {
+        const key = titleKey(f.title)
+        if (key) keySet.add(key)
+      }
+    }
+    return { idSet, keySet }
+  }, [followedAnime])
+
+  const checkIsFollowed = useCallback(
+    (item: ScheduleEntry): boolean => {
+      if (!followedSet) return false
+      const targetId = item.entry.anilistId || item.rail.anilistId
+      if (targetId && followedSet.idSet.has(targetId)) return true
+      const rawTitle = item.rail.title || item.entry.title || ''
+      const key = titleKey(rawTitle)
+      return !!(key && followedSet.keySet.has(key))
+    },
+    [followedSet]
+  )
+
   // Group the week's entries into Mon..Sun buckets by LOCAL weekday of the
-  // airing timestamp, sorted by airing time within each day.
+  // airing timestamp, prioritized with followed anime at the top of each day.
   const days = useMemo(() => {
     const buckets: ScheduleEntry[][] = [[], [], [], [], [], [], []]
     for (const entry of Array.isArray(entries) ? entries : []) {
@@ -155,9 +215,18 @@ export const ScheduleView: React.FC<ScheduleViewProps> = ({ onSelectItem, status
       const index = (new Date(entry.airingAt * 1000).getDay() + 6) % 7
       buckets[index].push({ entry, rail: toRailItem(entry) })
     }
-    for (const bucket of buckets) bucket.sort((a, b) => a.entry.airingAt - b.entry.airingAt)
+    for (const bucket of buckets) {
+      bucket.sort((a, b) => {
+        const aFollowed = checkIsFollowed(a)
+        const bFollowed = checkIsFollowed(b)
+        if (aFollowed !== bFollowed) {
+          return aFollowed ? -1 : 1
+        }
+        return a.entry.airingAt - b.entry.airingAt
+      })
+    }
     return buckets
-  }, [entries])
+  }, [entries, checkIsFollowed])
 
   return (
     <div className="mx-auto w-full max-w-7xl px-6 py-6">
@@ -228,6 +297,8 @@ export const ScheduleView: React.FC<ScheduleViewProps> = ({ onSelectItem, status
         <div className="grid grid-cols-1 gap-4 md:grid-cols-2 xl:grid-cols-4">
           {WEEKDAY_LABELS.map((label, i) => {
             const isToday = dayKey(dayDates[i]) === todayKey
+            const dayEntries = days[i]
+            const followedCount = dayEntries.filter(checkIsFollowed).length
             return (
               <div
                 key={label}
@@ -236,23 +307,35 @@ export const ScheduleView: React.FC<ScheduleViewProps> = ({ onSelectItem, status
                 }`}
               >
                 <div className="mb-2 flex items-baseline justify-between">
-                  <span
-                    className={`text-xs font-bold uppercase tracking-wider ${isToday ? 'text-red-400' : 'text-zinc-400'}`}
-                  >
-                    {label}
-                    {isToday ? ' · Today' : ''}
-                  </span>
-                  <span className="text-[11px] font-semibold text-zinc-500">{formatShortDate(dayDates[i])}</span>
+                  <div className="flex items-center gap-1.5 min-w-0">
+                    <span
+                      className={`text-xs font-bold uppercase tracking-wider ${isToday ? 'text-red-400' : 'text-zinc-400'}`}
+                    >
+                      {label}
+                      {isToday ? ' · Today' : ''}
+                    </span>
+                    {followedCount > 0 && (
+                      <span
+                        title={`${followedCount} followed anime airing on this day`}
+                        className="inline-flex items-center gap-0.5 rounded-full border border-rose-500/35 bg-rose-500/20 px-1.5 py-0.5 text-[9px] font-extrabold text-rose-300 shadow-xs"
+                      >
+                        <Bell className="h-2.5 w-2.5 fill-current" />
+                        <span>{followedCount}</span>
+                      </span>
+                    )}
+                  </div>
+                  <span className="text-[11px] font-semibold text-zinc-500 shrink-0">{formatShortDate(dayDates[i])}</span>
                 </div>
 
-                {days[i].length === 0 ? (
+                {dayEntries.length === 0 ? (
                   <p className="py-3 text-center text-[11px] text-zinc-600">No episodes</p>
                 ) : (
                   <div className="flex flex-col gap-1">
-                    {days[i].map((item) => (
+                    {dayEntries.map((item) => (
                       <ScheduleEntryRow
                         key={`${item.entry.anilistId}-${item.entry.airingAt}`}
                         item={item}
+                        isFollowed={checkIsFollowed(item)}
                         statusFor={statusFor}
                         onSelect={onSelectItem}
                       />

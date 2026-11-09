@@ -1382,6 +1382,7 @@ export const App: React.FC = () => {
             <ScheduleView
               onSelectItem={(item) => setDetailSource({ kind: 'catalog', item })}
               statusFor={statusFor}
+              followedAnime={followedAnime}
             />
           </Suspense>
         </div>}
