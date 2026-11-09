@@ -477,7 +477,7 @@ export const DiscoverView: React.FC<DiscoverViewProps> = ({
               <button
                 type="button"
                 onClick={() => setIsGenrePickerOpen(!isGenrePickerOpen)}
-                className={`h-10 w-full appearance-none rounded-xl border px-3 pr-8 text-left text-xs font-semibold outline-none transition flex items-center justify-between ${
+                className={`relative h-10 w-full appearance-none rounded-xl border px-3 pr-8 text-left text-xs font-semibold outline-none transition flex items-center justify-between ${
                   selectedGenres.length > 0
                     ? 'border-rose-400/50 bg-[#16131c] text-rose-200 ring-1 ring-rose-500/20'
                     : 'border-white/[0.09] bg-[#11131a] text-zinc-200 hover:border-white/20'
