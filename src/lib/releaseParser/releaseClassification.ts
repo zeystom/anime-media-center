@@ -182,6 +182,70 @@ export function classifyRelease(title: string, description?: string | null): Rel
   }
 }
 
+/**
+ * Extract season number from an anime or release title:
+ * - "Season 2", "Season 02"
+ * - "2nd Season", "3rd Season"
+ * - "S2", "S02"
+ * - Roman numerals: "II", "III", "IV", "V", ... (e.g. "Mob Psycho 100 II")
+ * - Trailing single digit preceded by separator/space: "Cyberpunk: Edgerunners 2", "KonoSuba 2"
+ */
+export function detectSeasonFromTitle(title: string | null | undefined): number | null {
+  if (!title || typeof title !== 'string') return null
+  const t = title.trim()
+
+  // 1. Explicit named season: "Season 2", "Season 02"
+  const seasonNamed = /\bseason\s*0*(\d{1,2})\b/i.exec(t)
+  if (seasonNamed) return Number(seasonNamed[1])
+
+  // 2. Ordinal season: "2nd Season", "3rd Season", "4th Season"
+  const seasonOrdinal = /\b(\d{1,2})(?:st|nd|rd|th)\s+season\b/i.exec(t)
+  if (seasonOrdinal) return Number(seasonOrdinal[1])
+
+  // 3. Short marker: " S2", " S02", "(S2)", "[S2]"
+  const seasonShort = /(?:^|\s|[([_-])S0*(\d{1,2})(?:\s*[([\]_)-]|$)/i.exec(t)
+  if (seasonShort) return Number(seasonShort[1])
+
+  // 4. Roman numerals at end of title: " II", " III", " IV", " V", " VI", " VII", " VIII", " IX", " X"
+  const romanMatch = /(?:^|\s|[([:_-])(II|III|IV|V|VI|VII|VIII|IX|X)(?:\s*[([\])-]|$)/i.exec(t)
+  if (romanMatch) {
+    const romanMap: Record<string, number> = {
+      II: 2, III: 3, IV: 4, V: 5, VI: 6, VII: 7, VIII: 8, IX: 9, X: 10,
+    }
+    const val = romanMap[romanMatch[1].toUpperCase()]
+    if (val) return val
+  }
+
+  // 5. Trailing single digit (2-9) preceded by separator (e.g. ": 2", " - 2", " 2"):
+  // "Cyberpunk: Edgerunners 2", "KonoSuba 2", "Love Live! 2"
+  const trailingDigit = /(?:[:–—-]|\s)\s*([2-9])\s*$/.exec(t)
+  if (trailingDigit) {
+    const num = Number(trailingDigit[1])
+    if (num >= 2 && num <= 9) return num
+  }
+
+  return null
+}
+
+/**
+ * Resolution rank:
+ * 4320p / 8K -> 5
+ * 2160p / 4K / UHD -> 4
+ * 1440p / 2K -> 3
+ * 1080p -> 2
+ * 720p -> 1
+ * other -> 0
+ */
+export function qualityRank(title: string | null | undefined, parsedResolution?: string | null): number {
+  const resolution = ((parsedResolution || '') + ' ' + (title || '')).toLowerCase()
+  if (/\b(?:4320p|8k)\b/i.test(resolution)) return 5
+  if (/\b(?:2160p|4k|uhd)\b/i.test(resolution)) return 4
+  if (/\b(?:1440p|2k)\b/i.test(resolution)) return 3
+  if (/\b1080p\b/i.test(resolution)) return 2
+  if (/\b720p\b/i.test(resolution)) return 1
+  return 0
+}
+
 /** Convert a fetched or RSS HTML snippet into bounded plain text. */
 export function releaseDescriptionToText(raw: string | null | undefined): string {
   return raw ? htmlToText(raw).slice(0, 20_000) : ''

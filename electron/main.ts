@@ -1220,7 +1220,7 @@ function setupIpcHandlers() {
     }));
     const compatible = ranked.filter((release) =>
       !isExplicitPartMismatch(release, requestedPart) &&
-      !isExplicitSeasonMismatch(release, params?.season) &&
+      !isExplicitSeasonMismatch(release, params?.season, title) &&
       (params?.episode == null || !isExplicitEpisodeMismatch(release, params.episode))
     );
     console.log(`[P2P] search "${queries.join('" / "')}" -> ${compatible.length} compatible results (${ranked.length - compatible.length} wrong-part/episode result(s) skipped)`);

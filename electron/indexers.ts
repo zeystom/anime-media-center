@@ -23,7 +23,7 @@
 import { XMLParser, XMLValidator } from 'fast-xml-parser';
 import type { RssProvider, ReleaseSearchResult, ProviderReport } from './types.ts';
 import { parseReleaseSync } from '../src/lib/releaseParser/index.ts';
-import { classifyRelease } from '../src/lib/releaseParser/releaseClassification.ts';
+import { classifyRelease, detectSeasonFromTitle, qualityRank } from '../src/lib/releaseParser/releaseClassification.ts';
 import { releaseDescriptionToText } from '../src/lib/releaseParser/releaseClassification.ts';
 
 /** Per-request timeout for indexer feeds. */
@@ -268,11 +268,15 @@ const BATCH_TITLE_RE = /batch|season\s*(pack|1[- ]?\d+)|complete/i;
  */
 export function rankReleasesForEpisode(
   results: ReleaseSearchResult[],
-  ref: { animeTitle: string; season?: number | null; part?: number | null; episode?: number | null }
+  ref?: { animeTitle?: string; season?: number | null; part?: number | null; episode?: number | null }
 ): ReleaseSearchResult[] {
   if (!Array.isArray(results)) return [];
   const refNorm = normalizeMatch(typeof ref?.animeTitle === 'string' ? ref.animeTitle : '');
   const isSeasonSearch = ref?.episode === null || ref?.episode === undefined;
+  const targetSeason = (ref?.season != null && ref.season > 0)
+    ? ref.season
+    : detectSeasonFromTitle(typeof ref?.animeTitle === 'string' ? ref.animeTitle : '');
+
   const scored = results.map((result) => {
     const classification = classifyRelease(result.title, result.description);
     const isBatch = ['season-pack', 'episode-range'].includes(classification.kind);
@@ -280,8 +284,8 @@ export function rankReleasesForEpisode(
       result,
       relevance: computeTitleRelevance(result.title, [typeof ref?.animeTitle === 'string' ? ref.animeTitle : '']),
       rank: classification.rank,
-      score: scoreRelease(result, ref, refNorm),
-      quality: qualityRank(result),
+      score: scoreRelease(result, { ...ref, season: targetSeason ?? ref?.season }, refNorm),
+      quality: qualityRank(result.title),
       isBatch,
     };
   });
@@ -296,20 +300,24 @@ export function rankReleasesForEpisode(
       return a.isBatch ? -1 : 1;
     }
 
-    // 3. Substantial score differences (e.g. wrong season penalty or major mismatch >= 30 points)
-    const scoreDiff = b.score - a.score;
-    if (Math.abs(scoreDiff) >= 30) return scoreDiff;
-
-    // 4. Language classification rank (Dub+Subs -> Dub -> Japanese -> Other -> Unknown)
+    // 3. Language classification rank:
+    // Rank 0: eng-dub-dubtitles (Verified Dubtitles outranks higher quality without dubtitles)
+    // Rank 1: eng-dub-subs (English Dub + English/Multi Subs)
+    // Rank 2: eng-dub only OR Japanese Audio + Subs
+    // Rank 3: Japanese Audio only
+    // Rank 4: Other language
+    // Rank 5: Unknown
+    // Dub and sub are NEVER sacrificed for quality.
     if (a.rank !== b.rank) return a.rank - b.rank;
 
-    // 5. Remaining score difference (bonus points, seeds, etc.)
+    // 4. Score difference (title accuracy, episode match, season match):
+    const scoreDiff = b.score - a.score;
     if (scoreDiff !== 0) return scoreDiff;
 
-    // 6. Quality rank (2160p -> 1080p -> 720p)
+    // 5. Quality rank: within the same language and score, higher resolution (2160p > 1080p > 720p) wins!
     if (b.quality !== a.quality) return b.quality - a.quality;
 
-    // 7. Seeders
+    // 6. Seeders
     return (b.result.seeders ?? -1) - (a.result.seeders ?? -1);
   });
 
@@ -336,12 +344,20 @@ export function isExplicitEpisodeMismatch(result: ReleaseSearchResult, episode: 
 }
 
 /** Reject a release when its title explicitly names a different season than requested. */
-export function isExplicitSeasonMismatch(result: ReleaseSearchResult, requestedSeason: number | null | undefined): boolean {
-  if (!Number.isInteger(requestedSeason) || Number(requestedSeason) <= 0) return false;
+export function isExplicitSeasonMismatch(
+  result: ReleaseSearchResult,
+  requestedSeason: number | null | undefined,
+  titleHint?: string | null
+): boolean {
+  const target = (Number.isInteger(requestedSeason) && Number(requestedSeason) > 0)
+    ? Number(requestedSeason)
+    : (titleHint ? detectSeasonFromTitle(titleHint) : null);
+  if (!Number.isInteger(target) || Number(target) <= 0) return false;
+
   const title = typeof result?.title === 'string' ? result.title : '';
   const parsed = parseReleaseSync(title);
-  const relSeason = parsed.season ?? rawTitleSeason(title);
-  return relSeason != null && relSeason !== Number(requestedSeason);
+  const relSeason = parsed.season ?? rawTitleSeason(title) ?? detectSeasonFromTitle(title);
+  return relSeason != null && relSeason !== Number(target);
 }
 
 /** Returns the explicit cour/part marker in a title, if present. */
@@ -356,18 +372,6 @@ export function isExplicitPartMismatch(result: ReleaseSearchResult, part: number
   if (!Number.isInteger(part) || Number(part) <= 0) return false;
   const explicitPart = explicitReleasePart(result?.title || '');
   return explicitPart != null && explicitPart !== Number(part);
-}
-
-/** Resolution tie-breaker used after title/episode accuracy and language certainty. */
-function qualityRank(result: ReleaseSearchResult): number {
-  const parsed = parseReleaseSync(result.title)
-  const resolution = (parsed.resolution || result.title).toLowerCase()
-  if (/\b(?:4320p|8k)\b/.test(resolution)) return 5
-  if (/\b(?:2160p|4k|uhd)\b/.test(resolution)) return 4
-  if (/\b(?:1440p|2k)\b/.test(resolution)) return 3
-  if (/\b1080p\b/.test(resolution)) return 2
-  if (/\b720p\b/.test(resolution)) return 1
-  return 0
 }
 
 /**
@@ -713,7 +717,7 @@ function rawTitleSeason(title: string): number | null {
     const n = Number(match?.[1]);
     if (Number.isInteger(n) && n > 0) return n;
   }
-  return null;
+  return detectSeasonFromTitle(title);
 }
 
 /** Score one result against the episode reference (see rankReleasesForEpisode). */
@@ -919,9 +923,26 @@ export function computeTitleRelevance(resultTitle: string, refs: string[]): Titl
       }
     }
   }
+  const expandedRefs = new Set<string>();
+  for (const ref of refs) {
+    if (!ref) continue;
+    expandedRefs.add(ref);
+    const season = detectSeasonFromTitle(ref);
+    if (season != null) {
+      const base = ref.replace(/(?:[:–—-]|\s)\s*0*[2-9]\s*$/, '').trim();
+      if (base && base !== ref) {
+        const parsed = parseReleaseSync(raw);
+        const relSeason = parsed.season ?? rawTitleSeason(raw);
+        if (relSeason === season) {
+          expandedRefs.add(base);
+        }
+      }
+    }
+  }
+
   return bestTitleRelevance(
     candidates.filter((candidate) => !!candidate),
-    refs,
+    Array.from(expandedRefs),
   );
 }
 

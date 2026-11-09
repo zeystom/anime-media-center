@@ -29,7 +29,7 @@ import { useUserLibrary } from '../../hooks/useUserLibrary'
 import { StatusBadges } from '../common/StatusBadges'
 import { DownloadActionButton } from '../common/DownloadActionButton'
 import { ReleasePickerModal } from '../P2P/ReleasePickerModal'
-import { classifyRelease, type TorrentLanguageCode } from '../../lib/releaseParser/releaseClassification.ts'
+import { classifyRelease, detectSeasonFromTitle, type TorrentLanguageCode } from '../../lib/releaseParser/releaseClassification.ts'
 import { EpisodeRow } from './EpisodeRow'
 import { resolveAnimeTitle } from '../../utils/title'
 // CRITICAL: import the wasm-free regex engine directly — never from
@@ -552,11 +552,7 @@ export const AnimeDetailView: React.FC<AnimeDetailViewProps> = ({
   }, [hero.description]);
 
   const seasonHint = useMemo(() => {
-    const namedSeason = /\bseason\s*0*(\d{1,2})\b/i.exec(hero.title)
-    if (namedSeason) return Number(namedSeason[1])
-    const ordinalSeason = /\b(\d{1,2})(?:st|nd|rd|th)\s+season\b/i.exec(hero.title)
-    if (ordinalSeason) return Number(ordinalSeason[1])
-    return parsedSeason
+    return detectSeasonFromTitle(hero.title) ?? parsedSeason
   }, [parsedSeason, hero.title])
 
   const partHint = useMemo(() => {

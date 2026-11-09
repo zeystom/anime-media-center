@@ -26,7 +26,7 @@ import {
 import type { ProviderReport, ReleaseSearchResult } from '../../types'
 import type { ParsedRelease } from '../../lib/releaseParser/types.ts'
 import { formatEpisodeNumberPart, parseReleaseCore } from '../../lib/releaseParser/regexEngine.ts'
-import { classifyRelease, TORRENT_LANGUAGES, type ReleaseClassification, type ReleaseKind, type TorrentLanguageCode } from '../../lib/releaseParser/releaseClassification.ts'
+import { classifyRelease, detectSeasonFromTitle, qualityRank, TORRENT_LANGUAGES, type ReleaseClassification, type ReleaseKind, type TorrentLanguageCode } from '../../lib/releaseParser/releaseClassification.ts'
 import { formatFileSize } from '../../utils/format'
 
 interface ReleasePickerModalProps {
@@ -238,23 +238,52 @@ export const ReleasePickerModal: React.FC<ReleasePickerModalProps> = ({
     [results],
   )
 
+  const effectiveSeason = season ?? (title ? detectSeasonFromTitle(title) : null)
+
   // Preserve backend's match ordering inside each audio/subtitle priority group.
   const languageSorted = useMemo(() => [...classified].sort((a, b) => {
+    // 1. Language classification rank:
+    // 0 = Dubtitles (Verified Dubtitles outranks higher resolution without dubtitles)
+    // 1 = Eng Dub + Eng/Multi Subs
+    // 2 = Eng Dub or Japanese + Subs
+    // 3 = Japanese only
+    // 4 = Other
+    // 5 = Unknown
     const priorityDiff = a.classification.rank - b.classification.rank
     if (priorityDiff) return priorityDiff
+
+    // 2. Size warning
     if (!!a.result.sizeWarning !== !!b.result.sizeWarning) return a.result.sizeWarning ? 1 : -1
-    if (episode != null) {
+
+    // 3. For whole-season downloads: batch/season-pack strictly beats individual episode
+    if (episode == null) {
+      const aBatch = a.kind === 'batch'
+      const bBatch = b.kind === 'batch'
+      if (aBatch !== bBatch) return aBatch ? -1 : 1
+    } else {
       const aMatch = a.parsed.episodeNumbers.includes(episode) ? 1 : 0
       const bMatch = b.parsed.episodeNumbers.includes(episode) ? 1 : 0
       if (aMatch !== bMatch) return bMatch - aMatch
     }
-    if (season != null) {
-      const aMatch = a.parsed.season === season ? 1 : 0
-      const bMatch = b.parsed.season === season ? 1 : 0
+
+    // 4. Season match
+    if (effectiveSeason != null) {
+      const aSeason = a.parsed.season ?? detectSeasonFromTitle(a.result.title)
+      const bSeason = b.parsed.season ?? detectSeasonFromTitle(b.result.title)
+      const aMatch = aSeason === effectiveSeason ? 1 : (aSeason != null ? -1 : 0)
+      const bMatch = bSeason === effectiveSeason ? 1 : (bSeason != null ? -1 : 0)
       if (aMatch !== bMatch) return bMatch - aMatch
     }
+
+    // 5. Quality / Resolution: within the same language confidence group, higher resolution (2160p > 1080p > 720p) wins!
+    // Quality never sacrifices dub & sub because priorityDiff was checked first!
+    const aQuality = qualityRank(a.result.title, a.parsed.resolution)
+    const bQuality = qualityRank(b.result.title, b.parsed.resolution)
+    if (bQuality !== aQuality) return bQuality - aQuality
+
+    // 6. Seeders
     return (b.result.seeders ?? -1) - (a.result.seeders ?? -1)
-  }), [classified, episode, season])
+  }), [classified, episode, effectiveSeason])
 
   // Local search and controls compose; unclassified items naturally stay last.
   const normalizedFilter = filter.trim().toLowerCase()
@@ -289,7 +318,7 @@ export const ReleasePickerModal: React.FC<ReleasePickerModalProps> = ({
   if (!open) return null
 
   const scopeLabel =
-    episode != null ? `Episode ${episode}` : season != null ? `Season ${season}` : 'Season pack'
+    episode != null ? `Episode ${episode}` : effectiveSeason != null ? `Season ${effectiveSeason}` : 'Season pack'
 
   // Results-area state machine (see file header): loading -> fatal / all
   // providers failed -> no indexers -> some ok but zero results -> results.

@@ -44,7 +44,7 @@ import {
   computeTitleRelevance,
   isExplicitSeasonMismatch,
 } from './electron/indexers.ts';
-import { classifyRelease } from './src/lib/releaseParser/releaseClassification.ts';
+import { classifyRelease, detectSeasonFromTitle, qualityRank } from './src/lib/releaseParser/releaseClassification.ts';
 import { detectVpnStatus, clearVpnCache } from './electron/vpnGuard.ts';
 
 let passed = 0;
@@ -827,6 +827,53 @@ async function main() {
     assert.strictEqual(isExplicitSeasonMismatch(s1, 2), true);
     assert.strictEqual(isExplicitSeasonMismatch(s2, 2), false);
     assert.strictEqual(isExplicitSeasonMismatch(s1, 1), false);
+  });
+
+  runTest('4.8d detectSeasonFromTitle extracts season from various anime and release title formats', () => {
+    assert.strictEqual(detectSeasonFromTitle('Cyberpunk: Edgerunners 2'), 2);
+    assert.strictEqual(detectSeasonFromTitle('KonoSuba 2'), 2);
+    assert.strictEqual(detectSeasonFromTitle('Mob Psycho 100 II'), 2);
+    assert.strictEqual(detectSeasonFromTitle('Mob Psycho 100 III'), 3);
+    assert.strictEqual(detectSeasonFromTitle('Overlord IV'), 4);
+    assert.strictEqual(detectSeasonFromTitle('Jujutsu Kaisen Season 2'), 2);
+    assert.strictEqual(detectSeasonFromTitle('DanMachi S5'), 5);
+    assert.strictEqual(detectSeasonFromTitle('DanMachi 4th Season'), 4);
+    assert.strictEqual(detectSeasonFromTitle('Bleach'), null);
+    assert.strictEqual(detectSeasonFromTitle('86'), null);
+    assert.strictEqual(detectSeasonFromTitle('Mob Psycho 100'), null);
+    assert.strictEqual(detectSeasonFromTitle('Steins;Gate 0'), null);
+    assert.strictEqual(detectSeasonFromTitle('Show (2024)'), null);
+  });
+
+  runTest('4.8e quality filtering prefers 2160p over 1080p within same dub+sub confidence, regardless of seeds', () => {
+    const ntb2160p = makeResult('Cyberpunk Edgerunners S02 2160p NF WEB-DL DDP5.1 DV HDR HEVC-NTb (Cyberpunk: Edgerunners 2, Dual-Audio, Multi-Subs, Batch)', 1218);
+    const varyg1080p = makeResult('Cyberpunk Edgerunners S02 1080p NF WEB-DL DUAL DDP5.1 H.264-VARYG (Cyberpunk: Edgerunners 2, Dual-Audio, Multi-Subs, Batch)', 2403);
+    const judas1080p = makeResult('[Judas] Cyberpunk Edgerunners (Season 2) [1080p HDR][HEVC x265 10bit][Dual-Audio][Multi-Subs] (Batch)', 1050);
+    const ranked = rankReleasesForEpisode([varyg1080p, judas1080p, ntb2160p], { animeTitle: 'Cyberpunk: Edgerunners 2' });
+    assert.strictEqual(ranked[0], ntb2160p);
+    assert.strictEqual(ranked[1], varyg1080p);
+    assert.strictEqual(ranked[2], judas1080p);
+  });
+
+  runTest('4.8f quality filtering never sacrifices dub & sub for higher resolution', () => {
+    const raw2160p = makeResult('Cyberpunk Edgerunners S02 2160p [Japanese RAW]', 5000);
+    const dubSub1080p = makeResult('Cyberpunk Edgerunners S02 1080p [Dual-Audio][Multi-Subs] (Batch)', 100);
+    const ranked = rankReleasesForEpisode([raw2160p, dubSub1080p], { animeTitle: 'Cyberpunk: Edgerunners 2' });
+    assert.strictEqual(ranked[0], dubSub1080p);
+    assert.strictEqual(ranked[1], raw2160p);
+  });
+
+  runTest('4.8g verified dubtitles strictly outrank higher resolution releases without dubtitles', () => {
+    const dubtitles1080p = makeResult('Cyberpunk Edgerunners S02 1080p [English Dub][Dubtitles] (Batch)', 50);
+    const multiSubs2160p = makeResult('Cyberpunk Edgerunners S02 2160p (Cyberpunk: Edgerunners 2, Dual-Audio, Multi-Subs, Batch)', 1500);
+    const ranked = rankReleasesForEpisode([multiSubs2160p, dubtitles1080p], { animeTitle: 'Cyberpunk: Edgerunners 2' });
+    assert.strictEqual(ranked[0], dubtitles1080p);
+    assert.strictEqual(ranked[1], multiSubs2160p);
+  });
+
+  runTest('4.8h isExplicitSeasonMismatch rejects Season 1 releases using titleHint when requestedSeason is null', () => {
+    const s1 = makeResult('[Judas] Cyberpunk Edgerunners (Season 1) [1080p][Multi-Subs] (Batch)', 100);
+    assert.strictEqual(isExplicitSeasonMismatch(s1, null, 'Cyberpunk: Edgerunners 2'), true);
   });
 
   runTest('4.9 English dub without subtitle data precedes Japanese, then other known audio', () => {

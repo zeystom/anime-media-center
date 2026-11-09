@@ -1,5 +1,26 @@
 # Changelog
 
+## 1.0.6 — Intelligent P2P release ranking, quality-first filtering & UI polish
+
+- **Intelligent P2P Quality-First Filtering:**
+  - Releases with matching language confidence (e.g. English Dub + Sub / Multi-Subs) now strictly prioritize higher video resolutions (4K / 2160p > 1080p > 720p), regardless of seed count differences.
+  - Quality never sacrifices language confidence: a 1080p release with verified English Dub + Sub will never be demoted below a 4K release that lacks English audio or subtitles.
+  - Verified Dubtitles (`eng-dub-dubtitles`) retain ultimate precedence over standard subtitles and raw video resolutions.
+- **Full Dual-Audio & Multi-Subs Support:**
+  - Indexer and release parser now fully detects `Dual-Audio`, `Multi-Subs`, `MultiSub`, and `Multi-Audio` tags, assigning full English/Japanese audio and subtitle metadata with dedicated badges in the release picker.
+- **Season Pack Prioritization & Strict Season Isolation:**
+  - Whole-season downloads now strictly rank season packs and batches above single individual episodes.
+  - Automatic season detection extracts season numbers from titles like `Cyberpunk: Edgerunners 2`, `KonoSuba 2`, `Mob Psycho 100 II`, etc.
+  - Releases explicitly belonging to a different season (e.g. Season 1 releases during a Season 2 search) are automatically rejected.
+  - Indexer URL builder auto-normalizes missing slashes before `{query}` in user templates (e.g. `http://rutor.info{query}`).
+- **UI & UX Refinements:**
+  - **Discover:** Vertically centered the genre dropdown chevron icon to align cleanly with format and status filters.
+  - **Anime Detail:** Locked width and symmetrical styling for Follow and Favourite buttons to prevent layout shifting on toggle.
+  - **My List & Library Sync:** Elevated My List dropdown with backdrop isolation to prevent clipping under episodes, with real-time status synchronization across library and detail views.
+  - **Schedule View:** Followed anime are highlighted with a distinct bell icon and subtle raspberry accent border, floating to the top of the schedule.
+  - **Status Badges:** Suppressed redundant "Watched" badge on Completed anime to prevent UI duplication.
+  - **Escape Key Routing:** Pressing Escape in SettingsModal captures the event and no longer inadvertently navigates back from anime detail pages.
+
 ## 1.0.5 — In-app updater & automated GitHub Releases deployment
 
 - **In-App Auto-Updater:** Seamless application updates directly from GitHub Releases without needing to git clone or pull manually.
