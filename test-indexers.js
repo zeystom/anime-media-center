@@ -42,6 +42,7 @@ import {
   sanitizeSearchQuery,
   extractInfoHash,
   computeTitleRelevance,
+  isExplicitSeasonMismatch,
 } from './electron/indexers.ts';
 import { classifyRelease } from './src/lib/releaseParser/releaseClassification.ts';
 import { detectVpnStatus, clearVpnCache } from './electron/vpnGuard.ts';
@@ -798,7 +799,7 @@ async function main() {
   });
 
   runTest('4.8 explicit English dub/subtitle confidence outranks ambiguous tags and seeders', () => {
-    const unknown = makeResult('[Group] Show S01E01 [Dual Audio][MultiSub]', 999);
+    const unknown = makeResult('[Group] Show S01E01 [1080p]', 999);
     const japanese = makeResult('[Group] Show S01E01 [Japanese Audio]', 1);
     const englishSubs = makeResult('[Group] Show S01E01 [English Dub][English Subs]', 5);
     const dubtitles = makeResult('[Group] Show S01E01 [English Dub][Dubtitles]', 2);
@@ -807,6 +808,25 @@ async function main() {
       [dubtitles, englishSubs, japanese, unknown],
     );
     assert.strictEqual(classifyRelease(unknown.title).languageGroup, 'unknown');
+  });
+
+  runTest('4.8b Dual-Audio and Multi-Subs are classified as eng-dub-subs with English audio and subtitles', () => {
+    const dualMulti = makeResult('[Group] Show S01E01 [Dual-Audio][Multi-Subs]', 999);
+    const classification = classifyRelease(dualMulti.title);
+    assert.strictEqual(classification.languageGroup, 'eng-dub-subs');
+    assert.strictEqual(classification.rank, 1);
+    assert.ok(classification.audioLanguageCodes.includes('en'));
+    assert.ok(classification.audioLanguageCodes.includes('ja'));
+    assert.ok(classification.subtitleLanguageCodes.includes('en'));
+    assert.strictEqual(classification.subtitleLabel, 'Multi-Subs');
+  });
+
+  runTest('4.8c isExplicitSeasonMismatch rejects releases targeting a different season', () => {
+    const s1 = makeResult('Show - S01E02 (WEB 1080p) [ENG]', 10);
+    const s2 = makeResult('Show S02 2160p (Dual-Audio, Multi-Subs, Batch)', 10);
+    assert.strictEqual(isExplicitSeasonMismatch(s1, 2), true);
+    assert.strictEqual(isExplicitSeasonMismatch(s2, 2), false);
+    assert.strictEqual(isExplicitSeasonMismatch(s1, 1), false);
   });
 
   runTest('4.9 English dub without subtitle data precedes Japanese, then other known audio', () => {

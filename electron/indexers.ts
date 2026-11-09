@@ -134,9 +134,14 @@ async function resolveFetch(): Promise<FetchImpl> {
  * when the template is not http(s) or has no `{query}` slot.
  */
 export function buildQueryUrl(template: string, params: ProviderSearchParams): string | null {
-  const trimmed = typeof template === 'string' ? template.trim() : '';
+  let trimmed = typeof template === 'string' ? template.trim() : '';
   if (!/^https?:\/\//i.test(trimmed)) return null;
   if (!trimmed.includes('{query}')) return null;
+  // If the template is missing a slash between host and query placeholder (e.g. "http://rutor.info{query}"),
+  // insert a slash so it forms a valid URL instead of corrupting the hostname.
+  if (/^https?:\/\/[^/{]+\{query\}/i.test(trimmed)) {
+    trimmed = trimmed.replace(/^https?:\/\/[^/{]+/i, '$&/');
+  }
   const query = sanitizeSearchQuery(typeof params?.query === 'string' ? params.query : '');
   let url = trimmed.replace('{query}', encodeURIComponent(query));
   if (params?.season !== null && params?.season !== undefined) {
@@ -267,23 +272,47 @@ export function rankReleasesForEpisode(
 ): ReleaseSearchResult[] {
   if (!Array.isArray(results)) return [];
   const refNorm = normalizeMatch(typeof ref?.animeTitle === 'string' ? ref.animeTitle : '');
-  const scored = results.map((result) => ({
-    result,
-    relevance: computeTitleRelevance(result.title, [typeof ref?.animeTitle === 'string' ? ref.animeTitle : '']),
-    rank: classifyRelease(result.title, result.description).rank,
-    score: scoreRelease(result, ref, refNorm),
-    quality: qualityRank(result),
-  }));
-  // Title relevance outranks release-kind: a verified-dub spin-off must never
-  // float above the real show just because its kind classifies better.
-  scored.sort(
-    (a, b) =>
-      TITLE_RELEVANCE_RANK[b.relevance] - TITLE_RELEVANCE_RANK[a.relevance] ||
-      a.rank - b.rank ||
-      b.score - a.score ||
-      b.quality - a.quality ||
-      (b.result.seeders ?? -1) - (a.result.seeders ?? -1)
-  );
+  const isSeasonSearch = ref?.episode === null || ref?.episode === undefined;
+  const scored = results.map((result) => {
+    const classification = classifyRelease(result.title, result.description);
+    const isBatch = ['season-pack', 'episode-range'].includes(classification.kind);
+    return {
+      result,
+      relevance: computeTitleRelevance(result.title, [typeof ref?.animeTitle === 'string' ? ref.animeTitle : '']),
+      rank: classification.rank,
+      score: scoreRelease(result, ref, refNorm),
+      quality: qualityRank(result),
+      isBatch,
+    };
+  });
+
+  scored.sort((a, b) => {
+    // 1. Title relevance: exact / prefix match outranks related / none
+    const relDiff = TITLE_RELEVANCE_RANK[b.relevance] - TITLE_RELEVANCE_RANK[a.relevance];
+    if (relDiff !== 0) return relDiff;
+
+    // 2. Whole-season downloads: batches/season-packs must strictly outrank single individual episodes
+    if (isSeasonSearch && a.isBatch !== b.isBatch) {
+      return a.isBatch ? -1 : 1;
+    }
+
+    // 3. Substantial score differences (e.g. wrong season penalty or major mismatch >= 30 points)
+    const scoreDiff = b.score - a.score;
+    if (Math.abs(scoreDiff) >= 30) return scoreDiff;
+
+    // 4. Language classification rank (Dub+Subs -> Dub -> Japanese -> Other -> Unknown)
+    if (a.rank !== b.rank) return a.rank - b.rank;
+
+    // 5. Remaining score difference (bonus points, seeds, etc.)
+    if (scoreDiff !== 0) return scoreDiff;
+
+    // 6. Quality rank (2160p -> 1080p -> 720p)
+    if (b.quality !== a.quality) return b.quality - a.quality;
+
+    // 7. Seeders
+    return (b.result.seeders ?? -1) - (a.result.seeders ?? -1);
+  });
+
   return scored.map((entry) => entry.result);
 }
 
@@ -304,6 +333,15 @@ export function isExplicitEpisodeMismatch(result: ReleaseSearchResult, episode: 
     episode >= parsed.episodeNumber && episode <= parsed.episodeEnd
   )
   return numbers.length > 0 && !containsEpisode
+}
+
+/** Reject a release when its title explicitly names a different season than requested. */
+export function isExplicitSeasonMismatch(result: ReleaseSearchResult, requestedSeason: number | null | undefined): boolean {
+  if (!Number.isInteger(requestedSeason) || Number(requestedSeason) <= 0) return false;
+  const title = typeof result?.title === 'string' ? result.title : '';
+  const parsed = parseReleaseSync(title);
+  const relSeason = parsed.season ?? rawTitleSeason(title);
+  return relSeason != null && relSeason !== Number(requestedSeason);
 }
 
 /** Returns the explicit cour/part marker in a title, if present. */
@@ -686,7 +724,23 @@ function scoreRelease(
 ): number {
   const parsed = parseReleaseSync(result.title);
   let score = 0;
-  const parsedNorm = releaseShowName(result.title) || normalizeMatch(parsed.animeTitle ?? '');
+  let parsedNorm = releaseShowName(result.title) || normalizeMatch(parsed.animeTitle ?? '');
+  if (refNorm) {
+    const parenMatches = result.title.matchAll(/\(([^)]+)\)|\[([^\]]+)\]/g);
+    for (const m of parenMatches) {
+      const inside = m[1] || m[2];
+      if (inside) {
+        for (const part of inside.split(/[,;/]+/)) {
+          const rawPart = normalizeMatch(part);
+          const strippedPart = stripTrailingDecorations(rawPart);
+          if (rawPart === refNorm || strippedPart === refNorm) {
+            parsedNorm = refNorm;
+            break;
+          }
+        }
+      }
+    }
+  }
   if (refNorm && parsedNorm) {
     if (parsedNorm === refNorm) {
       score += 60;
@@ -795,11 +849,17 @@ function releaseShowName(resultTitle: string): string {
  *  different show, which must never count as a title prefix match. */
 const SEASONISH_TOKEN_RE = /^(?:s\d{1,3}|season|part|cour|final|batch|complete|pack|(?:19|20)\d{2}|\d{1,4})$/i;
 const ORDINAL_TOKEN_RE = /^\d{1,4}(?:st|nd|rd|th)$/i;
+const TECHNICAL_TOKEN_RE = /^(?:s\d{1,3}|season|part|cour|final|batch|complete|pack|(?:19|20)\d{2}|\d{1,4}|\d{3,4}p|nf|cr|amzn|at-?x|tv|web|dl|web-?dl|webrip|bluray|bdrip|hdtv|dvd|remux|hevc|avc|x264|x265|h264|h265|10bit|8bit|hdr|hdr10|hdr10plus|dv|dovi|ddp|ddp\d(?:\.\d)?|aac|flac|eac3|ac3|dts|truehd|atmos|dual|multi|audio|subs?|subtitles?|eng|dub|ita|ger|fra|spa|rus|jpn|raws?|repack\d?|v\d)$/i;
 
 function seasonishTail(tail: string): boolean {
   const tokens = tail.split(/[\s,.:()[\]_-]+/).filter(Boolean);
   if (tokens.length === 0) return true;
-  return tokens.every((token) => SEASONISH_TOKEN_RE.test(token) || ORDINAL_TOKEN_RE.test(token));
+  return tokens.every((token, index) =>
+    SEASONISH_TOKEN_RE.test(token) ||
+    ORDINAL_TOKEN_RE.test(token) ||
+    TECHNICAL_TOKEN_RE.test(token) ||
+    (index === tokens.length - 1 && /^[a-z0-9]{2,8}$/i.test(token) && /-[a-zA-Z0-9]{2,8}/.test(tail))
+  );
 }
 
 function titleRelevanceOf(candidate: string, ref: string): TitleRelevance {
@@ -839,8 +899,28 @@ function bestTitleRelevance(candidates: string[], refs: string[]): TitleRelevanc
  *  normalized title backs it up. */
 export function computeTitleRelevance(resultTitle: string, refs: string[]): TitleRelevance {
   const raw = typeof resultTitle === 'string' ? resultTitle : '';
+  const rawNormTitle = normalizeMatch(raw);
+  const candidates: string[] = [
+    releaseShowName(raw),
+    stripTrailingDecorations(rawNormTitle),
+    rawNormTitle,
+  ];
+  // Extract sub-phrases inside parentheses or brackets which frequently house the canonical or alternate title
+  const parenMatches = raw.matchAll(/\(([^)]+)\)|\[([^\]]+)\]/g);
+  for (const m of parenMatches) {
+    const inside = m[1] || m[2];
+    if (inside) {
+      const parts = inside.split(/[,;/]+/);
+      for (const part of parts) {
+        const rawPart = normalizeMatch(part);
+        const strippedPart = stripTrailingDecorations(rawPart);
+        if (rawPart && rawPart.length >= 3) candidates.push(rawPart);
+        if (strippedPart && strippedPart.length >= 3 && strippedPart !== rawPart) candidates.push(strippedPart);
+      }
+    }
+  }
   return bestTitleRelevance(
-    [releaseShowName(raw), stripTrailingDecorations(normalizeMatch(raw))].filter((candidate) => !!candidate),
+    candidates.filter((candidate) => !!candidate),
     refs,
   );
 }

@@ -23,7 +23,7 @@ import { computeDiskUsage, computeStorageOverview, deleteAnime, deleteEpisodes }
 import { syncBackupNow, getBackupStatus, detectRestoreState, restoreFromBackup, scheduleBackupSync } from './userDataBackup';
 import { exportWatchlist, importWatchlist, MAL_ONLY_ANILIST_ID_BASE } from './watchlistIO';
 import { initTorrentEngine, engineSetEnabled, engineAddDownload, enginePause, engineResume, engineCancel, engineGetState, engineShutdown } from './torrentEngine';
-import { searchProviders, rankReleasesForEpisode, isExplicitEpisodeMismatch, explicitReleasePart, isExplicitPartMismatch, getEpisodeReleaseSizeWarning, sanitizeSearchQuery, extractInfoHash, fetchReleaseDescription, inspectReleaseResults, computeTitleRelevance } from './indexers';
+import { searchProviders, rankReleasesForEpisode, isExplicitEpisodeMismatch, explicitReleasePart, isExplicitPartMismatch, isExplicitSeasonMismatch, getEpisodeReleaseSizeWarning, sanitizeSearchQuery, extractInfoHash, fetchReleaseDescription, inspectReleaseResults, computeTitleRelevance } from './indexers';
 import { initUpdater, checkForUpdates, downloadUpdate, installUpdate, getUpdaterState, getAppVersion } from './updater';
 
 const __filename = fileURLToPath(import.meta.url);
@@ -1220,6 +1220,7 @@ function setupIpcHandlers() {
     }));
     const compatible = ranked.filter((release) =>
       !isExplicitPartMismatch(release, requestedPart) &&
+      !isExplicitSeasonMismatch(release, params?.season) &&
       (params?.episode == null || !isExplicitEpisodeMismatch(release, params.episode))
     );
     console.log(`[P2P] search "${queries.join('" / "')}" -> ${compatible.length} compatible results (${ranked.length - compatible.length} wrong-part/episode result(s) skipped)`);

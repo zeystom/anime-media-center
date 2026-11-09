@@ -52,6 +52,9 @@ function htmlToText(raw: string): string {
     .trim()
 }
 
+const DUAL_AUDIO_RE = /\b(?:dual[-_\s]*audio|multi[-_\s]*audio)\b/i
+const MULTI_SUBS_RE = /\b(?:multi[-_\s]*subs?|multisubs?)\b/i
+
 function explicitAudioLabel(text: string, aliases: string): boolean {
   const language = `(?:${aliases})`
   return new RegExp(`\\b${language}\\s+(?:(?:dual|multi)\\s+)?(?:audio|dub(?:bed)?|voice(?:\s+track)?)\\b`, 'i').test(text)
@@ -65,16 +68,28 @@ function detectLanguages(text: string): string[] {
   for (const language of AUDIO_LANGUAGES) {
     if (explicitAudioLabel(text, language.aliases)) labels.push(language.label)
   }
+  if (DUAL_AUDIO_RE.test(text)) {
+    if (!labels.includes('English Dub')) labels.push('English Dub')
+    if (!labels.includes('Japanese Audio')) labels.push('Japanese Audio')
+  }
   return labels
 }
 
 function detectAudioLanguageCodes(text: string): TorrentLanguageCode[] {
-  return AUDIO_LANGUAGES.filter((language) => explicitAudioLabel(text, language.aliases)).map((language) => language.code)
+  const codes = new Set<TorrentLanguageCode>(
+    AUDIO_LANGUAGES.filter((language) => explicitAudioLabel(text, language.aliases)).map((language) => language.code)
+  )
+  if (DUAL_AUDIO_RE.test(text)) {
+    codes.add('en')
+    codes.add('ja')
+  }
+  return [...codes]
 }
 
 function detectSubtitleLanguageCodes(text: string): TorrentLanguageCode[] {
   const codes = new Set<TorrentLanguageCode>()
   if (/\b(?:english\s+)?dubtitles?\b/i.test(text) || /\benglish\s+(?:sdh|closed\s+captions?|cc)\b/i.test(text)) codes.add('en')
+  if (MULTI_SUBS_RE.test(text)) codes.add('en')
   for (const language of AUDIO_LANGUAGES) {
     const token = `(?:${language.aliases})`
     const subtitleMention = new RegExp(`\\b${token}\\s+(?:soft\\s*)?(?:subs?|subtitles?|captions?)\\b`, 'i').test(text)
@@ -84,7 +99,7 @@ function detectSubtitleLanguageCodes(text: string): TorrentLanguageCode[] {
   return [...codes]
 }
 
-function detectSubtitle(text: string): 'Dubtitles' | 'English Subs' | null {
+function detectSubtitle(text: string): 'Dubtitles' | 'English Subs' | 'Multi-Subs' | null {
   if (/\b(?:english\s+)?dubtitles?\b/i.test(text) || /\benglish\s+(?:sdh|closed\s+captions?|cc)\b/i.test(text)) {
     return 'Dubtitles'
   }
@@ -92,6 +107,9 @@ function detectSubtitle(text: string): 'Dubtitles' | 'English Subs' | null {
     || /\b(?:english|eng)\s+subtitles?\b/i.test(text)
     || /\bsubtitles?\s*(?:in|:|-)?\s*(?:english|eng)\b/i.test(text)) {
     return 'English Subs'
+  }
+  if (MULTI_SUBS_RE.test(text)) {
+    return 'Multi-Subs'
   }
   return null
 }
@@ -128,17 +146,21 @@ export function classifyRelease(title: string, description?: string | null): Rel
   const englishDub = audioLabels.includes('English Dub')
   const japanese = audioLabels.includes('Japanese Audio')
   const subtitleLabel = detectSubtitle(searchableText)
+  const hasEnglishSubs = subtitleLabel === 'English Subs' || subtitleLabel === 'Multi-Subs'
 
   let languageGroup: ReleaseLanguageGroup = 'unknown'
   let rank = 5
   if (englishDub && subtitleLabel === 'Dubtitles') {
     languageGroup = 'eng-dub-dubtitles'
     rank = 0
-  } else if (englishDub && subtitleLabel === 'English Subs') {
+  } else if (englishDub && hasEnglishSubs) {
     languageGroup = 'eng-dub-subs'
     rank = 1
   } else if (englishDub) {
     languageGroup = 'eng-dub'
+    rank = 2
+  } else if (japanese && hasEnglishSubs) {
+    languageGroup = 'japanese'
     rank = 2
   } else if (japanese && audioLabels.length === 1) {
     languageGroup = 'japanese'

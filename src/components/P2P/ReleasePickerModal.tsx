@@ -529,11 +529,11 @@ export const ReleasePickerModal: React.FC<ReleasePickerModalProps> = ({
                   const languageBadges = classification.languageGroup === 'eng-dub-dubtitles'
                     ? ['English Dub', 'Dubtitles']
                     : classification.languageGroup === 'eng-dub-subs'
-                      ? ['English Dub', 'English Subs']
+                      ? ['English Dub', classification.subtitleLabel || 'English Subs']
                       : classification.languageGroup === 'eng-dub'
                         ? ['English Dub']
                         : classification.languageGroup === 'japanese'
-                          ? ['Japanese Audio']
+                          ? ['Japanese Audio', ...(classification.subtitleLabel ? [classification.subtitleLabel] : [])]
                           : classification.languageGroup === 'other'
                             ? [...classification.audioLabels, ...(classification.subtitleLabel ? [classification.subtitleLabel] : [])]
                             : []
