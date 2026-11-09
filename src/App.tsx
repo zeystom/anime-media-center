@@ -672,6 +672,9 @@ export const App: React.FC = () => {
         const scanned = await window.electronAPI.scanLibrary();
         setFolders(scanned);
 
+        const userLib = await window.electronAPI.getUserLibrary();
+        if (userLib) setUserEntries(userLib);
+
         if (scanned.length > 0) {
           setSelectedFolder((prev) => {
             const exists = scanned.find((f) => f.folderPath === prev?.folderPath);
@@ -930,6 +933,9 @@ export const App: React.FC = () => {
         setLoading(true);
         const scanned = await window.electronAPI.scanLibrary();
         setFolders(scanned);
+
+        const userLib = await window.electronAPI.getUserLibrary();
+        if (userLib) setUserEntries(userLib);
         setSelectedFolder(findLastWatchedFolder(scanned, history) || (scanned.length > 0 ? scanned[0] : null));
         setLoading(false);
       }
@@ -1346,6 +1352,7 @@ export const App: React.FC = () => {
                 history={history}
                 followedAnime={followedAnime}
                 favouriteAnime={favouriteAnime}
+                userEntries={userEntries}
                 loading={loading}
                 onChangeRoot={handleChangeRoot}
                 onRefresh={handleRefreshLibrary}
@@ -1450,6 +1457,16 @@ export const App: React.FC = () => {
             },
           })}
           onLibraryChanged={handleRefreshLibrary}
+          onUserEntryChange={(entry) => {
+            setUserEntries((prev) => ({ ...prev, [entry.anilistId]: entry }));
+          }}
+          onUserEntryRemove={(id) => {
+            setUserEntries((prev) => {
+              const next = { ...prev };
+              delete next[id];
+              return next;
+            });
+          }}
           onOpenWhisper={(folder) => {
             setSelectedFolder(folder);
             setInitialDownloadEpisode(null);

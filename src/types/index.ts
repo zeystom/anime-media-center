@@ -114,9 +114,17 @@ export interface ElectronAPI {
   getRemoteEpisodes: (anilistId: number) => Promise<RemoteEpisodesResult>;
   // User Library
   getUserLibrary: () => Promise<Record<number, UserLibraryEntry>>;
-  setUserLibraryStatus: (anilistId: number, idMal: number | null, titleSnapshot: string, status: UserListStatus) => Promise<UserLibraryEntry | null>;
+  setUserLibraryStatus: (
+    anilistId: number,
+    idMal: number | null,
+    titleSnapshot: string,
+    status: UserListStatus,
+    posterUrl?: string | null,
+    totalEpisodes?: number | null
+  ) => Promise<UserLibraryEntry | null>;
   setUserLibraryScore: (anilistId: number, score: number | null) => Promise<UserLibraryEntry | null>;
   setUserLibraryProgress: (anilistId: number, progress: number) => Promise<UserLibraryEntry | null>;
+  removeUserLibraryEntry: (anilistId: number) => Promise<boolean>;
   // Library storage management (Phase 4)
   getStorageOverview: () => Promise<StorageOverview>;
   getDiskUsage: (folderPath: string) => Promise<{ totalBytes: number; episodeCount: number }>;

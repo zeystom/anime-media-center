@@ -8,7 +8,7 @@
  */
 import React, { useEffect, useLayoutEffect, useMemo, useRef, useState } from 'react'
 import { motion } from 'framer-motion'
-import { AlertTriangle, Bell, BellRing, Check, CheckCircle, Compass, Download, Film, Heart, MoreHorizontal, Play, Plus, Star, Trash2, Wand2, X } from 'lucide-react'
+import { AlertTriangle, Bell, BellRing, Check, CheckCircle, ChevronDown, Compass, Download, Film, Heart, MoreHorizontal, Play, Plus, Star, Trash2, Wand2, X } from 'lucide-react'
 import type {
   AnimeFolder,
   AppSettings,
@@ -60,6 +60,8 @@ export interface AnimeDetailViewProps {
   onToggleFollow: (anime: FollowedAnime, follow: boolean) => void
   isFavourite: boolean
   onToggleFavourite: (anime: FavouriteAnime, favourite: boolean) => void
+  onUserEntryChange?: (entry: UserLibraryEntry) => void
+  onUserEntryRemove?: (anilistId: number) => void
   onBackdropProgressChange?: (progress: number) => void
   onSelectGenre?: (genre: string) => void
 }
@@ -81,10 +83,48 @@ const STATUS_OPTIONS: { value: UserListStatus; label: string }[] = [
   { value: 'dropped', label: 'Dropped' },
 ]
 
-const DOWNLOAD_TOOLTIP = 'Connect the P2P indexers in Settings to download this title'
+const STATUS_THEME: Record<
+  UserListStatus,
+  { label: string; dotColor: string; activeBorder: string; activeBg: string; activeText: string }
+> = {
+  watching: {
+    label: 'Watching',
+    dotColor: 'bg-emerald-400',
+    activeBorder: 'border-emerald-500/35',
+    activeBg: 'bg-gradient-to-r from-emerald-500/20 to-teal-500/20',
+    activeText: 'text-emerald-200',
+  },
+  completed: {
+    label: 'Completed',
+    dotColor: 'bg-violet-400',
+    activeBorder: 'border-violet-500/35',
+    activeBg: 'bg-gradient-to-r from-violet-500/20 to-purple-500/20',
+    activeText: 'text-violet-200',
+  },
+  planning: {
+    label: 'Planning',
+    dotColor: 'bg-amber-400',
+    activeBorder: 'border-amber-500/35',
+    activeBg: 'bg-gradient-to-r from-amber-500/20 to-yellow-500/20',
+    activeText: 'text-amber-200',
+  },
+  paused: {
+    label: 'Paused',
+    dotColor: 'bg-orange-400',
+    activeBorder: 'border-orange-500/35',
+    activeBg: 'bg-gradient-to-r from-orange-500/20 to-amber-500/20',
+    activeText: 'text-orange-200',
+  },
+  dropped: {
+    label: 'Dropped',
+    dotColor: 'bg-rose-400',
+    activeBorder: 'border-rose-500/35',
+    activeBg: 'bg-gradient-to-r from-rose-500/20 to-red-500/20',
+    activeText: 'text-rose-200',
+  },
+}
 
-const SELECT_CLASS =
-  'rounded-lg border border-zinc-700/60 bg-zinc-800/90 px-3 py-2 text-sm font-semibold text-zinc-100 focus:outline-none focus:ring-2 focus:ring-red-600/40 disabled:cursor-not-allowed disabled:opacity-50'
+const DOWNLOAD_TOOLTIP = 'Connect the P2P indexers in Settings to download this title'
 
 function statusChipClass(status: string): string {
   switch (status) {
@@ -172,6 +212,8 @@ export const AnimeDetailView: React.FC<AnimeDetailViewProps> = ({
   onToggleFollow,
   isFavourite,
   onToggleFavourite,
+  onUserEntryChange,
+  onUserEntryRemove,
   onBackdropProgressChange,
   onSelectGenre,
 }) => {
@@ -760,11 +802,56 @@ export const AnimeDetailView: React.FC<AnimeDetailViewProps> = ({
   const statusValue: string = currentEntry?.status ?? ''
   const scoreValue: string = currentEntry?.score != null ? String(Math.round(currentEntry.score)) : '0'
 
-  const handleStatusChange = (event: React.ChangeEvent<HTMLSelectElement>) => {
+  const [statusDropdownOpen, setStatusDropdownOpen] = useState(false)
+  const [scoreDropdownOpen, setScoreDropdownOpen] = useState(false)
+  const statusDropdownRef = useRef<HTMLDivElement | null>(null)
+  const scoreDropdownRef = useRef<HTMLDivElement | null>(null)
+
+  useEffect(() => {
+    const handleClickOutside = (e: MouseEvent) => {
+      const target = e.target as Node
+      if (statusDropdownRef.current && !statusDropdownRef.current.contains(target)) {
+        setStatusDropdownOpen(false)
+      }
+      if (scoreDropdownRef.current && !scoreDropdownRef.current.contains(target)) {
+        setScoreDropdownOpen(false)
+      }
+    }
+    const handleKeyDown = (e: KeyboardEvent) => {
+      if (e.key === 'Escape' && (statusDropdownOpen || scoreDropdownOpen)) {
+        e.stopPropagation()
+        setStatusDropdownOpen(false)
+        setScoreDropdownOpen(false)
+      }
+    }
+    document.addEventListener('mousedown', handleClickOutside)
+    document.addEventListener('keydown', handleKeyDown)
+    return () => {
+      document.removeEventListener('mousedown', handleClickOutside)
+      document.removeEventListener('keydown', handleKeyDown)
+    }
+  }, [statusDropdownOpen, scoreDropdownOpen])
+
+  const handleStatusSelect = async (status: UserListStatus | '') => {
     if (anilistId == null) return
-    const status = event.target.value as UserListStatus
-    if (!STATUS_OPTIONS.some((option) => option.value === status)) return
-    void userLibrary.setStatus(anilistId, hero.idMal, hero.title, status)
+    if (!status) {
+      await userLibrary.remove(anilistId)
+      onUserEntryRemove?.(anilistId)
+      onLibraryChanged?.()
+      return
+    }
+    const updated = await userLibrary.setStatus(
+      anilistId,
+      hero.idMal,
+      hero.title,
+      status,
+      hero.posterUrl,
+      hero.episodesCount
+    )
+    if (updated) {
+      onUserEntryChange?.(updated)
+    }
+    onLibraryChanged?.()
 
     // Suggest freeing the downloaded files once per session when the user
     // marks a locally downloaded title as Completed.
@@ -779,10 +866,13 @@ export const AnimeDetailView: React.FC<AnimeDetailViewProps> = ({
     }
   }
 
-  const handleScoreChange = (event: React.ChangeEvent<HTMLSelectElement>) => {
+  const handleScoreSelect = async (score: number | null) => {
     if (anilistId == null) return
-    const score = Number(event.target.value)
-    void userLibrary.setScore(anilistId, Number.isNaN(score) || score === 0 ? null : score)
+    const updated = await userLibrary.setScore(anilistId, score)
+    if (updated) {
+      onUserEntryChange?.(updated)
+    }
+    onLibraryChanged?.()
   }
 
   // Deletes every remaining local file of this title. History and list
@@ -1147,23 +1237,159 @@ export const AnimeDetailView: React.FC<AnimeDetailViewProps> = ({
               <div className="mt-3">
                 <span className="mb-1.5 block text-[10px] font-bold uppercase tracking-widest text-zinc-500">My List</span>
                 <div className="grid grid-cols-[minmax(0,1fr)_68px] gap-2">
-                  <select value={statusValue} onChange={handleStatusChange} className={`${SELECT_CLASS} min-w-0 w-full`}>
-                    <option value="">Add to list</option>
-                    {STATUS_OPTIONS.map((option) => (
-                      <option key={option.value} value={option.value}>{option.label}</option>
-                    ))}
-                  </select>
-                  <select
-                    value={scoreValue}
-                    onChange={handleScoreChange}
-                    disabled={!currentEntry}
-                    title={currentEntry ? 'Your score' : 'Set a list status first'}
-                    className={`${SELECT_CLASS} min-w-0 w-full px-2`}
-                  >
-                    {Array.from({ length: 11 }, (_, n) => n).map((n) => (
-                      <option key={n} value={n}>{n === 0 ? '—' : n}</option>
-                    ))}
-                  </select>
+                  {/* Status Dropdown */}
+                  <div ref={statusDropdownRef} className="relative min-w-0">
+                    <button
+                      type="button"
+                      onClick={() => {
+                        setStatusDropdownOpen((prev) => !prev)
+                        setScoreDropdownOpen(false)
+                      }}
+                      className={`flex h-9 w-full select-none items-center justify-between gap-1.5 rounded-xl border px-2.5 text-xs font-semibold transition-all hover:scale-[1.01] active:scale-[0.99] ${
+                        currentEntry?.status && STATUS_THEME[currentEntry.status]
+                          ? `${STATUS_THEME[currentEntry.status].activeBorder} ${STATUS_THEME[currentEntry.status].activeBg} ${STATUS_THEME[currentEntry.status].activeText} shadow-sm`
+                          : 'border-white/10 bg-white/[0.04] text-zinc-300 hover:border-white/20 hover:bg-white/[0.08]'
+                      }`}
+                    >
+                      <span className="flex items-center gap-2 min-w-0 truncate">
+                        {currentEntry?.status && STATUS_THEME[currentEntry.status] ? (
+                          <>
+                            <span className={`h-2 w-2 shrink-0 rounded-full ${STATUS_THEME[currentEntry.status].dotColor} shadow-sm`} />
+                            <span className="truncate">{STATUS_THEME[currentEntry.status].label}</span>
+                          </>
+                        ) : (
+                          <>
+                            <Plus className="h-3.5 w-3.5 shrink-0 text-zinc-400" />
+                            <span className="truncate text-zinc-400">Add to list</span>
+                          </>
+                        )}
+                      </span>
+                      <ChevronDown
+                        className={`h-3.5 w-3.5 shrink-0 text-zinc-400 transition-transform duration-200 ${
+                          statusDropdownOpen ? 'rotate-180 text-white' : ''
+                        }`}
+                      />
+                    </button>
+
+                    {statusDropdownOpen && (
+                      <div className="absolute left-0 top-full z-30 mt-1.5 w-full min-w-[160px] rounded-xl border border-white/10 bg-[#12141c]/95 p-1 shadow-2xl shadow-black/80 backdrop-blur-xl">
+                        {STATUS_OPTIONS.map((opt) => {
+                          const conf = STATUS_THEME[opt.value]
+                          const isSelected = statusValue === opt.value
+                          return (
+                            <button
+                              key={opt.value}
+                              type="button"
+                              onClick={() => {
+                                setStatusDropdownOpen(false)
+                                void handleStatusSelect(opt.value)
+                              }}
+                              className={`flex w-full select-none items-center justify-between rounded-lg px-2.5 py-1.5 text-xs font-medium transition-colors ${
+                                isSelected
+                                  ? 'bg-white/[0.1] text-white font-semibold'
+                                  : 'text-zinc-300 hover:bg-white/[0.06] hover:text-white'
+                              }`}
+                            >
+                              <span className="flex items-center gap-2">
+                                <span className={`h-2 w-2 rounded-full ${conf.dotColor}`} />
+                                <span>{conf.label}</span>
+                              </span>
+                              {isSelected && <Check className="h-3.5 w-3.5 text-emerald-400 shrink-0" />}
+                            </button>
+                          )
+                        })}
+                        {currentEntry && (
+                          <>
+                            <div className="my-1 h-px bg-white/10" />
+                            <button
+                              type="button"
+                              onClick={() => {
+                                setStatusDropdownOpen(false)
+                                void handleStatusSelect('')
+                              }}
+                              className="flex w-full select-none items-center gap-2 rounded-lg px-2.5 py-1.5 text-xs font-medium text-rose-400/80 transition-colors hover:bg-rose-500/10 hover:text-rose-300"
+                            >
+                              <X className="h-3.5 w-3.5 shrink-0" />
+                              <span>Remove from list</span>
+                            </button>
+                          </>
+                        )}
+                      </div>
+                    )}
+                  </div>
+
+                  {/* Score Dropdown */}
+                  <div ref={scoreDropdownRef} className="relative">
+                    <button
+                      type="button"
+                      disabled={!currentEntry}
+                      onClick={() => {
+                        if (!currentEntry) return
+                        setScoreDropdownOpen((prev) => !prev)
+                        setStatusDropdownOpen(false)
+                      }}
+                      title={currentEntry ? 'Score this anime (1-10)' : 'Set a list status first'}
+                      className={`flex h-9 w-full select-none items-center justify-between gap-1 rounded-xl border px-2.5 text-xs font-semibold transition-all ${
+                        !currentEntry
+                          ? 'cursor-not-allowed border-white/5 bg-white/[0.02] text-zinc-600 opacity-50'
+                          : Number(scoreValue) > 0
+                            ? 'border-amber-400/35 bg-gradient-to-r from-amber-500/20 to-yellow-500/20 text-amber-200 shadow-sm hover:bg-amber-500/25'
+                            : 'border-white/10 bg-white/[0.04] text-zinc-400 hover:border-white/20 hover:bg-white/[0.08]'
+                      }`}
+                    >
+                      <span className="flex items-center gap-1 min-w-0">
+                        <Star
+                          className={`h-3 w-3 shrink-0 ${
+                            Number(scoreValue) > 0 ? 'fill-amber-400 text-amber-400' : 'text-zinc-500'
+                          }`}
+                        />
+                        <span>{Number(scoreValue) > 0 ? scoreValue : '—'}</span>
+                      </span>
+                      <ChevronDown
+                        className={`h-3 w-3 shrink-0 text-zinc-400 transition-transform duration-200 ${
+                          scoreDropdownOpen ? 'rotate-180 text-white' : ''
+                        }`}
+                      />
+                    </button>
+
+                    {scoreDropdownOpen && (
+                      <div className="absolute right-0 top-full z-30 mt-1.5 w-24 max-h-60 overflow-y-auto rounded-xl border border-white/10 bg-[#12141c]/95 p-1 shadow-2xl shadow-black/80 backdrop-blur-xl">
+                        <button
+                          type="button"
+                          onClick={() => {
+                            setScoreDropdownOpen(false)
+                            void handleScoreSelect(null)
+                          }}
+                          className={`flex w-full select-none items-center justify-between rounded-lg px-2.5 py-1 text-xs font-medium transition-colors ${
+                            Number(scoreValue) === 0 ? 'bg-white/[0.1] text-white font-semibold' : 'text-zinc-400 hover:bg-white/[0.06] hover:text-white'
+                          }`}
+                        >
+                          <span>—</span>
+                          {Number(scoreValue) === 0 && <Check className="h-3 w-3 text-amber-400 shrink-0" />}
+                        </button>
+                        <div className="my-1 h-px bg-white/10" />
+                        {Array.from({ length: 10 }, (_, i) => 10 - i).map((score) => (
+                          <button
+                            key={score}
+                            type="button"
+                            onClick={() => {
+                              setScoreDropdownOpen(false)
+                              void handleScoreSelect(score)
+                            }}
+                            className={`flex w-full select-none items-center justify-between rounded-lg px-2.5 py-1 text-xs font-medium transition-colors ${
+                              Number(scoreValue) === score ? 'bg-white/[0.1] text-amber-300 font-semibold' : 'text-zinc-300 hover:bg-white/[0.06] hover:text-white'
+                            }`}
+                          >
+                            <span className="flex items-center gap-1">
+                              <Star className={`h-2.5 w-2.5 ${Number(scoreValue) === score ? 'fill-amber-400 text-amber-400' : 'text-zinc-600'}`} />
+                              <span>{score}</span>
+                            </span>
+                            {Number(scoreValue) === score && <Check className="h-3 w-3 text-amber-400 shrink-0" />}
+                          </button>
+                        ))}
+                      </div>
+                    )}
+                  </div>
                 </div>
               </div>
             )}

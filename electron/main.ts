@@ -1009,8 +1009,12 @@ function setupIpcHandlers() {
     return userLibrary.getAll();
   });
 
-  ipcMain.handle('user-library:set-status', async (_event, anilistId: number, idMal: number | null, titleSnapshot: string, status: UserListStatus) => {
-    return userLibrary.setStatus(anilistId, idMal, titleSnapshot, status);
+  ipcMain.handle('user-library:set-status', async (_event, anilistId: number, idMal: number | null, titleSnapshot: string, status: UserListStatus, posterUrl?: string | null, totalEpisodes?: number | null) => {
+    return userLibrary.setStatus(anilistId, idMal, titleSnapshot, status, posterUrl, totalEpisodes);
+  });
+
+  ipcMain.handle('user-library:remove', async (_event, anilistId: number) => {
+    return userLibrary.remove(anilistId);
   });
 
   ipcMain.handle('user-library:set-score', async (_event, anilistId: number, score: number | null) => {

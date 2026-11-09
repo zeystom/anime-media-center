@@ -106,12 +106,20 @@ contextBridge.exposeInMainWorld('electronAPI', {
   getRemoteEpisodes: (anilistId: number) => ipcRenderer.invoke('metadata:remote-episodes', anilistId),
   // User Library
   getUserLibrary: () => ipcRenderer.invoke('user-library:get-all'),
-  setUserLibraryStatus: (anilistId: number, idMal: number | null, titleSnapshot: string, status: string) =>
-    ipcRenderer.invoke('user-library:set-status', anilistId, idMal, titleSnapshot, status),
+  setUserLibraryStatus: (
+    anilistId: number,
+    idMal: number | null,
+    titleSnapshot: string,
+    status: string,
+    posterUrl?: string | null,
+    totalEpisodes?: number | null
+  ) => ipcRenderer.invoke('user-library:set-status', anilistId, idMal, titleSnapshot, status, posterUrl, totalEpisodes),
   setUserLibraryScore: (anilistId: number, score: number | null) =>
     ipcRenderer.invoke('user-library:set-score', anilistId, score),
   setUserLibraryProgress: (anilistId: number, progress: number) =>
     ipcRenderer.invoke('user-library:set-progress', anilistId, progress),
+  removeUserLibraryEntry: (anilistId: number) =>
+    ipcRenderer.invoke('user-library:remove', anilistId),
   // Library storage management (Phase 4)
   getStorageOverview: () => ipcRenderer.invoke('library:storage-overview'),
   getDiskUsage: (folderPath: string) => ipcRenderer.invoke('library:disk-usage', folderPath),

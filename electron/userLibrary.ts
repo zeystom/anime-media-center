@@ -24,6 +24,8 @@ export interface UserLibraryEntry {
   score: number | null;
   progress: number;
   updatedAt: number;
+  posterUrl?: string | null;
+  totalEpisodes?: number | null;
 }
 
 const LIBRARY_FILE_NAME = 'user-library.json';
@@ -91,7 +93,7 @@ function saveJsonSync(targetFile: string, data: any): void {
  * applies to user-library.json.
  */
 function normalizeUserLibraryEntry(anilistId: number, raw: Partial<UserLibraryEntry>): UserLibraryEntry {
-  return {
+  const entry: UserLibraryEntry = {
     anilistId,
     idMal: typeof raw.idMal === 'number' && Number.isFinite(raw.idMal) ? Math.trunc(raw.idMal) : null,
     titleSnapshot: typeof raw.titleSnapshot === 'string' ? raw.titleSnapshot : '',
@@ -100,6 +102,13 @@ function normalizeUserLibraryEntry(anilistId: number, raw: Partial<UserLibraryEn
     progress: typeof raw.progress === 'number' ? Math.max(0, Math.trunc(raw.progress)) : 0,
     updatedAt: typeof raw.updatedAt === 'number' ? raw.updatedAt : 0,
   };
+  if (typeof raw.posterUrl === 'string' && raw.posterUrl.trim()) {
+    entry.posterUrl = raw.posterUrl.trim();
+  }
+  if (typeof raw.totalEpisodes === 'number' && Number.isFinite(raw.totalEpisodes)) {
+    entry.totalEpisodes = Math.max(0, Math.trunc(raw.totalEpisodes));
+  }
+  return entry;
 }
 
 export class UserLibrary {
@@ -211,7 +220,14 @@ export class UserLibrary {
    * when provided (null/empty keeps the stored values). Throws on an invalid
    * status so IPC callers get a clear error.
    */
-  setStatus(anilistId: number, idMal: number | null, titleSnapshot: string, status: UserListStatus): UserLibraryEntry {
+  setStatus(
+    anilistId: number,
+    idMal: number | null,
+    titleSnapshot: string,
+    status: UserListStatus,
+    posterUrl?: string | null,
+    totalEpisodes?: number | null
+  ): UserLibraryEntry {
     const id = Math.trunc(Number(anilistId));
     if (!Number.isFinite(id) || id <= 0) {
       throw new Error(`Invalid anilistId: ${anilistId}`);
@@ -232,6 +248,11 @@ export class UserLibrary {
       progress: existing?.progress ?? 0,
       updatedAt: Date.now(),
     };
+    const finalPoster = typeof posterUrl === 'string' && posterUrl.trim() ? posterUrl.trim() : existing?.posterUrl;
+    if (finalPoster) entry.posterUrl = finalPoster;
+    const finalEpisodes = typeof totalEpisodes === 'number' && Number.isFinite(totalEpisodes) ? Math.max(0, Math.trunc(totalEpisodes)) : existing?.totalEpisodes;
+    if (typeof finalEpisodes === 'number') entry.totalEpisodes = finalEpisodes;
+
     entries[id] = entry;
     this.scheduleFlush();
     return entry;
