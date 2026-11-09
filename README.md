@@ -7,7 +7,7 @@
 <p align="center"><strong>Your anime library, player, and subtitle studio — on your PC.</strong></p>
 
 <p align="center">
-  <img src="https://img.shields.io/badge/Version-1.0.3-ec4899?style=flat-square" alt="Version 1.0.3" />
+  <img src="https://img.shields.io/badge/Version-1.0.3-ec4899?style=flat-square" alt="Version 1.0.4" />
   <img src="https://img.shields.io/badge/Platform-Windows%2010%20%2F%2011-blue?style=flat-square" alt="Windows 10 and 11" />
   <img src="https://img.shields.io/badge/Electron-33-47848F?style=flat-square&logo=electron" alt="Electron 33" />
   <img src="https://img.shields.io/badge/License-MIT-green?style=flat-square" alt="MIT License" />
