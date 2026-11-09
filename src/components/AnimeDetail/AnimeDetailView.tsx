@@ -589,15 +589,6 @@ export const AnimeDetailView: React.FC<AnimeDetailViewProps> = ({
     setPosterFailed(false)
   }, [hero.bannerUrl, hero.posterUrl])
 
-  const badgeState = useMemo(
-    () =>
-      statusFor({
-        anilistId: anilistId ?? null,
-        title: hero.title,
-        apiEpisodesCount: hero.episodesCount ?? null,
-      }),
-    [statusFor, anilistId, hero.title, hero.episodesCount]
-  )
   const episodeTotal = hero.episodesCount ?? Math.max(
     hero.totalEpisodes,
     hero.nextAiringEpisodeNumber ? hero.nextAiringEpisodeNumber - 1 : 0,
@@ -801,6 +792,20 @@ export const AnimeDetailView: React.FC<AnimeDetailViewProps> = ({
     anilistId != null ? (userLibrary.entries[anilistId] ?? userEntries[anilistId]) : undefined
   const statusValue: string = currentEntry?.status ?? ''
   const scoreValue: string = currentEntry?.score != null ? String(Math.round(currentEntry.score)) : '0'
+
+  const badgeState = useMemo(() => {
+    const raw = statusFor({
+      anilistId: anilistId ?? null,
+      title: hero.title,
+      apiEpisodesCount: hero.episodesCount ?? null,
+    })
+    if (!raw) return null
+    // If the title is completed in My List, suppress "Watched" badge to avoid duplicate status and layout shifts.
+    if (statusValue === 'completed' && raw.isWatched) {
+      return { ...raw, isWatched: false }
+    }
+    return raw
+  }, [statusFor, anilistId, hero.title, hero.episodesCount, statusValue])
 
   const [statusDropdownOpen, setStatusDropdownOpen] = useState(false)
   const [scoreDropdownOpen, setScoreDropdownOpen] = useState(false)
@@ -1461,19 +1466,28 @@ export const AnimeDetailView: React.FC<AnimeDetailViewProps> = ({
               )}
             </div>
 
-            {(badgeState || techChips.length > 0) && (
-              <div className="mt-2 flex flex-wrap items-center gap-1.5">
-                {badgeState && <StatusBadges state={badgeState} />}
-                {techChips.map((chip) => (
-                  <span
-                    key={chip}
-                    className="rounded border border-white/10 bg-black/35 px-2 py-0.5 font-mono text-[9px] font-semibold text-zinc-300/90 backdrop-blur-sm"
-                  >
-                    {chip}
-                  </span>
-                ))}
-              </div>
-            )}
+            {(() => {
+              const hasBadges = badgeState && (
+                badgeState.isDownloading ||
+                badgeState.isOnPc ||
+                badgeState.isWatched ||
+                (badgeState.releaseBadges && badgeState.releaseBadges.length > 0)
+              )
+              if (!hasBadges && techChips.length === 0) return null
+              return (
+                <div className="mt-2 flex flex-wrap items-center gap-1.5">
+                  {hasBadges && <StatusBadges state={badgeState} />}
+                  {techChips.map((chip) => (
+                    <span
+                      key={chip}
+                      className="rounded border border-white/10 bg-black/35 px-2 py-0.5 font-mono text-[9px] font-semibold text-zinc-300/90 backdrop-blur-sm"
+                    >
+                      {chip}
+                    </span>
+                  ))}
+                </div>
+              )
+            })()}
 
             {/* Genres */}
             {hero.genres.length > 0 && (

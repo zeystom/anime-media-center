@@ -132,35 +132,35 @@ export function useLocalStatus(
       }
 
       const userEntry = refId !== null ? entryMap[refId] : undefined
-      if (!folder && !userEntry) return null
+      if (!folder) return null
 
-      const downloadedEpisodes = folder ? folder.episodes.filter((ep) => !ep?.isDownloading).length : 0
+      const downloadedEpisodes = folder.episodes.filter((ep) => !ep?.isDownloading).length
       const apiCount = typeof ref?.apiEpisodesCount === 'number' && Number.isFinite(ref.apiEpisodesCount)
         ? Math.trunc(ref.apiEpisodesCount)
         : 0
-      const totalEpisodes = Math.max(folder?.totalEpisodes ?? 0, apiCount)
+      const totalEpisodes = Math.max(folder.totalEpisodes ?? 0, apiCount)
 
       const userCompleted = userEntry?.status === 'completed'
       const allLocalWatched =
-        !!folder &&
         folder.episodes.length > 0 &&
         folder.episodes.every((ep) => progressMap[ep.filePath]?.completed === true)
 
       const releaseBadges: string[] = []
-      if (folder) {
-        if ((folder.hasExtSubCount ?? 0) > 0) releaseBadges.push('Ext Sub')
-        if ((folder.hasDubtitlesCount ?? 0) > 0 || folder.hasEmbeddedDubtitles) releaseBadges.push('Dub Sub')
-        if (folder.hasEmbeddedSubtitles) releaseBadges.push('Sub')
-        if (isFolderMovie(folder)) releaseBadges.push('Movie')
-      }
+      if ((folder.hasExtSubCount ?? 0) > 0) releaseBadges.push('Ext Sub')
+      if ((folder.hasDubtitlesCount ?? 0) > 0 || folder.hasEmbeddedDubtitles) releaseBadges.push('Dub Sub')
+      if (folder.hasEmbeddedSubtitles) releaseBadges.push('Sub')
+      if (isFolderMovie(folder)) releaseBadges.push('Movie')
+
+      // When completed in the user list, suppress "Watched" badge so it doesn't duplicate status.
+      const isWatched = !userCompleted && allLocalWatched
 
       return {
-        isOnPc: !!folder,
+        isOnPc: true,
         downloadedEpisodes,
         totalEpisodes,
-        isDownloading: !!folder?.isDownloading,
-        downloadProgress: folder?.downloadProgress,
-        isWatched: userCompleted || allLocalWatched,
+        isDownloading: !!folder.isDownloading,
+        downloadProgress: folder.downloadProgress,
+        isWatched,
         releaseBadges,
       }
     }
