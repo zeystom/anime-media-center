@@ -7,7 +7,7 @@
 <p align="center"><strong>Your anime library, player, and subtitle studio — on your PC.</strong></p>
 
 <p align="center">
-  <img src="https://img.shields.io/badge/Version-1.0.3-ec4899?style=flat-square" alt="Version 1.0.4" />
+  <img src="https://img.shields.io/badge/Version-1.0.4-ec4899?style=flat-square" alt="Version 1.0.4" />
   <img src="https://img.shields.io/badge/Platform-Windows%2010%20%2F%2011-blue?style=flat-square" alt="Windows 10 and 11" />
   <img src="https://img.shields.io/badge/Electron-33-47848F?style=flat-square&logo=electron" alt="Electron 33" />
   <img src="https://img.shields.io/badge/License-MIT-green?style=flat-square" alt="MIT License" />
@@ -33,7 +33,7 @@ For a magnet link that contains no tracker address, the engine appends a small l
 
 ## Install the Windows app
 
-Download the `Kaiko Setup 1.0.3.exe` installer from the project’s GitHub Releases page, run it, and choose an install folder. The installer creates shortcuts. During a normal uninstall, Kaiko asks separately whether to remove saved settings, anime lists, and watch history, and whether to clear the contents of configured media-library folders. Both choices default to **No**; deleting library contents requires a second confirmation listing the folders. Clearing a library folder removes every file inside it, not just Kaiko downloads, and leaves the folder itself in place. Silent uninstall and app upgrades preserve personal data. The first launch may take a little longer while Windows initializes Electron.
+Download the `Kaiko Setup 1.0.4.exe` installer from the project’s GitHub Releases page, run it, and choose an install folder. The installer creates shortcuts. During a normal uninstall, Kaiko asks separately whether to remove saved settings, anime lists, and watch history, and whether to clear the contents of configured media-library folders. Both choices default to **No**; deleting library contents requires a second confirmation listing the folders. Clearing a library folder removes every file inside it, not just Kaiko downloads, and leaves the folder itself in place. Silent uninstall and app upgrades preserve personal data. The first launch may take a little longer while Windows initializes Electron.
 
 The installer does not include FFmpeg or Faster-Whisper. Kaiko can use FFmpeg installed on the system and can detect Faster-Whisper from Subtitle Edit; you can also set executable paths in **Settings**. These tools are only needed for their related media and transcription features.
 
