@@ -185,7 +185,8 @@ const DISCOVER_QUERY = `
     $page: Int, $perPage: Int, $search: String, $season: MediaSeason,
     $seasonYear: Int, $genreIn: [String], $tagIn: [String], $formatIn: [MediaFormat],
     $status: MediaStatus, $minScore: Int, $sort: [MediaSort],
-    $countryOfOrigin: CountryCode, $isAdult: Boolean
+    $countryOfOrigin: CountryCode, $isAdult: Boolean,
+    $genreNotIn: [String], $tagNotIn: [String]
   ) {
     Page(page: $page, perPage: $perPage) {
       pageInfo { hasNextPage }
@@ -193,6 +194,7 @@ const DISCOVER_QUERY = `
         type: ANIME, search: $search, season: $season, seasonYear: $seasonYear,
         genre_in: $genreIn, tag_in: $tagIn, format_in: $formatIn, status: $status,
         averageScore_greater: $minScore, sort: $sort, isAdult: $isAdult,
+        genre_not_in: $genreNotIn, tag_not_in: $tagNotIn,
         countryOfOrigin: $countryOfOrigin
       ) {
         ...MediaFields
@@ -223,7 +225,7 @@ const AIRING_SCHEDULE_QUERY = `
 const RECOMMENDATIONS_QUERY = `
   query ($ids: [Int], $page: Int, $perPage: Int) {
     Page(page: $page, perPage: $perPage) {
-      media(id_in: $ids, type: ANIME) {
+      media(id_in: $ids, type: ANIME, isAdult: false) {
         recommendations {
           nodes {
             rating
@@ -416,6 +418,7 @@ export async function queryDiscoverCatalog(params: {
     ...(Array.isArray(params.tags) ? params.tags : [])
   ]));
 
+  const isAdultQuery = params.isAdult === true;
   const commonVariables = {
     perPage,
     search: params.search?.trim() || undefined,
@@ -430,7 +433,9 @@ export async function queryDiscoverCatalog(params: {
     minScore: params.minScore && params.minScore > 0 ? Math.max(0, Math.min(100, Math.floor(params.minScore) - 1)) : undefined,
     sort: [params.sort],
     countryOfOrigin: params.countryOfOrigin,
-    isAdult: params.isAdult,
+    isAdult: isAdultQuery ? true : false,
+    genreNotIn: isAdultQuery ? undefined : ['Hentai'],
+    tagNotIn: isAdultQuery ? undefined : ['Hentai'],
   };
   let pages: DiscoverPageResult[];
 
@@ -451,6 +456,7 @@ export async function queryDiscoverCatalog(params: {
           type: ANIME, search: $search, season: $season, seasonYear: $seasonYear,
           genre_in: $genreIn, tag_in: $tagIn, format_in: $formatIn, status: $status,
           averageScore_greater: $minScore, sort: $sort, isAdult: $isAdult,
+          genre_not_in: $genreNotIn, tag_not_in: $tagNotIn,
           countryOfOrigin: $countryOfOrigin
         ) { ...MediaFields }
       }
@@ -460,6 +466,7 @@ export async function queryDiscoverCatalog(params: {
       '$perPage: Int!', '$search: String', '$season: MediaSeason', '$seasonYear: Int',
       '$genreIn: [String]', '$tagIn: [String]', '$formatIn: [MediaFormat]', '$status: MediaStatus',
       '$minScore: Int', '$sort: [MediaSort]', '$countryOfOrigin: CountryCode', '$isAdult: Boolean',
+      '$genreNotIn: [String]', '$tagNotIn: [String]',
     ].join(', ')}) { ${pageSelections} } ${MEDIA_FIELDS_FRAGMENT}`;
     const data = await runAniListQuery<Record<string, DiscoverPageResult>>(query, {
       ...commonVariables,
@@ -468,10 +475,19 @@ export async function queryDiscoverCatalog(params: {
     pages = Array.from({ length: pageCount }, (_, index) => data[`page${index}`] ?? null);
   }
 
+  const isHentaiOrAdult = (media: AniListMedia) => {
+    if (media.isAdult === true) return true;
+    if (Array.isArray(media.genres) && media.genres.some((g) => g?.toLowerCase() === 'hentai')) return true;
+    if (Array.isArray(media.tags) && media.tags.some((t) => t?.name?.toLowerCase().includes('hentai'))) return true;
+    return false;
+  };
+
   const unique = new Map<number, AniListMedia>();
   for (const page of pages) {
     for (const media of page?.media ?? []) {
-      if (media && !unique.has(media.id)) unique.set(media.id, media);
+      if (!media) continue;
+      if (!isAdultQuery && isHentaiOrAdult(media)) continue;
+      if (!unique.has(media.id)) unique.set(media.id, media);
     }
   }
   return {

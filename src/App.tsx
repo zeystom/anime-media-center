@@ -4,13 +4,14 @@ import { Navbar } from './components/Navbar';
 import { HomeView } from './components/Home/HomeView';
 import type { DetailSource } from './components/AnimeDetail/AnimeDetailView';
 import { CompletionPrompt, CompletionPromptData } from './components/common/CompletionPrompt';
-import { AnimeFolder, Episode, AppSettings, PlaybackProgress, UserLibraryEntry, P2pState } from './types';
+import { AnimeFolder, Episode, AppSettings, PlaybackProgress, UserLibraryEntry, P2pState, UpdateInfoPayload } from './types';
 import { useLocalStatus } from './hooks/useLocalStatus';
 import { ToastProvider, showGlobalToast } from './components/Toast';
 import { getPathBasename, getPathDirname, formatFileSize, cleanSeriesTitle } from './utils/format';
 import { toRailItem } from './hooks/useCatalog';
 import type { RailItem } from './hooks/useCatalog';
 import type { AppNotification, FavouriteAnime, FollowedAnime } from './types/notifications';
+import { UpdatePromptModal } from './components/UpdatePromptModal';
 
 const AnimeDetailView = lazy(() => import('./components/AnimeDetail/AnimeDetailView').then((module) => ({ default: module.AnimeDetailView })));
 const VideoPlayer = lazy(() => import('./components/Player/VideoPlayer').then((module) => ({ default: module.VideoPlayer })));
@@ -119,6 +120,24 @@ export const App: React.FC = () => {
   const [navbarBackdropProgress, setNavbarBackdropProgress] = useState(1);
   const [whisperMounted, setWhisperMounted] = useState(false);
   const [settingsMounted, setSettingsMounted] = useState(false);
+  const [startupUpdate, setStartupUpdate] = useState<UpdateInfoPayload | null>(null);
+  const [appVersion, setAppVersion] = useState<string>('1.0.5');
+
+  useEffect(() => {
+    const api = window.electronAPI;
+    if (!api) return;
+    if (typeof api.getAppVersion === 'function') {
+      api.getAppVersion().then((v) => { if (v) setAppVersion(v); }).catch(() => {});
+    }
+    if (typeof api.onStartupUpdateAvailable === 'function') {
+      const unsub = api.onStartupUpdateAvailable((info) => {
+        setStartupUpdate(info);
+      });
+      return () => {
+        unsub();
+      };
+    }
+  }, []);
 
   useEffect(() => {
     if (currentTab === 'whisper') setWhisperMounted(true);
@@ -1042,6 +1061,10 @@ export const App: React.FC = () => {
     }
   };
 
+  const handleCloseSettings = useCallback(() => {
+    setSettingsOpen(false);
+  }, []);
+
   // Resolve current active anime folder for player (with fallback for BUG-01)
   const currentPlayingFolder = useMemo<AnimeFolder | null>(() => {
     if (!activePlayerEpisode) return null;
@@ -1486,10 +1509,21 @@ export const App: React.FC = () => {
       {/* Settings Modal */}
       {settingsMounted && <Suspense fallback={null}><SettingsModal
         isOpen={settingsOpen}
-        onClose={() => setSettingsOpen(false)}
+        onClose={handleCloseSettings}
         settings={settings}
         onSave={handleSaveSettings}
       /></Suspense>}
+
+      {/* Startup Update Prompt */}
+      {startupUpdate && (
+        <UpdatePromptModal
+          isOpen={Boolean(startupUpdate)}
+          onClose={() => setStartupUpdate(null)}
+          updateInfo={startupUpdate}
+          appVersion={appVersion}
+          onUpdateSettings={handleSaveSettings}
+        />
+      )}
     </div>
     </ToastProvider>
   );

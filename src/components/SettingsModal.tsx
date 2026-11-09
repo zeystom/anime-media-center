@@ -25,7 +25,7 @@ import {
   Languages,
 } from 'lucide-react';
 import { AppSettings } from '../types';
-import type { P2pState, RssProvider } from '../types';
+import type { P2pState, RssProvider, UpdaterState } from '../types';
 import { showGlobalToast } from './Toast';
 import { P2pConsentModal } from './P2P/P2pConsentModal';
 import { formatFileSize } from '../utils/format';
@@ -141,10 +141,28 @@ export const SettingsModal: React.FC<SettingsModalProps> = ({
   const [providersBusy, setProvidersBusy] = useState(false);
   const providerImportRef = useRef<HTMLInputElement>(null);
 
+  // Application update state
+  const [appVersion, setAppVersion] = useState<string>('1.0.5');
+  const [checkForUpdatesOnStartup, setCheckForUpdatesOnStartup] = useState<boolean>(
+    settings.checkForUpdatesOnStartup ?? true
+  );
+  const [autoUpdate, setAutoUpdate] = useState<boolean>(
+    settings.autoUpdate ?? true
+  );
+  const [updaterState, setUpdaterState] = useState<UpdaterState>({
+    status: 'idle',
+    currentVersion: '1.0.5',
+    updateInfo: null,
+    downloadProgress: null,
+    error: null,
+  });
+
   useEffect(() => {
     if (isOpen) {
       setFfmpegPath(settings.ffmpegPath);
       setWhisperPath(settings.whisperPath);
+      setCheckForUpdatesOnStartup(settings.checkForUpdatesOnStartup ?? true);
+      setAutoUpdate(settings.autoUpdate ?? true);
       setLibraryFolders(
         Array.isArray(settings.libraryFolders) && settings.libraryFolders.length > 0
           ? settings.libraryFolders
@@ -232,6 +250,73 @@ export const SettingsModal: React.FC<SettingsModalProps> = ({
     };
   }, [isOpen]);
 
+  // Updater: fetch current version, state and listen to updater events
+  useEffect(() => {
+    if (!isOpen) return;
+    const api = window.electronAPI;
+    if (!api) return;
+
+    if (typeof api.getAppVersion === 'function') {
+      api.getAppVersion().then((v) => { if (v) setAppVersion(v); }).catch(() => {});
+    }
+    if (typeof api.getUpdaterState === 'function') {
+      api.getUpdaterState().then((s) => { if (s) setUpdaterState(s); }).catch(() => {});
+    }
+    if (typeof api.onUpdaterStateChanged === 'function') {
+      const unsub = api.onUpdaterStateChanged((s) => {
+        setUpdaterState(s);
+      });
+      return unsub;
+    }
+  }, [isOpen]);
+
+  const handleToggleCheckOnStartup = () => {
+    const next = !checkForUpdatesOnStartup;
+    setCheckForUpdatesOnStartup(next);
+    onSave({ checkForUpdatesOnStartup: next });
+  };
+
+  const handleToggleAutoUpdate = () => {
+    const next = !autoUpdate;
+    setAutoUpdate(next);
+    onSave({ autoUpdate: next });
+  };
+
+  const handleCheckForUpdates = async () => {
+    if (window.electronAPI?.checkForUpdates) {
+      try {
+        const state = await window.electronAPI.checkForUpdates();
+        if (state) {
+          setUpdaterState(state);
+          if (state.status === 'not-available') {
+            showGlobalToast(`You are running the latest version (${appVersion})`, 'info');
+          }
+        }
+      } catch (err: any) {
+        showGlobalToast(err?.message || 'Failed to check for updates', 'error');
+      }
+    }
+  };
+
+  const handleDownloadUpdate = async () => {
+    if (window.electronAPI?.downloadUpdate) {
+      try {
+        const res = await window.electronAPI.downloadUpdate();
+        if (!res.success && res.error) {
+          showGlobalToast(res.error, 'error');
+        }
+      } catch (err: any) {
+        showGlobalToast(err?.message || 'Failed to download update', 'error');
+      }
+    }
+  };
+
+  const handleInstallUpdate = () => {
+    if (window.electronAPI?.installUpdate) {
+      window.electronAPI.installUpdate();
+    }
+  };
+
   // Save any pending uncommitted path changes before closing
   const handleClose = () => {
     if (ffmpegPath !== settings.ffmpegPath || whisperPath !== settings.whisperPath) {
@@ -245,14 +330,18 @@ export const SettingsModal: React.FC<SettingsModalProps> = ({
 
   // Handle Escape key to close (the P2P consent modal handles its own Escape)
   useEffect(() => {
+    if (!isOpen) return;
     const handleKeyDown = (e: KeyboardEvent) => {
-      if (e.key === 'Escape' && isOpen) {
+      if (e.key === 'Escape') {
+        e.preventDefault();
+        e.stopPropagation();
+        e.stopImmediatePropagation();
         if (showP2pConsent) return;
         handleClose();
       }
     };
-    window.addEventListener('keydown', handleKeyDown);
-    return () => window.removeEventListener('keydown', handleKeyDown);
+    window.addEventListener('keydown', handleKeyDown, true);
+    return () => window.removeEventListener('keydown', handleKeyDown, true);
   }, [isOpen, ffmpegPath, whisperPath, settings, onClose, showP2pConsent]);
 
   if (!isOpen) return null;
@@ -755,13 +844,21 @@ export const SettingsModal: React.FC<SettingsModalProps> = ({
             </div>
           </div>
 
-          <button
-            type="button"
-            onClick={handleClose}
-            className="p-1.5 rounded-lg text-zinc-400 hover:text-white hover:bg-zinc-800 transition-colors"
-          >
-            <X className="w-5 h-5" />
-          </button>
+          <div className="flex items-center space-x-3">
+            <span
+              title={`Kaiko version ${appVersion}`}
+              className="text-xs font-mono font-medium px-2.5 py-1 rounded-lg bg-zinc-800/90 text-zinc-400 border border-white/10 select-none"
+            >
+              v{appVersion}
+            </span>
+            <button
+              type="button"
+              onClick={handleClose}
+              className="p-1.5 rounded-lg text-zinc-400 hover:text-white hover:bg-zinc-800 transition-colors"
+            >
+              <X className="w-5 h-5" />
+            </button>
+          </div>
         </div>
 
         {/* Form Body (Scrollable) */}
@@ -1065,6 +1162,144 @@ export const SettingsModal: React.FC<SettingsModalProps> = ({
                   <FolderOpen className="w-3.5 h-3.5 text-zinc-400" />
                   <span>Browse</span>
                 </button>
+              </div>
+            </div>
+          </div>
+
+          {/* Section: Application Updates */}
+          <div className="space-y-3 pt-3 border-t border-white/10">
+            <div>
+              <label className="text-xs font-semibold text-zinc-200 uppercase tracking-wider flex items-center space-x-2">
+                <RefreshCw className="w-3.5 h-3.5 text-zinc-400" />
+                <span>Application Updates</span>
+              </label>
+              <p className="text-[11px] text-zinc-400">
+                Manage update checking and installation from GitHub Releases without re-downloading or pulling through Git.
+              </p>
+            </div>
+
+            <div className="space-y-2">
+              {/* Toggle 1: Search updates on start */}
+              <div className="flex items-center justify-between p-3 rounded-xl bg-zinc-900/60 border border-white/5">
+                <div className="space-y-0.5 pr-3">
+                  <span className="text-xs font-medium text-zinc-200">
+                    Check for updates on startup
+                  </span>
+                  <p className="text-[11px] text-zinc-400">
+                    Automatically check for new releases when launching the application
+                  </p>
+                </div>
+                <ToggleSwitch
+                  checked={checkForUpdatesOnStartup}
+                  onChange={handleToggleCheckOnStartup}
+                  label="Check for updates on startup"
+                />
+              </div>
+
+              {/* Toggle 2: Auto-updates */}
+              <div className="flex items-center justify-between p-3 rounded-xl bg-zinc-900/60 border border-white/5">
+                <div className="space-y-0.5 pr-3">
+                  <span className="text-xs font-medium text-zinc-200">
+                    Auto-updates
+                  </span>
+                  <p className="text-[11px] text-zinc-400">
+                    Automatically download available updates in the background
+                  </p>
+                </div>
+                <ToggleSwitch
+                  checked={autoUpdate}
+                  onChange={handleToggleAutoUpdate}
+                  label="Auto-updates"
+                />
+              </div>
+
+              {/* Check for updates button & Status */}
+              <div className="flex flex-col space-y-2.5 p-3.5 rounded-xl bg-zinc-900/60 border border-white/5">
+                <div className="flex items-center justify-between">
+                  <div className="space-y-0.5 min-w-0 pr-3">
+                    <span className="text-xs font-medium text-zinc-200">
+                      Application Version
+                    </span>
+                    <p className="text-[11px] text-zinc-400 font-mono">
+                      Current: <span className="text-zinc-200 font-semibold">v{appVersion}</span>
+                      {updaterState.status === 'not-available' && ' — you are running the latest version'}
+                      {updaterState.status === 'checking' && ' — checking for updates...'}
+                      {updaterState.status === 'available' && ` — new version v${updaterState.updateInfo?.version || ''} available!`}
+                      {updaterState.status === 'downloaded' && ` — v${updaterState.updateInfo?.version || ''} ready to install!`}
+                    </p>
+                  </div>
+
+                  <div className="flex items-center space-x-2 shrink-0">
+                    {updaterState.status === 'available' ? (
+                      <button
+                        type="button"
+                        onClick={handleDownloadUpdate}
+                        className="flex items-center space-x-1.5 px-3.5 py-1.5 rounded-lg bg-purple-600 hover:bg-purple-500 text-white text-xs font-medium transition-all shadow-sm"
+                      >
+                        <Download className="w-3.5 h-3.5" />
+                        <span>Update Now</span>
+                      </button>
+                    ) : updaterState.status === 'downloaded' ? (
+                      <button
+                        type="button"
+                        onClick={handleInstallUpdate}
+                        className="flex items-center space-x-1.5 px-3.5 py-1.5 rounded-lg bg-green-600 hover:bg-green-500 text-white text-xs font-medium transition-all shadow-sm"
+                      >
+                        <RefreshCw className="w-3.5 h-3.5" />
+                        <span>Restart &amp; Install</span>
+                      </button>
+                    ) : (
+                      <button
+                        type="button"
+                        onClick={handleCheckForUpdates}
+                        disabled={updaterState.status === 'checking' || updaterState.status === 'downloading'}
+                        className="flex items-center space-x-1.5 px-3.5 py-1.5 rounded-lg bg-zinc-800 hover:bg-zinc-700 disabled:opacity-50 text-zinc-100 border border-white/10 text-xs font-medium transition-all shadow-sm"
+                      >
+                        <RefreshCw className={`w-3.5 h-3.5 ${updaterState.status === 'checking' ? 'animate-spin text-purple-400' : ''}`} />
+                        <span>{updaterState.status === 'checking' ? 'Checking...' : 'Check for Updates'}</span>
+                      </button>
+                    )}
+                  </div>
+                </div>
+
+                {/* Downloading Progress Bar */}
+                {updaterState.status === 'downloading' && (
+                  <div className="space-y-1.5 pt-2 border-t border-white/5">
+                    <div className="flex items-center justify-between text-xs text-zinc-300">
+                      <span>Downloading update v{updaterState.updateInfo?.version || ''}...</span>
+                      <span className="font-mono">{Math.round(updaterState.downloadProgress?.percent || 0)}%</span>
+                    </div>
+                    <div className="w-full h-1.5 rounded-full bg-zinc-800 overflow-hidden">
+                      <div
+                        className="h-full bg-gradient-to-r from-purple-500 to-indigo-500 transition-all duration-200"
+                        style={{ width: `${Math.max(2, Math.min(100, updaterState.downloadProgress?.percent || 0))}%` }}
+                      />
+                    </div>
+                    {updaterState.downloadProgress && (
+                      <div className="flex items-center justify-between text-[11px] text-zinc-500 font-mono">
+                        <span>{formatFileSize(updaterState.downloadProgress.transferred)} / {formatFileSize(updaterState.downloadProgress.total)}</span>
+                        <span>{formatFileSize(updaterState.downloadProgress.bytesPerSecond)}/s</span>
+                      </div>
+                    )}
+                  </div>
+                )}
+
+                {/* Error message */}
+                {updaterState.status === 'error' && updaterState.error && (
+                  <div className="flex items-center justify-between p-2.5 rounded-lg bg-red-950/40 border border-red-500/30 text-xs text-red-200">
+                    <div className="flex items-center space-x-2 min-w-0 pr-2">
+                      <AlertCircle className="w-4 h-4 text-red-400 shrink-0" />
+                      <span className="truncate">{updaterState.error}</span>
+                    </div>
+                    <button
+                      type="button"
+                      onClick={handleCheckForUpdates}
+                      className="px-2 py-0.5 rounded bg-zinc-800 hover:bg-zinc-700 text-[11px] font-medium text-zinc-200 shrink-0"
+                    >
+                      Retry
+                    </button>
+                  </div>
+                )}
               </div>
             </div>
           </div>
@@ -1470,14 +1705,19 @@ export const SettingsModal: React.FC<SettingsModalProps> = ({
 
         {/* Footer Actions */}
         <div className="px-6 py-4 border-t border-white/10 flex items-center justify-between shrink-0 bg-[#141418]">
-          <button
-            type="button"
-            onClick={handleResetDefaults}
-            className="flex items-center space-x-1.5 px-3 py-1.5 rounded-lg text-zinc-400 hover:text-white hover:bg-zinc-800/80 text-xs font-medium transition-colors"
-          >
-            <RotateCcw className="w-3.5 h-3.5" />
-            <span>Reset tool paths</span>
-          </button>
+          <div className="flex items-center space-x-3">
+            <button
+              type="button"
+              onClick={handleResetDefaults}
+              className="flex items-center space-x-1.5 px-3 py-1.5 rounded-lg text-zinc-400 hover:text-white hover:bg-zinc-800/80 text-xs font-medium transition-colors"
+            >
+              <RotateCcw className="w-3.5 h-3.5" />
+              <span>Reset tool paths</span>
+            </button>
+            <span className="text-[11px] text-zinc-500 font-mono select-none">
+              v{appVersion}
+            </span>
+          </div>
 
           <button
             type="button"

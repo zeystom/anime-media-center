@@ -4,6 +4,7 @@ import type { Episode, PlaybackProgress, TorrentJob } from '../../types'
 import { formatRelativeAirDate, formatTime } from '../../utils/format'
 import { parseReleaseCore } from '../../lib/releaseParser/regexEngine.ts'
 import { DownloadActionButton } from '../common/DownloadActionButton'
+import { PLACEHOLDER_EPISODE_IMAGE } from '../../utils/assets'
 
 export interface EpisodeRowProps {
   number: string
@@ -112,8 +113,13 @@ export const EpisodeRow: React.FC<EpisodeRowProps> = ({
             else setImgError(true)
           }} className={`h-full w-full object-cover transition duration-300 ${!downloaded || downloadActive ? 'scale-105 blur-sm brightness-50' : 'group-hover:scale-105'}`} />
         ) : (
-          <div className="flex h-full w-full items-center justify-center bg-gradient-to-br from-zinc-900 to-zinc-950">
-            <Film className="h-7 w-7 text-zinc-700" />
+          <div className="relative flex h-full w-full items-center justify-center bg-[#0e0915] overflow-hidden">
+            <img
+              src={PLACEHOLDER_EPISODE_IMAGE}
+              alt=""
+              loading="lazy"
+              className={`h-full w-full object-cover transition duration-300 ${downloadActive ? 'scale-105 blur-sm brightness-50' : 'group-hover:scale-105'}`}
+            />
           </div>
         )}
 

@@ -3,6 +3,7 @@ import { X, Play, CheckCircle2, ListVideo, Film, Sparkles } from 'lucide-react';
 import { Episode, PlaybackProgress } from '../../types';
 import { formatTime, cleanEpisodeTitle, cleanSeriesTitle, formatEpisodeDisplayTitle } from '../../utils/format';
 import { parseReleaseCore } from '../../lib/releaseParser/regexEngine';
+import { PLACEHOLDER_EPISODE_IMAGE } from '../../utils/assets';
 
 interface EpisodeDrawerProps {
   isOpen: boolean;
@@ -97,9 +98,14 @@ const EpisodeDrawerItem: React.FC<EpisodeItemProps> = ({
             loading="lazy"
           />
         ) : (
-          <div className="w-full h-full flex flex-col items-center justify-center bg-gradient-to-br from-zinc-900 via-zinc-950 to-black p-2 text-center">
-            <Film className="w-5 h-5 text-zinc-600 mb-1" />
-            <span className="text-[11px] font-bold text-zinc-400 tracking-wider">
+          <div className="relative w-full h-full flex items-center justify-center bg-[#0e0915] overflow-hidden">
+            <img
+              src={PLACEHOLDER_EPISODE_IMAGE}
+              alt=""
+              className="w-full h-full object-cover transition-transform duration-300 group-hover:scale-105"
+              loading="lazy"
+            />
+            <span className="absolute bottom-1 right-1 px-1 py-0.5 rounded text-[9px] font-bold bg-black/75 text-zinc-300 border border-white/10">
               {parsed.episodeLabel}
             </span>
           </div>

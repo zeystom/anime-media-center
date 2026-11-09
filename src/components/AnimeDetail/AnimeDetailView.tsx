@@ -276,6 +276,15 @@ export const AnimeDetailView: React.FC<AnimeDetailViewProps> = ({
   useEffect(() => {
     const onKey = (e: KeyboardEvent) => {
       if (e.key !== 'Escape' || e.defaultPrevented) return
+
+      // Do not close AnimeDetailView if a modal or dialog is open (e.g. SettingsModal)
+      const isModalOpen = Boolean(
+        document.querySelector('[role="dialog"]') ||
+        document.querySelector('[data-modal="true"]') ||
+        document.querySelector('.glass-dropdown')
+      )
+      if (isModalOpen) return
+
       if (descriptionReaderOpen) {
         e.preventDefault()
         e.stopImmediatePropagation()

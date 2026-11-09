@@ -1,6 +1,6 @@
 {
   "name": "anime-media-center",
-  "version": "1.0.4",
+  "version": "1.0.5",
   "description": "Kaiko — your anime library and home media center",
   "type": "module",
   "main": "dist-electron/bootstrap.js",
@@ -9,8 +9,8 @@
     "build": "tsc && vite build",
     "start": "electron .",
     "package": "npm run build && electron-builder",
-    "test": "node test-episodes.js && node test-release-parser.js && node test-path-security.js && node test-torrents.js && node test-whisper-queue.js && node test-catalog-cache.js && node test-library-manager.js && node test-watchlist-io.js && node test-indexers.js && node test-torrent-engine.js && node test-milestone1.js && node test-milestone2.js && node test-milestone3.js && node test-milestone4.js",
-    "test:all": "node test-episodes.js && node test-release-parser.js && node test-path-security.js && node test-torrents.js && node test-whisper-queue.js && node test-catalog-cache.js && node test-library-manager.js && node test-watchlist-io.js && node test-indexers.js && node test-torrent-engine.js && node test-milestone1.js && node test-milestone1-adversarial.js && node test-milestone2.js && node test-milestone2-adversarial.js && node test-milestone3.js && node test-milestone3-adversarial.js && node test-milestone4.js && node test-milestone4-adversarial.js && node test-milestone4-challenger2.js",
+    "test": "node test-episodes.js && node test-release-parser.js && node test-path-security.js && node test-torrents.js && node test-whisper-queue.js && node test-catalog-cache.js && node test-library-manager.js && node test-watchlist-io.js && node test-indexers.js && node test-torrent-engine.js && node test-milestone1.js && node test-milestone2.js && node test-milestone3.js && node test-milestone4.js && node test-updater.js",
+    "test:all": "node test-episodes.js && node test-release-parser.js && node test-path-security.js && node test-torrents.js && node test-whisper-queue.js && node test-catalog-cache.js && node test-library-manager.js && node test-watchlist-io.js && node test-indexers.js && node test-torrent-engine.js && node test-milestone1.js && node test-milestone1-adversarial.js && node test-milestone2.js && node test-milestone2-adversarial.js && node test-milestone3.js && node test-milestone3-adversarial.js && node test-milestone4.js && node test-milestone4-adversarial.js && node test-milestone4-challenger2.js && node test-updater.js",
     "update:age-ratings": "node scripts/update-age-ratings.mjs"
   },
   "build": {
@@ -23,6 +23,13 @@
     "directories": {
       "output": "dist-build"
     },
+    "publish": [
+      {
+        "provider": "github",
+        "owner": "zeystom",
+        "repo": "anime-media-center"
+      }
+    ],
     "win": {
       "target": [
         "nsis"
@@ -39,6 +46,7 @@
   },
   "dependencies": {
     "anitomyscript": "^2.0.4",
+    "electron-updater": "^6.8.11",
     "fast-xml-parser": "^5.12.0",
     "framer-motion": "^11.11.17",
     "jassub": "^2.5.23",

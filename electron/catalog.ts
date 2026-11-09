@@ -249,7 +249,7 @@ export function normalizeMedia(raw: AniListMedia): CatalogItem {
     durationMinutes: typeof raw?.duration === 'number' ? raw.duration : null,
     format: raw?.format || null,
     status: raw?.status || null,
-    isAdult: raw?.isAdult === true,
+    isAdult: raw?.isAdult === true || (Array.isArray(raw?.genres) && raw.genres.some((g) => g?.toLowerCase() === 'hentai')),
     season: raw?.season || null,
     seasonYear: typeof raw?.seasonYear === 'number' ? raw.seasonYear : null,
     startDate:
@@ -370,6 +370,7 @@ export async function getDiscoverCatalog(
   if (mode === 'recommended') {
     const recommendations = recommendationSeeds.length > 0 ? await getRecommendations(recommendationSeeds, 100) : [];
     const filtered = recommendations.filter((item) => {
+      if (item.isAdult || item.genres.some((g) => g.toLowerCase() === 'hentai')) return false;
       if (inputGenres.length > 0) {
         const matchesAll = inputGenres.every((sel) => {
           const lower = sel.toLowerCase();
@@ -406,6 +407,7 @@ export async function getDiscoverCatalog(
       season,
       seasonYear,
       ...filters,
+      isAdult: false,
       sort,
       countryOfOrigin,
     });

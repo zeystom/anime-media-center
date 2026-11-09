@@ -3,6 +3,7 @@ import { Play, Subtitles, CheckCircle2, ArrowDownToLine, Check } from 'lucide-re
 import { Episode, PlaybackProgress } from '../../types';
 import { formatTime, formatFileSize, cleanEpisodeTitle, formatEpisodeDisplayTitle } from '../../utils/format';
 import { showGlobalToast } from '../Toast';
+import { PLACEHOLDER_EPISODE_IMAGE } from '../../utils/assets';
 
 interface EpisodeCardProps {
   episode: Episode;
@@ -84,10 +85,20 @@ export const EpisodeCard: React.FC<EpisodeCardProps> = ({ episode, progress, onP
             loading="lazy"
           />
         ) : (
-          <div className="w-full h-full flex flex-col items-center justify-center bg-gradient-to-br from-zinc-900 to-zinc-950 p-4 text-center">
-            <span className="text-2xl font-bold tracking-wider text-zinc-700 group-hover:text-zinc-500 transition-colors">
-              {episode.episodeNumber}
-            </span>
+          <div className="relative w-full h-full flex flex-col items-center justify-center bg-[#0e0915] overflow-hidden">
+            <img
+              src={PLACEHOLDER_EPISODE_IMAGE}
+              alt=""
+              className={`w-full h-full object-cover transition-transform duration-300 ${
+                episode.isDownloading ? 'blur-md scale-110 opacity-35' : 'group-hover:scale-105'
+              }`}
+              loading="lazy"
+            />
+            {episode.episodeNumber && (
+              <span className="absolute bottom-2 right-2 px-1.5 py-0.5 rounded text-[10px] font-bold bg-black/75 backdrop-blur-sm text-zinc-300 border border-white/10">
+                {episode.episodeNumber}
+              </span>
+            )}
           </div>
         )}
 

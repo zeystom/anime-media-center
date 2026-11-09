@@ -4,6 +4,7 @@ import type { AnimeFolder, Episode, PlaybackProgress } from '../../types'
 import { cleanEpisodeTitle, formatTime } from '../../utils/format'
 import { parseReleaseCore } from '../../lib/releaseParser/regexEngine.ts'
 import { HorizontalScroller } from '../common/HorizontalScroller'
+import { PLACEHOLDER_EPISODE_IMAGE } from '../../utils/assets'
 
 interface RecentEpisodesRailProps {
   folders: AnimeFolder[]
@@ -162,7 +163,7 @@ export const RecentEpisodesRail: React.FC<RecentEpisodesRailProps> = ({ folders,
           // Keep Home completely off the video files: episode.thumbnailUrl is
           // a local FFmpeg endpoint and can seek/decode a multi-GB MKV just to
           // paint a card. Use hosted stills and series artwork only here.
-          const image = remote?.thumbnailUrl || episode.kitsuThumbnail || folder.bannerUrl || folder.posterUrl
+          const image = remote?.thumbnailUrl || episode.kitsuThumbnail || folder.bannerUrl || folder.posterUrl || PLACEHOLDER_EPISODE_IMAGE
 
           return (
             <button key={episode.filePath} onClick={() => onPlay(episode, progress.currentTime)} className="group w-[250px] shrink-0 overflow-hidden rounded-2xl border border-white/[0.08] bg-[#151720]/90 text-left shadow-lg shadow-black/20 transition hover:-translate-y-1 hover:border-rose-300/30 hover:shadow-rose-950/20">

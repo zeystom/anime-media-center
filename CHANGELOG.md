@@ -1,5 +1,13 @@
 # Changelog
 
+## 1.0.5 — In-app updater & automated GitHub Releases deployment
+
+- **In-App Auto-Updater:** Seamless application updates directly from GitHub Releases without needing to git clone or pull manually.
+- **Startup Update Check:** Configurable check on startup (enabled by default) with an interactive prompt to update now, postpone, or permanently suppress future startup prompts.
+- **Settings Management:** Display current app version badge in Settings, toggle automatic background updates and startup checks, and trigger manual "Check for Updates" with live progress indicators.
+- **Direct GitHub Fallback:** Dual update engine supporting both packaged NSIS delta packages and direct stream-downloaded installers from GitHub Releases API.
+- **Episode Art Assets:** Bundled 16:9 widescreen placeholder artwork for upcoming or unreleased episodes.
+
 ## 1.0.4 — Discover infinite scroll, multi-genres, title language & Whisper Studio overhaul
 
 - **Discover Infinite Scroll:** Automatically loads more anime seamlessly as you scroll down.

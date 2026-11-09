@@ -147,6 +147,14 @@ export interface ElectronAPI {
   getP2pProviders: () => Promise<RssProvider[]>;
   saveP2pProviders: (providers: RssProvider[]) => Promise<{ success: boolean; error?: string }>;
   onP2pStateChanged: (callback: (state: P2pState) => void) => () => void;
+  // Updater
+  getAppVersion: () => Promise<string>;
+  getUpdaterState: () => Promise<import('../../electron/types').UpdaterState>;
+  checkForUpdates: () => Promise<import('../../electron/types').UpdaterState>;
+  downloadUpdate: () => Promise<{ success: boolean; error?: string }>;
+  installUpdate: () => Promise<{ success: boolean }>;
+  onUpdaterStateChanged: (callback: (state: import('../../electron/types').UpdaterState) => void) => () => void;
+  onStartupUpdateAvailable: (callback: (info: import('../../electron/types').UpdateInfoPayload) => void) => () => void;
 }
 
 declare global {

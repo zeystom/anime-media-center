@@ -45,7 +45,7 @@ export default defineConfig({
           build: {
             outDir: 'dist-electron',
             rollupOptions: {
-              external: ['electron', 'child_process', 'fs', 'fs/promises', 'path', 'os', 'http', 'url', 'crypto', 'events', 'anitomyscript', 'fast-xml-parser', 'webtorrent'],
+              external: ['electron', 'child_process', 'fs', 'fs/promises', 'path', 'os', 'http', 'url', 'crypto', 'events', 'anitomyscript', 'fast-xml-parser', 'webtorrent', 'electron-updater'],
             },
           },
         },

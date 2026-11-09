@@ -24,6 +24,7 @@ import { syncBackupNow, getBackupStatus, detectRestoreState, restoreFromBackup, 
 import { exportWatchlist, importWatchlist, MAL_ONLY_ANILIST_ID_BASE } from './watchlistIO';
 import { initTorrentEngine, engineSetEnabled, engineAddDownload, enginePause, engineResume, engineCancel, engineGetState, engineShutdown } from './torrentEngine';
 import { searchProviders, rankReleasesForEpisode, isExplicitEpisodeMismatch, explicitReleasePart, isExplicitPartMismatch, getEpisodeReleaseSizeWarning, sanitizeSearchQuery, extractInfoHash, fetchReleaseDescription, inspectReleaseResults, computeTitleRelevance } from './indexers';
+import { initUpdater, checkForUpdates, downloadUpdate, installUpdate, getUpdaterState, getAppVersion } from './updater';
 
 const __filename = fileURLToPath(import.meta.url);
 const __dirname = path.dirname(__filename);
@@ -343,6 +344,7 @@ async function createWindow() {
     });
     // Setup IPC Handlers (Guarded against duplicate registration)
     setupIpcHandlers();
+    initUpdater(() => mainWindow);
 
     // Background 60-day cleanup of old thumbnails & subtitles
     setTimeout(() => {
@@ -397,6 +399,17 @@ async function createWindow() {
         if (!win.isDestroyed()) win.webContents.send('age-ratings:updated', ratings);
       }
     });
+
+    // Check for updates on startup if enabled (default true)
+    setTimeout(() => {
+      if (!mainWindow || mainWindow.isDestroyed()) return;
+      const s = storage.getSettings();
+      if (s.checkForUpdatesOnStartup !== false) {
+        checkForUpdates(true).catch((err) => {
+          console.warn('[Main] Startup update check failed:', err);
+        });
+      }
+    }, 3000);
 
     mainWindow.on('closed', () => {
       mainWindow = null;
@@ -1267,6 +1280,16 @@ function setupIpcHandlers() {
     // Provider URLs are part of the search environment. Discard old failures
     // immediately so a corrected indexer can be retried without restarting.
     searchResultCache.clear();
+    return { success: true };
+  });
+
+  // Updater handlers
+  ipcMain.handle('updater:get-version', () => getAppVersion());
+  ipcMain.handle('updater:get-state', () => getUpdaterState());
+  ipcMain.handle('updater:check', async () => checkForUpdates(false));
+  ipcMain.handle('updater:download', async () => downloadUpdate());
+  ipcMain.handle('updater:install', async () => {
+    installUpdate();
     return { success: true };
   });
 }

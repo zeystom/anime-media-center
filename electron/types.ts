@@ -171,6 +171,10 @@ export interface AppSettings {
   hideDownloadingAnime?: boolean;
   whisperOptions?: WhisperOptions;
 
+  // ---- Updater settings ----
+  checkForUpdatesOnStartup?: boolean; // default true
+  autoUpdate?: boolean;               // default true
+
   // ---- P2P / BitTorrent (BYOC — user provides their own indexers) ----
   enableP2P?: boolean;              // default false — the torrent engine never starts until the user opts in
   p2pConsentAcceptedAt?: number | null;
@@ -349,4 +353,39 @@ export interface WhisperStatus {
   queue: WhisperQueueItem[];
   logs: WhisperLogMessage[];
   liveCues?: WhisperLiveCue[];
+}
+
+// ---- Application Updater Types ----
+
+export type UpdaterStatus =
+  | 'idle'
+  | 'checking'
+  | 'available'
+  | 'downloading'
+  | 'downloaded'
+  | 'not-available'
+  | 'error';
+
+export interface UpdateInfoPayload {
+  version: string;
+  releaseDate?: string;
+  releaseNotes?: string | null;
+  downloadUrl?: string | null;
+  fileName?: string | null;
+  fileSize?: number | null;
+}
+
+export interface UpdateProgressPayload {
+  percent: number;
+  bytesPerSecond: number;
+  transferred: number;
+  total: number;
+}
+
+export interface UpdaterState {
+  status: UpdaterStatus;
+  currentVersion: string;
+  updateInfo?: UpdateInfoPayload | null;
+  downloadProgress?: UpdateProgressPayload | null;
+  error?: string | null;
 }

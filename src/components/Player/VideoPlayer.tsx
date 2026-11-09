@@ -31,6 +31,7 @@ import { MagneticEpisodePeek } from './MagneticEpisodePeek';
 import { RippleIndicator, RippleType } from './RippleIndicator';
 import { formatTime, cleanEpisodeTitle, cleanSeriesTitle, formatEpisodeDisplayTitle } from '../../utils/format';
 import { parseReleaseCore } from '../../lib/releaseParser/regexEngine';
+import { PLACEHOLDER_EPISODE_IMAGE } from '../../utils/assets';
 
 interface VideoPlayerProps {
   episode: Episode;
@@ -1891,9 +1892,11 @@ export const VideoPlayer: React.FC<VideoPlayerProps> = ({
                   className="w-full h-full object-cover"
                 />
               ) : (
-                <div className="w-full h-full flex items-center justify-center bg-zinc-900 text-zinc-500">
-                  <Film className="w-4 h-4" />
-                </div>
+                <img
+                  src={PLACEHOLDER_EPISODE_IMAGE}
+                  alt={nextTitle}
+                  className="w-full h-full object-cover"
+                />
               )}
             </div>
 

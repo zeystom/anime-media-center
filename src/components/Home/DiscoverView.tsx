@@ -128,6 +128,13 @@ function defaultSortForMode(mode: Exclude<DiscoverMode, 'search'>): DiscoverSort
   return 'POPULARITY_DESC'
 }
 
+function isHentaiItem(item: { isAdult?: boolean; genres?: string[]; tags?: string[] }): boolean {
+  if (item.isAdult === true) return true
+  if (Array.isArray(item.genres) && item.genres.some((g) => g.toLowerCase() === 'hentai')) return true
+  if (Array.isArray(item.tags) && item.tags.some((t) => t.toLowerCase().includes('hentai'))) return true
+  return false
+}
+
 function SelectField({ label, value, onChange, children, className = '', disabled = false }: {
   label: string
   value: string
@@ -288,7 +295,7 @@ export const DiscoverView: React.FC<DiscoverViewProps> = ({
     api.getDiscoverCatalog(requestParams)
       .then((result) => {
         if (cancelled || generation !== requestGenerationRef.current) return
-        setItems((result?.items || []).map(toRailItem))
+        setItems((result?.items || []).filter((item) => !isHentaiItem(item)).map(toRailItem))
         setPage(result?.page || 1)
         setHasNextPage(Boolean(result?.hasNextPage))
       })
@@ -304,8 +311,9 @@ export const DiscoverView: React.FC<DiscoverViewProps> = ({
 
   const { ratings: ageRatings, loadingIds: loadingAgeRatingIds } = useAgeRatings(items)
   const visibleItems = useMemo(() => {
-    if (ageRating === 'ALL') return items
-    return items.filter((item) => {
+    const safeItems = items.filter((item) => !isHentaiItem(item))
+    if (ageRating === 'ALL') return safeItems
+    return safeItems.filter((item) => {
       if (item.idMal == null) return ageRating === 'NR'
       if (!Object.prototype.hasOwnProperty.call(ageRatings, item.idMal)) return false
       return normalizeAgeRating(ageRatings[item.idMal]) === ageRating
@@ -324,7 +332,7 @@ export const DiscoverView: React.FC<DiscoverViewProps> = ({
     try {
       const result = await api.getDiscoverCatalog({ ...requestParams, page: nextPage })
       if (generation !== requestGenerationRef.current) return
-      const newItems = (result?.items || []).map(toRailItem)
+      const newItems = (result?.items || []).filter((item) => !isHentaiItem(item)).map(toRailItem)
       setItems((previous) => {
         const merged = new Map(previous.map((item) => [item.anilistId, item]))
         newItems.forEach((item) => merged.set(item.anilistId, item))

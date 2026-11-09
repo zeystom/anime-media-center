@@ -150,4 +150,20 @@ contextBridge.exposeInMainWorld('electronAPI', {
     ipcRenderer.on('p2p-state-changed', handler);
     return () => ipcRenderer.removeListener('p2p-state-changed', handler);
   },
+  // Updater
+  getAppVersion: () => ipcRenderer.invoke('updater:get-version'),
+  getUpdaterState: () => ipcRenderer.invoke('updater:get-state'),
+  checkForUpdates: () => ipcRenderer.invoke('updater:check'),
+  downloadUpdate: () => ipcRenderer.invoke('updater:download'),
+  installUpdate: () => ipcRenderer.invoke('updater:install'),
+  onUpdaterStateChanged: (callback: (state: import('./types').UpdaterState) => void) => {
+    const handler = (_event: any, state: import('./types').UpdaterState) => callback(state);
+    ipcRenderer.on('updater:state-changed', handler);
+    return () => ipcRenderer.removeListener('updater:state-changed', handler);
+  },
+  onStartupUpdateAvailable: (callback: (info: import('./types').UpdateInfoPayload) => void) => {
+    const handler = (_event: any, info: import('./types').UpdateInfoPayload) => callback(info);
+    ipcRenderer.on('updater:startup-update-available', handler);
+    return () => ipcRenderer.removeListener('updater:startup-update-available', handler);
+  },
 });
