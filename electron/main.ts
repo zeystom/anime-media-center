@@ -5,7 +5,7 @@ import { fileURLToPath } from 'url';
 import { storage, autoDetectFfmpegPath, autoDetectWhisperPath } from './storage';
 import { resolveUserDataPath } from './userDataPath';
 import { streamServer } from './server';
-import { probeMkv, extractEmbeddedSubtitle, extractEmbeddedAss, extractEmbeddedFonts, filterFontsForAss, parseSrt, readMkvEmbeddedTitle, readContainerDuration, cleanupOldCaches } from './ffmpeg';
+import { probeMkv, extractEmbeddedSubtitle, extractEmbeddedAss, extractEmbeddedFonts, getFolderHash, getCachedFolderFonts, filterFontsForAss, parseSrt, readMkvEmbeddedTitle, readContainerDuration, cleanupOldCaches } from './ffmpeg';
 import { whisperManager } from './whisper';
 import { findExternalSubtitles } from './subtitles';
 import { AnimeFolder, Episode, PlaybackProgress, SeasonPreference, VIDEO_EXTENSIONS, ReleaseSearchResult, ProviderReport, DiscoverCatalogParams } from './types';
@@ -14,6 +14,7 @@ import { extractEpisodeNumber } from './episodes';
 import { parseReleaseCore } from '../src/lib/releaseParser/regexEngine.ts';
 import { checkEpisodeDownloading, isFolderDownloading } from './torrents';
 import { getTrending, getPopularSeason, getAllTimePopular, getAiringSchedule, getRecommendations, getGenrePicks, getDiscoverCatalog, searchCatalog, getCatalogDetails, getCatalogFranchise } from './catalog';
+import { queryAnimeCharacters } from './anilist';
 import { fetchRemoteEpisodes, isAniZipCacheFresh, setRemoteEpisodesUpdateListener } from './aniZip';
 import { warmFribbIndex } from './fribb';
 import { userLibrary, UserListStatus } from './userLibrary';
@@ -173,6 +174,7 @@ async function scanFolderForEpisodes(folderPath: string, port: number, targetRoo
       const extSubs = findExternalSubtitles(fullPath);
       const hasExternalSrt = extSubs.length > 0;
       const hasWhisperSrt = extSubs.some((s) => s.isWhisper);
+      const hasExternalDub = extSubs.some((s) => s.isDubtitle);
       const externalSrtPath = extSubs[0]?.filePath;
 
       // Match numeric episode index for Kitsu metadata
@@ -205,7 +207,7 @@ async function scanFolderForEpisodes(folderPath: string, port: number, targetRoo
         hasExternalSrt,
         hasWhisperSrt,
         externalSrtPath,
-        hasEmbeddedDubtitles: hasDubtitles,
+        hasEmbeddedDubtitles: hasDubtitles || hasExternalDub,
         hasEmbeddedSubtitles: hasEmbeddedSubtitles,
         thumbnailUrl: `http://127.0.0.1:${port}/thumb?file=${encodeURIComponent(fullPath)}&type=card${duration ? `&duration=${duration}` : ''}`,
         kitsuThumbnail: kitsuThumb,
@@ -683,12 +685,14 @@ function setupIpcHandlers() {
           fonts,
           port,
           cues: [],
+          fontsPending: false,
         };
       }
       return {
         format: 'srt',
         port,
         cues: parseSrt(content),
+        fontsPending: false,
       };
     }
 
@@ -699,18 +703,82 @@ function setupIpcHandlers() {
       const isAss = track && /ass|ssa/i.test(track.codec || '');
 
       if (isAss) {
-        // Fast ASS extraction with input packet discard + embedded fonts extraction
-        const [assContent, rawFonts] = await Promise.all([
-          extractEmbeddedAss(filePath, trackIndex, settings.ffmpegPath),
-          extractEmbeddedFonts(filePath, settings.ffmpegPath, port),
+        const folderHash = getFolderHash(filePath);
+        const cachedFonts = getCachedFolderFonts(folderHash, port);
+        const assContentPromise = extractEmbeddedAss(filePath, trackIndex, settings.ffmpegPath);
+
+        // Fast path 1: Folder fonts are already cached! (0 ms font delay)
+        if (cachedFonts.length > 0) {
+          const assContent = await assContentPromise;
+          const fonts = filterFontsForAss(assContent, cachedFonts);
+          return {
+            format: 'ass',
+            content: assContent,
+            fonts,
+            port,
+            cues: [],
+            fontsPending: false,
+          };
+        }
+
+        // Fast path 2: File has no font attachments
+        if (metadata.hasFontAttachments === false) {
+          const assContent = await assContentPromise;
+          return {
+            format: 'ass',
+            content: assContent,
+            fonts: [],
+            port,
+            cues: [],
+            fontsPending: false,
+          };
+        }
+
+        // Slow path: First time opening this release without cache
+        const fontsPromise = extractEmbeddedFonts(filePath, settings.ffmpegPath, port);
+
+        // Race font extraction with a fast 150ms deadline
+        const fontRace = await Promise.race([
+          fontsPromise.then((rawFonts) => ({ done: true as const, rawFonts })),
+          new Promise<{ done: false }>((resolve) => setTimeout(() => resolve({ done: false }), 150)),
         ]);
-        const fonts = filterFontsForAss(assContent, rawFonts);
+
+        const assContent = await assContentPromise;
+
+        if (fontRace.done) {
+          const fonts = filterFontsForAss(assContent, fontRace.rawFonts);
+          return {
+            format: 'ass',
+            content: assContent,
+            fonts,
+            port,
+            cues: [],
+            fontsPending: false,
+          };
+        }
+
+        // Two-phase: return ASS content now so video and subtitles start immediately!
+        // When fonts finish, send IPC event 'subtitles:fonts-ready' to enhance styling in place
+        fontsPromise
+          .then((rawFonts) => {
+            const fonts = filterFontsForAss(assContent, rawFonts);
+            if (fonts.length > 0) {
+              for (const win of BrowserWindow.getAllWindows()) {
+                if (!win.isDestroyed()) {
+                  win.webContents.send('subtitles:fonts-ready', { filePath, trackIndex, fonts });
+                }
+              }
+            }
+          })
+          .catch(() => {});
+
         return {
           format: 'ass',
           content: assContent,
-          fonts,
+          fonts: [],
           port,
           cues: [],
+          fontsPending: true,
         };
       } else {
         const content = await extractEmbeddedSubtitle(filePath, trackIndex, settings.ffmpegPath);
@@ -718,6 +786,7 @@ function setupIpcHandlers() {
           format: 'srt',
           port,
           cues: parseSrt(content),
+          fontsPending: false,
         };
       }
     }
@@ -726,7 +795,39 @@ function setupIpcHandlers() {
       format: 'srt',
       port,
       cues: [],
+      fontsPending: false,
     };
+  });
+
+  ipcMain.handle('subtitles:warm', async (_event, filePath: string) => {
+    if (!filePath || typeof filePath !== 'string' || !fs.existsSync(filePath)) {
+      return { success: false };
+    }
+    const settings = storage.getSettings();
+    const port = streamServer.getPort();
+    try {
+      const metadata = await probeMkv(filePath, settings.ffmpegPath);
+      if (!metadata || !metadata.subtitleTracks) return { success: false };
+
+      const mainTrack =
+        metadata.subtitleTracks.find((s) => !s.isSigns && (s.language === 'eng' || s.language === 'en')) ||
+        metadata.subtitleTracks.find((s) => s.type === 'embedded');
+
+      if (mainTrack && mainTrack.index !== null) {
+        const isAss = /ass|ssa/i.test(mainTrack.codec || '');
+        if (isAss) {
+          await Promise.all([
+            extractEmbeddedAss(filePath, mainTrack.index, settings.ffmpegPath),
+            metadata.hasFontAttachments !== false
+              ? extractEmbeddedFonts(filePath, settings.ffmpegPath, port)
+              : Promise.resolve([]),
+          ]);
+        }
+      }
+      return { success: true };
+    } catch {
+      return { success: false };
+    }
   });
 
   ipcMain.handle('save-playback-progress', async (_event, progress: PlaybackProgress) => {
@@ -771,9 +872,9 @@ function setupIpcHandlers() {
     return await fetchAniSkipTimes(seriesName, episodeNum, duration);
   });
 
-  ipcMain.handle('start-whisper-season', async (_event, folderPath: string, audioTrackNum: number, skipExistingSrt: boolean) => {
+  ipcMain.handle('start-whisper-season', async (_event, folderPath: string, audioTrackNum: number, skipExistingSrt: boolean, options?: any) => {
     if (!mainWindow) return { success: false, error: 'No main window' };
-    return await whisperManager.startQueue(folderPath, audioTrackNum, skipExistingSrt, mainWindow);
+    return await whisperManager.startQueue(folderPath, audioTrackNum, skipExistingSrt, mainWindow, options);
   });
 
   ipcMain.handle('cancel-whisper', async () => {
@@ -782,6 +883,17 @@ function setupIpcHandlers() {
 
   ipcMain.handle('get-whisper-status', async () => {
     return whisperManager.getStatus();
+  });
+
+  ipcMain.handle('get-anime-characters', async (_event, title: string, anilistId?: number) => {
+    if (anilistId && Number.isFinite(anilistId) && anilistId > 0) {
+      const byId = await queryAnimeCharacters(anilistId);
+      if (byId && byId.characters.length > 0) return byId;
+    }
+    if (title && title.trim()) {
+      return await queryAnimeCharacters(title.trim());
+    }
+    return null;
   });
 
   ipcMain.handle('open-folder', async (_event, folderPath: string) => {

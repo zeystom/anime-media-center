@@ -208,6 +208,15 @@ async function cachedServiceCall<T>(
 
 // --- Normalization ----------------------------------------------------------
 
+export function pickEnglishSynonym(synonyms?: string[] | null): string | null {
+  if (!Array.isArray(synonyms) || synonyms.length === 0) return null;
+  const isEnglish = (s: string) => typeof s === 'string' && s.trim().length >= 2 && !/[\u3040-\u30ff\u3400-\u9fff\uac00-\ud7af]/u.test(s) && /[a-zA-Z]/.test(s);
+  const candidates = synonyms.filter(isEnglish);
+  if (candidates.length === 0) return null;
+  candidates.sort((a, b) => b.length - a.length);
+  return candidates[0];
+}
+
 /**
  * Converts a raw AniList media object into the normalized CatalogItem shape.
  * HTML tags are stripped from the description (same approach as kitsu.ts).
@@ -347,8 +356,12 @@ export async function getDiscoverCatalog(
     : undefined;
   const countryOfOrigin = mode === 'search' && search && params.searchScope === 'all' ? undefined : 'JP';
   const sort = params.sort || (mode === 'trending' ? 'TRENDING_DESC' : mode === 'recommended' ? 'RECOMMENDATION' : 'POPULARITY_DESC');
+  const inputGenres = Array.isArray(params.genres) && params.genres.length > 0
+    ? params.genres
+    : (params.genre ? [params.genre] : []);
   const filters = {
-    genre: params.genre || undefined,
+    genres: inputGenres.length > 0 ? inputGenres : undefined,
+    genre: inputGenres[0] || undefined,
     format: params.format || undefined,
     status: params.status || undefined,
     minScore: params.minScore && params.minScore > 0 ? Math.max(0, Math.min(100, Math.floor(params.minScore))) : undefined,
@@ -357,7 +370,14 @@ export async function getDiscoverCatalog(
   if (mode === 'recommended') {
     const recommendations = recommendationSeeds.length > 0 ? await getRecommendations(recommendationSeeds, 100) : [];
     const filtered = recommendations.filter((item) => {
-      if (filters.genre && !item.genres.some((value) => value.toLowerCase() === filters.genre!.toLowerCase())) return false;
+      if (inputGenres.length > 0) {
+        const matchesAll = inputGenres.every((sel) => {
+          const lower = sel.toLowerCase();
+          return item.genres.some((value) => value.toLowerCase() === lower) ||
+            item.tags.some((value) => value.toLowerCase() === lower);
+        });
+        if (!matchesAll) return false;
+      }
       if (filters.format && item.format !== filters.format) return false;
       if (filters.status && item.status !== filters.status) return false;
       if (filters.minScore && (item.averageScore == null || item.averageScore < filters.minScore)) return false;

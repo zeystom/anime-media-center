@@ -10,6 +10,8 @@ export interface AudioTrack {
   codec: string;         // 'eac3', 'flac', 'aac', etc.
   title: string;         // e.g. 'English E-AC-3 2.0', 'Japanese FLAC 2.0'
   isDefault: boolean;
+  channels?: number;
+  isSurround?: boolean;
 }
 
 export interface SubtitleTrack {
@@ -40,6 +42,7 @@ export interface SubtitleTrackPayload {
   fonts?: string[];
   port?: number;
   cues?: SubtitleCue[];
+  fontsPending?: boolean;
 }
 
 export interface VideoChapter {
@@ -61,6 +64,7 @@ export interface VideoMetadata {
   externalSrtPath?: string;
   hasEmbeddedDubtitles?: boolean;
   hasEmbeddedSubtitles?: boolean;
+  hasFontAttachments?: boolean;
 }
 
 export interface Episode {
@@ -139,6 +143,8 @@ export interface DiscoverCatalogParams {
   year?: number;
   season?: DiscoverSeason;
   genre?: string;
+  genres?: string[];
+  tags?: string[];
   format?: 'TV' | 'TV_SHORT' | 'MOVIE' | 'SPECIAL' | 'OVA' | 'ONA' | 'MUSIC';
   status?: 'FINISHED' | 'RELEASING' | 'NOT_YET_RELEASED' | 'CANCELLED' | 'HIATUS';
   minScore?: number;
@@ -160,8 +166,10 @@ export interface AppSettings {
   subtitlesBgStyle?: 'none' | 'translucent' | 'semi' | 'solid';
   subtitlesOutlineWidth?: 'thin' | 'medium' | 'thick' | 'heavy' | 'none';
   subtitlesOutlineColor?: string;
+  animeTitleLanguage?: 'english' | 'romaji' | 'native';
   /** Legacy setting retained only so older settings files remain readable; incomplete titles are always hidden. */
   hideDownloadingAnime?: boolean;
+  whisperOptions?: WhisperOptions;
 
   // ---- P2P / BitTorrent (BYOC — user provides their own indexers) ----
   enableP2P?: boolean;              // default false — the torrent engine never starts until the user opts in
@@ -281,6 +289,39 @@ export interface P2pState {
   };
 }
 
+export interface WhisperLiveCue {
+  id: string;
+  start: string;
+  end: string;
+  text: string;
+  timestamp: number;
+}
+
+export type WhisperPreset = 'anime' | 'bgm' | 'fast' | 'custom';
+
+export interface WhisperOptions {
+  preset?: WhisperPreset;
+  model?: string;
+  language?: string;
+  task?: 'transcribe' | 'translate';
+  vadThreshold?: number;
+  vadMinSpeechDurationMs?: number;
+  vadSpeechPadMs?: number;
+  conditionOnPreviousText?: boolean;
+  compressionRatioThreshold?: number;
+  noSpeechThreshold?: number;
+  initialPrompt?: string;
+  temperature?: number;
+  maxLineWidth?: number;
+  maxLineCount?: number;
+  maxCommaCent?: number;
+  sentence?: boolean;
+  minDistToEnd?: number;
+  channelMode?: 'auto' | 'fc';
+  speechNorm?: boolean;
+  selectedFilePaths?: string[];
+}
+
 export interface WhisperQueueItem {
   id: string;
   filePath: string;
@@ -290,6 +331,7 @@ export interface WhisperQueueItem {
   progress: number;
   speed?: string;
   error?: string;
+  liveCues?: WhisperLiveCue[];
 }
 
 export interface WhisperLogMessage {
@@ -303,6 +345,8 @@ export interface WhisperStatus {
   folderPath?: string;
   currentFile: string;
   progress: number;
+  speed?: string;
   queue: WhisperQueueItem[];
   logs: WhisperLogMessage[];
+  liveCues?: WhisperLiveCue[];
 }

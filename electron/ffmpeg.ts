@@ -427,7 +427,7 @@ export async function probeMkv(filePath: string, ffmpegPath: string): Promise<Vi
       isDefault: false,
       isForced: found.isForced,
       isSigns: found.isSigns,
-      isDubtitle: found.isWhisper,
+      isDubtitle: found.isWhisper || Boolean(found.isDubtitle),
     };
   });
 
@@ -509,6 +509,18 @@ function parseFfmpegProbeOutput(filePath: string, stderr: string): VideoMetadata
       const codecMatch = entry.details.match(/^([a-zA-Z0-9_-]+)/);
       const codec = codecMatch ? codecMatch[1].toLowerCase() : 'unknown';
 
+      // Detect channels & surround layout from stream details (e.g. "5.1(side)", "stereo", "7.1")
+      const isSurround = /\b(?:5\.1|7\.1|6\.1|surround|5\.0|side)\b/i.test(entry.details);
+      const channels = /\b7\.1\b/i.test(entry.details)
+        ? 8
+        : /\b(?:5\.1|6\.0|6\.1|5\.0)\b/i.test(entry.details)
+        ? 6
+        : /\b(?:stereo|2\.0)\b/i.test(entry.details)
+        ? 2
+        : /\b(?:mono|1\.0)\b/i.test(entry.details)
+        ? 1
+        : undefined;
+
       const audioTrack: AudioTrack = {
         index: entry.index,
         audioIndex: audioCounter++,
@@ -517,6 +529,8 @@ function parseFfmpegProbeOutput(filePath: string, stderr: string): VideoMetadata
         codec,
         title: title || `${getLanguageName(entry.lang)} (${codec.toUpperCase()})`,
         isDefault,
+        channels,
+        isSurround,
       };
       audioTracks.push(audioTrack);
     } else if (entry.type === 'Subtitle') {
@@ -572,6 +586,10 @@ function parseFfmpegProbeOutput(filePath: string, stderr: string): VideoMetadata
     });
   }
 
+  const hasFontAttachments =
+    /Stream\s+#0:\d+.*Attachment:\s*(?:ttf|otf|ttc|woff2?|font)/i.test(stderr) ||
+    /Attachment:\s*(?:ttf|otf|ttc|woff2?|font)/i.test(stderr);
+
   return {
     filePath,
     fileName,
@@ -583,6 +601,7 @@ function parseFfmpegProbeOutput(filePath: string, stderr: string): VideoMetadata
     hasExternalSrt: false,
     hasEmbeddedDubtitles,
     hasEmbeddedSubtitles,
+    hasFontAttachments,
   };
 }
 
@@ -741,46 +760,92 @@ export async function extractEmbeddedAss(
   return promise;
 }
 
+const inFlightFonts = new Map<string, Promise<string[]>>();
+
+export function getFolderHash(filePath: string): string {
+  const folder = path.dirname(filePath);
+  return crypto.createHash('md5').update(folder).digest('hex').slice(0, 16);
+}
+
+export function getCachedFolderFonts(folderHash: string, port: number): string[] {
+  const fontsDir = path.join(storage.getThumbnailDir(), 'fonts', folderHash);
+  if (!fs.existsSync(fontsDir)) return [];
+  const fontFiles = fs.readdirSync(fontsDir).filter((f) => /\.(ttf|otf|woff2?)$/i.test(f));
+  return fontFiles.map((name) => `http://127.0.0.1:${port}/font/${folderHash}/${encodeURIComponent(name)}`);
+}
+
 export async function extractEmbeddedFonts(
   filePath: string,
   ffmpegPath: string,
   port: number
 ): Promise<string[]> {
-  const fileHash = crypto.createHash('md5').update(filePath).digest('hex').slice(0, 16);
-  const fontsDir = path.join(storage.getThumbnailDir(), 'fonts', fileHash);
+  const folderHash = getFolderHash(filePath);
+  const fontsDir = path.join(storage.getThumbnailDir(), 'fonts', folderHash);
 
   if (!fs.existsSync(fontsDir)) {
     fs.mkdirSync(fontsDir, { recursive: true });
   }
 
-  // Remember successful scans even when the file contains no attachments.
-  // Without this marker a fontless MKV launches FFmpeg on every player open.
+  // Deduplicate in-flight extraction for the same folder
+  const inFlight = inFlightFonts.get(folderHash);
+  if (inFlight) return inFlight;
+
+  // Folder scan marker and file-specific scan marker
+  const fileHashShort = crypto.createHash('md5').update(filePath).digest('hex').slice(0, 8);
+  const fileMarker = path.join(fontsDir, `.file-${fileHashShort}`);
   const scanCompleteMarker = path.join(fontsDir, '.scan-complete');
 
-  // Check if fonts are already extracted
+  // Check if fonts are already extracted for this folder
   const existingFiles = fs.readdirSync(fontsDir).filter((f) => /\.(ttf|otf|ttc|woff2?)$/i.test(f));
-  if (existingFiles.length === 0 && !fs.existsSync(scanCompleteMarker)) {
-    await new Promise<void>((resolve) => {
-      const p = spawn(
-        ffmpegPath,
-        ['-hide_banner', '-y', '-dump_attachment:t', '', '-i', filePath, '-vn', '-an', '-t', '0', '-f', 'null', '-'],
-        { cwd: fontsDir, windowsHide: true, stdio: ['ignore', 'ignore', 'ignore'] }
-      );
-      p.on('close', (code) => {
-        if (code === 0) {
-          try {
-            fs.writeFileSync(scanCompleteMarker, 'ok');
-          } catch {}
-        }
-        resolve();
-      });
-      p.on('error', () => resolve());
-    });
+
+  // If the folder already has extracted fonts or this file was already scanned, return immediately (0 ms!)
+  if (existingFiles.length > 0 && (fs.existsSync(fileMarker) || fs.existsSync(scanCompleteMarker))) {
+    const validFonts = existingFiles.filter((f) => !f.toLowerCase().endsWith('.ttc'));
+    return validFonts.map((name) => `http://127.0.0.1:${port}/font/${folderHash}/${encodeURIComponent(name)}`);
   }
 
-  // Filter valid TTF/OTF fonts (exclude TTC collections as WASM FreeType does not support them without index)
-  const fontFiles = fs.readdirSync(fontsDir).filter((f) => /\.(ttf|otf|woff2?)$/i.test(f));
-  return fontFiles.map((name) => `http://127.0.0.1:${port}/font/${fileHash}/${encodeURIComponent(name)}`);
+  // If this folder already has a healthy font collection (e.g. 5+ fonts), return them immediately
+  // and mark the file so we don't block on FFmpeg for subsequent episodes.
+  if (existingFiles.length >= 5) {
+    try { fs.writeFileSync(fileMarker, 'ok'); } catch {}
+    const validFonts = existingFiles.filter((f) => !f.toLowerCase().endsWith('.ttc'));
+    return validFonts.map((name) => `http://127.0.0.1:${port}/font/${folderHash}/${encodeURIComponent(name)}`);
+  }
+
+  // If scan is complete and no fonts were found in the folder, return [] immediately
+  if (existingFiles.length === 0 && fs.existsSync(scanCompleteMarker)) {
+    return [];
+  }
+
+  const promise = (async () => {
+    try {
+      await new Promise<void>((resolve) => {
+        const p = spawn(
+          ffmpegPath,
+          ['-hide_banner', '-y', '-dump_attachment:t', '', '-i', filePath, '-vn', '-an', '-t', '0', '-f', 'null', '-'],
+          { cwd: fontsDir, windowsHide: true, stdio: ['ignore', 'ignore', 'ignore'] }
+        );
+        p.on('close', (code) => {
+          if (code === 0) {
+            try {
+              fs.writeFileSync(scanCompleteMarker, 'ok');
+              fs.writeFileSync(fileMarker, 'ok');
+            } catch {}
+          }
+          resolve();
+        });
+        p.on('error', () => resolve());
+      });
+
+      const fontFiles = fs.readdirSync(fontsDir).filter((f) => /\.(ttf|otf|woff2?)$/i.test(f));
+      return fontFiles.map((name) => `http://127.0.0.1:${port}/font/${folderHash}/${encodeURIComponent(name)}`);
+    } finally {
+      inFlightFonts.delete(folderHash);
+    }
+  })();
+
+  inFlightFonts.set(folderHash, promise);
+  return promise;
 }
 
 export function filterFontsForAss(assContent: string, fontUrls: string[]): string[] {

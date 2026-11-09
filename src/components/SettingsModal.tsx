@@ -22,6 +22,7 @@ import {
   Share2,
   Gauge,
   Rss,
+  Languages,
 } from 'lucide-react';
 import { AppSettings } from '../types';
 import type { P2pState, RssProvider } from '../types';
@@ -103,6 +104,9 @@ export const SettingsModal: React.FC<SettingsModalProps> = ({
   );
   const [preferredSubtitleLanguages, setPreferredSubtitleLanguages] = useState<TorrentLanguageCode[]>(
     (settings.preferredTorrentSubtitleLanguages ?? ['en']) as TorrentLanguageCode[]
+  );
+  const [animeTitleLanguage, setAnimeTitleLanguage] = useState<'english' | 'romaji' | 'native'>(
+    settings.animeTitleLanguage ?? 'english'
   );
 
   const [binaryStatus, setBinaryStatus] = useState<{
@@ -850,6 +854,44 @@ export const SettingsModal: React.FC<SettingsModalProps> = ({
               )}
             </div>
 
+          </div>
+
+          {/* Section: Anime Title Language */}
+          <div className="space-y-3 pt-3 border-t border-white/10">
+            <div>
+              <label className="text-xs font-semibold text-zinc-200 uppercase tracking-wider flex items-center space-x-2">
+                <Languages className="w-3.5 h-3.5 text-zinc-400" />
+                <span>Anime Title Language</span>
+              </label>
+              <p className="text-[11px] text-zinc-400">
+                Choose whether titles across Discovery, Home, and details appear in English, Romanized Japanese, or Original Japanese.
+              </p>
+            </div>
+
+            <div className="grid grid-cols-3 gap-2.5">
+              {[
+                { value: 'english' as const, label: 'English', desc: 'Localized (e.g. Demon Slayer)' },
+                { value: 'romaji' as const, label: 'Romaji', desc: 'Romanized (e.g. Kimetsu no Yaiba)' },
+                { value: 'native' as const, label: '日本語', desc: 'Native script (e.g. 鬼滅の刃)' },
+              ].map((option) => (
+                <button
+                  key={option.value}
+                  type="button"
+                  onClick={() => {
+                    setAnimeTitleLanguage(option.value);
+                    onSave({ animeTitleLanguage: option.value });
+                  }}
+                  className={`flex flex-col items-start p-3 rounded-xl border text-left transition-all ${
+                    animeTitleLanguage === option.value
+                      ? 'border-rose-400/50 bg-rose-500/10 text-white shadow-sm'
+                      : 'border-white/10 bg-zinc-900/60 text-zinc-400 hover:border-zinc-700 hover:text-zinc-200'
+                  }`}
+                >
+                  <span className={`text-xs font-bold ${animeTitleLanguage === option.value ? 'text-rose-200' : 'text-zinc-200'}`}>{option.label}</span>
+                  <span className="mt-1 text-[10px] text-zinc-500 leading-tight">{option.desc}</span>
+                </button>
+              ))}
+            </div>
           </div>
 
           {/* Section: External Tools & AI Engine */}

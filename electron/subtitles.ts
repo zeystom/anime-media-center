@@ -7,6 +7,7 @@ export interface ExternalSubtitleMatch {
   isWhisper: boolean;
   isForced: boolean;
   isSigns: boolean;
+  isDubtitle?: boolean;
   suffix: string;
 }
 
@@ -60,6 +61,11 @@ export function findExternalSubtitles(videoPath: string): ExternalSubtitleMatch[
         fileLower === `${base.toLowerCase()}.whisper.srt`;
       const isForced = suffixTokens.includes('forced');
       const isSigns = suffixTokens.includes('signs') || suffixTokens.includes('sign');
+      const isDubtitle =
+        suffixTokens.includes('sdh') ||
+        suffixTokens.includes('dub') ||
+        suffixTokens.includes('dubtitle') ||
+        suffixTokens.includes('cc');
 
       matches.push({
         filePath: fullPath,
@@ -67,6 +73,7 @@ export function findExternalSubtitles(videoPath: string): ExternalSubtitleMatch[
         isWhisper,
         isForced,
         isSigns,
+        isDubtitle,
         suffix: suffixTokens.join('.'),
       });
     }

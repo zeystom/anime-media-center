@@ -346,6 +346,7 @@ export class StorageService {
           releaseSelectionMode: parsed.releaseSelectionMode === 'manual' ? 'manual' : 'automatic',
           preferredTorrentAudioLanguages: normalizeTorrentLanguages(parsed.preferredTorrentAudioLanguages, ['en']),
           preferredTorrentSubtitleLanguages: normalizeTorrentLanguages(parsed.preferredTorrentSubtitleLanguages, ['en']),
+          animeTitleLanguage: ['english', 'romaji', 'native'].includes(parsed.animeTitleLanguage) ? parsed.animeTitleLanguage : 'english',
         };
 
         this.cachedSettings = res;
@@ -376,6 +377,7 @@ export class StorageService {
       releaseSelectionMode: 'automatic',
       preferredTorrentAudioLanguages: ['en'],
       preferredTorrentSubtitleLanguages: ['en'],
+      animeTitleLanguage: 'english',
       enableP2P: false,
       p2pConsentAcceptedAt: null,
       rssProviders: [],

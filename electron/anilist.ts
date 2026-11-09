@@ -183,7 +183,7 @@ const ALL_TIME_POPULAR_QUERY = `
 const DISCOVER_QUERY = `
   query (
     $page: Int, $perPage: Int, $search: String, $season: MediaSeason,
-    $seasonYear: Int, $genreIn: [String], $formatIn: [MediaFormat],
+    $seasonYear: Int, $genreIn: [String], $tagIn: [String], $formatIn: [MediaFormat],
     $status: MediaStatus, $minScore: Int, $sort: [MediaSort],
     $countryOfOrigin: CountryCode, $isAdult: Boolean
   ) {
@@ -191,7 +191,7 @@ const DISCOVER_QUERY = `
       pageInfo { hasNextPage }
       media(
         type: ANIME, search: $search, season: $season, seasonYear: $seasonYear,
-        genre_in: $genreIn, format_in: $formatIn, status: $status,
+        genre_in: $genreIn, tag_in: $tagIn, format_in: $formatIn, status: $status,
         averageScore_greater: $minScore, sort: $sort, isAdult: $isAdult,
         countryOfOrigin: $countryOfOrigin
       ) {
@@ -375,6 +375,12 @@ interface PageMediaResult {
   Page?: { media?: (AniListMedia | null)[] | null } | null;
 }
 
+const OFFICIAL_GENRES_SET = new Set([
+  'action', 'adventure', 'comedy', 'drama', 'ecchi', 'fantasy', 'horror',
+  'mahou shoujo', 'mecha', 'music', 'mystery', 'psychological', 'romance',
+  'sci-fi', 'slice of life', 'sports', 'supernatural', 'thriller'
+]);
+
 export async function queryDiscoverCatalog(params: {
   page: number;
   perPage: number;
@@ -383,6 +389,8 @@ export async function queryDiscoverCatalog(params: {
   season?: AniListSeason;
   seasonYear?: number;
   genre?: string;
+  genres?: string[];
+  tags?: string[];
   format?: string;
   status?: string;
   minScore?: number;
@@ -397,12 +405,24 @@ export async function queryDiscoverCatalog(params: {
   const pageCount = Math.max(1, Math.min(5, Math.floor(Number(params.pageCount) || 1)));
   const firstPage = Math.max(1, Math.floor(params.page));
   const perPage = clampPerPage(params.perPage, 24);
+
+  const rawGenres = Array.isArray(params.genres) && params.genres.length > 0
+    ? params.genres
+    : (params.genre ? [params.genre] : []);
+  const genreIn = rawGenres.filter((g) => OFFICIAL_GENRES_SET.has(g.toLowerCase()));
+  const tagsFromGenres = rawGenres.filter((g) => !OFFICIAL_GENRES_SET.has(g.toLowerCase()));
+  const tagIn = Array.from(new Set([
+    ...tagsFromGenres,
+    ...(Array.isArray(params.tags) ? params.tags : [])
+  ]));
+
   const commonVariables = {
     perPage,
     search: params.search?.trim() || undefined,
     season: params.season,
     seasonYear: params.seasonYear,
-    genre: params.genre ? [params.genre] : undefined,
+    genreIn: genreIn.length > 0 ? genreIn : undefined,
+    tagIn: tagIn.length > 0 ? tagIn : undefined,
     formatIn: params.format ? [params.format] : undefined,
     status: params.status,
     // AniList exposes averageScore_greater (strictly greater); subtract one
@@ -429,7 +449,7 @@ export async function queryDiscoverCatalog(params: {
         pageInfo { hasNextPage }
         media(
           type: ANIME, search: $search, season: $season, seasonYear: $seasonYear,
-          genre_in: $genre, format_in: $formatIn, status: $status,
+          genre_in: $genreIn, tag_in: $tagIn, format_in: $formatIn, status: $status,
           averageScore_greater: $minScore, sort: $sort, isAdult: $isAdult,
           countryOfOrigin: $countryOfOrigin
         ) { ...MediaFields }
@@ -438,7 +458,7 @@ export async function queryDiscoverCatalog(params: {
     const query = `query (${[
       ...pageVariables,
       '$perPage: Int!', '$search: String', '$season: MediaSeason', '$seasonYear: Int',
-      '$genre: [String]', '$formatIn: [MediaFormat]', '$status: MediaStatus',
+      '$genreIn: [String]', '$tagIn: [String]', '$formatIn: [MediaFormat]', '$status: MediaStatus',
       '$minScore: Int', '$sort: [MediaSort]', '$countryOfOrigin: CountryCode', '$isAdult: Boolean',
     ].join(', ')}) { ${pageSelections} } ${MEDIA_FIELDS_FRAGMENT}`;
     const data = await runAniListQuery<Record<string, DiscoverPageResult>>(query, {
@@ -613,4 +633,114 @@ export async function queryFranchiseMedia(ids: number[]): Promise<AniListMedia[]
     perPage: unique.length,
   });
   return (data.Page?.media ?? []).filter((item): item is AniListMedia => !!item);
+}
+
+const CHARACTERS_QUERY = `
+  query ($search: String, $id: Int) {
+    Media(search: $search, id: $id, type: ANIME) {
+      id
+      title {
+        romaji
+        english
+        native
+      }
+      characters(sort: [ROLE, RELEVANCE, ID], perPage: 15) {
+        edges {
+          role
+          node {
+            name {
+              full
+              native
+              alternative
+            }
+          }
+        }
+      }
+    }
+  }
+`;
+
+export interface CharacterQueryResult {
+  id: number;
+  title: string;
+  characters: string[];
+}
+
+const charactersCache = new Map<string, CharacterQueryResult>();
+
+/**
+ * Automatically retrieves character names for an anime by title or AniList ID.
+ * Results are cached in memory.
+ */
+export async function queryAnimeCharacters(
+  searchOrId: string | number
+): Promise<CharacterQueryResult | null> {
+  const cacheKey = typeof searchOrId === 'number' ? `id:${searchOrId}` : `search:${searchOrId.toLowerCase().trim()}`;
+  if (charactersCache.has(cacheKey)) {
+    return charactersCache.get(cacheKey)!;
+  }
+
+  const variables = typeof searchOrId === 'number' && Number.isFinite(searchOrId) && searchOrId > 0
+    ? { id: searchOrId }
+    : { search: String(searchOrId).trim() };
+
+  if (!variables.id && (!variables.search || variables.search.length === 0)) {
+    return null;
+  }
+
+  try {
+    const data = await runAniListQuery<{
+      Media?: {
+        id: number;
+        title?: { romaji?: string | null; english?: string | null; native?: string | null };
+        characters?: {
+          edges?: Array<{
+            role?: string;
+            node?: {
+              name?: {
+                full?: string | null;
+                native?: string | null;
+                alternative?: string[] | null;
+              };
+            };
+          }>;
+        };
+      } | null;
+    }>(CHARACTERS_QUERY, variables);
+
+    const media = data?.Media;
+    if (!media || !media.id) return null;
+
+    const names: string[] = [];
+    const seen = new Set<string>();
+    const GENERIC_CHAR_REGEX = /^(machi no hito|townsperson|villager|narrator|announcer|student|teacher|doctor|nurse|father|mother|parent|guard|soldier|driver|waiter|clerk|crowd|passerby|thug|citizen|police|demon|monster|cat|dog|bird|boy|girl|man|woman|child|kid|extra|subordinate|operator)\b/i;
+
+    for (const edge of media.characters?.edges || []) {
+      const full = edge.node?.name?.full?.trim();
+      if (
+        full &&
+        full.length >= 2 &&
+        full.length <= 35 &&
+        !GENERIC_CHAR_REGEX.test(full) &&
+        !seen.has(full.toLowerCase())
+      ) {
+        seen.add(full.toLowerCase());
+        names.push(full);
+      }
+      if (names.length >= 12) break;
+    }
+
+    const title = media.title?.english || media.title?.romaji || variables.search || '';
+    const result: CharacterQueryResult = {
+      id: media.id,
+      title,
+      characters: names.slice(0, 12),
+    };
+
+    charactersCache.set(cacheKey, result);
+    charactersCache.set(`id:${media.id}`, result);
+    return result;
+  } catch {
+    return null;
+  }
 }

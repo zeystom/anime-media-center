@@ -2,6 +2,7 @@ import React, { useState, useEffect, useRef, useMemo } from 'react';
 import { X, Play, CheckCircle2, ListVideo, Film, Sparkles } from 'lucide-react';
 import { Episode, PlaybackProgress } from '../../types';
 import { formatTime, cleanEpisodeTitle, cleanSeriesTitle, formatEpisodeDisplayTitle } from '../../utils/format';
+import { parseReleaseCore } from '../../lib/releaseParser/regexEngine';
 
 interface EpisodeDrawerProps {
   isOpen: boolean;
@@ -14,6 +15,10 @@ interface EpisodeDrawerProps {
   autoPlayNext: boolean;
   onToggleAutoPlayNext: () => void;
   onSelectEpisode: (episode: Episode) => void;
+  animeTitle?: string;
+  folderPath?: string;
+  anilistId?: number | null;
+  remoteEpisodes?: Map<number, { title: string | null; thumbnailUrl: string | null }>;
 }
 
 interface EpisodeItemProps {
@@ -22,6 +27,7 @@ interface EpisodeItemProps {
   progress?: PlaybackProgress;
   onSelect: () => void;
   isCurrentRef?: (el: HTMLDivElement | null) => void;
+  remoteInfo?: { title: string | null; thumbnailUrl: string | null };
 }
 
 const EpisodeDrawerItem: React.FC<EpisodeItemProps> = ({
@@ -30,25 +36,29 @@ const EpisodeDrawerItem: React.FC<EpisodeItemProps> = ({
   progress,
   onSelect,
   isCurrentRef,
+  remoteInfo,
 }) => {
+  const primaryThumbnail = remoteInfo?.thumbnailUrl || episode.kitsuThumbnail || null;
+  const fallbackThumbnail = episode.thumbnailUrl || null;
+
   const [imgError, setImgError] = useState(false);
-  const [activeImgUrl, setActiveImgUrl] = useState(episode.thumbnailUrl || episode.kitsuThumbnail);
+  const [activeImgUrl, setActiveImgUrl] = useState<string | null>(primaryThumbnail || fallbackThumbnail);
   const [retryCount, setRetryCount] = useState(0);
   const parsed = useMemo(() => cleanEpisodeTitle(episode.fileName), [episode.fileName]);
 
   useEffect(() => {
-    setActiveImgUrl(episode.thumbnailUrl || episode.kitsuThumbnail);
+    setActiveImgUrl(primaryThumbnail || fallbackThumbnail);
     setImgError(false);
     setRetryCount(0);
-  }, [episode.kitsuThumbnail, episode.thumbnailUrl]);
+  }, [primaryThumbnail, fallbackThumbnail]);
 
   const handleImgError = () => {
-    if (activeImgUrl === episode.thumbnailUrl && episode.kitsuThumbnail) {
-      setActiveImgUrl(episode.kitsuThumbnail);
-    } else if (activeImgUrl === episode.thumbnailUrl && retryCount < 3 && episode.thumbnailUrl) {
+    if (activeImgUrl === primaryThumbnail && fallbackThumbnail) {
+      setActiveImgUrl(fallbackThumbnail);
+    } else if (fallbackThumbnail && activeImgUrl?.startsWith(fallbackThumbnail) && retryCount < 3) {
       setTimeout(() => {
         setRetryCount((c) => c + 1);
-        setActiveImgUrl(`${episode.thumbnailUrl}&retry=${Date.now()}`);
+        setActiveImgUrl(`${fallbackThumbnail}&retry=${Date.now()}`);
       }, 1000);
     } else {
       setImgError(true);
@@ -59,6 +69,12 @@ const EpisodeDrawerItem: React.FC<EpisodeItemProps> = ({
     progress && progress.duration > 0
       ? Math.min(100, Math.round((progress.currentTime / progress.duration) * 100))
       : 0;
+
+  const officialTitle = remoteInfo?.title || episode.kitsuTitle || episode.episodeTitle;
+  const fullDisplayTitle = useMemo(
+    () => formatEpisodeDisplayTitle(parsed.displayTitle, officialTitle),
+    [parsed.displayTitle, officialTitle]
+  );
 
   return (
     <div
@@ -127,9 +143,9 @@ const EpisodeDrawerItem: React.FC<EpisodeItemProps> = ({
             className={`text-xs sm:text-sm font-semibold truncate ${
               isPlaying ? 'text-red-400 font-bold' : 'text-zinc-100 group-hover:text-white'
             }`}
-            title={formatEpisodeDisplayTitle(parsed.displayTitle, episode.kitsuTitle || episode.episodeTitle)}
+            title={fullDisplayTitle}
           >
-            {formatEpisodeDisplayTitle(parsed.displayTitle, episode.kitsuTitle || episode.episodeTitle)}
+            {fullDisplayTitle}
           </h4>
 
           {progress?.completed && (
@@ -167,6 +183,10 @@ export const EpisodeDrawer: React.FC<EpisodeDrawerProps> = ({
   autoPlayNext,
   onToggleAutoPlayNext,
   onSelectEpisode,
+  animeTitle,
+  folderPath,
+  anilistId,
+  remoteEpisodes,
 }) => {
   const activeElementRef = useRef<HTMLDivElement | null>(null);
 
@@ -196,11 +216,64 @@ export const EpisodeDrawer: React.FC<EpisodeDrawerProps> = ({
     }
   }, [isOpen]);
 
-  // Clean Series Title for Header
+  // Remote episodes enrichment when anilistId is available
+  const [internalRemoteEpisodes, setInternalRemoteEpisodes] = useState<Map<number, { title: string | null; thumbnailUrl: string | null }>>(new Map());
+
+  useEffect(() => {
+    if (remoteEpisodes && remoteEpisodes.size > 0) return;
+    if (!anilistId) return;
+    const api = window.electronAPI;
+    if (!api?.getRemoteEpisodes) return;
+
+    let cancelled = false;
+    api.getRemoteEpisodes(anilistId).then((res) => {
+      if (cancelled || !res?.episodes) return;
+      const map = new Map<number, { title: string | null; thumbnailUrl: string | null }>();
+      for (const ep of res.episodes) {
+        if (typeof ep.number === 'number' && (ep.title || ep.thumbnailUrl)) {
+          map.set(ep.number, { title: ep.title, thumbnailUrl: ep.thumbnailUrl });
+        }
+      }
+      setInternalRemoteEpisodes(map);
+    }).catch(() => {});
+
+    const unsub = api.onRemoteEpisodesUpdated?.((id, res) => {
+      if (cancelled || id !== anilistId || !res?.episodes) return;
+      const map = new Map<number, { title: string | null; thumbnailUrl: string | null }>();
+      for (const ep of res.episodes) {
+        if (typeof ep.number === 'number' && (ep.title || ep.thumbnailUrl)) {
+          map.set(ep.number, { title: ep.title, thumbnailUrl: ep.thumbnailUrl });
+        }
+      }
+      setInternalRemoteEpisodes(map);
+    });
+
+    return () => {
+      cancelled = true;
+      unsub?.();
+    };
+  }, [anilistId, remoteEpisodes]);
+
+  const effectiveRemoteEpisodes = (remoteEpisodes && remoteEpisodes.size > 0) ? remoteEpisodes : internalRemoteEpisodes;
+
+  // Series Title for Header (API / Cache anime title first, then parsed series title)
   const seriesName = useMemo(() => {
-    if (episodes.length === 0) return 'Episodes';
-    return cleanSeriesTitle(episodes[0].fileName || currentEpisode.fileName);
-  }, [episodes, currentEpisode]);
+    if (animeTitle && animeTitle.trim()) {
+      return animeTitle.trim();
+    }
+    const sampleFile = episodes[0]?.fileName || currentEpisode.fileName || '';
+    const parsedEp = cleanEpisodeTitle(sampleFile);
+    if (parsedEp.seriesTitle && parsedEp.seriesTitle.trim()) {
+      return parsedEp.seriesTitle.trim();
+    }
+    if (folderPath) {
+      const fromFolder = cleanSeriesTitle(folderPath.split(/[/\\]/).filter(Boolean).pop() || '');
+      if (fromFolder && fromFolder.trim()) {
+        return fromFolder.trim();
+      }
+    }
+    return '';
+  }, [animeTitle, episodes, currentEpisode, folderPath]);
 
   return (
     <div
@@ -214,7 +287,7 @@ export const EpisodeDrawer: React.FC<EpisodeDrawerProps> = ({
           isOpen ? 'translate-x-0' : 'translate-x-full'
         }`}
         onClick={(e) => e.stopPropagation()}
-        onMouseLeave={closeOnMouseLeave ? onClose : undefined}
+        onPointerLeave={closeOnMouseLeave ? onClose : undefined}
       >
         {/* Header */}
         <div className="flex items-center justify-between pb-4 border-b border-zinc-800/80">
@@ -276,6 +349,9 @@ export const EpisodeDrawer: React.FC<EpisodeDrawerProps> = ({
           {episodes.map((ep) => {
             const isPlaying = ep.filePath === currentEpisode.filePath;
             const progress = history[ep.filePath];
+            const parsedCore = parseReleaseCore(ep.fileName);
+            const epNum = parsedCore.episodeNumber ?? parsedCore.episodeNumbers[0] ?? (ep.episodeNumber ? parseInt(ep.episodeNumber.replace(/\D/g, ''), 10) : null);
+            const remoteInfo = epNum !== null && Number.isFinite(epNum) ? effectiveRemoteEpisodes.get(epNum) : undefined;
 
             return (
               <EpisodeDrawerItem
@@ -283,6 +359,7 @@ export const EpisodeDrawer: React.FC<EpisodeDrawerProps> = ({
                 episode={ep}
                 isPlaying={isPlaying}
                 progress={progress}
+                remoteInfo={remoteInfo}
                 onSelect={() => {
                   onSelectEpisode(ep);
                   onClose();

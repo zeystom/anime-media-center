@@ -8,7 +8,7 @@
  */
 import React, { useEffect, useLayoutEffect, useMemo, useRef, useState } from 'react'
 import { motion } from 'framer-motion'
-import { AlertTriangle, Bell, BellRing, CheckCircle, Download, Film, Heart, MoreHorizontal, Play, Star, Trash2, Wand2, X } from 'lucide-react'
+import { AlertTriangle, Bell, BellRing, CheckCircle, Compass, Download, Film, Heart, MoreHorizontal, Play, Star, Trash2, Wand2, X } from 'lucide-react'
 import type {
   AnimeFolder,
   AppSettings,
@@ -31,6 +31,7 @@ import { DownloadActionButton } from '../common/DownloadActionButton'
 import { ReleasePickerModal } from '../P2P/ReleasePickerModal'
 import { classifyRelease, type TorrentLanguageCode } from '../../lib/releaseParser/releaseClassification.ts'
 import { EpisodeRow } from './EpisodeRow'
+import { resolveAnimeTitle } from '../../utils/title'
 // CRITICAL: import the wasm-free regex engine directly — never from
 // ../../lib/releaseParser/index.ts, which pulls native/wasm deps unsuitable
 // for the renderer process.
@@ -60,6 +61,7 @@ export interface AnimeDetailViewProps {
   isFavourite: boolean
   onToggleFavourite: (anime: FavouriteAnime, favourite: boolean) => void
   onBackdropProgressChange?: (progress: number) => void
+  onSelectGenre?: (genre: string) => void
 }
 
 interface MergedEpisodeRow {
@@ -171,6 +173,7 @@ export const AnimeDetailView: React.FC<AnimeDetailViewProps> = ({
   isFavourite,
   onToggleFavourite,
   onBackdropProgressChange,
+  onSelectGenre,
 }) => {
   const [details, setDetails] = useState<CatalogItem | null>(null)
   // Hero description expand-on-click (clamped to 3 lines by default). The
@@ -381,9 +384,28 @@ export const AnimeDetailView: React.FC<AnimeDetailViewProps> = ({
   // Hero data: full CatalogItem preferred, RailItem/folder as fallback chain.
   const hero = useMemo(() => {
     const fallbackTitle = railItem?.title || localFolder?.canonicalTitle || localFolder?.folderName || ''
-    const title = details ? details.title.english || details.title.romaji || fallbackTitle : fallbackTitle
+    const titlePreference = settings?.animeTitleLanguage ?? 'english'
+    const title = details
+      ? resolveAnimeTitle(details.title, details.synonyms, titlePreference) || fallbackTitle
+      : fallbackTitle
+
+    let secondaryTitle: string | null = null
+    if (details?.title) {
+      if (titlePreference === 'english') {
+        const parts = [details.title.romaji, details.title.native].filter(Boolean).filter((t) => t !== title)
+        if (parts.length > 0) secondaryTitle = parts.join(' · ')
+      } else if (titlePreference === 'romaji') {
+        const parts = [details.title.english, details.title.native].filter(Boolean).filter((t) => t !== title)
+        if (parts.length > 0) secondaryTitle = parts.join(' · ')
+      } else {
+        const parts = [details.title.english, details.title.romaji].filter(Boolean).filter((t) => t !== title)
+        if (parts.length > 0) secondaryTitle = parts.join(' · ')
+      }
+    }
+
     return {
       title,
+      secondaryTitle,
       bannerUrl: details?.bannerUrl ?? railItem?.bannerUrl ?? remoteArtwork.bannerUrl ?? localFolder?.bannerUrl ?? null,
       posterUrl: details?.posterUrl ?? railItem?.posterUrl ?? remoteArtwork.posterUrl ?? localFolder?.posterUrl ?? null,
       averageScore: details?.averageScore ?? railItem?.averageScore ?? localFolder?.averageScore ?? null,
@@ -397,7 +419,7 @@ export const AnimeDetailView: React.FC<AnimeDetailViewProps> = ({
       description: stripHtml(details?.description ?? localFolder?.synopsis ?? null),
       idMal: details?.idMal ?? railItem?.idMal ?? (anilistId != null ? userEntries[anilistId]?.idMal : null) ?? null,
     }
-  }, [details, railItem, localFolder, remoteArtwork, anilistId, userEntries])
+  }, [details, railItem, localFolder, remoteArtwork, anilistId, userEntries, settings?.animeTitleLanguage])
   const posterAspectRatio = posterAspect?.url === hero.posterUrl ? posterAspect.ratio : 2 / 3
 
   // Read a tiny downsample of the banner when the image host permits canvas
@@ -620,6 +642,15 @@ export const AnimeDetailView: React.FC<AnimeDetailViewProps> = ({
     if (page > 1) setEpisodePage(page)
     // eslint-disable-next-line react-hooks/exhaustive-deps
   }, [source, resumeEpisodeNumber])
+
+  // Pre-warm subtitles and fonts for the target resume episode in background while browsing
+  useEffect(() => {
+    if (!resumeEpisode?.filePath || !window.electronAPI?.warmSubtitles) return;
+    const timer = setTimeout(() => {
+      window.electronAPI.warmSubtitles?.(resumeEpisode.filePath).catch(() => {});
+    }, 600);
+    return () => clearTimeout(timer);
+  }, [resumeEpisode?.filePath]);
 
   // Merge local + remote by episode number: local supplies the file, remote
   // fills title/thumbnail/air date (whole rows for fileless episodes).
@@ -1140,6 +1171,11 @@ export const AnimeDetailView: React.FC<AnimeDetailViewProps> = ({
             <h1 className="text-4xl font-black leading-tight tracking-tight text-white md:text-5xl" title={hero.title}>
               {hero.title}
             </h1>
+            {hero.secondaryTitle && (
+              <p className="mt-1.5 text-xs font-semibold text-zinc-400">
+                {hero.secondaryTitle}
+              </p>
+            )}
 
             {/* Meta chips */}
             <div className="mt-3 flex flex-wrap items-center gap-1.5">
@@ -1206,13 +1242,17 @@ export const AnimeDetailView: React.FC<AnimeDetailViewProps> = ({
             {hero.genres.length > 0 && (
               <div className="mt-3 flex flex-wrap items-center gap-1.5">
                 {hero.genres.map((genre) => (
-                  <span
+                  <button
                     key={genre}
-                    className="rounded border px-2.5 py-0.5 text-[11px] font-medium text-zinc-200"
+                    type="button"
+                    title={`Explore ${genre} anime in Discover`}
+                    onClick={() => onSelectGenre?.(genre)}
+                    className="group/genre inline-flex items-center gap-1.5 rounded-lg border px-2.5 py-1 text-[11px] font-semibold text-zinc-200 transition-all duration-150 hover:scale-105 hover:border-rose-400 hover:bg-rose-500/20 hover:text-white cursor-pointer"
                     style={{ borderColor: `hsla(${themeHue}, 72%, 68%, .24)`, backgroundColor: `hsla(${themeHue}, 72%, 58%, .10)` }}
                   >
-                    {genre}
-                  </span>
+                    <span>{genre}</span>
+                    <Compass className="h-3 w-3 opacity-60 transition-transform group-hover/genre:scale-110 group-hover/genre:opacity-100 text-rose-300" />
+                  </button>
                 ))}
               </div>
             )}

@@ -60,6 +60,8 @@ export interface ElectronAPI {
   getFolderEpisodes: (folderPath: string) => Promise<import('../../electron/types').Episode[]>;
   probeVideo: (filePath: string) => Promise<import('../../electron/types').VideoMetadata>;
   extractSubtitleTrack: (filePath: string, trackId: string, trackIndex: number | null, isExternal: boolean, externalPath?: string) => Promise<import('../../electron/types').SubtitleTrackPayload>;
+  warmSubtitles?: (filePath: string) => Promise<{ success: boolean }>;
+  onSubtitleFontsReady?: (callback: (data: { filePath: string; trackIndex: number; fonts: string[] }) => void) => () => void;
   savePlaybackProgress: (progress: import('../../electron/types').PlaybackProgress) => Promise<void>;
   getAllPlaybackProgress: () => Promise<Record<string, import('../../electron/types').PlaybackProgress>>;
   getSeasonPreference: (folderPath: string) => Promise<import('../../electron/types').SeasonPreference | null>;
@@ -68,11 +70,23 @@ export interface ElectronAPI {
   stopVideoStream: () => Promise<void>;
   getThumbnailUrl: (filePath: string, time: number) => Promise<string>;
   getAniSkipTimes: (seriesName: string, episodeNum: number, duration: number) => Promise<{ op?: { start: number; end: number }; ed?: { start: number; end: number } } | null>;
-  startWhisperSeason: (folderPath: string, audioTrackNum: number, skipExistingSrt: boolean) => Promise<{ success: boolean; error?: string }>;
+  startWhisperSeason: (
+    folderPath: string,
+    audioTrackNum: number,
+    skipExistingSrt: boolean,
+    options?: import('../../electron/types').WhisperOptions
+  ) => Promise<{ success: boolean; error?: string }>;
   cancelWhisper: () => Promise<void>;
   getWhisperStatus: () => Promise<import('../../electron/types').WhisperStatus>;
+  getAnimeCharacters: (title: string, anilistId?: number) => Promise<{ id: number; title: string; characters: string[] } | null>;
   onWhisperLog: (callback: (log: import('../../electron/types').WhisperLogMessage) => void) => () => void;
-  onWhisperProgress: (callback: (data: { currentFile: string; progress: number; queue: import('../../electron/types').WhisperQueueItem[] }) => void) => () => void;
+  onWhisperProgress: (callback: (data: {
+    currentFile: string;
+    progress: number;
+    speed?: string;
+    queue: import('../../electron/types').WhisperQueueItem[];
+    liveCues?: import('../../electron/types').WhisperLiveCue[];
+  }) => void) => () => void;
   onWhisperDone: (callback: (result: { completedCount: number; failedCount: number }) => void) => () => void;
   openFolderInExplorer: (folderPath: string) => Promise<void>;
   checkDownloadProgress: (filePaths: string[]) => Promise<Record<string, { isDownloading: boolean; downloadProgress?: number }>>;

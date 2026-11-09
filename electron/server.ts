@@ -602,7 +602,24 @@ export class LocalStreamServer {
       return;
     }
 
-    if (fs.existsSync(resolvedFontPath)) {
+    let finalFontPath = resolvedFontPath;
+    if (!fs.existsSync(finalFontPath)) {
+      const fontsRoot = path.resolve(storage.getThumbnailDir(), 'fonts');
+      try {
+        const subdirs = fs.readdirSync(fontsRoot, { withFileTypes: true });
+        for (const dir of subdirs) {
+          if (dir.isDirectory() && dir.name !== fileHash && /^[a-f0-9]{16}$/i.test(dir.name)) {
+            const candidate = path.resolve(fontsRoot, dir.name, fontName);
+            if (fs.existsSync(candidate) && isPathInside(candidate, fontsRoot)) {
+              finalFontPath = candidate;
+              break;
+            }
+          }
+        }
+      } catch {}
+    }
+
+    if (fs.existsSync(finalFontPath)) {
       const ext = path.extname(fontName).toLowerCase();
       const contentType =
         ext === '.otf' ? 'font/otf' :
@@ -613,7 +630,7 @@ export class LocalStreamServer {
         'Content-Type': contentType,
         'Cache-Control': 'public, max-age=86400',
       });
-      fs.createReadStream(resolvedFontPath).pipe(res);
+      fs.createReadStream(finalFontPath).pipe(res);
       return;
     }
 

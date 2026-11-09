@@ -557,7 +557,13 @@ export function formatEpisodeDisplayTitle(
     const official = ep.kitsuTitle || ep.episodeTitle || apiTitle;
     return formatEpisodeDisplayTitle(parsed.displayTitle || ep.episodeNumber || '', official);
   }
-  const parsedDisplayTitle = (parsedOrEpisode || '').trim();
+  let parsedDisplayTitle = (parsedOrEpisode || '').trim();
+  if (parsedDisplayTitle && (/\.[a-z0-9]{2,4}$/i.test(parsedDisplayTitle) || /(?:\.|\b)(?:S\d+E\d+|\d+p|WEB-DL|BD|HDTV|x264|x265|H\.264|HEVC|REPACK)\b/i.test(parsedDisplayTitle))) {
+    const cleaned = cleanEpisodeTitle(parsedDisplayTitle);
+    if (cleaned.displayTitle) {
+      parsedDisplayTitle = cleaned.displayTitle;
+    }
+  }
   if (!apiTitle || !apiTitle.trim()) {
     return parsedDisplayTitle;
   }

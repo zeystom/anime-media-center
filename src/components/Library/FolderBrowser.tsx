@@ -210,10 +210,10 @@ export const FolderBrowser: React.FC<FolderBrowserProps> = ({
         </div>
       </section>
 
-      {libraryFolders.length === 0 ? (
+      {folders.length === 0 ? (
         <div className="flex flex-col items-center justify-center rounded-2xl border border-zinc-800/80 bg-zinc-900/40 p-16 text-center shadow-lg">
           <FolderOpen className="w-12 h-12 text-zinc-600 mb-4" />
-          <h3 className="text-lg font-bold text-zinc-200">Your library is empty</h3>
+          <h3 className="text-lg font-bold text-zinc-200">No Anime Folders Found</h3>
           <p className="mt-2 max-w-md text-sm text-zinc-400">
             Download an anime from Discover or point the app at your existing library folder — your collection will show up here.
           </p>
@@ -470,11 +470,11 @@ export const FolderBrowser: React.FC<FolderBrowserProps> = ({
               })}
             </div>
           ) : (
-            (searchQuery.trim() || collectionFilter !== 'all') && (
+            searchQuery.trim() && (
               <div className="flex flex-col items-center justify-center py-16 text-center rounded-2xl border border-zinc-800/80 bg-zinc-900/40 p-8 shadow-lg">
                 <Search className="w-10 h-10 text-zinc-500 mb-3" />
                 <h3 className="text-base font-semibold text-zinc-200">
-                  {searchQuery.trim() ? <>No anime found matching <span className="text-red-400 font-bold">"{searchQuery}"</span></> : `No anime in ${collectionFilter === 'favourites' ? 'Favourites' : collectionFilter === 'followed' ? 'Followed' : 'Watching'}`}
+                  No anime found matching <span className="text-red-400 font-bold">"{searchQuery}"</span>
                 </h3>
                 <p className="text-xs text-zinc-400 max-w-sm mt-1">
                   Try another filter or search, or clear the current selection.
@@ -484,7 +484,7 @@ export const FolderBrowser: React.FC<FolderBrowserProps> = ({
                   onClick={() => { setSearchQuery(''); setCollectionFilter('all'); }}
                   className="mt-4 px-4 py-2 rounded-xl bg-zinc-800 hover:bg-zinc-700 text-zinc-200 hover:text-white text-xs font-semibold border border-white/10 transition-colors shadow-sm"
                 >
-                  Reset filters
+                  Clear Search
                 </button>
               </div>
             )

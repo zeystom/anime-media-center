@@ -1,17 +1,31 @@
 import React, { useState, useEffect, useMemo } from 'react';
 import {
   FolderOpen,
-  Sparkles,
   Volume2,
   StopCircle,
   Play,
   CheckCircle2,
-  Check,
   AlertCircle,
+  ChevronDown,
+  ChevronUp,
+  Terminal,
+  CheckSquare,
+  Square,
+  Users,
 } from 'lucide-react';
-import { AnimeFolder, Episode, AudioTrack, WhisperLogMessage, WhisperQueueItem } from '../../types';
+import {
+  AnimeFolder,
+  Episode,
+  AudioTrack,
+  WhisperLogMessage,
+  WhisperQueueItem,
+  WhisperLiveCue,
+  WhisperOptions,
+  WhisperPreset,
+} from '../../types';
 import { cleanSeriesTitle, cleanEpisodeTitle } from '../../utils/format';
 import { TerminalLog } from './TerminalLog';
+import { LiveDialogueStream } from './LiveDialogueStream';
 
 interface WhisperStudioProps {
   initialFolder?: AnimeFolder | null;
@@ -19,6 +33,8 @@ interface WhisperStudioProps {
   onRefreshLibrary: () => void;
   onOpenSettings?: () => void;
 }
+
+const STORAGE_KEY_WHISPER_TUNING = 'kaiko_whisper_tuning_preset';
 
 export const WhisperStudio: React.FC<WhisperStudioProps> = ({
   initialFolder,
@@ -30,15 +46,79 @@ export const WhisperStudio: React.FC<WhisperStudioProps> = ({
   const [episodes, setEpisodes] = useState<Episode[]>(initialFolder?.episodes || []);
   const [sampleAudioTracks, setSampleAudioTracks] = useState<AudioTrack[]>([]);
   const [selectedAudioTrackNum, setSelectedAudioTrackNum] = useState<number>(1);
-  const [skipExistingSrt, setSkipExistingSrt] = useState<boolean>(true);
+  const [isAudioTracksExpanded, setIsAudioTracksExpanded] = useState<boolean>(false);
   const [probing, setProbing] = useState<boolean>(false);
+
+  // Episode selection & filter
+  const [selectedEpisodePaths, setSelectedEpisodePaths] = useState<Set<string>>(new Set());
+  const [episodeFilter, setEpisodeFilter] = useState<'all' | 'missing'>('missing');
 
   // Whisper Queue & Execution State
   const [isProcessing, setIsProcessing] = useState<boolean>(false);
   const [currentFile, setCurrentFile] = useState<string>('');
   const [overallProgress, setOverallProgress] = useState<number>(0);
+  const [currentSpeed, setCurrentSpeed] = useState<string>('');
   const [queue, setQueue] = useState<WhisperQueueItem[]>([]);
   const [logs, setLogs] = useState<WhisperLogMessage[]>([]);
+  const [liveCues, setLiveCues] = useState<WhisperLiveCue[]>([]);
+
+  // UI Drawer State
+  const [showTerminal, setShowTerminal] = useState<boolean>(false);
+  const [showAdvanced, setShowAdvanced] = useState<boolean>(false);
+  const [isEditingPrompt, setIsEditingPrompt] = useState<boolean>(false);
+
+  // Auto-detected Character Names state
+  const [detectedCharacters, setDetectedCharacters] = useState<string[]>([]);
+  const [isDetectingCharacters, setIsDetectingCharacters] = useState<boolean>(false);
+  const [detectedAnimeTitle, setDetectedAnimeTitle] = useState<string>('');
+  const [userPromptOverride, setUserPromptOverride] = useState<string | null>(null);
+
+  // Quality & Tuning State (Human Friendly)
+  // 'anime' = Normal dialogue, 'bgm' = Loud music / action, 'fast' = Quiet & fast, 'custom' = Custom
+  const [qualityOption, setQualityOption] = useState<WhisperPreset>('anime');
+  const [vadSensitivity, setVadSensitivity] = useState<'high' | 'balanced' | 'standard'>('balanced');
+  const [antiStutter, setAntiStutter] = useState<boolean>(true);
+  const [preventSingleWords, setPreventSingleWords] = useState<boolean>(true);
+  const [channelMode, setChannelMode] = useState<'auto' | 'fc'>('auto');
+  const [task, setTask] = useState<'transcribe' | 'translate'>('transcribe');
+  const [language, setLanguage] = useState<string>('en');
+
+  // Restore saved tuning preferences from localStorage on mount
+  useEffect(() => {
+    try {
+      const saved = localStorage.getItem(STORAGE_KEY_WHISPER_TUNING);
+      if (saved) {
+        const parsed = JSON.parse(saved);
+        if (parsed.preset) setQualityOption(parsed.preset);
+        if (parsed.vadSensitivity) setVadSensitivity(parsed.vadSensitivity);
+        if (parsed.antiStutter !== undefined) setAntiStutter(parsed.antiStutter);
+        if (parsed.preventSingleWords !== undefined) setPreventSingleWords(parsed.preventSingleWords);
+        if (parsed.channelMode) setChannelMode(parsed.channelMode);
+        if (parsed.task) setTask(parsed.task);
+        if (parsed.language) setLanguage(parsed.language);
+        if (parsed.userPromptOverride) setUserPromptOverride(parsed.userPromptOverride);
+      }
+    } catch {}
+  }, []);
+
+  // Save tuning preferences to localStorage when changed
+  useEffect(() => {
+    try {
+      localStorage.setItem(
+        STORAGE_KEY_WHISPER_TUNING,
+        JSON.stringify({
+          preset: qualityOption,
+          vadSensitivity,
+          antiStutter,
+          preventSingleWords,
+          channelMode,
+          task,
+          language,
+          userPromptOverride,
+        })
+      );
+    } catch {}
+  }, [qualityOption, vadSensitivity, antiStutter, preventSingleWords, channelMode, task, language, userPromptOverride]);
 
   // Synchronize initialFolder when user opens Whisper from library (unless job is running)
   useEffect(() => {
@@ -47,7 +127,7 @@ export const WhisperStudio: React.FC<WhisperStudioProps> = ({
     }
   }, [initialFolder, isProcessing]);
 
-  // Initial Status Recovery on Mount (re-syncs state if app reloaded or remounted)
+  // Initial Status Recovery on Mount
   useEffect(() => {
     if (!window.electronAPI) return;
 
@@ -59,6 +139,10 @@ export const WhisperStudio: React.FC<WhisperStudioProps> = ({
           setCurrentFile(status.currentFile);
           setOverallProgress(status.progress);
           setQueue(status.queue);
+          if (status.speed) setCurrentSpeed(status.speed);
+          if (status.liveCues && status.liveCues.length > 0) {
+            setLiveCues(status.liveCues);
+          }
           if (status.folderPath) {
             setSelectedFolder(status.folderPath);
           }
@@ -85,6 +169,12 @@ export const WhisperStudio: React.FC<WhisperStudioProps> = ({
         if (!isMounted) return;
         setEpisodes(eps);
 
+        // By default, select episodes that DO NOT have .whisper.srt yet
+        const missingPaths = new Set(
+          eps.filter((e) => !e.hasWhisperSrt).map((e) => e.filePath)
+        );
+        setSelectedEpisodePaths(missingPaths.size > 0 ? missingPaths : new Set(eps.map((e) => e.filePath)));
+
         if (eps.length > 0) {
           const sampleFile = eps[0].filePath;
           const meta = await window.electronAPI.probeVideo(sampleFile);
@@ -94,14 +184,18 @@ export const WhisperStudio: React.FC<WhisperStudioProps> = ({
 
           // Auto-detect English track for --ff_track (1-indexed track number)
           let engTrackNum = 1;
+          let hasEng = false;
           for (let i = 0; i < meta.audioTracks.length; i++) {
             const t = meta.audioTracks[i];
             if (t.language === 'eng' || t.language === 'en' || /english/i.test(t.title)) {
               engTrackNum = i + 1;
+              hasEng = true;
               break;
             }
           }
           setSelectedAudioTrackNum(engTrackNum);
+          // If no English track auto-detected, expand list so user can choose
+          setIsAudioTracksExpanded(!hasEng);
         } else {
           setSampleAudioTracks([]);
         }
@@ -117,13 +211,48 @@ export const WhisperStudio: React.FC<WhisperStudioProps> = ({
     };
   }, [selectedFolder]);
 
+  // Auto-detect character names via AniList API when anime folder changes
+  useEffect(() => {
+    if (!selectedFolder || !window.electronAPI) {
+      setDetectedCharacters([]);
+      setDetectedAnimeTitle('');
+      return;
+    }
+
+    const title = cleanSeriesTitle(selectedFolder);
+    if (!title) return;
+
+    let isMounted = true;
+    setIsDetectingCharacters(true);
+
+    (async () => {
+      try {
+        const res = await window.electronAPI.getAnimeCharacters(title, initialFolder?.anilistId ?? undefined);
+        if (!isMounted) return;
+        if (res && res.characters && res.characters.length > 0) {
+          setDetectedCharacters(res.characters);
+          setDetectedAnimeTitle(res.title || title);
+        } else {
+          setDetectedCharacters([]);
+        }
+      } catch {
+        if (isMounted) setDetectedCharacters([]);
+      } finally {
+        if (isMounted) setIsDetectingCharacters(false);
+      }
+    })();
+
+    return () => {
+      isMounted = false;
+    };
+  }, [selectedFolder, initialFolder?.anilistId]);
+
   // Setup IPC log and progress listeners
   useEffect(() => {
     if (!window.electronAPI) return;
 
     const unsubLog = window.electronAPI.onWhisperLog((log) => {
       setLogs((prev) => {
-        // Keep up to 350 items in memory to prevent DOM lag
         const updated = [...prev, log];
         return updated.length > 350 ? updated.slice(-350) : updated;
       });
@@ -133,6 +262,10 @@ export const WhisperStudio: React.FC<WhisperStudioProps> = ({
       setCurrentFile(data.currentFile);
       setOverallProgress(data.progress);
       setQueue(data.queue);
+      if (data.speed) setCurrentSpeed(data.speed);
+      if (data.liveCues && data.liveCues.length > 0) {
+        setLiveCues(data.liveCues);
+      }
       setIsProcessing(true);
     });
 
@@ -153,7 +286,82 @@ export const WhisperStudio: React.FC<WhisperStudioProps> = ({
     const folder = await window.electronAPI.browseFolder(selectedFolder);
     if (folder) {
       setSelectedFolder(folder);
+      setUserPromptOverride(null);
     }
+  };
+
+  const handleSelectQuality = (newPreset: 'anime' | 'bgm' | 'fast') => {
+    setQualityOption(newPreset);
+    if (newPreset === 'anime') {
+      setVadSensitivity('balanced');
+      setAntiStutter(true);
+      setPreventSingleWords(true);
+      setChannelMode('auto');
+    } else if (newPreset === 'bgm') {
+      setVadSensitivity('high');
+      setAntiStutter(true);
+      setPreventSingleWords(true);
+      setChannelMode('auto');
+    } else if (newPreset === 'fast') {
+      setVadSensitivity('standard');
+      setAntiStutter(true);
+      setPreventSingleWords(true);
+      setChannelMode('auto');
+    }
+  };
+
+  // Computes active initial prompt automatically without user friction
+  const activePrompt = useMemo(() => {
+    if (userPromptOverride !== null) return userPromptOverride;
+    const suffix =
+      qualityOption === 'bgm'
+        ? 'Anime dialogue, spoken conversation over music, no singing, no lyrics.'
+        : qualityOption === 'fast'
+        ? 'Clean dialogue and conversations.'
+        : 'Anime dialogue, conversational speech, clean subtitles.';
+
+    if (detectedCharacters.length > 0) {
+      return `${detectedCharacters.join(', ')}. ${suffix}`;
+    }
+    return suffix;
+  }, [userPromptOverride, qualityOption, detectedCharacters]);
+
+  const isCustomQuality = useMemo(() => {
+    if (qualityOption === 'custom') return true;
+    if (qualityOption === 'anime') {
+      return vadSensitivity !== 'balanced' || !antiStutter || !preventSingleWords || channelMode !== 'auto';
+    }
+    if (qualityOption === 'bgm') {
+      return vadSensitivity !== 'high' || !antiStutter || !preventSingleWords || channelMode !== 'auto';
+    }
+    if (qualityOption === 'fast') {
+      return vadSensitivity !== 'standard' || !antiStutter || !preventSingleWords || channelMode !== 'auto';
+    }
+    return false;
+  }, [qualityOption, vadSensitivity, antiStutter, preventSingleWords, channelMode]);
+
+  const buildWhisperOptions = (selectivePaths?: string[]): WhisperOptions => {
+    return {
+      preset: qualityOption,
+      model: 'large-v3-turbo',
+      language,
+      task,
+      vadThreshold: vadSensitivity === 'high' ? 0.28 : vadSensitivity === 'balanced' ? 0.35 : 0.45,
+      vadMinSpeechDurationMs: vadSensitivity === 'standard' ? 250 : 150,
+      vadSpeechPadMs: vadSensitivity === 'high' ? 1000 : 900,
+      conditionOnPreviousText: !antiStutter,
+      compressionRatioThreshold: antiStutter ? 2.8 : 2.4,
+      noSpeechThreshold: vadSensitivity === 'high' ? 0.7 : 0.6,
+      initialPrompt: activePrompt,
+      maxLineWidth: 46,
+      maxLineCount: 2,
+      maxCommaCent: preventSingleWords ? 100 : 70,
+      minDistToEnd: 8,
+      sentence: true,
+      channelMode,
+      speechNorm: qualityOption === 'bgm',
+      selectedFilePaths: selectivePaths || (selectedEpisodePaths.size > 0 ? Array.from(selectedEpisodePaths) : undefined),
+    };
   };
 
   const handleStartSeason = async () => {
@@ -163,19 +371,56 @@ export const WhisperStudio: React.FC<WhisperStudioProps> = ({
       return;
     }
     setIsProcessing(true);
+    setLiveCues([]);
     setLogs((prev) => [
       ...prev,
       {
         type: 'info',
-        text: `Starting Whisper batch job for folder: ${selectedFolder} (Audio Track: ${selectedAudioTrackNum})`,
+        text: `Starting Whisper generation for folder: ${selectedFolder} (Audio Track: ${selectedAudioTrackNum}, Quality: ${qualityOption})`,
         timestamp: Date.now(),
       },
     ]);
 
+    const options = buildWhisperOptions();
     const res = await window.electronAPI.startWhisperSeason(
       selectedFolder,
       selectedAudioTrackNum,
-      skipExistingSrt
+      false, // Explicit user-selected set is already filtered in selectedFilePaths
+      options
+    );
+
+    if (!res.success) {
+      setIsProcessing(false);
+      setLogs((prev) => [
+        ...prev,
+        {
+          type: 'error',
+          text: `Whisper error: ${res.error}`,
+          timestamp: Date.now(),
+        },
+      ]);
+    }
+  };
+
+  const handleStartSingleEpisode = async (ep: Episode) => {
+    if (!selectedFolder || !whisperExists) return;
+    setIsProcessing(true);
+    setLiveCues([]);
+    setLogs((prev) => [
+      ...prev,
+      {
+        type: 'info',
+        text: `Starting single episode subtitle generation: ${ep.fileName}`,
+        timestamp: Date.now(),
+      },
+    ]);
+
+    const options = buildWhisperOptions([ep.filePath]);
+    const res = await window.electronAPI.startWhisperSeason(
+      selectedFolder,
+      selectedAudioTrackNum,
+      false,
+      options
     );
 
     if (!res.success) {
@@ -204,18 +449,69 @@ export const WhisperStudio: React.FC<WhisperStudioProps> = ({
     ]);
   };
 
+  // Batch toggle handlers
+  const handleToggleSelectAll = () => {
+    const targetEpisodes = episodeFilter === 'missing'
+      ? episodes.filter((e) => !e.hasWhisperSrt)
+      : episodes;
+
+    const allTargetSelected = targetEpisodes.every((e) => selectedEpisodePaths.has(e.filePath));
+    setSelectedEpisodePaths((prev) => {
+      const next = new Set(prev);
+      if (allTargetSelected) {
+        for (const ep of targetEpisodes) {
+          next.delete(ep.filePath);
+        }
+      } else {
+        for (const ep of targetEpisodes) {
+          next.add(ep.filePath);
+        }
+      }
+      return next;
+    });
+  };
+
+  const toggleEpisodePath = (path: string) => {
+    setSelectedEpisodePaths((prev) => {
+      const next = new Set(prev);
+      if (next.has(path)) {
+        next.delete(path);
+      } else {
+        next.add(path);
+      }
+      return next;
+    });
+  };
+
+  const hasSubtitles = (e: (typeof episodes)[0]) =>
+    Boolean(e.hasWhisperSrt || e.hasEmbeddedDubtitles || e.hasExternalSrt || e.hasEmbeddedSubtitles);
+
   const existingWhisperCount = episodes.filter((e) => e.hasWhisperSrt).length;
-  const cleanTitle = useMemo(() => cleanSeriesTitle(selectedFolder), [selectedFolder]);
+  const existingAnySubCount = episodes.filter(hasSubtitles).length;
+  const missingAnySubCount = episodes.length - existingAnySubCount;
+  const missingWhisperCount = episodes.length - existingWhisperCount;
+
+  const filteredEpisodes =
+    episodeFilter === 'missing'
+      ? episodes.filter((e) => (existingWhisperCount > 0 ? !e.hasWhisperSrt : !hasSubtitles(e)))
+      : episodes;
+
+  const engTrackIndex = sampleAudioTracks.findIndex(
+    (t) => t.language === 'eng' || t.language === 'en' || /english/i.test(t.title)
+  );
+  const isEngAutoDetected = engTrackIndex !== -1 && selectedAudioTrackNum === engTrackIndex + 1;
+  const selectedTrack = sampleAudioTracks[selectedAudioTrackNum - 1];
+
+  // Active generation queue index
+  const currentQueueIndex = queue.findIndex((q) => q.status === 'processing');
+  const activeProcessingEpisode = currentFile ? cleanEpisodeTitle(currentFile) : null;
 
   return (
-    <div className="flex-1 flex flex-col h-[calc(100vh-3.5rem)] overflow-hidden bg-[#0f0f12] p-6 space-y-6">
+    <div className="flex-1 flex flex-col h-[calc(100vh-3.5rem)] overflow-hidden bg-[#0f0f12] p-6 space-y-5">
       {/* Top Banner / Heading */}
-      <div className="flex flex-wrap items-center justify-between gap-4 pb-2 border-b border-zinc-800">
+      <div className="flex flex-wrap items-center justify-between gap-4 pb-2 border-b border-zinc-800 shrink-0">
         <div>
           <div className="flex items-center space-x-2.5">
-            <div className="w-8 h-8 rounded-lg bg-indigo-600/20 text-indigo-400 flex items-center justify-center border border-indigo-500/30">
-              <Sparkles className="w-4 h-4" />
-            </div>
             <h1 className="text-xl font-bold text-white tracking-tight">Whisper Studio</h1>
             <span className="px-2 py-0.5 rounded text-xs font-mono font-bold bg-zinc-800 text-indigo-300 border border-zinc-700">
               large-v3-turbo
@@ -226,7 +522,7 @@ export const WhisperStudio: React.FC<WhisperStudioProps> = ({
           </p>
         </div>
 
-        {/* Global Action Buttons */}
+        {/* Global Action Button */}
         <div className="flex items-center space-x-3">
           {isProcessing ? (
             <button
@@ -239,11 +535,15 @@ export const WhisperStudio: React.FC<WhisperStudioProps> = ({
           ) : (
             <button
               onClick={handleStartSeason}
-              disabled={!selectedFolder || episodes.length === 0 || probing || !whisperExists}
+              disabled={!selectedFolder || episodes.length === 0 || probing || !whisperExists || selectedEpisodePaths.size === 0}
               className="flex items-center space-x-2 px-6 py-2.5 rounded-xl bg-gradient-to-r from-red-600 to-indigo-600 hover:from-red-500 hover:to-indigo-500 text-white font-bold text-xs shadow-lg shadow-indigo-600/20 transition-all hover:scale-[1.02] active:scale-[0.98] disabled:opacity-50 disabled:cursor-not-allowed"
             >
               <Play className="w-4 h-4 fill-white" />
-              <span>Generate Subtitles for Season</span>
+              <span>
+                {selectedEpisodePaths.size === 0
+                  ? 'Select episodes to generate'
+                  : `Generate subtitles for ${selectedEpisodePaths.size} episode${selectedEpisodePaths.size === 1 ? '' : 's'}`}
+              </span>
             </button>
           )}
         </div>
@@ -251,7 +551,7 @@ export const WhisperStudio: React.FC<WhisperStudioProps> = ({
 
       {/* Missing Whisper Binary Alert */}
       {!whisperExists && (
-        <div className="p-3.5 rounded-2xl bg-amber-500/10 border border-amber-500/30 flex items-center justify-between text-xs text-amber-300 shadow-sm">
+        <div className="p-3.5 rounded-2xl bg-amber-500/10 border border-amber-500/30 flex items-center justify-between text-xs text-amber-300 shadow-sm shrink-0">
           <div className="flex items-center space-x-2.5">
             <AlertCircle className="w-4 h-4 text-amber-400 shrink-0" />
             <span>Faster-Whisper executable is not configured. Configure the tool path in Settings to transcribe subtitles.</span>
@@ -267,22 +567,15 @@ export const WhisperStudio: React.FC<WhisperStudioProps> = ({
         </div>
       )}
 
-      {/* Main Grid: Left Controls (1/3) & Right Live Terminal (2/3) */}
+      {/* Main Grid: Left Steps (5/12) & Right Queue (7/12) */}
       <div className="flex-1 grid grid-cols-1 lg:grid-cols-12 gap-6 min-h-0">
-        {/* Left Column: Configuration & Audio Selector */}
+        {/* Left Column: 3 Compact Steps */}
         <div className="lg:col-span-5 flex flex-col space-y-4 overflow-y-auto pr-1 scrollbar-thin">
-          {/* 1. Folder Selection Card */}
-          <div className="p-4 rounded-2xl bg-[#141418] border border-white/10 space-y-3 shadow-md">
-            <div className="flex items-center justify-between">
-              <span className="text-xs font-bold uppercase tracking-wider text-zinc-400 block">
-                1. Target Anime Season Folder
-              </span>
-              {cleanTitle && (
-                <span className="text-xs font-bold text-indigo-400 truncate max-w-[200px]" title={cleanTitle}>
-                  {cleanTitle}
-                </span>
-              )}
-            </div>
+          {/* Step 1: Folder Selection */}
+          <div className="rounded-2xl bg-[#141418] border border-white/10 space-y-3 shadow-md p-4">
+            <span className="text-xs font-bold uppercase tracking-wider text-zinc-400 block">
+              1. Folder
+            </span>
 
             <div className="flex items-center space-x-2">
               <input
@@ -304,234 +597,468 @@ export const WhisperStudio: React.FC<WhisperStudioProps> = ({
             </div>
 
             {episodes.length > 0 && (
-              <div className="flex flex-col space-y-1.5 text-xs text-zinc-400 pt-1">
-                <div className="flex items-center justify-between">
-                  <span>{episodes.length} MKV episodes detected</span>
-                  <span className="text-emerald-400 font-semibold">
-                    {existingWhisperCount} already have .whisper.srt
+              <div className="text-xs text-zinc-400 pt-0.5 flex items-center justify-between flex-wrap gap-2">
+                <span>
+                  {episodes.length} episodes ·{' '}
+                  {existingWhisperCount > 0 ? (
+                    <>
+                      <strong className="text-emerald-400 font-semibold">{existingWhisperCount}</strong> already have AI subtitles
+                    </>
+                  ) : existingAnySubCount > 0 ? (
+                    <>
+                      <strong className="text-emerald-400 font-semibold">{existingAnySubCount}</strong> already have subtitles
+                    </>
+                  ) : (
+                    <span>0 already have subtitles</span>
+                  )}
+                </span>
+                <div className="flex items-center space-x-1.5 flex-wrap">
+                  {episodes.some((e) => e.hasWhisperSrt) && (
+                    <span className="text-[10px] text-indigo-300 font-semibold bg-indigo-500/15 px-1.5 py-0.5 rounded border border-indigo-500/30">
+                      AI Sub ({existingWhisperCount})
+                    </span>
+                  )}
+                  {episodes.some((e) => e.hasEmbeddedDubtitles) && (
+                    <span className="text-[10px] text-purple-300 font-semibold bg-purple-500/15 px-1.5 py-0.5 rounded border border-purple-500/30" title="Embedded English Dubtitles (SDH)">
+                      Dub Sub
+                    </span>
+                  )}
+                  {episodes.some((e) => !e.hasWhisperSrt && e.hasExternalSrt) && (
+                    <span className="text-[10px] text-blue-300 font-semibold bg-blue-500/15 px-1.5 py-0.5 rounded border border-blue-500/30" title="External Subtitle (.srt)">
+                      Ext Sub
+                    </span>
+                  )}
+                  {episodes.some((e) => !e.hasWhisperSrt && !e.hasExternalSrt && e.hasEmbeddedSubtitles) && (
+                    <span className="text-[10px] text-emerald-300 font-semibold bg-emerald-500/15 px-1.5 py-0.5 rounded border border-emerald-500/30" title="Embedded Subtitles">
+                      Sub
+                    </span>
+                  )}
+                </div>
+              </div>
+            )}
+          </div>
+
+          {/* Step 2: Audio Stream Selection */}
+          <div className="rounded-2xl bg-[#141418] border border-white/10 space-y-3 shadow-md p-4">
+            <div className="flex items-center justify-between">
+              <span className="text-xs font-bold uppercase tracking-wider text-zinc-400 block">
+                2. Audio
+              </span>
+              {probing && <span className="text-[11px] text-zinc-500 animate-pulse">Scanning audio...</span>}
+            </div>
+
+            {/* If English is auto-detected and not expanded, show clean compact row with "Change" button */}
+            {isEngAutoDetected && !isAudioTracksExpanded ? (
+              <div className="flex items-center justify-between p-3 rounded-xl bg-zinc-900/60 border border-zinc-800/80 text-xs text-zinc-300">
+                <div className="flex items-center space-x-2.5 truncate mr-2">
+                  <Volume2 className="w-4 h-4 text-emerald-400 shrink-0" />
+                  <span className="truncate">
+                    Audio: <strong className="text-white font-semibold">{selectedTrack?.title || 'English'}</strong>{' '}
+                    <span className="text-[10px] text-emerald-400 bg-emerald-500/10 px-1.5 py-0.5 rounded border border-emerald-500/20 font-semibold ml-1">
+                      auto-detected
+                    </span>
                   </span>
                 </div>
-                {episodes.some((e) => e.hasEmbeddedDubtitles) && (
-                  <div className="flex items-center space-x-1.5 text-purple-300 bg-purple-500/15 border border-purple-500/30 px-2 py-1 rounded-md text-[11px] font-medium">
-                    <Sparkles className="w-3.5 h-3.5 shrink-0 text-purple-400" />
-                    <span>Embedded Dubtitles (SDH) detected. Whisper generation is optional!</span>
+                <button
+                  type="button"
+                  disabled={isProcessing}
+                  onClick={() => setIsAudioTracksExpanded(true)}
+                  className="text-xs text-indigo-400 hover:text-indigo-300 font-semibold underline shrink-0 disabled:opacity-50"
+                >
+                  Change
+                </button>
+              </div>
+            ) : (
+              <div className="space-y-2">
+                {!isEngAutoDetected && sampleAudioTracks.length > 0 && (
+                  <p className="text-[11px] text-amber-300/90 leading-tight">
+                    English audio track not detected automatically. Please pick the speech track below:
+                  </p>
+                )}
+
+                {sampleAudioTracks.length > 0 ? (
+                  sampleAudioTracks.map((track, idx) => {
+                    const trackNum = idx + 1;
+                    const isSelected = selectedAudioTrackNum === trackNum;
+                    const isEng = track.language === 'eng' || track.language === 'en' || /english/i.test(track.title);
+
+                    return (
+                      <button
+                        key={track.audioIndex}
+                        disabled={isProcessing}
+                        onClick={() => {
+                          setSelectedAudioTrackNum(trackNum);
+                          if (isEngAutoDetected) setIsAudioTracksExpanded(false);
+                        }}
+                        className={`w-full flex items-center justify-between p-2.5 rounded-xl text-left transition-all border ${
+                          isSelected
+                            ? 'bg-indigo-600/20 border-indigo-500 text-white shadow-sm'
+                            : 'bg-zinc-900/60 border-zinc-800/80 text-zinc-300 hover:bg-zinc-800/60 disabled:opacity-50'
+                        }`}
+                      >
+                        <div className="truncate mr-2">
+                          <div className="flex items-center space-x-2">
+                            <span className="text-xs font-bold font-mono text-zinc-400">
+                              Track #{trackNum}
+                            </span>
+                            <span className="text-xs font-semibold text-zinc-100 truncate">
+                              {track.title || track.languageName || 'Audio'}
+                            </span>
+                            {isEng && (
+                              <span className="px-1.5 py-0.2 rounded text-[10px] font-bold bg-emerald-500/20 text-emerald-300 border border-emerald-500/30">
+                                ENG
+                              </span>
+                            )}
+                          </div>
+                          <div className="text-[11px] text-zinc-500 mt-0.5">
+                            {track.languageName} • {track.codec.toUpperCase()}
+                          </div>
+                        </div>
+                        {isSelected && <span className="text-xs font-bold text-indigo-400 shrink-0">Selected</span>}
+                      </button>
+                    );
+                  })
+                ) : (
+                  <div className="p-3 text-center rounded-xl bg-zinc-900/40 border border-dashed border-zinc-800 text-zinc-500 text-xs">
+                    {probing ? 'Scanning audio tracks...' : 'No audio streams loaded yet.'}
+                  </div>
+                )}
+
+                {isAudioTracksExpanded && isEngAutoDetected && (
+                  <div className="text-right pt-1">
+                    <button
+                      type="button"
+                      onClick={() => setIsAudioTracksExpanded(false)}
+                      className="text-xs text-zinc-400 hover:text-white underline"
+                    >
+                      Done
+                    </button>
                   </div>
                 )}
               </div>
             )}
           </div>
 
-          {/* 2. Audio Track Selection Card */}
-          <div className="p-4 rounded-2xl bg-[#141418] border border-white/10 space-y-3 shadow-md">
+          {/* Step 3: Quality & Settings */}
+          <div className="rounded-2xl bg-[#141418] border border-white/10 space-y-3 shadow-md p-4">
             <div className="flex items-center justify-between">
-              <span className="text-xs font-bold uppercase tracking-wider text-zinc-400 flex items-center space-x-1.5">
-                <Volume2 className="w-4 h-4 text-indigo-400" />
-                <span>2. Audio Stream to Transcribe</span>
+              <span className="text-xs font-bold uppercase tracking-wider text-zinc-400 block">
+                3. Quality
               </span>
-              {probing && <span className="text-[11px] text-zinc-500 animate-pulse">Probing tracks...</span>}
+              {isCustomQuality && (
+                <span className="text-[10px] font-mono text-purple-300 bg-purple-500/20 px-2 py-0.5 rounded border border-purple-500/30">
+                  Custom
+                </span>
+              )}
             </div>
-            <p className="text-[11px] text-zinc-500">
-              Auto-detected English track is used if present
+
+            {/* Segmented 3-option control */}
+            <div className="grid grid-cols-3 gap-1.5 p-1 rounded-xl bg-zinc-900/90 border border-zinc-800">
+              <button
+                type="button"
+                disabled={isProcessing}
+                onClick={() => handleSelectQuality('anime')}
+                className={`py-2 px-1.5 rounded-lg text-xs font-semibold text-center transition-all ${
+                  qualityOption === 'anime' && !isCustomQuality
+                    ? 'bg-indigo-600 text-white shadow-md'
+                    : 'text-zinc-400 hover:text-white hover:bg-zinc-800/60'
+                }`}
+              >
+                Normal dialogue
+              </button>
+              <button
+                type="button"
+                disabled={isProcessing}
+                onClick={() => handleSelectQuality('bgm')}
+                className={`py-2 px-1.5 rounded-lg text-xs font-semibold text-center transition-all ${
+                  qualityOption === 'bgm' && !isCustomQuality
+                    ? 'bg-indigo-600 text-white shadow-md'
+                    : 'text-zinc-400 hover:text-white hover:bg-zinc-800/60'
+                }`}
+              >
+                Loud music / action
+              </button>
+              <button
+                type="button"
+                disabled={isProcessing}
+                onClick={() => handleSelectQuality('fast')}
+                className={`py-2 px-1.5 rounded-lg text-xs font-semibold text-center transition-all ${
+                  qualityOption === 'fast' && !isCustomQuality
+                    ? 'bg-indigo-600 text-white shadow-md'
+                    : 'text-zinc-400 hover:text-white hover:bg-zinc-800/60'
+                }`}
+              >
+                Quiet & fast
+              </button>
+            </div>
+
+            {/* Plain-language explanation line */}
+            <p className="text-[11px] text-zinc-400 leading-normal pt-0.5">
+              {qualityOption === 'bgm'
+                ? 'Boosts quiet speech under loud soundtrack, battle sound effects, and phone calls.'
+                : qualityOption === 'fast'
+                ? 'High-speed recognition for quiet conversational episodes without loud background music.'
+                : 'Recommended for most anime. Protects fast speech, high voices, and stuttering.'}
             </p>
 
-            <div className="space-y-2">
-              {sampleAudioTracks.length > 0 ? (
-                sampleAudioTracks.map((track, idx) => {
-                  const trackNum = idx + 1; // 1-indexed for --ff_track
-                  const isSelected = selectedAudioTrackNum === trackNum;
-                  const isEng = track.language === 'eng' || track.language === 'en';
+            {/* Character Names (AniList Auto-Search) */}
+            <div className="pt-2 border-t border-zinc-800/60 space-y-2">
+              <div className="flex items-center justify-between text-xs">
+                <div className="flex items-center space-x-1.5 text-zinc-300 truncate mr-2">
+                  <Users className="w-3.5 h-3.5 text-indigo-400 shrink-0" />
+                  {isDetectingCharacters ? (
+                    <span className="text-zinc-500 animate-pulse text-[11px]">Finding character names...</span>
+                  ) : detectedCharacters.length > 0 ? (
+                    <span className="text-[11px] truncate">
+                      Character names: <strong className="text-emerald-400 font-semibold">{detectedCharacters.length} found ✓</strong>
+                    </span>
+                  ) : (
+                    <span className="text-zinc-500 text-[11px]">Names not found, you can add them manually</span>
+                  )}
+                </div>
+                <button
+                  type="button"
+                  disabled={isProcessing}
+                  onClick={() => setIsEditingPrompt((prev) => !prev)}
+                  className="text-xs text-indigo-400 hover:text-indigo-300 font-semibold underline shrink-0 disabled:opacity-50"
+                >
+                  {isEditingPrompt ? 'Close' : detectedCharacters.length > 0 ? 'Edit' : 'Add'}
+                </button>
+              </div>
 
-                  return (
+              {/* Expandable Character Names & Prompt Editor */}
+              {isEditingPrompt && (
+                <div className="p-3 rounded-xl bg-zinc-900/90 border border-zinc-800 space-y-2.5">
+                  <div className="flex items-center justify-between text-[11px] text-zinc-400">
+                    <span>Initial dialogue prompt:</span>
                     <button
-                      key={track.audioIndex}
+                      type="button"
                       disabled={isProcessing}
-                      onClick={() => setSelectedAudioTrackNum(trackNum)}
-                      className={`w-full flex items-center justify-between p-3 rounded-xl text-left transition-all border ${
-                        isSelected
-                          ? 'bg-indigo-600/20 border-indigo-500 text-white shadow-sm'
-                          : 'bg-zinc-900/60 border-zinc-800/80 text-zinc-300 hover:bg-zinc-800/60 disabled:opacity-50'
-                      }`}
+                      onClick={() => setUserPromptOverride(null)}
+                      className="text-[10px] text-zinc-400 hover:text-white underline disabled:opacity-50"
                     >
-                      <div className="truncate mr-2">
-                        <div className="flex items-center space-x-2">
-                          <span className="text-xs font-bold font-mono text-zinc-400">
-                            Track #{trackNum}
-                          </span>
-                          <span className="text-xs font-semibold text-zinc-100 truncate">
-                            {track.title}
-                          </span>
-                          {isEng && (
-                            <span className="px-1.5 py-0.2 rounded text-[10px] font-bold bg-emerald-500/20 text-emerald-300 border border-emerald-500/30">
-                              AUTO-DETECTED ENG
-                            </span>
-                          )}
-                        </div>
-                        <div className="text-[11px] text-zinc-500 mt-0.5">
-                          {track.languageName} • {track.codec.toUpperCase()}
-                        </div>
-                      </div>
-                      {isSelected && <Check className="w-4 h-4 text-indigo-400 shrink-0" />}
+                      Reset to default
                     </button>
-                  );
-                })
-              ) : (
-                <div className="p-4 text-center rounded-xl bg-zinc-900/40 border border-dashed border-zinc-800 text-zinc-500 text-xs">
-                  {probing ? 'Scanning audio tracks...' : 'No audio streams loaded yet.'}
+                  </div>
+
+                  <input
+                    type="text"
+                    disabled={isProcessing}
+                    value={activePrompt}
+                    onChange={(e) => setUserPromptOverride(e.target.value)}
+                    placeholder="Character names, anime dialogue context..."
+                    className="w-full px-3 py-1.5 rounded-lg bg-zinc-950 border border-zinc-700 text-xs text-zinc-100 focus:outline-none focus:border-indigo-500 font-sans"
+                  />
+
+                  {detectedCharacters.length > 0 && (
+                    <div className="space-y-1.5 pt-1">
+                      <span className="text-[10px] text-zinc-500 block">
+                        Toggle names for {detectedAnimeTitle || 'this series'}:
+                      </span>
+                      <div className="flex flex-wrap gap-1 max-h-24 overflow-y-auto scrollbar-thin pr-1">
+                        {detectedCharacters.map((char) => {
+                          const isInPrompt = activePrompt.toLowerCase().includes(char.toLowerCase());
+                          return (
+                            <button
+                              key={char}
+                              type="button"
+                              disabled={isProcessing}
+                              onClick={() => {
+                                const tokens = activePrompt.split(',').map((t) => t.trim()).filter(Boolean);
+                                const idx = tokens.findIndex((t) => t.toLowerCase() === char.toLowerCase());
+                                if (idx !== -1) {
+                                  tokens.splice(idx, 1);
+                                } else {
+                                  tokens.unshift(char);
+                                }
+                                setUserPromptOverride(tokens.join(', '));
+                              }}
+                              className={`px-2 py-0.5 rounded text-[10px] font-medium border transition-colors ${
+                                isInPrompt
+                                  ? 'bg-indigo-600/30 text-indigo-200 border-indigo-500/60'
+                                  : 'bg-zinc-800 text-zinc-400 border-zinc-700 hover:text-white'
+                              }`}
+                            >
+                              {isInPrompt ? `✓ ${char}` : `+ ${char}`}
+                            </button>
+                          );
+                        })}
+                      </div>
+                    </div>
+                  )}
                 </div>
               )}
             </div>
-          </div>
 
-          {/* 3. Transcription Options */}
-          <div className="p-4 rounded-2xl bg-[#141418] border border-white/10 space-y-3 shadow-md">
-            <span className="text-xs font-bold uppercase tracking-wider text-zinc-400 block">
-              3. Processing Options
-            </span>
+            {/* Advanced Settings Link (Collapsed by Default) */}
+            <div className="pt-2 border-t border-zinc-800/60">
+              <button
+                type="button"
+                onClick={() => setShowAdvanced((prev) => !prev)}
+                className="flex items-center space-x-1.5 text-xs text-zinc-400 hover:text-white transition-colors"
+              >
+                <span>Advanced settings</span>
+                {showAdvanced ? <ChevronUp className="w-3.5 h-3.5" /> : <ChevronDown className="w-3.5 h-3.5" />}
+              </button>
 
-            <label className="flex items-center space-x-3 cursor-pointer">
-              <input
-                type="checkbox"
-                disabled={isProcessing}
-                checked={skipExistingSrt}
-                onChange={(e) => setSkipExistingSrt(e.target.checked)}
-                className="w-4 h-4 rounded bg-zinc-900 border-zinc-700 text-red-600 focus:ring-0 cursor-pointer disabled:opacity-50"
-              />
-              <span className="text-xs font-medium text-zinc-200">
-                Skip episodes that already have .whisper.srt
-              </span>
-            </label>
-
-            <div className="pt-2 flex flex-wrap gap-1.5 text-[11px]">
-              <span className="inline-flex items-center space-x-1 px-2.5 py-1 rounded-lg bg-white/5 text-zinc-300 border border-white/10 font-medium">
-                <Sparkles className="w-3 h-3 text-indigo-400" />
-                <span>large-v3-turbo</span>
-              </span>
-              <span className="inline-flex items-center space-x-1 px-2.5 py-1 rounded-lg bg-white/5 text-zinc-300 border border-white/10 font-medium">
-                <span>Accurate Timestamps</span>
-              </span>
-              <span className="inline-flex items-center space-x-1 px-2.5 py-1 rounded-lg bg-white/5 text-zinc-300 border border-white/10 font-medium">
-                <span>English Dialogue</span>
-              </span>
-              <span className="inline-flex items-center space-x-1 px-2.5 py-1 rounded-lg bg-white/5 text-zinc-300 border border-white/10 font-medium">
-                <span>Standard 2-Line</span>
-              </span>
-            </div>
-          </div>
-
-          {/* Queue Status List if active */}
-          {queue.length > 0 && (
-            <div className="p-4 rounded-2xl bg-[#141418] border border-white/10 space-y-2 flex-1 min-h-[160px] overflow-y-auto scrollbar-thin shadow-md">
-              <div className="flex items-center justify-between text-xs font-bold uppercase text-zinc-400 pb-1 border-b border-zinc-800/80">
-                <span>Season Queue ({queue.length})</span>
-                <span className="text-indigo-400">
-                  {queue.filter((q) => q.status === 'completed' || q.status === 'skipped').length} /{' '}
-                  {queue.length} Done
-                </span>
-              </div>
-
-              <div className="space-y-2 pt-1">
-                {queue.map((item) => {
-                  const parsed = cleanEpisodeTitle(item.fileName);
-                  const isCurrent = item.status === 'processing';
-
-                  return (
-                    <div
-                      key={item.id}
-                      className={`p-2.5 rounded-xl border flex flex-col space-y-1.5 transition-all ${
-                        isCurrent
-                          ? 'bg-indigo-600/15 border-indigo-500/50 shadow-sm'
-                          : item.status === 'completed'
-                          ? 'bg-zinc-900/60 border-zinc-800/80 text-zinc-300'
-                          : item.status === 'skipped'
-                          ? 'bg-zinc-900/30 border-zinc-800/30 text-zinc-500 opacity-60'
-                          : 'bg-zinc-900/40 border-zinc-800/40 text-zinc-400'
-                      }`}
-                    >
-                      <div className="flex items-center justify-between">
-                        <div className="flex items-center space-x-2 truncate mr-2">
-                          <span
-                            className={`px-1.5 py-0.5 rounded text-[10px] font-bold ${
-                              isCurrent
-                                ? 'bg-indigo-600 text-white'
-                                : item.status === 'completed'
-                                ? 'bg-emerald-500/20 text-emerald-400 border border-emerald-500/30'
-                                : 'bg-zinc-800 text-zinc-400'
-                            }`}
-                          >
-                            {parsed.episodeLabel}
-                          </span>
-                          <span
-                            className={`text-xs font-semibold truncate ${
-                              isCurrent ? 'text-indigo-300 font-bold' : 'text-zinc-200'
-                            }`}
-                            title={item.fileName}
-                          >
-                            {parsed.displayTitle}
-                          </span>
-                        </div>
-
-                        <span className="shrink-0 ml-1">
-                          {item.status === 'completed' && (
-                            <span className="flex items-center space-x-1 text-emerald-400 text-[11px] font-semibold">
-                              <CheckCircle2 className="w-3.5 h-3.5" />
-                              <span>Done</span>
-                            </span>
-                          )}
-                          {item.status === 'skipped' && (
-                            <span className="text-zinc-500 text-[11px]">Skipped</span>
-                          )}
-                          {item.status === 'processing' && (
-                            <span className="text-indigo-400 font-bold text-[11px] font-mono animate-pulse">
-                              {item.progress}% {item.speed || ''}
-                            </span>
-                          )}
-                          {item.status === 'pending' && (
-                            <span className="text-zinc-500 text-[11px]">Queued</span>
-                          )}
-                          {item.status === 'cancelled' && (
-                            <span className="text-amber-400 text-[11px]">Cancelled</span>
-                          )}
-                          {item.status === 'failed' && (
-                            <span className="text-red-400 text-[11px]">{item.error || 'Failed'}</span>
-                          )}
-                        </span>
-                      </div>
-
-                      {/* Mini progress bar for currently processing item */}
-                      {isCurrent && (
-                        <div className="w-full h-1 bg-zinc-800 rounded-full overflow-hidden">
-                          <div
-                            className="h-full bg-gradient-to-r from-indigo-500 to-red-500 transition-all duration-300"
-                            style={{ width: `${Math.max(5, item.progress)}%` }}
-                          />
-                        </div>
-                      )}
+              {showAdvanced && (
+                <div className="pt-3 pb-1 space-y-3.5 border-t border-zinc-800/80 mt-2.5">
+                  {/* Voice Sensitivity */}
+                  <div>
+                    <label className="text-[11px] font-bold text-zinc-300 block mb-1">
+                      Speech recognition sensitivity
+                    </label>
+                    <div className="grid grid-cols-3 gap-1.5 text-xs">
+                      {(['high', 'balanced', 'standard'] as const).map((level) => (
+                        <button
+                          key={level}
+                          type="button"
+                          disabled={isProcessing}
+                          onClick={() => {
+                            setVadSensitivity(level);
+                            setQualityOption('custom');
+                          }}
+                          className={`py-1.5 px-2 rounded-lg border font-medium text-center transition-all ${
+                            vadSensitivity === level
+                              ? 'bg-indigo-600/25 border-indigo-500 text-white'
+                              : 'bg-zinc-900 border-zinc-800 text-zinc-400 hover:bg-zinc-800'
+                          }`}
+                        >
+                          {level === 'high' ? 'High' : level === 'balanced' ? 'Balanced' : 'Standard'}
+                        </button>
+                      ))}
                     </div>
-                  );
-                })}
-              </div>
+                    <span className="text-[10px] text-zinc-500 block mt-1">
+                      Higher sensitivity prevents skipping quiet phrases and whispery speech.
+                    </span>
+                  </div>
+
+                  {/* Anti-stutter Protection */}
+                  <label className="flex items-start space-x-2.5 cursor-pointer">
+                    <input
+                      type="checkbox"
+                      disabled={isProcessing}
+                      checked={antiStutter}
+                      onChange={(e) => {
+                        setAntiStutter(e.target.checked);
+                        setQualityOption('custom');
+                      }}
+                      className="w-4 h-4 mt-0.5 rounded bg-zinc-900 border-zinc-700 text-indigo-600 focus:ring-0 cursor-pointer disabled:opacity-50"
+                    />
+                    <div>
+                      <span className="text-xs font-medium text-zinc-200 block">
+                        Stutter & high-pitch loop protection
+                      </span>
+                      <span className="text-[10px] text-zinc-500 block leading-tight">
+                        Prevents repetition loops when characters stutter, squeak, or speak rapidly.
+                      </span>
+                    </div>
+                  </label>
+
+                  {/* Merge Single Words */}
+                  <label className="flex items-start space-x-2.5 cursor-pointer">
+                    <input
+                      type="checkbox"
+                      disabled={isProcessing}
+                      checked={preventSingleWords}
+                      onChange={(e) => {
+                        setPreventSingleWords(e.target.checked);
+                        setQualityOption('custom');
+                      }}
+                      className="w-4 h-4 mt-0.5 rounded bg-zinc-900 border-zinc-700 text-indigo-600 focus:ring-0 cursor-pointer disabled:opacity-50"
+                    />
+                    <div>
+                      <span className="text-xs font-medium text-zinc-200 block">
+                        Merge isolated single words
+                      </span>
+                      <span className="text-[10px] text-zinc-500 block leading-tight">
+                        Keeps whole phrases intact so single words do not fly out onto their own subtitle lines.
+                      </span>
+                    </div>
+                  </label>
+
+                  {/* Channel Isolation (5.1/7.1 FC) */}
+                  <div>
+                    <label className="text-[11px] font-bold text-zinc-300 block mb-1">
+                      Audio channel processing
+                    </label>
+                    <div className="grid grid-cols-2 gap-1.5 text-xs">
+                      <button
+                        type="button"
+                        disabled={isProcessing}
+                        onClick={() => {
+                          setChannelMode('auto');
+                          setQualityOption('custom');
+                        }}
+                        className={`py-1.5 px-2 rounded-lg border font-medium text-center transition-all ${
+                          channelMode === 'auto'
+                            ? 'bg-indigo-600/25 border-indigo-500 text-white'
+                            : 'bg-zinc-900 border-zinc-800 text-zinc-400 hover:bg-zinc-800'
+                        }`}
+                      >
+                        Stereo / Auto
+                      </button>
+                      <button
+                        type="button"
+                        disabled={isProcessing}
+                        onClick={() => {
+                          setChannelMode('fc');
+                          setQualityOption('custom');
+                        }}
+                        className={`py-1.5 px-2 rounded-lg border font-medium text-center transition-all ${
+                          channelMode === 'fc'
+                            ? 'bg-indigo-600/25 border-indigo-500 text-white'
+                            : 'bg-zinc-900 border-zinc-800 text-zinc-400 hover:bg-zinc-800'
+                        }`}
+                        title="Isolates center channel dialogue in 5.1/7.1 surround sound. Safely skipped on stereo."
+                      >
+                        Center FC (5.1 surround)
+                      </button>
+                    </div>
+                    <span className="text-[10px] text-zinc-500 block mt-1">
+                      Center FC extracts dialogue cleanly on 5.1/7.1 surround tracks (safely falls back to stereo on 2-channel audio).
+                    </span>
+                  </div>
+                </div>
+              )}
             </div>
-          )}
+
+            {/* Subtle Milestone 4 Summary Line */}
+            <div className="pt-2 text-[11px] text-zinc-500 flex items-center space-x-1.5 flex-wrap">
+              <span className="font-mono text-zinc-400">large-v3-turbo</span>
+              <span>·</span>
+              <span>Accurate Timestamps</span>
+              <span>·</span>
+              <span>English Dialogue</span>
+              <span>·</span>
+              <span>Standard 2-Line</span>
+            </div>
+          </div>
         </div>
 
-        {/* Right Column: Live Terminal Output */}
-        <div className="lg:col-span-7 flex flex-col h-full min-h-[400px] space-y-3">
-          {/* Active Progress Bar Banner */}
+        {/* Right Column: Live Stream & Interactive Season Queue */}
+        <div className="lg:col-span-7 flex flex-col h-full min-h-0 space-y-4">
+          {/* Active Generation Banner (Visible only when running) */}
           {isProcessing && currentFile && (
-            <div className="p-3.5 rounded-2xl bg-zinc-900/90 border border-indigo-500/30 flex flex-col space-y-2 shadow-lg">
+            <div className="p-3.5 rounded-2xl bg-zinc-900/95 border border-indigo-500/40 flex flex-col space-y-2 shadow-lg shrink-0">
               <div className="flex items-center justify-between text-xs">
                 <div className="flex items-center space-x-2 truncate max-w-md">
-                  <span className="w-2 h-2 rounded-full bg-indigo-500 animate-pulse" />
+                  <span className="w-2.5 h-2.5 rounded-full bg-indigo-500 animate-ping" />
                   <span className="font-semibold text-zinc-200 truncate">
-                    Transcribing:{' '}
+                    {currentQueueIndex >= 0 ? `Episode ${currentQueueIndex + 1} of ${queue.length}: ` : 'Transcribing: '}
                     <span className="text-indigo-400 font-bold">
-                      {cleanEpisodeTitle(currentFile).displayTitle}
+                      {activeProcessingEpisode?.displayTitle || currentFile}
                     </span>
                   </span>
                 </div>
-                <span className="font-mono font-bold text-indigo-400 text-sm">
-                  {overallProgress}%
-                </span>
+                <div className="flex items-center space-x-2 shrink-0">
+                  {currentSpeed && (
+                    <span className="font-mono text-zinc-400 text-xs">{currentSpeed}</span>
+                  )}
+                  <span className="font-mono font-bold text-indigo-400 text-sm">
+                    {overallProgress}%
+                  </span>
+                </div>
               </div>
               <div className="w-full h-2 rounded-full bg-zinc-800 overflow-hidden">
                 <div
@@ -541,8 +1068,222 @@ export const WhisperStudio: React.FC<WhisperStudioProps> = ({
               </div>
             </div>
           )}
-          <div className="flex-1 min-h-0">
-            <TerminalLog logs={logs} onClear={() => setLogs([])} />
+
+          {/* Live Dialogue Stream Card: Shown during run or when cues exist */}
+          {isProcessing || liveCues.length > 0 ? (
+            <LiveDialogueStream
+              cues={liveCues}
+              isProcessing={isProcessing}
+              currentFile={currentFile}
+              speed={currentSpeed}
+              progress={overallProgress}
+            />
+          ) : null}
+
+          {/* Interactive Season Queue & Episode Selector */}
+          <div className="flex-1 rounded-2xl bg-[#141418] border border-white/10 flex flex-col min-h-[220px] overflow-hidden shadow-md">
+            {/* Queue Header & Filters */}
+            <div className="flex items-center justify-between px-4 py-3 bg-zinc-900/80 border-b border-zinc-800/80 shrink-0">
+              <div className="flex items-center space-x-3">
+                <button
+                  type="button"
+                  disabled={isProcessing}
+                  onClick={handleToggleSelectAll}
+                  className="text-zinc-400 hover:text-white transition-colors disabled:opacity-50 flex items-center space-x-1.5"
+                  title="Select all / none"
+                >
+                  {filteredEpisodes.length > 0 && filteredEpisodes.every((e) => selectedEpisodePaths.has(e.filePath)) ? (
+                    <CheckSquare className="w-4 h-4 text-indigo-400" />
+                  ) : (
+                    <Square className="w-4 h-4" />
+                  )}
+                  <span className="text-xs font-bold uppercase tracking-wider text-zinc-300">
+                    Episodes ({selectedEpisodePaths.size} selected)
+                  </span>
+                </button>
+              </div>
+
+              {/* Filter: All | Without Subtitles */}
+              <div className="flex items-center space-x-1 bg-zinc-950 p-0.5 rounded-lg border border-zinc-800 text-xs">
+                <button
+                  type="button"
+                  onClick={() => setEpisodeFilter('missing')}
+                  className={`px-2.5 py-1 rounded-md text-[11px] font-medium transition-colors ${
+                    episodeFilter === 'missing'
+                      ? 'bg-zinc-800 text-white font-semibold'
+                      : 'text-zinc-400 hover:text-zinc-200'
+                  }`}
+                >
+                  {existingWhisperCount > 0
+                    ? `Without AI subtitles (${missingWhisperCount})`
+                    : `Without subtitles (${missingAnySubCount})`}
+                </button>
+                <button
+                  type="button"
+                  onClick={() => setEpisodeFilter('all')}
+                  className={`px-2.5 py-1 rounded-md text-[11px] font-medium transition-colors ${
+                    episodeFilter === 'all'
+                      ? 'bg-zinc-800 text-white font-semibold'
+                      : 'text-zinc-400 hover:text-zinc-200'
+                  }`}
+                >
+                  All ({episodes.length})
+                </button>
+              </div>
+            </div>
+
+            {/* Episode Rows List */}
+            <div className="flex-1 p-3 overflow-y-auto space-y-2 scrollbar-thin">
+              {episodes.length === 0 ? (
+                <div className="h-full flex flex-col items-center justify-center text-zinc-500 text-xs p-6 text-center">
+                  <span>No episodes loaded. Select an anime folder to view episodes.</span>
+                </div>
+              ) : filteredEpisodes.length === 0 ? (
+                <div className="h-full flex flex-col items-center justify-center text-zinc-500 text-xs p-6 text-center">
+                  <span>All episodes already have subtitles! Switch filter to "All" to re-generate.</span>
+                </div>
+              ) : (
+                filteredEpisodes.map((ep) => {
+                  const parsed = cleanEpisodeTitle(ep.fileName);
+                  const isSelected = selectedEpisodePaths.has(ep.filePath);
+                  const isCurrent = currentFile && ep.fileName === currentFile;
+                  const queueMatch = queue.find((q) => q.filePath === ep.filePath || q.fileName === ep.fileName);
+
+                  return (
+                    <div
+                      key={ep.filePath}
+                      className={`p-2.5 rounded-xl border flex items-center justify-between space-x-3 transition-all ${
+                        isCurrent
+                          ? 'bg-indigo-600/15 border-indigo-500/60 shadow-sm'
+                          : isSelected
+                          ? 'bg-zinc-900/70 border-zinc-800 text-zinc-200'
+                          : ep.hasWhisperSrt
+                          ? 'bg-zinc-900/20 border-zinc-800/30 text-zinc-500 opacity-50'
+                          : 'bg-zinc-900/30 border-zinc-800/40 text-zinc-400 opacity-70'
+                      }`}
+                    >
+                      {/* Checkbox & Title */}
+                      <div className="flex items-center space-x-2.5 truncate mr-2">
+                        <input
+                          type="checkbox"
+                          disabled={isProcessing}
+                          checked={isSelected}
+                          onChange={() => toggleEpisodePath(ep.filePath)}
+                          className="w-4 h-4 rounded bg-zinc-800 border-zinc-700 text-indigo-600 focus:ring-0 cursor-pointer disabled:opacity-50 shrink-0"
+                        />
+
+                        <span
+                          className={`px-1.5 py-0.5 rounded text-[10px] font-bold shrink-0 ${
+                            isCurrent
+                              ? 'bg-indigo-600 text-white'
+                              : ep.hasWhisperSrt
+                              ? 'bg-emerald-500/20 text-emerald-300 border border-emerald-500/30'
+                              : 'bg-zinc-800 text-zinc-400'
+                          }`}
+                        >
+                          {parsed.episodeLabel}
+                        </span>
+
+                        <span
+                          className={`text-xs truncate font-medium ${
+                            isCurrent ? 'text-indigo-300 font-bold' : ep.hasWhisperSrt ? 'text-zinc-400' : 'text-zinc-200'
+                          }`}
+                          title={ep.fileName}
+                        >
+                          {parsed.displayTitle}
+                        </span>
+                      </div>
+
+                      {/* Status Badges & Quick Action */}
+                      <div className="flex items-center space-x-2 shrink-0">
+                        {isCurrent ? (
+                          <span className="text-indigo-400 font-bold text-[11px] font-mono animate-pulse flex items-center space-x-1">
+                            <span>{overallProgress}%</span>
+                            {currentSpeed && <span className="text-[10px] text-zinc-400">({currentSpeed})</span>}
+                          </span>
+                        ) : isProcessing && queueMatch ? (
+                          queueMatch.status === 'completed' ? (
+                            <span className="flex items-center space-x-1 text-emerald-400 text-[11px] font-semibold bg-emerald-500/10 px-2 py-0.5 rounded border border-emerald-500/20">
+                              <CheckCircle2 className="w-3.5 h-3.5" />
+                              <span>Done</span>
+                            </span>
+                          ) : queueMatch.status === 'processing' ? (
+                            <span className="text-indigo-400 font-bold text-[11px] font-mono animate-pulse">Running</span>
+                          ) : queueMatch.status === 'failed' ? (
+                            <span className="text-red-400 text-[11px]">Failed</span>
+                          ) : (
+                            <span className="text-zinc-500 text-[11px]">Queued</span>
+                          )
+                        ) : ep.hasWhisperSrt ? (
+                          <span className="flex items-center space-x-1 text-emerald-400 text-[11px] font-semibold bg-emerald-500/10 px-2 py-0.5 rounded border border-emerald-500/20" title="Whisper AI subtitle ready (.whisper.srt)">
+                            <CheckCircle2 className="w-3.5 h-3.5" />
+                            <span>Done</span>
+                          </span>
+                        ) : ep.hasEmbeddedDubtitles ? (
+                          <span className="text-purple-300 text-[10px] font-semibold bg-purple-500/15 px-1.5 py-0.5 rounded border border-purple-500/30" title="Embedded English Dubtitles (SDH)">
+                            Dub Sub
+                          </span>
+                        ) : ep.hasExternalSrt ? (
+                          <span className="text-blue-300 text-[10px] font-semibold bg-blue-500/15 px-1.5 py-0.5 rounded border border-blue-500/30" title="External Subtitle ready (.srt)">
+                            Ext Sub
+                          </span>
+                        ) : ep.hasEmbeddedSubtitles ? (
+                          <span className="text-emerald-300 text-[10px] font-semibold bg-emerald-500/15 px-1.5 py-0.5 rounded border border-emerald-500/30" title="Embedded Subtitles">
+                            Sub
+                          </span>
+                        ) : (
+                          <span className="text-zinc-500 text-[11px]">No subtitles</span>
+                        )}
+
+                        {/* Quick Transcribe Single Episode Button */}
+                        {!isProcessing && (
+                          <button
+                            type="button"
+                            onClick={() => handleStartSingleEpisode(ep)}
+                            title="Generate this episode"
+                            className="p-1 rounded text-zinc-400 hover:text-white hover:bg-zinc-800 transition-colors"
+                          >
+                            <Play className="w-3 h-3" />
+                          </button>
+                        )}
+                      </div>
+                    </div>
+                  );
+                })
+              )}
+            </div>
+          </div>
+
+          {/* Developer Logs Drawer (Collapsed by Default) */}
+          <div className="rounded-2xl bg-[#0c0c0e] border border-zinc-800/80 overflow-hidden shadow-lg shrink-0">
+            <button
+              type="button"
+              onClick={() => setShowTerminal((prev) => !prev)}
+              className="w-full flex items-center justify-between px-4 py-2.5 bg-[#141418] hover:bg-zinc-800/60 text-zinc-300 transition-colors"
+            >
+              <div className="flex items-center space-x-2">
+                <Terminal className="w-4 h-4 text-indigo-400" />
+                <span className="text-xs font-mono font-semibold text-zinc-300">
+                  Developer & Engine Logs ({logs.length} events)
+                </span>
+              </div>
+              <div className="flex items-center space-x-2">
+                <span className="text-[11px] font-mono text-zinc-500">
+                  {showTerminal ? 'Hide Console' : 'Show Console'}
+                </span>
+                {showTerminal ? (
+                  <ChevronDown className="w-4 h-4 text-zinc-400" />
+                ) : (
+                  <ChevronUp className="w-4 h-4 text-zinc-400" />
+                )}
+              </div>
+            </button>
+
+            {showTerminal && (
+              <div className="h-64 border-t border-zinc-800/80">
+                <TerminalLog logs={logs} onClear={() => setLogs([])} />
+              </div>
+            )}
           </div>
         </div>
       </div>

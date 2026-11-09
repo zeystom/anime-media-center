@@ -1,5 +1,6 @@
 import { useCallback, useEffect, useState } from 'react'
 import type { AiringEntry, CatalogItem, GenrePickRail } from '../types'
+import { resolveAnimeTitle } from '../utils/title'
 
 /**
  * Normalized rail/card item shared by catalog rails, the airing schedule and
@@ -21,6 +22,8 @@ export interface RailItem {
   seasonYear?: number | null
   airingAt?: number | null
   airingEpisode?: number | null
+  rawTitle?: { english: string | null; romaji: string | null; native: string | null }
+  synonyms?: string[]
 }
 
 export type CatalogSection = 'trending' | 'season' | 'allTime' | 'airingToday' | 'recommended'
@@ -76,10 +79,11 @@ export function toRailItem(item: CatalogItem | AiringEntry): RailItem {
     }
   }
   const catalog = item
+  const resolvedTitle = resolveAnimeTitle(catalog.title, catalog.synonyms, 'english')
   return {
     anilistId: catalog.anilistId,
     idMal: catalog.idMal,
-    title: catalog.title.english || catalog.title.romaji || '',
+    title: resolvedTitle,
     posterUrl: catalog.posterUrl,
     bannerUrl: catalog.bannerUrl,
     averageScore: catalog.averageScore,
@@ -91,6 +95,8 @@ export function toRailItem(item: CatalogItem | AiringEntry): RailItem {
     seasonYear: catalog.seasonYear ?? catalog.startDate?.year ?? null,
     airingAt: catalog.nextAiringEpisode ? catalog.nextAiringEpisode.airingAt : null,
     airingEpisode: catalog.nextAiringEpisode ? catalog.nextAiringEpisode.episode : null,
+    rawTitle: catalog.title,
+    synonyms: catalog.synonyms,
   }
 }
 

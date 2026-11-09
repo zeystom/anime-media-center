@@ -3,10 +3,174 @@ import fs from 'fs';
 import path from 'path';
 import { app, BrowserWindow } from 'electron';
 import { resolveUserDataPath } from './userDataPath';
-import { WhisperLogMessage, WhisperQueueItem, WhisperStatus } from './types';
+import { WhisperLogMessage, WhisperQueueItem, WhisperStatus, WhisperOptions, WhisperLiveCue } from './types';
 import { storage } from './storage';
 import { probeMkv, invalidateProbeCache } from './ffmpeg';
 import { hasWhisperSubtitle } from './subtitles';
+
+/**
+ * Detects whether a subtitle text contains Japanese characters (Hiragana, Katakana, or Kanji).
+ * Used to filter out Japanese opening/ending song lyrics when transcribing English dubs.
+ */
+export function containsJapaneseLyrics(text: string): boolean {
+  if (!text) return false;
+  // Count Japanese kana characters (Hiragana and Katakana)
+  const kanaMatches = text.match(/[\u3040-\u309f\u30a0-\u30ff]/gu);
+  const kanaCount = kanaMatches ? kanaMatches.length : 0;
+
+  // Count CJK Kanji
+  const cjkMatches = text.match(/[\u4e00-\u9faf]/gu);
+  const cjkCount = cjkMatches ? cjkMatches.length : 0;
+
+  const totalJapaneseChars = kanaCount + cjkCount;
+  if (totalJapaneseChars === 0) return false;
+
+  const latinMatches = text.match(/[a-zA-Z]/g);
+  const latinCount = latinMatches ? latinMatches.length : 0;
+
+  // If there are Japanese kana or kanji, and either:
+  // 1. There are barely any Latin letters (< 5) while Japanese chars exist -> Japanese song/lyrics
+  // 2. Japanese characters exceed Latin letters -> Japanese song
+  // 3. Significant kana present (>= 3 kana characters) -> song lyrics
+  if (latinCount < 5 && totalJapaneseChars >= 1) return true;
+  if (totalJapaneseChars > latinCount) return true;
+  if (kanaCount >= 3) return true;
+
+  return false;
+}
+
+/**
+ * Removes stray Japanese kana/kanji from English text lines.
+ */
+export function cleanJapaneseArtifacts(text: string): string {
+  if (!text) return text;
+  return text.replace(/[\u3040-\u309f\u30a0-\u30ff\u4e00-\u9faf]/gu, '').replace(/\s{2,}/g, ' ').trim();
+}
+
+/**
+ * Normalizes and cleans generated SRT subtitles:
+ * 1. Merges isolated single-word fragments caused by mid-sentence punctuation/pauses.
+ * 2. Removes empty cues or trailing lonely hyphens/music note artifacts.
+ * 3. Formats sequential 1-based subtitle indices and standardized timecodes.
+ * 4. Filters out Japanese lyrics / kanji / kana when transcribing English subtitles.
+ */
+export function cleanSubtitleSrt(srtContent: string, isEnglish: boolean = true): string {
+  if (!srtContent || typeof srtContent !== 'string') return srtContent;
+
+  try {
+    const rawBlocks = srtContent.replace(/\r\n/g, '\n').split(/\n\s*\n/);
+    interface CueBlock {
+      start: string;
+      end: string;
+      startMs: number;
+      endMs: number;
+      text: string;
+    }
+
+    function timecodeToMs(tc: string): number {
+      const match = tc.match(/(?:(\d+):)?(\d+):(\d+)[,.](\d+)/);
+      if (!match) return 0;
+      const h = match[1] ? parseInt(match[1], 10) : 0;
+      const m = parseInt(match[2], 10) || 0;
+      const s = parseInt(match[3], 10) || 0;
+      const ms = parseInt(match[4].padEnd(3, '0').slice(0, 3), 10) || 0;
+      return h * 3600000 + m * 60000 + s * 1000 + ms;
+    }
+
+    const cues: CueBlock[] = [];
+
+    for (const raw of rawBlocks) {
+      const trimmed = raw.trim();
+      if (!trimmed) continue;
+      const lines = trimmed.split('\n');
+      if (lines.length < 2) continue;
+
+      let timeLineIdx = -1;
+      for (let i = 0; i < lines.length; i++) {
+        if (lines[i].includes('-->')) {
+          timeLineIdx = i;
+          break;
+        }
+      }
+      if (timeLineIdx === -1) continue;
+
+      const [startStr, endStr] = lines[timeLineIdx].split('-->').map((s) => s.trim());
+      const textLines = lines.slice(timeLineIdx + 1).map((l) => l.trim()).filter(Boolean);
+      let text = textLines.join('\n');
+
+      // Strip lonely music notes or brackets
+      text = text.replace(/^[♪♫#\s*]+$/g, '').trim();
+      if (!text) continue;
+
+      // Filter out Japanese song lyrics/kanji in English subtitles
+      if (isEnglish) {
+        if (containsJapaneseLyrics(text)) {
+          continue;
+        }
+        text = cleanJapaneseArtifacts(text);
+        if (!text) continue;
+      }
+
+      cues.push({
+        start: startStr,
+        end: endStr,
+        startMs: timecodeToMs(startStr),
+        endMs: timecodeToMs(endStr),
+        text,
+      });
+    }
+
+    if (cues.length <= 1) return srtContent;
+
+    // Merge isolated 1-word orphan fragments
+    const merged: CueBlock[] = [];
+    for (let i = 0; i < cues.length; i++) {
+      const cur = cues[i];
+      const words = cur.text.trim().split(/\s+/);
+      const isSingleWord = words.length === 1 && cur.text.length < 15;
+
+      if (isSingleWord && i + 1 < cues.length) {
+        const next = cues[i + 1];
+        const gap = next.startMs - cur.endMs;
+        const curEndsSentence = /[.!?…]$/.test(cur.text.trim());
+
+        // Prepend orphan word if next cue is very close (< 600ms) and cur does not end sentence
+        if (gap >= 0 && gap < 600 && !curEndsSentence) {
+          next.text = `${cur.text} ${next.text}`;
+          next.start = cur.start;
+          next.startMs = cur.startMs;
+          continue;
+        }
+      }
+
+      if (isSingleWord && merged.length > 0) {
+        const prev = merged[merged.length - 1];
+        const gap = cur.startMs - prev.endMs;
+        const prevEndsSentence = /[.!?…]$/.test(prev.text.trim());
+
+        // Append orphan word if close to previous cue (< 400ms) and prev does not end sentence
+        if (gap >= 0 && gap < 400 && !prevEndsSentence) {
+          prev.text = `${prev.text} ${cur.text}`;
+          prev.end = cur.end;
+          prev.endMs = cur.endMs;
+          continue;
+        }
+      }
+
+      merged.push(cur);
+    }
+
+    let out = '';
+    for (let i = 0; i < merged.length; i++) {
+      const c = merged[i];
+      out += `${i + 1}\n${c.start} --> ${c.end}\n${c.text}\n\n`;
+    }
+
+    return out.trim() ? out : srtContent;
+  } catch {
+    return srtContent;
+  }
+}
 
 export class WhisperManager {
   private activeProcess: ChildProcess | null = null;
@@ -17,8 +181,10 @@ export class WhisperManager {
   private currentFolder: string = '';
   private currentAudioTrackNum: number = 1;
   private logsBuffer: WhisperLogMessage[] = [];
+  private liveCues: WhisperLiveCue[] = [];
   private currentRunId: string | null = null;
   private runPromise: Promise<void> | null = null;
+  private activeOptions: WhisperOptions = {};
 
   getStatus(): WhisperStatus {
     return {
@@ -26,8 +192,10 @@ export class WhisperManager {
       folderPath: this.currentFolder,
       currentFile: this.currentItem ? this.currentItem.fileName : '',
       progress: this.currentItem ? this.currentItem.progress : 0,
+      speed: this.currentItem?.speed,
       queue: this.queue,
       logs: this.logsBuffer.slice(-250),
+      liveCues: this.liveCues,
     };
   }
 
@@ -35,7 +203,8 @@ export class WhisperManager {
     folderPath: string,
     audioTrackNum: number,
     skipExistingSrt: boolean,
-    mainWindow: BrowserWindow
+    mainWindow: BrowserWindow,
+    options?: Partial<WhisperOptions>
   ): Promise<{ success: boolean; error?: string }> {
     if (this.isRunning || this.runPromise) {
       return { success: false, error: 'Whisper task is already in progress' };
@@ -66,12 +235,21 @@ export class WhisperManager {
     this.currentRunId = runId;
     this.currentFolder = folderPath;
     this.currentAudioTrackNum = audioTrackNum;
+    this.activeOptions = options || {};
     this.queue = [];
+    this.liveCues = [];
     this.cancelled = false;
     this.isRunning = true;
 
+    const selectedSet = options?.selectedFilePaths && options.selectedFilePaths.length > 0
+      ? new Set(options.selectedFilePaths.map((p) => path.resolve(p).toLowerCase()))
+      : null;
+
     for (const file of mkvFiles) {
       const fullPath = path.join(folderPath, file);
+      const isSelected = !selectedSet || selectedSet.has(path.resolve(fullPath).toLowerCase());
+      if (!isSelected) continue;
+
       const hasWhisper = hasWhisperSubtitle(fullPath);
 
       if (skipExistingSrt && hasWhisper) {
@@ -136,6 +314,7 @@ export class WhisperManager {
 
           // 1.5 Dynamic English audio track determination per file
           let effectiveTrack = audioTrackNum;
+          let isTrackSurround = false;
           try {
             const meta = await probeMkv(item.filePath, settings.ffmpegPath);
             if (meta.duration > 0) {
@@ -144,10 +323,10 @@ export class WhisperManager {
             const engTrack = meta.audioTracks.find(
               (t) => t.language === 'eng' || t.language === 'en' || (t.title && /english/i.test(t.title))
             );
-            if (engTrack) {
-              effectiveTrack = engTrack.audioIndex + 1; // 1-based index (1..6)
-            } else if (audioTrackNum >= 1 && audioTrackNum <= meta.audioTracks.length) {
-              effectiveTrack = audioTrackNum;
+            const targetTrack = engTrack || (audioTrackNum >= 1 && audioTrackNum <= meta.audioTracks.length ? meta.audioTracks[audioTrackNum - 1] : undefined);
+            if (targetTrack) {
+              effectiveTrack = targetTrack.audioIndex + 1; // 1-based index (1..6)
+              isTrackSurround = Boolean(targetTrack.isSurround || (targetTrack.channels && targetTrack.channels > 2));
             }
           } catch (e) {
             // Duration and audio track fallback to defaults
@@ -210,7 +389,7 @@ export class WhisperManager {
           );
 
           try {
-            await this.processSingleFile(item, whisperExe, folderPath, effectiveTrack, runId, mainWindow);
+            await this.processSingleFile(item, whisperExe, folderPath, effectiveTrack, runId, mainWindow, isTrackSurround);
 
             if (this.cancelled || this.currentRunId !== runId) {
               item.status = 'cancelled';
@@ -333,7 +512,8 @@ export class WhisperManager {
     folderPath: string,
     audioTrackNum: number,
     runId: string,
-    mainWindow: BrowserWindow
+    mainWindow: BrowserWindow,
+    isTrackSurround = false
   ): Promise<void> {
     const fileId = path.parse(item.filePath).name.replace(/[^a-zA-Z0-9_-]/g, '_');
     const tmpDir = path.join(resolveUserDataPath(), 'whisper_tmp', runId, fileId);
@@ -356,35 +536,96 @@ export class WhisperManager {
       }
 
       await new Promise<void>((resolve, reject) => {
+        this.liveCues = [];
+        const opts = this.activeOptions;
+        const preset = opts.preset || 'anime';
+
+        // Tuned smart defaults by preset
+        let defaultVadThreshold = 0.35;
+        let defaultVadMinDuration = 150;
+        let defaultVadPad = 900;
+        let defaultNoSpeech = 0.6;
+        let defaultCompressionRatio = 2.8;
+        let defaultPrompt = 'Anime dialogue, conversational speech, clean subtitles.';
+        let defaultSpeechNorm = false;
+
+        if (preset === 'bgm') {
+          defaultVadThreshold = 0.28;
+          defaultVadMinDuration = 150;
+          defaultVadPad = 1000;
+          defaultNoSpeech = 0.7;
+          defaultCompressionRatio = 2.8;
+          defaultPrompt = 'Anime dialogue, spoken conversation over music, no singing, no lyrics.';
+          defaultSpeechNorm = true;
+        } else if (preset === 'fast') {
+          defaultVadThreshold = 0.45;
+          defaultVadMinDuration = 250;
+          defaultVadPad = 900;
+          defaultNoSpeech = 0.6;
+          defaultCompressionRatio = 2.4;
+          defaultPrompt = 'Clean dialogue and conversations.';
+        }
+
+        const model = opts.model || 'large-v3-turbo';
+        const task = opts.task || 'transcribe';
+        const language = opts.language || 'en';
+        const condition = opts.conditionOnPreviousText ?? false;
+        const vadThreshold = opts.vadThreshold ?? defaultVadThreshold;
+        const vadMinDuration = opts.vadMinSpeechDurationMs ?? defaultVadMinDuration;
+        const vadPad = opts.vadSpeechPadMs ?? defaultVadPad;
+        const compressionRatio = opts.compressionRatioThreshold ?? defaultCompressionRatio;
+        const noSpeech = opts.noSpeechThreshold ?? defaultNoSpeech;
+        const prompt = opts.initialPrompt !== undefined ? opts.initialPrompt : defaultPrompt;
+        const maxLineWidth = opts.maxLineWidth ?? 46;
+        const maxLineCount = opts.maxLineCount ?? 2;
+        const maxCommaCent = opts.maxCommaCent ?? 100;
+        const minDistToEnd = opts.minDistToEnd ?? 8;
+        const speechNorm = opts.speechNorm ?? defaultSpeechNorm;
+
         const args = [
           inputPath,
-          '--model',
-          'large-v3-turbo',
-          '--task',
-          'transcribe',
-          '--language',
-          'en',
+          '--model', model,
+          '--task', task,
+          '--language', language,
+          '--vad_filter', 'True',
+          '--vad_threshold', vadThreshold.toString(),
+          '--vad_min_speech_duration_ms', vadMinDuration.toString(),
+          '--vad_speech_pad_ms', vadPad.toString(),
+          '--condition_on_previous_text', condition ? 'True' : 'False',
+          '--compression_ratio_threshold', compressionRatio.toString(),
+          '--no_speech_threshold', noSpeech.toString(),
         ];
 
-        if (!needExtract) {
-          args.push('--ff_track', audioTrackNum.toString(), '--ff_sync');
+        if (prompt && prompt.trim() && prompt !== 'None') {
+          args.push('--initial_prompt', prompt.trim());
         }
 
         args.push(
           '--sentence',
-          '--max_line_width',
-          '46',
-          '--max_line_count',
-          '2',
-          '--max_comma_cent',
-          '70',
-          '--min_dist_to_end',
-          '8',
-          '--output_format',
-          'srt',
-          '--output_dir',
-          tmpDir
+          '--max_line_width', maxLineWidth.toString(),
+          '--max_line_count', maxLineCount.toString(),
+          '--max_comma_cent', maxCommaCent.toString(),
+          '--min_dist_to_end', minDistToEnd.toString(),
+          '--output_format', 'srt',
+          '--output_dir', tmpDir
         );
+
+        if (speechNorm) {
+          args.push('--ff_speechnorm');
+        }
+
+        if (opts.channelMode === 'fc') {
+          if (isTrackSurround) {
+            args.push('--ff_fc');
+            this.sendLog(mainWindow, 'info', 'Surround audio (5.1/7.1) detected: extracting Front Center (FC) dialogue channel');
+          } else {
+            this.sendLog(mainWindow, 'info', 'Stereo/mono audio detected: skipped --ff_fc to prevent muting dialogue');
+          }
+        }
+
+        if (!needExtract) {
+          args.push('--ff_track', audioTrackNum.toString(), '--ff_sync');
+        }
 
         this.sendLog(mainWindow, 'info', `Executing: "${path.basename(whisperExe)}" ${args.slice(1).join(' ')}`);
 
@@ -439,6 +680,14 @@ export class WhisperManager {
       if (!fs.existsSync(producedSrt) || fs.statSync(producedSrt).size === 0) {
         throw new Error('No subtitle file produced (no speech detected?)');
       }
+
+      // Clean up isolated single words, Japanese song lyrics, and normalize SRT
+      try {
+        const rawSrt = fs.readFileSync(producedSrt, 'utf-8');
+        const isEnglish = (this.activeOptions.language || 'en') === 'en';
+        const cleaned = cleanSubtitleSrt(rawSrt, isEnglish);
+        fs.writeFileSync(producedSrt, cleaned, 'utf-8');
+      } catch {}
 
       // Move atomically to <folder>/<base>.whisper.srt
       const destSrt = path.join(folderPath, `${baseName}.whisper.srt`);
@@ -519,6 +768,43 @@ export class WhisperManager {
     if (speedMatch) {
       item.speed = speedMatch[1];
     }
+
+    // 5. Parse live recognized subtitle cues for native UI streaming
+    const cueMatches = Array.from(
+      output.matchAll(
+        /\[((?:\d+:)?\d+:\d+(?:\.\d+)?)\s*-->\s*((?:\d+:)?\d+:\d+(?:\.\d+)?)]\s*(.*)/g
+      )
+    );
+    for (const cm of cueMatches) {
+      const start = cm[1].trim();
+      const end = cm[2].trim();
+      const text = cm[3].trim();
+      if (text) {
+        const isEnglish = (this.activeOptions.language || 'en') === 'en';
+        if (isEnglish && containsJapaneseLyrics(text)) {
+          continue;
+        }
+        const cleanedText = isEnglish ? cleanJapaneseArtifacts(text) : text;
+        if (!cleanedText) continue;
+
+        const cue: WhisperLiveCue = {
+          id: `${Date.now()}-${Math.random().toString(36).substring(2, 7)}`,
+          start,
+          end,
+          text: cleanedText,
+          timestamp: Date.now(),
+        };
+        this.liveCues.push(cue);
+        if (this.liveCues.length > 30) {
+          this.liveCues.shift();
+        }
+        if (!item.liveCues) item.liveCues = [];
+        item.liveCues.push(cue);
+        if (item.liveCues.length > 30) {
+          item.liveCues.shift();
+        }
+      }
+    }
   }
 
   private sendLog(mainWindow: BrowserWindow, type: WhisperLogMessage['type'], text: string) {
@@ -542,7 +828,9 @@ export class WhisperManager {
       mainWindow.webContents.send('whisper-progress', {
         currentFile: this.currentItem ? this.currentItem.fileName : '',
         progress: this.currentItem ? this.currentItem.progress : 0,
+        speed: this.currentItem?.speed,
         queue: this.queue,
+        liveCues: this.liveCues,
       });
     }
   }

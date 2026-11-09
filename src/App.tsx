@@ -7,7 +7,7 @@ import { CompletionPrompt, CompletionPromptData } from './components/common/Comp
 import { AnimeFolder, Episode, AppSettings, PlaybackProgress, UserLibraryEntry, P2pState } from './types';
 import { useLocalStatus } from './hooks/useLocalStatus';
 import { ToastProvider, showGlobalToast } from './components/Toast';
-import { getPathBasename, getPathDirname, formatFileSize } from './utils/format';
+import { getPathBasename, getPathDirname, formatFileSize, cleanSeriesTitle } from './utils/format';
 import { toRailItem } from './hooks/useCatalog';
 import type { RailItem } from './hooks/useCatalog';
 import type { AppNotification, FavouriteAnime, FollowedAnime } from './types/notifications';
@@ -110,6 +110,7 @@ export const App: React.FC = () => {
   // Navigation & View state
   const [currentTab, setCurrentTab] = useState<'home' | 'discover' | 'library' | 'schedule' | 'downloads' | 'whisper'>('home');
   const [visitedTabs, setVisitedTabs] = useState<Set<string>>(() => new Set(['home']));
+  const [discoverInitialGenre, setDiscoverInitialGenre] = useState<string | null>(null);
   const [activePlayerEpisode, setActivePlayerEpisode] = useState<Episode | null>(null);
   const [playerInitialTime, setPlayerInitialTime] = useState<number>(0);
   const [settingsOpen, setSettingsOpen] = useState<boolean>(false);
@@ -148,6 +149,7 @@ export const App: React.FC = () => {
     subtitlesTextColor: '#ffffff',
     subtitlesFontFamily: 'sans',
     subtitlesBgStyle: 'none',
+    animeTitleLanguage: 'english',
     subtitlesOutlineWidth: 'thick',
     subtitlesOutlineColor: '#000000',
     releaseSelectionMode: 'automatic',
@@ -1298,6 +1300,9 @@ export const App: React.FC = () => {
               folders={visibleFolders}
               history={history}
               userEntries={userEntries}
+              settings={settings}
+              initialGenre={discoverInitialGenre}
+              onClearInitialGenre={() => setDiscoverInitialGenre(null)}
               onSelectItem={(item) => setDetailSource({ kind: 'catalog', item })}
             />
           </Suspense>
@@ -1382,6 +1387,11 @@ export const App: React.FC = () => {
           source={detailSource}
           initialDownloadEpisode={initialDownloadEpisode}
           settings={settings}
+          onSelectGenre={(genre) => {
+            setDetailSource(null);
+            setDiscoverInitialGenre(genre);
+            setCurrentTab('discover');
+          }}
           p2pState={p2pState}
           isFollowing={followedAnime.some((item) => item.anilistId === (detailSource.kind === 'catalog' ? detailSource.item.anilistId : detailSource.folder.anilistId))}
           onToggleFollow={toggleFollowAnime}
@@ -1435,6 +1445,8 @@ export const App: React.FC = () => {
             episode={activePlayerEpisode}
             seasonEpisodes={currentPlayingFolder.episodes}
             folderPath={currentPlayingFolder.folderPath}
+            folder={currentPlayingFolder}
+            animeTitle={currentPlayingFolder.canonicalTitle || cleanSeriesTitle(currentPlayingFolder.folderName) || currentPlayingFolder.folderName}
             initialTime={playerInitialTime}
             settings={settings}
             onUpdateSettings={(updated) => setSettings((prev) => ({ ...prev, ...updated }))}

@@ -4,6 +4,7 @@ import type { RailItem } from '../../hooks/useCatalog'
 import type { LocalBadgeState } from '../../hooks/useLocalStatus'
 import { StatusBadges } from './StatusBadges'
 import { normalizeAgeRating } from '../../utils/ageRating'
+import { resolveAnimeTitle, type TitleLanguagePreference } from '../../utils/title'
 
 export interface AnimeCardProps {
   item: RailItem
@@ -12,6 +13,7 @@ export interface AnimeCardProps {
   showCatalogBadges?: boolean
   ageRating?: string | null
   ageRatingLoaded?: boolean
+  titleLanguage?: TitleLanguagePreference
   onClick: (item: RailItem) => void
 }
 
@@ -27,7 +29,7 @@ function formatAgeRating(value: string | null): { label: string; description: st
  * chip, optional local-status badges over a subtle bottom gradient, and a
  * two-line clamped title underneath.
  */
-export const AnimeCard: React.FC<AnimeCardProps> = ({ item, badgeState = null, showCatalogBadges = false, ageRating = null, ageRatingLoaded = false, onClick }) => {
+export const AnimeCard: React.FC<AnimeCardProps> = ({ item, badgeState = null, showCatalogBadges = false, ageRating = null, ageRatingLoaded = false, titleLanguage = 'english', onClick }) => {
   const [imgError, setImgError] = useState(false)
   // Hover prefetch: arm a short timer on enter and cancel it on leave, so a
   // sweep across a rail produces zero requests while a resting cursor warms
@@ -81,6 +83,8 @@ export const AnimeCard: React.FC<AnimeCardProps> = ({ item, badgeState = null, s
           : null
   const airedEpisodes = item.airingEpisode != null ? Math.max(0, item.airingEpisode - 1) : null
 
+  const displayTitle = item.rawTitle ? resolveAnimeTitle(item.rawTitle, item.synonyms, titleLanguage) : item.title
+
   return (
     <div
       onClick={() => onClick(item)}
@@ -98,7 +102,7 @@ export const AnimeCard: React.FC<AnimeCardProps> = ({ item, badgeState = null, s
         {showImage ? (
           <img
             src={item.posterUrl || ''}
-            alt={item.title}
+            alt={displayTitle}
             draggable={false}
             loading="lazy"
             decoding="async"
@@ -157,8 +161,8 @@ export const AnimeCard: React.FC<AnimeCardProps> = ({ item, badgeState = null, s
         )}
       </div>
 
-      <h4 className="mt-1.5 text-xs leading-snug text-zinc-200 line-clamp-2" title={item.title}>
-        {item.title}
+      <h4 className="mt-1.5 text-xs leading-snug text-zinc-200 line-clamp-2" title={displayTitle}>
+        {displayTitle}
       </h4>
     </div>
   )

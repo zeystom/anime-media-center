@@ -31,6 +31,12 @@ contextBridge.exposeInMainWorld('electronAPI', {
     isExternal: boolean,
     externalPath?: string
   ) => ipcRenderer.invoke('extract-subtitle-track', filePath, trackId, trackIndex, isExternal, externalPath),
+  warmSubtitles: (filePath: string) => ipcRenderer.invoke('subtitles:warm', filePath),
+  onSubtitleFontsReady: (callback: (data: { filePath: string; trackIndex: number; fonts: string[] }) => void) => {
+    const listener = (_e: Electron.IpcRendererEvent, data: { filePath: string; trackIndex: number; fonts: string[] }) => callback(data);
+    ipcRenderer.on('subtitles:fonts-ready', listener);
+    return () => ipcRenderer.removeListener('subtitles:fonts-ready', listener);
+  },
   savePlaybackProgress: (progress: PlaybackProgress) => ipcRenderer.invoke('save-playback-progress', progress),
   getAllPlaybackProgress: () => ipcRenderer.invoke('get-all-playback-progress'),
   getSeasonPreference: (folderPath: string) => ipcRenderer.invoke('get-season-preference', folderPath),
@@ -42,10 +48,12 @@ contextBridge.exposeInMainWorld('electronAPI', {
     ipcRenderer.invoke('get-thumbnail-url', filePath, time),
   getAniSkipTimes: (seriesName: string, episodeNum: number, duration: number) =>
     ipcRenderer.invoke('get-aniskip-times', seriesName, episodeNum, duration),
-  startWhisperSeason: (folderPath: string, audioTrackNum: number, skipExistingSrt: boolean) =>
-    ipcRenderer.invoke('start-whisper-season', folderPath, audioTrackNum, skipExistingSrt),
+  startWhisperSeason: (folderPath: string, audioTrackNum: number, skipExistingSrt: boolean, options?: any) =>
+    ipcRenderer.invoke('start-whisper-season', folderPath, audioTrackNum, skipExistingSrt, options),
   cancelWhisper: () => ipcRenderer.invoke('cancel-whisper'),
   getWhisperStatus: () => ipcRenderer.invoke('get-whisper-status'),
+  getAnimeCharacters: (title: string, anilistId?: number) =>
+    ipcRenderer.invoke('get-anime-characters', title, anilistId),
   onWhisperLog: (callback: (log: any) => void) => {
     const handler = (_event: any, log: any) => callback(log);
     ipcRenderer.on('whisper-log', handler);

@@ -20,20 +20,24 @@ import {
   ChevronLeft,
   X,
   AlertCircle,
+  Film,
 } from 'lucide-react';
-import { Episode, VideoMetadata, VideoChapter, SubtitleCue, SeasonPreference, AppSettings } from '../../types';
+import { Episode, VideoMetadata, VideoChapter, SubtitleCue, SeasonPreference, AppSettings, AnimeFolder } from '../../types';
 import { SubtitleOverlay } from './SubtitleOverlay';
 import { TimelineScrubber } from './TimelineScrubber';
 import { TrackControls } from './TrackControls';
 import { EpisodeDrawer } from './EpisodeDrawer';
 import { MagneticEpisodePeek } from './MagneticEpisodePeek';
 import { RippleIndicator, RippleType } from './RippleIndicator';
-import { formatTime, cleanEpisodeTitle, formatEpisodeDisplayTitle } from '../../utils/format';
+import { formatTime, cleanEpisodeTitle, cleanSeriesTitle, formatEpisodeDisplayTitle } from '../../utils/format';
+import { parseReleaseCore } from '../../lib/releaseParser/regexEngine';
 
 interface VideoPlayerProps {
   episode: Episode;
   seasonEpisodes: Episode[];
   folderPath: string;
+  folder?: AnimeFolder | null;
+  animeTitle?: string;
   initialTime?: number;
   settings: AppSettings;
   onUpdateSettings?: (updated: Partial<AppSettings>) => void;
@@ -256,6 +260,8 @@ export const VideoPlayer: React.FC<VideoPlayerProps> = ({
   episode,
   seasonEpisodes,
   folderPath,
+  folder,
+  animeTitle,
   initialTime = 0,
   settings,
   onUpdateSettings,
@@ -274,6 +280,58 @@ export const VideoPlayer: React.FC<VideoPlayerProps> = ({
 
   // Clean parsed episode metadata
   const parsed = useMemo(() => cleanEpisodeTitle(episode.fileName), [episode.fileName]);
+
+  // Effective anime title (canonicalTitle from API/cache first, then clean folder name, then parsed series title)
+  const effectiveAnimeTitle = useMemo(() => {
+    if (animeTitle && animeTitle.trim()) return animeTitle.trim();
+    if (folder?.canonicalTitle && folder.canonicalTitle.trim()) return folder.canonicalTitle.trim();
+    if (folder?.folderName) {
+      const cleaned = cleanSeriesTitle(folder.folderName);
+      if (cleaned && cleaned.trim()) return cleaned.trim();
+      return folder.folderName.trim();
+    }
+    if (parsed.seriesTitle && parsed.seriesTitle.trim()) return parsed.seriesTitle.trim();
+    const fromFolder = folderPath ? cleanSeriesTitle(folderPath.split(/[/\\]/).filter(Boolean).pop() || '') : '';
+    return fromFolder || '';
+  }, [animeTitle, folder, parsed.seriesTitle, folderPath]);
+
+  // Remote episodes enrichment when anilistId is available
+  const [remoteEpisodes, setRemoteEpisodes] = useState<Map<number, { title: string | null; thumbnailUrl: string | null }>>(new Map());
+  const anilistId = folder?.anilistId;
+
+  useEffect(() => {
+    if (!anilistId) return;
+    const api = window.electronAPI;
+    if (!api?.getRemoteEpisodes) return;
+
+    let cancelled = false;
+    api.getRemoteEpisodes(anilistId).then((res) => {
+      if (cancelled || !res?.episodes) return;
+      const map = new Map<number, { title: string | null; thumbnailUrl: string | null }>();
+      for (const ep of res.episodes) {
+        if (typeof ep.number === 'number' && (ep.title || ep.thumbnailUrl)) {
+          map.set(ep.number, { title: ep.title, thumbnailUrl: ep.thumbnailUrl });
+        }
+      }
+      setRemoteEpisodes(map);
+    }).catch(() => {});
+
+    const unsub = api.onRemoteEpisodesUpdated?.((id, res) => {
+      if (cancelled || id !== anilistId || !res?.episodes) return;
+      const map = new Map<number, { title: string | null; thumbnailUrl: string | null }>();
+      for (const ep of res.episodes) {
+        if (typeof ep.number === 'number' && (ep.title || ep.thumbnailUrl)) {
+          map.set(ep.number, { title: ep.title, thumbnailUrl: ep.thumbnailUrl });
+        }
+      }
+      setRemoteEpisodes(map);
+    });
+
+    return () => {
+      cancelled = true;
+      unsub?.();
+    };
+  }, [anilistId]);
 
   // Video metadata
   const [metadata, setMetadata] = useState<VideoMetadata | null>(null);
@@ -421,7 +479,7 @@ export const VideoPlayer: React.FC<VideoPlayerProps> = ({
 
     let isCancelled = false;
     const epNum = parseInt(episode.episodeNumber.replace(/\D/g, ''), 10) || 1;
-    const seriesName = parsed.seriesTitle || folderPath.split(/[/\\]/).pop() || '';
+    const seriesName = effectiveAnimeTitle || parsed.seriesTitle || folderPath.split(/[/\\]/).pop() || '';
 
     if (window.electronAPI.getAniSkipTimes && seriesName && epNum > 0) {
       window.electronAPI
@@ -441,7 +499,7 @@ export const VideoPlayer: React.FC<VideoPlayerProps> = ({
     return () => {
       isCancelled = true;
     };
-  }, [localOpening, duration, episode.episodeNumber, parsed.seriesTitle, folderPath]);
+  }, [localOpening, duration, episode.episodeNumber, effectiveAnimeTitle, parsed.seriesTitle, folderPath]);
 
   // Effective opening: local detection first, AniSkip fallback second
   const detectedOpening = localOpening || aniSkipOpening;
@@ -870,6 +928,40 @@ export const VideoPlayer: React.FC<VideoPlayerProps> = ({
       }
     };
   }, [metadata, selectedMainSubId, selectedTopSubId, topSubEnabled, episode.filePath]);
+
+  // Progressive Phase 2: Apply newly extracted fonts on-the-fly to the active JASSUB instance
+  useEffect(() => {
+    if (!window.electronAPI?.onSubtitleFontsReady) return;
+    return window.electronAPI.onSubtitleFontsReady(({ filePath, fonts }) => {
+      if (filePath !== episode.filePath || !jassubRef.current || !fonts || fonts.length === 0) return;
+      const jassub = jassubRef.current;
+      console.log(`[VideoPlayer] Progressive Phase 2: Injecting ${fonts.length} styled fonts into active JASSUB instance`);
+      const renderer = (jassub as any).renderer;
+      if (renderer?.addFonts) {
+        renderer.addFonts(fonts).then(() => {
+          (jassub as any)._demandRender?.(true) || jassub.resize(true);
+        }).catch((err: any) => {
+          console.warn('[VideoPlayer] Failed to add fonts progressively:', err);
+        });
+      }
+    });
+  }, [episode.filePath]);
+
+  // Background prefetch next episode's subtitles & fonts during playback
+  useEffect(() => {
+    if (!isPlaying || !window.electronAPI?.warmSubtitles || seasonEpisodes.length <= 1) return;
+    const currentIndex = seasonEpisodes.findIndex((e) => e.filePath === episode.filePath);
+    if (currentIndex < 0 || currentIndex >= seasonEpisodes.length - 1) return;
+    const nextEp = seasonEpisodes[currentIndex + 1];
+    if (!nextEp?.filePath) return;
+
+    // Small delay (2.5 seconds into playback) so it doesn't compete with initial stream start
+    const timer = setTimeout(() => {
+      window.electronAPI.warmSubtitles?.(nextEp.filePath).catch(() => {});
+    }, 2500);
+
+    return () => clearTimeout(timer);
+  }, [episode.filePath, isPlaying, seasonEpisodes]);
 
   // Player Unmount Cleanup: Stop video, destroy JASSUB, and terminate all backend FFmpeg streams
   useEffect(() => {
@@ -1390,8 +1482,8 @@ export const VideoPlayer: React.FC<VideoPlayerProps> = ({
           break;
         case 'KeyE':
           e.preventDefault();
-          setEpisodeDrawerOpenMode('button');
           setIsEpisodeDrawerOpen((prev) => !prev);
+          setEpisodeDrawerOpenMode('button');
           break;
         case 'KeyF':
           e.preventDefault();
@@ -1585,8 +1677,8 @@ export const VideoPlayer: React.FC<VideoPlayerProps> = ({
                 className="text-sm md:text-base font-bold text-white tracking-tight truncate max-w-md md:max-w-2xl"
                 title={episode.fileName}
               >
-                {parsed.seriesTitle
-                  ? `${parsed.seriesTitle} — ${formatEpisodeDisplayTitle(
+                {effectiveAnimeTitle || parsed.seriesTitle
+                  ? `${effectiveAnimeTitle || parsed.seriesTitle} — ${formatEpisodeDisplayTitle(
                       parsed.displayTitle,
                       episode.kitsuTitle || episode.episodeTitle
                     )}`
@@ -1775,45 +1867,62 @@ export const VideoPlayer: React.FC<VideoPlayerProps> = ({
       )}
 
       {/* Floating Next Episode / Skip Ending Prompt Card */}
-      {isEndingActive && nextEpisode && (
-        <div
-          className={`absolute right-6 z-40 bg-zinc-950/95 backdrop-blur-2xl border border-white/15 p-3.5 rounded-2xl shadow-2xl flex items-center space-x-3.5 animate-in slide-in-from-bottom-4 transition-all duration-300 ${
-            areControlsVisible ? 'bottom-32' : 'bottom-16'
-          }`}
-        >
-          <div className="w-16 sm:w-20 aspect-video rounded-xl overflow-hidden shrink-0 bg-black border border-white/10 relative">
-            <img
-              src={nextEpisode.kitsuThumbnail || nextEpisode.thumbnailUrl}
-              alt={nextEpisode.fileName}
-              className="w-full h-full object-cover"
-            />
-          </div>
+      {isEndingActive && nextEpisode && (() => {
+        const nextEpNum = (() => {
+          const p = parseReleaseCore(nextEpisode.fileName);
+          return p.episodeNumber ?? p.episodeNumbers[0] ?? (nextEpisode.episodeNumber ? parseInt(nextEpisode.episodeNumber.replace(/\D/g, ''), 10) : null);
+        })();
+        const nextRemote = nextEpNum !== null && Number.isFinite(nextEpNum) ? remoteEpisodes.get(nextEpNum) : undefined;
+        const nextThumbnail = nextRemote?.thumbnailUrl || nextEpisode.kitsuThumbnail || nextEpisode.thumbnailUrl;
+        const nextOfficialTitle = nextRemote?.title || nextEpisode.kitsuTitle || nextEpisode.episodeTitle;
+        const nextTitle = formatEpisodeDisplayTitle(nextEpisode, nextOfficialTitle);
 
-          <div className="min-w-0 pr-1">
-            <span className="text-[10px] font-bold uppercase tracking-wider text-red-500">Next Episode</span>
-            <p className="text-xs font-bold text-white max-w-[200px] truncate" title={formatEpisodeDisplayTitle(nextEpisode)}>
-              {formatEpisodeDisplayTitle(nextEpisode)}
-            </p>
-          </div>
-
-          <button
-            onClick={handlePlayNextEpisode}
-            className="px-3.5 py-2 rounded-xl bg-red-600 hover:bg-red-500 text-white text-xs font-bold flex items-center space-x-1.5 shadow-lg shadow-red-600/30 transition-all hover:scale-105 active:scale-95 shrink-0"
+        return (
+          <div
+            className={`absolute right-6 z-40 bg-zinc-950/95 backdrop-blur-2xl border border-white/15 p-3.5 rounded-2xl shadow-2xl flex items-center space-x-3.5 animate-in slide-in-from-bottom-4 transition-all duration-300 ${
+              areControlsVisible ? 'bottom-32' : 'bottom-16'
+            }`}
           >
-            <span>Play Next</span>
-            <SkipForward className="w-3.5 h-3.5 fill-white" />
-          </button>
+            <div className="w-16 sm:w-20 aspect-video rounded-xl overflow-hidden shrink-0 bg-black border border-white/10 relative">
+              {nextThumbnail ? (
+                <img
+                  src={nextThumbnail}
+                  alt={nextTitle}
+                  className="w-full h-full object-cover"
+                />
+              ) : (
+                <div className="w-full h-full flex items-center justify-center bg-zinc-900 text-zinc-500">
+                  <Film className="w-4 h-4" />
+                </div>
+              )}
+            </div>
 
-          <button
-            onClick={() => setIsEndingCardDismissed(true)}
-            className="p-1 rounded-lg text-zinc-500 hover:text-zinc-300 transition-colors"
-            aria-label="Dismiss Next Episode Prompt"
-            title="Dismiss"
-          >
-            <X className="w-4 h-4" />
-          </button>
-        </div>
-      )}
+            <div className="min-w-0 pr-1">
+              <span className="text-[10px] font-bold uppercase tracking-wider text-red-500">Next Episode</span>
+              <p className="text-xs font-bold text-white max-w-[200px] truncate" title={nextTitle}>
+                {nextTitle}
+              </p>
+            </div>
+
+            <button
+              onClick={handlePlayNextEpisode}
+              className="px-3.5 py-2 rounded-xl bg-red-600 hover:bg-red-500 text-white text-xs font-bold flex items-center space-x-1.5 shadow-lg shadow-red-600/30 transition-all hover:scale-105 active:scale-95 shrink-0"
+            >
+              <span>Play Next</span>
+              <SkipForward className="w-3.5 h-3.5 fill-white" />
+            </button>
+
+            <button
+              onClick={() => setIsEndingCardDismissed(true)}
+              className="p-1 rounded-lg text-zinc-500 hover:text-zinc-300 transition-colors"
+              aria-label="Dismiss Next Episode Prompt"
+              title="Dismiss"
+            >
+              <X className="w-4 h-4" />
+            </button>
+          </div>
+        );
+      })()}
 
       {/* Right Edge Magnetic Peek Arc (Organic elastic curve following cursor & snapping open) */}
       <MagneticEpisodePeek
@@ -1873,6 +1982,10 @@ export const VideoPlayer: React.FC<VideoPlayerProps> = ({
         onSelectEpisode={(newEp) => {
           onEpisodeChange(newEp);
         }}
+        animeTitle={effectiveAnimeTitle}
+        folderPath={folderPath}
+        anilistId={anilistId}
+        remoteEpisodes={remoteEpisodes}
       />
 
       {/* Playback Error Overlay */}

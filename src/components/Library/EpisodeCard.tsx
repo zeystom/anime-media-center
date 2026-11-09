@@ -11,26 +11,29 @@ interface EpisodeCardProps {
 }
 
 export const EpisodeCard: React.FC<EpisodeCardProps> = ({ episode, progress, onPlay }) => {
+  const primaryThumbnail = episode.kitsuThumbnail || null;
+  const fallbackThumbnail = episode.thumbnailUrl || null;
+
   const [imgError, setImgError] = useState(false);
-  const [activeImgUrl, setActiveImgUrl] = useState(episode.thumbnailUrl || episode.kitsuThumbnail);
+  const [activeImgUrl, setActiveImgUrl] = useState<string | null>(primaryThumbnail || fallbackThumbnail);
   const [retryCount, setRetryCount] = useState(0);
   const parsed = useMemo(() => cleanEpisodeTitle(episode.fileName), [episode.fileName]);
 
   useEffect(() => {
-    setActiveImgUrl(episode.thumbnailUrl || episode.kitsuThumbnail);
+    setActiveImgUrl(primaryThumbnail || fallbackThumbnail);
     setImgError(false);
     setRetryCount(0);
-  }, [episode.kitsuThumbnail, episode.thumbnailUrl]);
+  }, [primaryThumbnail, fallbackThumbnail]);
 
   const handleImgError = () => {
-    if (activeImgUrl === episode.thumbnailUrl && episode.kitsuThumbnail) {
-      // If the local frame is unavailable, use the episode still from metadata.
-      setActiveImgUrl(episode.kitsuThumbnail);
-    } else if (activeImgUrl === episode.thumbnailUrl && retryCount < 3 && episode.thumbnailUrl) {
+    if (activeImgUrl === primaryThumbnail && fallbackThumbnail) {
+      // If the API thumbnail is unavailable, fall back to local video frame.
+      setActiveImgUrl(fallbackThumbnail);
+    } else if (fallbackThumbnail && activeImgUrl?.startsWith(fallbackThumbnail) && retryCount < 3) {
       // If local thumbnail was queued or in extraction, retry
       setTimeout(() => {
         setRetryCount((c) => c + 1);
-        setActiveImgUrl(`${episode.thumbnailUrl}&retry=${Date.now()}`);
+        setActiveImgUrl(`${fallbackThumbnail}&retry=${Date.now()}`);
       }, 1000);
     } else {
       setImgError(true);

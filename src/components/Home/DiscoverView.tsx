@@ -2,6 +2,7 @@ import React, { useCallback, useEffect, useMemo, useRef, useState } from 'react'
 import {
   AlertCircle,
   CalendarDays,
+  Check,
   ChevronDown,
   Compass,
   Flame,
@@ -11,8 +12,9 @@ import {
   SlidersHorizontal,
   Sparkles,
   TrendingUp,
+  X,
 } from 'lucide-react'
-import type { DiscoverAgeRating, DiscoverCatalogParams, DiscoverMode, DiscoverSeason, DiscoverSort, PlaybackProgress, UserLibraryEntry } from '../../types'
+import type { AppSettings, DiscoverAgeRating, DiscoverCatalogParams, DiscoverMode, DiscoverSeason, DiscoverSort, PlaybackProgress, UserLibraryEntry } from '../../types'
 import { toRailItem, type RailItem } from '../../hooks/useCatalog'
 import { useLocalStatus } from '../../hooks/useLocalStatus'
 import { AnimeCard } from '../common/AnimeCard'
@@ -24,6 +26,9 @@ interface DiscoverViewProps {
   userEntries: Record<number, UserLibraryEntry>
   folders: Parameters<typeof useLocalStatus>[0]
   onSelectItem: (item: RailItem) => void
+  initialGenre?: string | null
+  onClearInitialGenre?: () => void
+  settings?: AppSettings
 }
 
 const SEASONS: Array<{ value: DiscoverSeason; label: string }> = [
@@ -33,7 +38,47 @@ const SEASONS: Array<{ value: DiscoverSeason; label: string }> = [
   { value: 'FALL', label: 'Fall' },
 ]
 
-const GENRES = ['Action', 'Adventure', 'Comedy', 'Drama', 'Fantasy', 'Horror', 'Mystery', 'Romance', 'Sci-Fi', 'Slice of Life', 'Sports', 'Supernatural', 'Thriller']
+const OFFICIAL_GENRES = [
+  'Action',
+  'Adventure',
+  'Comedy',
+  'Drama',
+  'Ecchi',
+  'Fantasy',
+  'Horror',
+  'Mahou Shoujo',
+  'Mecha',
+  'Music',
+  'Mystery',
+  'Psychological',
+  'Romance',
+  'Sci-Fi',
+  'Slice of Life',
+  'Sports',
+  'Supernatural',
+  'Thriller',
+] as const
+
+const POPULAR_THEMES = [
+  'Isekai',
+  'Shounen',
+  'Seinen',
+  'Shoujo',
+  'Josei',
+  'Cyberpunk',
+  'School',
+  'Military',
+  'Historical',
+  'Super Power',
+  'Space',
+  'Martial Arts',
+  'Vampire',
+  'Demons',
+  'Parody',
+  'Survival',
+  'Time Manipulation',
+  'Post-Apocalyptic',
+] as const
 const FORMATS = [
   { value: 'TV', label: 'TV' },
   { value: 'TV_SHORT', label: 'TV short' },
@@ -104,7 +149,15 @@ function SelectField({ label, value, onChange, children, className = '', disable
   )
 }
 
-export const DiscoverView: React.FC<DiscoverViewProps> = ({ history, userEntries, folders, onSelectItem }) => {
+export const DiscoverView: React.FC<DiscoverViewProps> = ({
+  history,
+  userEntries,
+  folders,
+  onSelectItem,
+  initialGenre,
+  onClearInitialGenre,
+  settings,
+}) => {
   const current = useMemo(getCurrentSeason, [])
   const [mode, setMode] = useState<Exclude<DiscoverMode, 'search'>>('season')
   const [query, setQuery] = useState('')
@@ -113,7 +166,10 @@ export const DiscoverView: React.FC<DiscoverViewProps> = ({ history, userEntries
   const [year, setYear] = useState(current.year)
   const [season, setSeason] = useState<DiscoverSeason>(current.season)
   const [seasonFilterEnabled, setSeasonFilterEnabled] = useState(true)
-  const [genre, setGenre] = useState('')
+  const [selectedGenres, setSelectedGenres] = useState<string[]>([])
+  const [isGenrePickerOpen, setIsGenrePickerOpen] = useState(false)
+  const [genreSearch, setGenreSearch] = useState('')
+  const genreDropdownRef = useRef<HTMLDivElement | null>(null)
   const [format, setFormat] = useState('')
   const [status, setStatus] = useState('')
   const [minScore, setMinScore] = useState(0)
@@ -133,6 +189,49 @@ export const DiscoverView: React.FC<DiscoverViewProps> = ({ history, userEntries
   const autoRatingLoadRef = useRef({ key: '', pages: 0 })
   const loadMoreSentinelRef = useRef<HTMLDivElement | null>(null)
   const statusResolver = useLocalStatus(folders, history, userEntries)
+
+  useEffect(() => {
+    if (initialGenre) {
+      setSelectedGenres([initialGenre])
+      onClearInitialGenre?.()
+    }
+  }, [initialGenre, onClearInitialGenre])
+
+  useEffect(() => {
+    if (!isGenrePickerOpen) return
+    const handleClickOutside = (event: MouseEvent) => {
+      if (genreDropdownRef.current && !genreDropdownRef.current.contains(event.target as Node)) {
+        setIsGenrePickerOpen(false)
+      }
+    }
+    const handleKeyDown = (event: KeyboardEvent) => {
+      if (event.key === 'Escape') setIsGenrePickerOpen(false)
+    }
+    document.addEventListener('mousedown', handleClickOutside)
+    document.addEventListener('keydown', handleKeyDown)
+    return () => {
+      document.removeEventListener('mousedown', handleClickOutside)
+      document.removeEventListener('keydown', handleKeyDown)
+    }
+  }, [isGenrePickerOpen])
+
+  const toggleGenre = (genreName: string) => {
+    setSelectedGenres((prev) =>
+      prev.includes(genreName) ? prev.filter((g) => g !== genreName) : [...prev, genreName]
+    )
+  }
+
+  const filteredOfficialGenres = useMemo(() => {
+    const q = genreSearch.trim().toLowerCase()
+    if (!q) return OFFICIAL_GENRES
+    return OFFICIAL_GENRES.filter((g) => g.toLowerCase().includes(q))
+  }, [genreSearch])
+
+  const filteredThemes = useMemo(() => {
+    const q = genreSearch.trim().toLowerCase()
+    if (!q) return POPULAR_THEMES
+    return POPULAR_THEMES.filter((t) => t.toLowerCase().includes(q))
+  }, [genreSearch])
 
   useEffect(() => {
     const timer = window.setTimeout(() => setDebouncedQuery(query.trim()), 300)
@@ -158,14 +257,15 @@ export const DiscoverView: React.FC<DiscoverViewProps> = ({ history, userEntries
     seasonFilterEnabled: !debouncedQuery && mode === 'season' ? seasonFilterEnabled : false,
     year,
     season,
-    genre: genre || undefined,
+    genre: selectedGenres[0] || undefined,
+    genres: selectedGenres.length > 0 ? selectedGenres : undefined,
     format: format ? format as DiscoverCatalogParams['format'] : undefined,
     status: status ? status as DiscoverCatalogParams['status'] : undefined,
     minScore: minScore || undefined,
     ageRating,
     sort,
     page: 1,
-  }), [debouncedQuery, mode, searchScope, seasonFilterEnabled, year, season, genre, format, status, minScore, ageRating, sort])
+  }), [debouncedQuery, mode, searchScope, seasonFilterEnabled, year, season, selectedGenres, format, status, minScore, ageRating, sort])
 
   useEffect(() => {
     let cancelled = false
@@ -242,7 +342,7 @@ export const DiscoverView: React.FC<DiscoverViewProps> = ({ history, userEntries
     }
   }, [hasNextPage, loadingMore, loading, page, requestParams])
 
-  const autoLoadKey = JSON.stringify({ mode, query: debouncedQuery, searchScope, seasonFilterEnabled, year, season, genre, format, status, minScore, sort, ageRating })
+  const autoLoadKey = JSON.stringify({ mode, query: debouncedQuery, searchScope, seasonFilterEnabled, year, season, selectedGenres, format, status, minScore, sort, ageRating })
   useEffect(() => {
     if (autoRatingLoadRef.current.key !== autoLoadKey) {
       autoRatingLoadRef.current = { key: autoLoadKey, pages: 0 }
@@ -256,16 +356,16 @@ export const DiscoverView: React.FC<DiscoverViewProps> = ({ history, userEntries
   }, [autoLoadKey, ageRating, loading, loadingMore, hasNextPage, ageRatingsPending, visibleItems.length, page, loadMore])
 
   useEffect(() => {
-    if (ageRating === 'ALL' || loading || loadingMore || !hasNextPage || !loadMoreSentinelRef.current) return
+    if (loading || loadingMore || !hasNextPage || !loadMoreSentinelRef.current) return
     const observer = new IntersectionObserver((entries) => {
       if (entries.some((entry) => entry.isIntersecting)) void loadMore()
-    }, { rootMargin: '700px 0px' })
+    }, { rootMargin: '800px 0px' })
     observer.observe(loadMoreSentinelRef.current)
     return () => observer.disconnect()
-  }, [ageRating, loading, loadingMore, hasNextPage, visibleItems.length, loadMore])
+  }, [loading, loadingMore, hasNextPage, visibleItems.length, loadMore])
 
   const clearFilters = () => {
-    setGenre('')
+    setSelectedGenres([])
     setFormat('')
     setStatus('')
     setMinScore(0)
@@ -283,7 +383,7 @@ export const DiscoverView: React.FC<DiscoverViewProps> = ({ history, userEntries
     clearFilters()
   }
 
-  const hasFilters = Boolean(genre || format || status || minScore || ageRating !== 'ALL' || (!debouncedQuery && mode === 'season' && !seasonFilterEnabled))
+  const hasFilters = Boolean(selectedGenres.length > 0 || format || status || minScore || ageRating !== 'ALL' || (!debouncedQuery && mode === 'season' && !seasonFilterEnabled))
   const seasonControlsVisible = mode === 'season' || Boolean(debouncedQuery)
   const seasonSelectionEnabled = debouncedQuery ? searchScope === 'season' : seasonFilterEnabled
   const activeMode = MODE_OPTIONS.find((option) => option.value === mode)!
@@ -358,10 +458,153 @@ export const DiscoverView: React.FC<DiscoverViewProps> = ({ history, userEntries
           )}
 
           <div className="grid grid-cols-2 gap-3 sm:grid-cols-3 xl:grid-cols-6">
-            <SelectField label="Genre" value={genre} onChange={setGenre}>
-              <option value="">All genres</option>
-              {GENRES.map((value) => <option key={value} value={value}>{value}</option>)}
-            </SelectField>
+            {/* Multi-select Genre Dropdown */}
+            <div ref={genreDropdownRef} className="relative flex min-w-0 flex-col gap-1.5">
+              <span className="flex items-center justify-between text-[9px] font-bold uppercase tracking-[0.15em] text-zinc-500">
+                <span>Genre</span>
+                {selectedGenres.length > 0 && (
+                  <span className="text-rose-400 font-extrabold">({selectedGenres.length})</span>
+                )}
+              </span>
+              <button
+                type="button"
+                onClick={() => setIsGenrePickerOpen(!isGenrePickerOpen)}
+                className={`h-10 w-full appearance-none rounded-xl border px-3 pr-8 text-left text-xs font-semibold outline-none transition flex items-center justify-between ${
+                  selectedGenres.length > 0
+                    ? 'border-rose-400/50 bg-[#16131c] text-rose-200 ring-1 ring-rose-500/20'
+                    : 'border-white/[0.09] bg-[#11131a] text-zinc-200 hover:border-white/20'
+                }`}
+              >
+                <span className="truncate">
+                  {selectedGenres.length === 0
+                    ? 'All genres'
+                    : selectedGenres.length <= 2
+                    ? selectedGenres.join(', ')
+                    : `${selectedGenres.slice(0, 2).join(', ')} (+${selectedGenres.length - 2})`}
+                </span>
+                <ChevronDown className={`pointer-events-none absolute right-3 top-1/2 h-3.5 w-3.5 -translate-y-1/2 text-zinc-500 transition-transform ${isGenrePickerOpen ? 'rotate-180 text-rose-400' : ''}`} />
+              </button>
+
+              {/* Multi-select Dropdown Popover */}
+              {isGenrePickerOpen && (
+                <div className="absolute left-0 top-full z-50 mt-2 w-80 sm:w-96 rounded-2xl border border-white/[0.12] bg-[#141620]/95 p-3.5 shadow-2xl shadow-black/80 backdrop-blur-xl">
+                  <div className="flex items-center justify-between pb-2 border-b border-white/[0.07]">
+                    <span className="text-xs font-bold text-white flex items-center gap-1.5">
+                      <SlidersHorizontal className="h-3.5 w-3.5 text-rose-400" />
+                      Filter Genres & Themes
+                    </span>
+                    {selectedGenres.length > 0 && (
+                      <button
+                        type="button"
+                        onClick={() => setSelectedGenres([])}
+                        className="text-[10px] font-bold text-rose-400 hover:text-rose-300 transition-colors"
+                      >
+                        Clear ({selectedGenres.length})
+                      </button>
+                    )}
+                  </div>
+
+                  <div className="relative my-2.5">
+                    <Search className="pointer-events-none absolute left-2.5 top-1/2 h-3.5 w-3.5 -translate-y-1/2 text-zinc-500" />
+                    <input
+                      value={genreSearch}
+                      onChange={(e) => setGenreSearch(e.target.value)}
+                      placeholder="Search genres or tags..."
+                      className="h-8 w-full rounded-lg border border-white/[0.08] bg-[#0c0d12] pl-8 pr-3 text-xs text-zinc-200 placeholder:text-zinc-600 outline-none focus:border-rose-400/40"
+                    />
+                    {genreSearch && (
+                      <button
+                        type="button"
+                        onClick={() => setGenreSearch('')}
+                        className="absolute right-2 top-1/2 -translate-y-1/2 text-xs text-zinc-500 hover:text-white"
+                      >
+                        ×
+                      </button>
+                    )}
+                  </div>
+
+                  <div className="max-h-64 overflow-y-auto space-y-3 pr-1">
+                    {/* Official Genres */}
+                    {filteredOfficialGenres.length > 0 && (
+                      <div>
+                        <div className="mb-1.5 text-[10px] font-bold uppercase tracking-wider text-zinc-500">
+                          Official Genres ({filteredOfficialGenres.length})
+                        </div>
+                        <div className="flex flex-wrap gap-1.5">
+                          {filteredOfficialGenres.map((g) => {
+                            const isSelected = selectedGenres.includes(g)
+                            return (
+                              <button
+                                key={g}
+                                type="button"
+                                onClick={() => toggleGenre(g)}
+                                className={`inline-flex items-center gap-1 rounded-lg px-2.5 py-1 text-[11px] font-semibold transition-all ${
+                                  isSelected
+                                    ? 'bg-rose-500 text-white shadow-md shadow-rose-950/40'
+                                    : 'bg-white/[0.05] text-zinc-300 hover:bg-white/[0.1] hover:text-white'
+                                }`}
+                              >
+                                {isSelected && <Check className="h-3 w-3" />}
+                                <span>{g}</span>
+                              </button>
+                            )
+                          })}
+                        </div>
+                      </div>
+                    )}
+
+                    {/* Popular Themes & Tags */}
+                    {filteredThemes.length > 0 && (
+                      <div>
+                        <div className="mb-1.5 text-[10px] font-bold uppercase tracking-wider text-zinc-500">
+                          Themes & Demographics ({filteredThemes.length})
+                        </div>
+                        <div className="flex flex-wrap gap-1.5">
+                          {filteredThemes.map((t) => {
+                            const isSelected = selectedGenres.includes(t)
+                            return (
+                              <button
+                                key={t}
+                                type="button"
+                                onClick={() => toggleGenre(t)}
+                                className={`inline-flex items-center gap-1 rounded-lg px-2.5 py-1 text-[11px] font-semibold transition-all ${
+                                  isSelected
+                                    ? 'bg-violet-600 text-white shadow-md shadow-violet-950/40'
+                                    : 'bg-white/[0.05] text-zinc-300 hover:bg-white/[0.1] hover:text-white'
+                                }`}
+                              >
+                                {isSelected && <Check className="h-3 w-3" />}
+                                <span>{t}</span>
+                              </button>
+                            )
+                          })}
+                        </div>
+                      </div>
+                    )}
+
+                    {filteredOfficialGenres.length === 0 && filteredThemes.length === 0 && (
+                      <div className="py-6 text-center text-xs text-zinc-500">
+                        No genres or themes match &ldquo;{genreSearch}&rdquo;
+                      </div>
+                    )}
+                  </div>
+
+                  <div className="mt-3 pt-2 border-t border-white/[0.07] flex items-center justify-between">
+                    <span className="text-[10px] text-zinc-500">
+                      Combine multiple genres to narrow down titles
+                    </span>
+                    <button
+                      type="button"
+                      onClick={() => setIsGenrePickerOpen(false)}
+                      className="rounded-lg bg-white/[0.08] px-3 py-1 text-xs font-bold text-zinc-200 hover:bg-white/[0.15] hover:text-white transition-colors"
+                    >
+                      Done
+                    </button>
+                  </div>
+                </div>
+              )}
+            </div>
+
             <SelectField label="Format" value={format} onChange={setFormat}>
               <option value="">All formats</option>
               {FORMATS.map((entry) => <option key={entry.value} value={entry.value}>{entry.label}</option>)}
@@ -388,6 +631,36 @@ export const DiscoverView: React.FC<DiscoverViewProps> = ({ history, userEntries
               ))}
             </SelectField>
           </div>
+
+          {/* Active Genre Chips */}
+          {selectedGenres.length > 0 && (
+            <div className="flex flex-wrap items-center gap-1.5 pt-1">
+              <span className="text-[10px] font-bold uppercase tracking-wider text-zinc-500">Active genres:</span>
+              {selectedGenres.map((g) => (
+                <span
+                  key={g}
+                  className="inline-flex items-center gap-1.5 rounded-lg border border-rose-400/30 bg-rose-500/15 px-2.5 py-1 text-xs font-semibold text-rose-200"
+                >
+                  <span>{g}</span>
+                  <button
+                    type="button"
+                    onClick={() => toggleGenre(g)}
+                    className="rounded p-0.5 hover:bg-rose-500/30 hover:text-white transition-colors"
+                    title={`Remove ${g}`}
+                  >
+                    <X className="h-3 w-3" />
+                  </button>
+                </span>
+              ))}
+              <button
+                type="button"
+                onClick={() => setSelectedGenres([])}
+                className="ml-1 text-[11px] font-semibold text-zinc-400 hover:text-white transition-colors"
+              >
+                Clear all ({selectedGenres.length})
+              </button>
+            </div>
+          )}
 
           {(hasFilters || debouncedQuery || mode !== 'season' || year !== current.year || season !== current.season) && (
             <div className="flex items-center justify-between border-t border-white/[0.06] pt-3">
@@ -434,19 +707,30 @@ export const DiscoverView: React.FC<DiscoverViewProps> = ({ history, userEntries
       ) : (
         <>
           <div className="grid grid-cols-[repeat(auto-fill,minmax(180px,192px))] justify-between gap-x-4 gap-y-7">
-            {visibleItems.map((item) => <AnimeCard key={item.anilistId} item={item} showCatalogBadges ageRating={item.idMal != null ? ageRatings[item.idMal] : null} ageRatingLoaded={item.idMal == null || Object.prototype.hasOwnProperty.call(ageRatings, item.idMal)} badgeState={statusResolver.statusFor({ anilistId: item.anilistId, title: item.title, apiEpisodesCount: item.episodesCount ?? null })} onClick={onSelectItem} />)}
+            {visibleItems.map((item) => (
+              <AnimeCard
+                key={item.anilistId}
+                item={item}
+                showCatalogBadges
+                ageRating={item.idMal != null ? ageRatings[item.idMal] : null}
+                ageRatingLoaded={item.idMal == null || Object.prototype.hasOwnProperty.call(ageRatings, item.idMal)}
+                badgeState={statusResolver.statusFor({ anilistId: item.anilistId, title: item.title, apiEpisodesCount: item.episodesCount ?? null })}
+                titleLanguage={settings?.animeTitleLanguage}
+                onClick={onSelectItem}
+              />
+            ))}
           </div>
           {error && <div className="mt-5 flex flex-wrap items-center justify-between gap-3 rounded-xl border border-rose-400/15 bg-rose-400/[0.04] px-4 py-3 text-xs text-rose-200"><span>{error}</span><button type="button" onClick={() => void loadMore()} disabled={loadingMore} className="font-bold hover:text-white">Retry</button></div>}
-          {hasNextPage && ageRating !== 'ALL' && (
-            <div ref={loadMoreSentinelRef} className="flex min-h-16 items-center justify-center py-4 text-xs text-zinc-500">
-              {loadingMore && <><LoaderCircle className="mr-2 h-4 w-4 animate-spin" />Finding more matches…</>}
-            </div>
-          )}
-          {hasNextPage && ageRating === 'ALL' && (
-            <div className="flex justify-center py-9">
-              <button type="button" onClick={() => void loadMore()} disabled={loadingMore} className="flex min-w-44 items-center justify-center gap-2 rounded-xl border border-white/[0.1] bg-white/[0.04] px-5 py-3 text-xs font-bold text-zinc-200 transition hover:border-rose-300/30 hover:bg-rose-500/10 hover:text-white disabled:cursor-wait disabled:opacity-60">
-                {loadingMore ? <><LoaderCircle className="h-4 w-4 animate-spin" />Loading…</> : 'Load more anime'}
-              </button>
+          {hasNextPage && (
+            <div ref={loadMoreSentinelRef} className="flex min-h-20 items-center justify-center py-6 text-xs text-zinc-500">
+              {loadingMore ? (
+                <span className="inline-flex items-center gap-2 rounded-xl border border-white/[0.08] bg-white/[0.03] px-4 py-2.5 font-semibold text-zinc-300 shadow-lg">
+                  <LoaderCircle className="h-4 w-4 animate-spin text-rose-400" />
+                  {ageRating !== 'ALL' ? 'Finding more matches…' : 'Loading more anime…'}
+                </span>
+              ) : (
+                <span className="text-zinc-600">Scroll for more anime</span>
+              )}
             </div>
           )}
         </>
