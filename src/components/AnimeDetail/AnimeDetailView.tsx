@@ -8,7 +8,7 @@
  */
 import React, { useEffect, useLayoutEffect, useMemo, useRef, useState } from 'react'
 import { motion } from 'framer-motion'
-import { AlertTriangle, Bell, BellRing, CheckCircle, Compass, Download, Film, Heart, MoreHorizontal, Play, Star, Trash2, Wand2, X } from 'lucide-react'
+import { AlertTriangle, Bell, BellRing, Check, CheckCircle, Compass, Download, Film, Heart, MoreHorizontal, Play, Plus, Star, Trash2, Wand2, X } from 'lucide-react'
 import type {
   AnimeFolder,
   AppSettings,
@@ -1316,10 +1316,26 @@ export const AnimeDetailView: React.FC<AnimeDetailViewProps> = ({
                     status: hero.status || 'RELEASING',
                     episodesCount: hero.episodesCount,
                   }, !isFollowing)}
-                  className={`flex select-none items-center gap-2 rounded-xl border px-4 py-3 text-xs font-bold transition-all hover:scale-[1.02] active:scale-[0.98] ${isFollowing ? 'border-emerald-400/30 bg-emerald-400/15 text-emerald-200 hover:bg-emerald-400/20' : 'border-emerald-400/30 bg-emerald-400/10 text-emerald-300 hover:bg-emerald-400/20'}`}
+                  title={isFollowing ? 'Unfollow series updates' : 'Follow series for new episode alerts'}
+                  className={`flex w-[124px] select-none items-center justify-center gap-1.5 rounded-xl border px-3 py-3 text-xs font-bold transition-all hover:scale-[1.02] active:scale-[0.98] ${
+                    isFollowing
+                      ? 'border-emerald-400/35 bg-gradient-to-r from-emerald-500/20 to-teal-500/20 text-emerald-200 shadow-sm shadow-emerald-950/40 hover:bg-emerald-500/25'
+                      : 'border-emerald-400/25 bg-emerald-400/10 text-emerald-300 hover:border-emerald-400/40 hover:bg-emerald-400/20'
+                  }`}
                 >
-                  {isFollowing ? <BellRing className="h-4 w-4" /> : <Bell className="h-4 w-4" />}
-                  <span>{isFollowing ? 'Following' : 'Follow'}</span>
+                  {isFollowing ? (
+                    <>
+                      <BellRing className="h-4 w-4 text-emerald-300 shrink-0" />
+                      <span className="truncate">Following</span>
+                      <Check className="h-3 w-3 text-emerald-400 shrink-0" />
+                    </>
+                  ) : (
+                    <>
+                      <Bell className="h-4 w-4 text-emerald-400/80 shrink-0" />
+                      <span className="truncate">Follow</span>
+                      <Plus className="h-3 w-3 text-emerald-400/60 shrink-0" />
+                    </>
+                  )}
                 </button>
               )}
 
@@ -1333,10 +1349,25 @@ export const AnimeDetailView: React.FC<AnimeDetailViewProps> = ({
                 }, !isFavourite)}
                 aria-pressed={isFavourite}
                 title={isFavourite ? 'Remove from favourites' : 'Add to favourites'}
-                className={`flex select-none items-center gap-2 rounded-xl border px-4 py-3 text-xs font-bold transition-all hover:scale-[1.02] active:scale-[0.98] ${isFavourite ? 'border-rose-400/35 bg-rose-400/20 text-rose-100' : 'border-rose-400/25 bg-rose-400/10 text-rose-200 hover:bg-rose-400/20'}`}
+                className={`flex w-[136px] select-none items-center justify-center gap-1.5 rounded-xl border px-3 py-3 text-xs font-bold transition-all hover:scale-[1.02] active:scale-[0.98] ${
+                  isFavourite
+                    ? 'border-rose-400/40 bg-gradient-to-r from-rose-500/20 to-pink-500/20 text-rose-100 shadow-sm shadow-rose-950/40 hover:bg-rose-500/25'
+                    : 'border-rose-400/25 bg-rose-400/10 text-rose-200 hover:border-rose-400/40 hover:bg-rose-400/20'
+                }`}
               >
-                <Heart className={`h-4 w-4 ${isFavourite ? 'fill-current' : ''}`} />
-                <span>{isFavourite ? 'Favourite' : 'Add to favourites'}</span>
+                {isFavourite ? (
+                  <>
+                    <Heart className="h-4 w-4 fill-current text-rose-400 shrink-0" />
+                    <span className="truncate">Favourited</span>
+                    <Check className="h-3 w-3 text-rose-300 shrink-0" />
+                  </>
+                ) : (
+                  <>
+                    <Heart className="h-4 w-4 text-rose-300/80 shrink-0" />
+                    <span className="truncate">Favourite</span>
+                    <Plus className="h-3 w-3 text-rose-400/60 shrink-0" />
+                  </>
+                )}
               </button>
 
               {localFolder && (
