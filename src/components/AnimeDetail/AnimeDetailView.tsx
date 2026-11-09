@@ -1176,34 +1176,36 @@ export const AnimeDetailView: React.FC<AnimeDetailViewProps> = ({
       {/* Hero */}
       <div
         data-backdrop-hero
-        className="relative overflow-hidden"
+        className="relative z-20"
         style={{
           background: `radial-gradient(ellipse at 78% 8%, hsla(${themeHue}, 78%, 48%, .22), transparent 48%), #0b0c10`,
         }}
       >
         {/* Banner and its fades stay clipped to the hero so they never wash
             over the episode section below. */}
-        {showBanner ? (
-          <img
-            src={hero.bannerUrl || ''}
-            alt=""
-            loading="eager"
-            decoding="async"
-            onError={() => setBgFailed(true)}
-            className="absolute inset-0 h-full w-full object-cover object-[center_28%] opacity-85 saturate-[1.35]"
-          />
-        ) : hero.posterUrl && !bgFailed ? (
-          <img
-            src={hero.posterUrl || ''}
-            alt=""
-            loading="lazy"
-            onError={() => setBgFailed(true)}
-            className="absolute inset-0 h-full w-full scale-125 object-cover opacity-20 blur-3xl"
-          />
-        ) : null}
-        <div className="pointer-events-none absolute inset-0" style={{ background: 'linear-gradient(to top, #0b0c10 0%, rgba(11,12,16,.72) 18%, rgba(11,12,16,.38) 42%, rgba(11,12,16,.12) 68%, transparent 100%)' }} />
-        <div className="pointer-events-none absolute inset-0" style={{ background: 'linear-gradient(to right, rgba(11,12,16,.68) 0%, rgba(11,12,16,.28) 48%, transparent 100%)' }} />
-        <div className="pointer-events-none absolute inset-0 mix-blend-screen" style={{ background: `radial-gradient(ellipse at 82% 20%, hsla(${themeHue}, 85%, 56%, .22), transparent 58%)` }} />
+        <div className="pointer-events-none absolute inset-0 overflow-hidden">
+          {showBanner ? (
+            <img
+              src={hero.bannerUrl || ''}
+              alt=""
+              loading="eager"
+              decoding="async"
+              onError={() => setBgFailed(true)}
+              className="absolute inset-0 h-full w-full object-cover object-[center_28%] opacity-85 saturate-[1.35]"
+            />
+          ) : hero.posterUrl && !bgFailed ? (
+            <img
+              src={hero.posterUrl || ''}
+              alt=""
+              loading="lazy"
+              onError={() => setBgFailed(true)}
+              className="absolute inset-0 h-full w-full scale-125 object-cover opacity-20 blur-3xl"
+            />
+          ) : null}
+          <div className="pointer-events-none absolute inset-0" style={{ background: 'linear-gradient(to top, #0b0c10 0%, rgba(11,12,16,.72) 18%, rgba(11,12,16,.38) 42%, rgba(11,12,16,.12) 68%, transparent 100%)' }} />
+          <div className="pointer-events-none absolute inset-0" style={{ background: 'linear-gradient(to right, rgba(11,12,16,.68) 0%, rgba(11,12,16,.28) 48%, transparent 100%)' }} />
+          <div className="pointer-events-none absolute inset-0 mix-blend-screen" style={{ background: `radial-gradient(ellipse at 82% 20%, hsla(${themeHue}, 85%, 56%, .22), transparent 58%)` }} />
+        </div>
 
         <div className="relative z-10 mx-auto flex w-full max-w-7xl flex-col gap-6 px-6 py-8 sm:flex-row sm:items-stretch">
           {/* Poster and personal list controls share one aligned left column. */}
@@ -1272,7 +1274,7 @@ export const AnimeDetailView: React.FC<AnimeDetailViewProps> = ({
                     </button>
 
                     {statusDropdownOpen && (
-                      <div className="absolute left-0 top-full z-30 mt-1.5 w-full min-w-[160px] rounded-xl border border-white/10 bg-[#12141c]/95 p-1 shadow-2xl shadow-black/80 backdrop-blur-xl">
+                      <div className="absolute left-0 top-full z-50 mt-1.5 w-full min-w-[160px] rounded-xl border border-white/10 bg-[#12141c]/95 p-1 shadow-2xl shadow-black/80 backdrop-blur-xl">
                         {STATUS_OPTIONS.map((opt) => {
                           const conf = STATUS_THEME[opt.value]
                           const isSelected = statusValue === opt.value
@@ -1353,7 +1355,7 @@ export const AnimeDetailView: React.FC<AnimeDetailViewProps> = ({
                     </button>
 
                     {scoreDropdownOpen && (
-                      <div className="absolute right-0 top-full z-30 mt-1.5 w-24 max-h-60 overflow-y-auto rounded-xl border border-white/10 bg-[#12141c]/95 p-1 shadow-2xl shadow-black/80 backdrop-blur-xl">
+                      <div className="absolute right-0 top-full z-50 mt-1.5 w-24 max-h-60 overflow-y-auto rounded-xl border border-white/10 bg-[#12141c]/95 p-1 shadow-2xl shadow-black/80 backdrop-blur-xl">
                         <button
                           type="button"
                           onClick={() => {
