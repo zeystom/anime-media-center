@@ -74,13 +74,33 @@ export const WhisperStudio: React.FC<WhisperStudioProps> = ({
   const [detectedAnimeTitle, setDetectedAnimeTitle] = useState<string>('');
   const [userPromptOverride, setUserPromptOverride] = useState<string | null>(null);
   const [activeModel, setActiveModel] = useState<string>('large-v3-turbo');
+  const [availableModels, setAvailableModels] = useState<string[]>(['large-v3-turbo']);
 
-  // Load configured Whisper model from application settings
-  useEffect(() => {
-    window.electronAPI?.getSettings?.().then((s) => {
-      if (s?.whisperModel) setActiveModel(s.whisperModel);
-    }).catch(() => {});
+  // Load configured Whisper model and scan available models from application settings & binary check
+  const refreshModels = React.useCallback(async () => {
+    try {
+      const s = await window.electronAPI?.getSettings?.();
+      const currentModel = s?.whisperModel || 'large-v3-turbo';
+      setActiveModel(currentModel);
+
+      const status = await window.electronAPI?.checkBinaries?.();
+      const list = ['large-v3-turbo'];
+      if (status?.detectedCustomModels) {
+        for (const m of status.detectedCustomModels) {
+          if (!list.includes(m)) list.push(m);
+        }
+      }
+      if (s?.customModelPath) {
+        const customName = status?.customModelDetectedName || s.customModelPath.replace(/^.*[\\/]/, '');
+        if (customName && !list.includes(customName)) list.push(customName);
+      }
+      setAvailableModels(list);
+    } catch {}
   }, []);
+
+  useEffect(() => {
+    refreshModels();
+  }, [refreshModels]);
 
   // Quality & Tuning State (Human Friendly)
   // 'anime' = Normal dialogue, 'bgm' = Loud music / action, 'fast' = Quiet & fast, 'custom' = Custom
@@ -522,9 +542,14 @@ export const WhisperStudio: React.FC<WhisperStudioProps> = ({
         <div>
           <div className="flex items-center space-x-2.5">
             <h1 className="text-xl font-bold text-white tracking-tight">Whisper Studio</h1>
-            <span className="px-2 py-0.5 rounded text-xs font-mono font-bold bg-zinc-800 text-indigo-300 border border-zinc-700">
-              large-v3-turbo
-            </span>
+            <button
+              type="button"
+              onClick={onOpenSettings}
+              className="px-2 py-0.5 rounded text-xs font-mono font-bold bg-zinc-800 text-indigo-300 border border-zinc-700 hover:border-indigo-500/50 transition-colors"
+              title="Active model for Whisper Studio. Click to configure in Settings."
+            >
+              {activeModel}
+            </button>
           </div>
           <p className="text-xs text-zinc-400 mt-1">
             Batch-generate synchronized English SRT subtitles for local MKV anime seasons using faster-whisper-xxl.
@@ -828,12 +853,51 @@ export const WhisperStudio: React.FC<WhisperStudioProps> = ({
                 : 'Recommended for most anime. Protects fast speech, high voices, and stuttering.'}
             </p>
 
-            {/* Active AI Model indicator */}
-            <div className="pt-2 border-t border-zinc-800/60 flex items-center justify-between text-xs">
-              <span className="font-semibold text-zinc-300">AI Subtitle Model</span>
-              <span className="text-[11px] text-indigo-300 font-mono font-medium px-2 py-0.5 rounded bg-indigo-500/10 border border-indigo-500/20">
-                {activeModel}
-              </span>
+            {/* Active AI Model Selector */}
+            <div className="pt-2.5 border-t border-zinc-800/60 space-y-2 text-xs">
+              <div className="flex items-center justify-between">
+                <div className="flex items-center space-x-1.5">
+                  <span className="font-semibold text-zinc-300">AI Subtitle Model</span>
+                  <span className="text-[10px] text-zinc-500 font-mono">({activeModel})</span>
+                </div>
+                {onOpenSettings && (
+                  <button
+                    type="button"
+                    onClick={onOpenSettings}
+                    className="text-[11px] text-indigo-400 hover:text-indigo-300 underline font-medium transition-colors"
+                  >
+                    Manage in Settings
+                  </button>
+                )}
+              </div>
+
+              {/* Model Selection Buttons / Pills */}
+              <div className="flex flex-wrap gap-1.5">
+                {availableModels.map((m) => {
+                  const isSelected = activeModel === m;
+                  return (
+                    <button
+                      key={m}
+                      type="button"
+                      disabled={isProcessing}
+                      onClick={async () => {
+                        setActiveModel(m);
+                        try {
+                          await window.electronAPI?.updateSettings?.({ whisperModel: m });
+                        } catch {}
+                      }}
+                      className={`flex items-center space-x-1 px-2.5 py-1 rounded-lg text-xs font-mono font-medium border transition-all ${
+                        isSelected
+                          ? 'bg-indigo-600/30 text-indigo-200 border-indigo-500/60 shadow-sm ring-1 ring-indigo-500/40'
+                          : 'bg-zinc-900/80 text-zinc-400 border-white/5 hover:border-zinc-700 hover:text-zinc-200'
+                      }`}
+                    >
+                      <span>{m}</span>
+                      {isSelected && <span className="text-indigo-300 font-sans text-[10px]">✓</span>}
+                    </button>
+                  );
+                })}
+              </div>
             </div>
 
             {/* Character Names (AniList Auto-Search) */}

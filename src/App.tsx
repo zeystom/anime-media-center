@@ -121,13 +121,16 @@ export const App: React.FC = () => {
   const [whisperMounted, setWhisperMounted] = useState(false);
   const [settingsMounted, setSettingsMounted] = useState(false);
   const [startupUpdate, setStartupUpdate] = useState<UpdateInfoPayload | null>(null);
-  const [appVersion, setAppVersion] = useState<string>('1.0.6');
+  const [appVersion, setAppVersion] = useState<string>('1.0.7');
 
   useEffect(() => {
     const api = window.electronAPI;
     if (!api) return;
     if (typeof api.getAppVersion === 'function') {
       api.getAppVersion().then((v) => { if (v) setAppVersion(v); }).catch(() => {});
+    }
+    if (typeof api.getStartupUpdate === 'function') {
+      api.getStartupUpdate().then((info) => { if (info) setStartupUpdate(info); }).catch(() => {});
     }
     if (typeof api.onStartupUpdateAvailable === 'function') {
       const unsub = api.onStartupUpdateAvailable((info) => {

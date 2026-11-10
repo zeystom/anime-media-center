@@ -31,7 +31,7 @@ export function getAppVersion(): string {
       if (v) return v;
     }
   } catch {}
-  return '1.0.4';
+  return '1.0.7';
 }
 
 let updaterState: UpdaterState = {
@@ -46,6 +46,14 @@ let getMainWindowRef: (() => BrowserWindow | null) | null = null;
 let isStartupCheckInProgress = false;
 let downloadedInstallerPath: string | null = null;
 let periodicTimer: NodeJS.Timeout | null = null;
+let activeDownloadPromise: Promise<{ success: boolean; error?: string }> | null = null;
+let maxDownloadPercent = 0;
+let maxTransferredBytes = 0;
+let startupUpdatePayload: UpdateInfoPayload | null = null;
+
+export function getStartupUpdateInfo(): UpdateInfoPayload | null {
+  return startupUpdatePayload;
+}
 
 function broadcastState() {
   const win = getMainWindowRef ? getMainWindowRef() : null;
@@ -55,6 +63,7 @@ function broadcastState() {
 }
 
 function broadcastStartupPrompt(updateInfo: UpdateInfoPayload) {
+  startupUpdatePayload = updateInfo;
   const win = getMainWindowRef ? getMainWindowRef() : null;
   if (win && !win.isDestroyed()) {
     win.webContents.send('updater:startup-update-available', updateInfo);
@@ -156,11 +165,14 @@ export function initUpdater(mainWindowGetter: () => BrowserWindow | null): void 
 
   updater.on('download-progress', (progress) => {
     updaterState.status = 'downloading';
+    const pct = typeof progress.percent === 'number' ? Math.round(progress.percent) : 0;
+    maxDownloadPercent = Math.max(maxDownloadPercent, Math.min(100, pct));
+    maxTransferredBytes = Math.max(maxTransferredBytes, progress.transferred || 0);
     updaterState.downloadProgress = {
-      percent: progress.percent,
-      bytesPerSecond: progress.bytesPerSecond,
-      transferred: progress.transferred,
-      total: progress.total,
+      percent: maxDownloadPercent,
+      bytesPerSecond: Math.max(0, Math.round(progress.bytesPerSecond || 0)),
+      transferred: maxTransferredBytes,
+      total: Math.max(maxTransferredBytes, progress.total || 0),
     };
     broadcastState();
   });
@@ -313,7 +325,10 @@ async function downloadDirectAsset(url: string, fileName?: string | null, expect
     throw new Error(`HTTP ${resp.status} while downloading installer`);
   }
 
-  const total = parseInt(resp.headers.get('content-length') || '0', 10) || expectedSize || 100 * 1024 * 1024;
+  const headerLen = parseInt(resp.headers.get('content-length') || '0', 10);
+  const total = (headerLen && headerLen > 0)
+    ? headerLen
+    : (expectedSize && expectedSize > 0 ? expectedSize : 160 * 1024 * 1024);
   const fileStream = fs.createWriteStream(targetPath);
 
   if (!resp.body) {
@@ -331,17 +346,20 @@ async function downloadDirectAsset(url: string, fileName?: string | null, expect
       if (done) break;
       fileStream.write(value);
       transferred += value.length;
+      maxTransferredBytes = Math.max(maxTransferredBytes, transferred);
 
       const now = Date.now();
-      if (now - lastTime >= 250) {
+      if (now - lastTime >= 200) {
         const bps = Math.round(((transferred - lastBytes) / (now - lastTime)) * 1000);
         lastTime = now;
         lastBytes = transferred;
+        const currentPercent = total > 0 ? Math.min(100, Math.round((maxTransferredBytes / total) * 100)) : 0;
+        maxDownloadPercent = Math.max(maxDownloadPercent, currentPercent);
         updaterState.downloadProgress = {
-          percent: Math.min(100, Math.round((transferred / total) * 100)),
-          bytesPerSecond: bps,
-          transferred,
-          total,
+          percent: maxDownloadPercent,
+          bytesPerSecond: Math.max(0, bps),
+          transferred: maxTransferredBytes,
+          total: Math.max(maxTransferredBytes, total),
         };
         broadcastState();
       }
@@ -365,38 +383,56 @@ async function downloadDirectAsset(url: string, fileName?: string | null, expect
 }
 
 export async function downloadUpdate(): Promise<{ success: boolean; error?: string }> {
-  const updater = getAutoUpdater();
-  updaterState.status = 'downloading';
-  updaterState.downloadProgress = { percent: 0, bytesPerSecond: 0, transferred: 0, total: 100 };
-  broadcastState();
-
-  if (updater) {
-    try {
-      await updater.downloadUpdate();
-      return { success: true };
-    } catch (err: any) {
-      console.warn('[Updater] autoUpdater.downloadUpdate() threw, will try direct download fallback:', err?.message || err);
-    }
+  if (activeDownloadPromise) {
+    return activeDownloadPromise;
+  }
+  if (updaterState.status === 'downloaded') {
+    return { success: true };
   }
 
-  const dlUrl = updaterState.updateInfo?.downloadUrl;
-  if (dlUrl) {
+  maxDownloadPercent = 0;
+  maxTransferredBytes = 0;
+
+  activeDownloadPromise = (async () => {
     try {
-      await downloadDirectAsset(dlUrl, updaterState.updateInfo?.fileName, updaterState.updateInfo?.fileSize);
-      return { success: true };
-    } catch (fallbackErr: any) {
-      console.warn('[Updater] Direct download fallback failed:', fallbackErr?.message || fallbackErr);
-      updaterState.status = 'error';
-      updaterState.error = fallbackErr?.message || 'Download failed';
+      updaterState.status = 'downloading';
+      updaterState.downloadProgress = { percent: 0, bytesPerSecond: 0, transferred: 0, total: 100 };
       broadcastState();
-      return { success: false, error: updaterState.error || 'Download failed' };
-    }
-  }
 
-  updaterState.status = 'error';
-  updaterState.error = 'No download URL available for update';
-  broadcastState();
-  return { success: false, error: updaterState.error || 'No download URL available for update' };
+      const updater = getAutoUpdater();
+      if (updater) {
+        try {
+          await updater.downloadUpdate();
+          return { success: true };
+        } catch (err: any) {
+          console.warn('[Updater] autoUpdater.downloadUpdate() threw, will try direct download fallback:', err?.message || err);
+        }
+      }
+
+      const dlUrl = updaterState.updateInfo?.downloadUrl;
+      if (dlUrl) {
+        try {
+          await downloadDirectAsset(dlUrl, updaterState.updateInfo?.fileName, updaterState.updateInfo?.fileSize);
+          return { success: true };
+        } catch (fallbackErr: any) {
+          console.warn('[Updater] Direct download fallback failed:', fallbackErr?.message || fallbackErr);
+          updaterState.status = 'error';
+          updaterState.error = fallbackErr?.message || 'Download failed';
+          broadcastState();
+          return { success: false, error: updaterState.error || 'Download failed' };
+        }
+      }
+
+      updaterState.status = 'error';
+      updaterState.error = 'No download URL available for update';
+      broadcastState();
+      return { success: false, error: updaterState.error || 'No download URL available for update' };
+    } finally {
+      activeDownloadPromise = null;
+    }
+  })();
+
+  return activeDownloadPromise;
 }
 
 export function installUpdate(): void {

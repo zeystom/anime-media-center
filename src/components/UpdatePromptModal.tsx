@@ -24,7 +24,14 @@ export const UpdatePromptModal: React.FC<UpdatePromptModalProps> = ({
   const [isDownloading, setIsDownloading] = useState(false);
   const [isDownloaded, setIsDownloaded] = useState(false);
   const [progress, setProgress] = useState<UpdateProgressPayload | null>(null);
+  const [displayPercent, setDisplayPercent] = useState<number>(0);
   const [error, setError] = useState<string | null>(null);
+
+  useEffect(() => {
+    if (progress?.percent !== undefined && progress.percent !== null) {
+      setDisplayPercent((prev) => Math.max(prev, Math.round(progress.percent)));
+    }
+  }, [progress]);
 
   useEffect(() => {
     if (!isOpen) return;
@@ -101,6 +108,7 @@ export const UpdatePromptModal: React.FC<UpdatePromptModalProps> = ({
       }
     }
 
+    setDisplayPercent(0);
     setIsDownloading(true);
     setError(null);
     try {
@@ -178,14 +186,14 @@ export const UpdatePromptModal: React.FC<UpdatePromptModalProps> = ({
                   <span>Downloading update v{updateInfo.version}...</span>
                 </span>
                 <span className="font-mono font-semibold text-purple-300">
-                  {Math.round(progress?.percent || 0)}%
+                  {displayPercent}%
                 </span>
               </div>
 
               <div className="w-full h-2 rounded-full bg-zinc-800 overflow-hidden">
                 <div
-                  className="h-full bg-gradient-to-r from-purple-500 to-indigo-500 transition-all duration-200"
-                  style={{ width: `${Math.max(2, Math.min(100, progress?.percent || 0))}%` }}
+                  className="h-full bg-gradient-to-r from-purple-500 to-indigo-500 transition-[width] duration-150 ease-out"
+                  style={{ width: `${Math.max(2, Math.min(100, displayPercent))}%` }}
                 />
               </div>
 

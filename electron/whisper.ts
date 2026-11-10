@@ -566,7 +566,14 @@ export class WhisperManager {
           defaultPrompt = 'Clean dialogue and conversations.';
         }
 
-        const model = opts.model || 'large-v3-turbo';
+        const settings = storage.getSettings();
+        let model = opts.model || settings.whisperModel || 'large-v3-turbo';
+        if (settings.customModelPath && fs.existsSync(settings.customModelPath)) {
+          const customName = path.basename(settings.customModelPath).replace(/^faster-whisper-/, '');
+          if (model === customName || model === settings.customModelPath || model === 'custom') {
+            model = settings.customModelPath;
+          }
+        }
         const task = opts.task || 'transcribe';
         const language = opts.language || 'en';
         const condition = opts.conditionOnPreviousText ?? false;

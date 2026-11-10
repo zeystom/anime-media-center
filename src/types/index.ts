@@ -51,10 +51,13 @@ export interface ElectronAPI {
     ffmpegExists: boolean;
     whisperExists: boolean;
     modelExists: boolean;
+    isDefaultModelInstalled?: boolean;
     modelName: string;
+    activeModel?: string;
     installedModels?: string[];
     detectedCustomModels?: string[];
     customModelPath?: string;
+    customModelDetectedName?: string | null;
   }>;
   downloadWhisperModel?: (modelName: string) => Promise<{ success: boolean; modelName?: string; error?: string }>;
   cancelWhisperModelDownload?: () => Promise<boolean>;
@@ -163,6 +166,7 @@ export interface ElectronAPI {
   onP2pStateChanged: (callback: (state: P2pState) => void) => () => void;
   // Updater
   getAppVersion: () => Promise<string>;
+  getStartupUpdate?: () => Promise<import('../../electron/types').UpdateInfoPayload | null>;
   getUpdaterState: () => Promise<import('../../electron/types').UpdaterState>;
   checkForUpdates: () => Promise<import('../../electron/types').UpdaterState>;
   downloadUpdate: () => Promise<{ success: boolean; error?: string }>;

@@ -25,7 +25,7 @@ import { syncBackupNow, getBackupStatus, detectRestoreState, restoreFromBackup, 
 import { exportWatchlist, importWatchlist, MAL_ONLY_ANILIST_ID_BASE } from './watchlistIO';
 import { initTorrentEngine, engineSetEnabled, engineAddDownload, enginePause, engineResume, engineCancel, engineGetState, engineShutdown } from './torrentEngine';
 import { searchProviders, rankReleasesForEpisode, isExplicitEpisodeMismatch, explicitReleasePart, isExplicitPartMismatch, isExplicitSeasonMismatch, getEpisodeReleaseSizeWarning, sanitizeSearchQuery, extractInfoHash, fetchReleaseDescription, inspectReleaseResults, computeTitleRelevance } from './indexers';
-import { initUpdater, checkForUpdates, downloadUpdate, installUpdate, getUpdaterState, getAppVersion } from './updater';
+import { initUpdater, checkForUpdates, downloadUpdate, installUpdate, getUpdaterState, getAppVersion, getStartupUpdateInfo } from './updater';
 
 const __filename = fileURLToPath(import.meta.url);
 const __dirname = path.dirname(__filename);
@@ -504,6 +504,8 @@ function setupIpcHandlers() {
     const customModelPath = paths?.customModelPath !== undefined ? paths.customModelPath : settings.customModelPath;
 
     let modelExists = false;
+    let isDefaultModelInstalled = false;
+    const installedModels: string[] = [];
     const detectedCustomModels: string[] = [];
 
     if (whisperExists) {
@@ -516,20 +518,30 @@ function setupIpcHandlers() {
         if (fs.existsSync(dir)) {
           try {
             const files = fs.readdirSync(dir);
-            // Check default model
-            if (files.some((f) => f.toLowerCase().includes(modelName.toLowerCase()))) {
-              modelExists = true;
-            }
-            // Scan for any other model folders in _models
             for (const f of files) {
               const cleaned = f.replace(/^faster-whisper-/, '').replace(/^models--.*?--/, '');
-              if (cleaned && !cleaned.toLowerCase().includes('large-v3-turbo') && !detectedCustomModels.includes(cleaned)) {
-                detectedCustomModels.push(cleaned);
+              if (cleaned) {
+                if (!installedModels.includes(cleaned)) {
+                  installedModels.push(cleaned);
+                }
+                if (cleaned.toLowerCase().includes('large-v3-turbo')) {
+                  isDefaultModelInstalled = true;
+                } else if (!detectedCustomModels.includes(cleaned)) {
+                  detectedCustomModels.push(cleaned);
+                }
               }
             }
           } catch {}
         }
       }
+    }
+
+    if (isDefaultModelInstalled && modelName === 'large-v3-turbo') {
+      modelExists = true;
+    } else if (installedModels.some((m) => m.toLowerCase().includes(modelName.toLowerCase()))) {
+      modelExists = true;
+    } else if (customModelPath && fs.existsSync(customModelPath)) {
+      modelExists = true;
     }
 
     // Check custom model path if specified
@@ -542,7 +554,10 @@ function setupIpcHandlers() {
       ffmpegExists,
       whisperExists,
       modelExists,
+      isDefaultModelInstalled,
       modelName,
+      activeModel: modelName,
+      installedModels,
       detectedCustomModels,
       customModelPath,
       customModelDetectedName,
@@ -1416,6 +1431,7 @@ function setupIpcHandlers() {
 
   // Updater handlers
   ipcMain.handle('updater:get-version', () => getAppVersion());
+  ipcMain.handle('updater:get-startup-update', () => getStartupUpdateInfo());
   ipcMain.handle('updater:get-state', () => getUpdaterState());
   ipcMain.handle('updater:check', async () => checkForUpdates(false));
   ipcMain.handle('updater:download', async () => downloadUpdate());
