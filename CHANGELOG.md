@@ -1,5 +1,15 @@
 # Changelog
 
+## 1.0.16 — Fix 99.7% Download Stall on Batch Boundary Pieces
+
+- **Fix Missing Final Piece Stall on Batch Torrents (e.g. 99.7% / 1 Missing Piece):**
+  - Resolved a critical piece selection bug where deselecting unchosen files in a multi-file batch torrent pruned the shared boundary piece belonging to the chosen episode.
+  - In batch releases, the end of Episode 1 and the start of Episode 2 share a single piece. Deselecting Episode 2 after selecting Episode 1 previously removed that shared piece from WebTorrent's download queue, leaving Episode 1 permanently stuck at 99.7% with 1 missing piece.
+  - File selection now strictly deselects unchosen files FIRST, and then selects chosen files, explicitly reinforcing torrent-level piece intervals so boundary pieces are never pruned.
+- **Active Piece Selection & Critical Re-Queueing:**
+  - When missing pieces are available in the swarm (`availableMissingPieces > 0`), the engine proactively verifies and selects missing pieces directly on the torrent every 10 seconds, ensuring WebTorrent immediately requests them from connected peers.
+  - Fixed accurate DHT node count display in diagnostic reports.
+
 ## 1.0.15 — Clean Torrent Cards & Full Diagnostic History Clipboard Export
 
 - **Clean Torrent Downloads UI (No Raw Log Clutter):**

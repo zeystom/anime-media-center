@@ -40,10 +40,11 @@ if (!token) {
 
 const RELEASE_BODY = `## What's new in v${VERSION}
 
-### 📋 Clean Torrent Downloads UI & Full Diagnostic Clipboard Export
-- **Decluttered Torrent Cards:** Removed raw internal technical diagnostics, tracker timeout warnings, and error traces from direct text display on torrent cards in the Downloads tab. The cards now stay clean, showing title, episode badges, status, file size, peers, live speeds, and selected files.
-- **Notepad Button for Full History Copy:** Added a notepad icon button to every torrent item. One click copies the entire chronological event history, active peer wires, tracker states, DHT lookup, piece availability, and diagnostics to the clipboard, with an instant toast notification.
-- **Post-Cancel Diagnostic Caching:** Diagnostic snapshots are preserved in memory even if a torrent was recently cancelled or completed, allowing full post-mortem inspection.
+### ⚡ Fix 99.7% Download Stall on Batch Boundary Pieces
+- **Fixed Missing Final Piece on Batch Torrents:** Resolved a piece selection bug where deselecting unchosen files in a batch torrent pruned the shared boundary piece belonging to the chosen episode. In batch releases, Episode 1 and Episode 2 share a boundary piece (~8 MB); deselecting Episode 2 previously removed that piece from WebTorrent's download queue, leaving downloads permanently stuck at 99.7%.
+- **Reinforced Piece Intervals:** File selection now deselects unchosen files FIRST, and then selects chosen files, explicitly reinforcing torrent-level piece intervals so boundary pieces are never pruned.
+- **Active Piece Selection & Critical Re-Queueing:** When missing pieces are available in the swarm, the engine proactively verifies and selects missing pieces directly on the torrent every 10 seconds, ensuring WebTorrent immediately requests them from connected peers.
+- **Accurate DHT Node Display:** Corrected DHT node count reporting in torrent diagnostic reports.
 
 ---
 ### Assets included:

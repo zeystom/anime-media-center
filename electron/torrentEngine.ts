@@ -48,6 +48,8 @@ export interface TorrentLike {
   bitfield?: { get: (index: number) => boolean }
   wires?: Array<{ peerPieces?: { get: (index: number) => boolean } }>
   pieceLength?: number
+  select?: (start: number, end: number, priority?: number) => void
+  deselect?: (start: number, end: number) => void
   critical?: (start: number, end: number) => void
   timeRemaining?: number
   pause: () => void
@@ -643,7 +645,10 @@ export function engineGetJobDiagnostics(infoHash: string): string {
     lines.push(`Configured fallback trackers: ${FALLBACK_TRACKERS.length}`)
   }
   const dht = (t as any)?.discovery?.dht || (client as any)?.dht
-  lines.push(`DHT Listening: ${Boolean(dht?.listening)}, DHT Nodes: ${dht?.nodes?.length || 0}`)
+  const dhtNodes = typeof dht?.nodes?.count === 'function'
+    ? dht.nodes.count()
+    : (Array.isArray(dht?.nodes) ? dht.nodes.length : (typeof dht?.nodes?.toArray === 'function' ? dht.nodes.toArray().length : 0))
+  lines.push(`DHT Listening: ${Boolean(dht?.listening)}, DHT Nodes: ${dhtNodes}`)
   lines.push('')
   lines.push('--- [6] CHRONOLOGICAL EVENT HISTORY ---')
   if (job.eventLogs && job.eventLogs.length > 0) {
@@ -854,11 +859,14 @@ function startTicker(): void {
         updateFilesProgress(job)
         reconcileSelectedDone(job)
         const noProgressSeconds = job.lastProgressAt ? Math.floor((now - job.lastProgressAt) / 1000) : 0
-        if (noProgressSeconds >= 30 && (job.availableMissingPieces || 0) > 0 && job.torrent.critical && now - (job.lastCriticalAt || 0) >= 20_000) {
+        if ((job.availableMissingPieces || 0) > 0 && now - (job.lastCriticalAt || 0) >= 10_000) {
           const files = job.selectedFiles?.length ? job.selectedFiles : job.torrent.files
           const stats = getSelectedPieceAvailability(job.torrent, files)
           for (const piece of stats?.missingIndices || []) {
-            if (job.torrent.wires?.some((wire) => wire.peerPieces?.get(piece))) job.torrent.critical(piece, piece)
+            if (job.torrent.wires?.some((wire) => wire.peerPieces?.get(piece))) {
+              try { job.torrent.select?.(piece, piece) } catch {}
+              try { job.torrent.critical?.(piece, piece) } catch {}
+            }
           }
           job.lastCriticalAt = now
         }
@@ -985,6 +993,11 @@ function attachSelectedCompletion(job: InternalJob, torrent: TorrentLike, select
   job.lastProgressBytes = selected.reduce((sum, file) => sum + (file.progress || 0) * (file.length || 0), 0)
   job.lastProgressAt = Date.now()
   for (const file of selected) {
+    const start = (file as any)._startPiece
+    const end = (file as any)._endPiece
+    if (typeof start === 'number' && typeof end === 'number') {
+      try { torrent.select?.(start, end) } catch {}
+    }
     if (file.done) {
       job.selectedDone += 1
     } else {
@@ -1498,12 +1511,26 @@ function selectFilesForJob(job: InternalJob, torrent: TorrentLike): TorrentFileL
     }
   }
 
+  // 1. Deselect every unchosen file FIRST
   const chosenSet = new Set(chosen)
   for (const file of torrent.files) {
-    if (chosenSet.has(file)) {
-      file.select?.()
-    } else {
+    if (!chosenSet.has(file)) {
       file.deselect?.()
+    }
+  }
+
+  // 2. ONLY AFTER all unchosen files are deselected, select the chosen files.
+  // This guarantees that any boundary pieces shared between a chosen file and an unchosen file
+  // (such as the boundary piece shared by Episode 1 and Episode 2 in batch torrents)
+  // are never pruned or cancelled by a subsequent unchosen file's deselect().
+  for (const file of chosen) {
+    file.select?.()
+    const start = (file as any)._startPiece
+    const end = (file as any)._endPiece
+    if (typeof start === 'number' && typeof end === 'number') {
+      try {
+        torrent.select?.(start, end)
+      } catch {}
     }
   }
   addJobLog(job, `Selected ${chosen.length} of ${torrent.files.length} file(s) for download: ${chosen.map((f) => f.name).slice(0, 5).join(', ')}${chosen.length > 5 ? '...' : ''}`)

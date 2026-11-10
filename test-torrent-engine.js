@@ -104,14 +104,17 @@ function createFakeTorrent(infoHash, spec = {}) {
     infoHash,
     name: spec.name || 'Fake Torrent',
     files: (spec.files || []).map((entry) => {
+      if (typeof entry === 'object' && entry !== null && typeof entry.select === 'function') {
+        return entry
+      }
       const name = typeof entry === 'string' ? entry : entry.name
       const file = {
-      name,
-      path: typeof entry === 'string' ? undefined : entry.path,
-      length: 1,
-      selected: true,
-      select() { file.selected = true },
-      deselect() { file.selected = false },
+        name,
+        path: typeof entry === 'string' ? undefined : entry.path,
+        length: 1,
+        selected: true,
+        select() { file.selected = true },
+        deselect() { file.selected = false },
       }
       return file
     }),
@@ -141,6 +144,9 @@ function createFakeTorrent(infoHash, spec = {}) {
     resume() {
       torrent.paused = false
     },
+    select() {},
+    deselect() {},
+    critical() {},
     destroy(opts, cb) {
       torrent.destroyArgs.push(opts || null)
       torrent.destroyed = true
@@ -671,6 +677,54 @@ await expectCase('(10) engineGetJobDiagnostics generates detailed report and cac
   // Non-existent hash
   const missingReport = engineGetJobDiagnostics('1111111111111111111111111111111111111111')
   assert.ok(missingReport.includes('is not active in memory'), 'handles unknown hash safely')
+
+  engineShutdown()
+})
+
+await expectCase('(11) batch boundary piece selection: unchosen files deselected before chosen files selected', async () => {
+  engineShutdown()
+  const { fake } = setupEngine()
+  const callOrder = []
+
+  const file1 = {
+    name: 'Cyberpunk S02E01.mkv',
+    length: 2625535839,
+    _startPiece: 0,
+    _endPiece: 312,
+    selected: true,
+    select() { callOrder.push('file1.select'); file1.selected = true },
+    deselect() { callOrder.push('file1.deselect'); file1.selected = false }
+  }
+  const file2 = {
+    name: 'Cyberpunk S02E02.mkv',
+    length: 2625535839,
+    _startPiece: 312,
+    _endPiece: 624,
+    selected: true,
+    select() { callOrder.push('file2.select'); file2.selected = true },
+    deselect() { callOrder.push('file2.deselect'); file2.selected = false }
+  }
+
+  fake.registry.set(HASH_A, {
+    name: 'Cyberpunk Batch',
+    infoHash: HASH_A,
+    files: [file1, file2],
+  })
+
+  assert.strictEqual((await engineSetEnabled(true)).success, true)
+  const res = await engineAddDownload({ item: magnetItem(HASH_A), title: 'Cyberpunk', episode: 1 })
+  assert.strictEqual(res.success, true)
+  await until(() => statusOf(HASH_A) === 'downloading', 'job is downloading')
+
+  // Verify that file2.deselect happened BEFORE file1.select in the final selection pass
+  const lastFile2Deselect = callOrder.lastIndexOf('file2.deselect')
+  const lastFile1Select = callOrder.lastIndexOf('file1.select')
+  assert.ok(lastFile2Deselect !== -1, 'file2 was deselected')
+  assert.ok(lastFile1Select !== -1, 'file1 was selected')
+  assert.ok(lastFile2Deselect < lastFile1Select, 'unchosen file2 was deselected BEFORE chosen file1 was selected')
+
+  assert.strictEqual(file1.selected, true, 'file1 is selected')
+  assert.strictEqual(file2.selected, false, 'file2 is deselected')
 
   engineShutdown()
 })
