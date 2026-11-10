@@ -28,11 +28,16 @@ import { cleanSeriesTitle, cleanEpisodeTitle } from '../../utils/format';
 import { TerminalLog } from './TerminalLog';
 import { LiveDialogueStream } from './LiveDialogueStream';
 
+import type { AppSettings } from '../../types';
+
 interface WhisperStudioProps {
   initialFolder?: AnimeFolder | null;
   whisperExists?: boolean;
   onRefreshLibrary: () => void;
   onOpenSettings?: () => void;
+  settings?: AppSettings;
+  onSaveSettings?: (newSettings: Partial<AppSettings>) => Promise<void> | void;
+  isActiveTab?: boolean;
 }
 
 const STORAGE_KEY_WHISPER_TUNING = 'kaiko_whisper_tuning_preset';
@@ -42,6 +47,9 @@ export const WhisperStudio: React.FC<WhisperStudioProps> = ({
   whisperExists = true,
   onRefreshLibrary,
   onOpenSettings,
+  settings,
+  onSaveSettings,
+  isActiveTab,
 }) => {
   const [selectedFolder, setSelectedFolder] = useState<string>(initialFolder?.folderPath || '');
   const [episodes, setEpisodes] = useState<Episode[]>(initialFolder?.episodes || []);
@@ -81,10 +89,13 @@ export const WhisperStudio: React.FC<WhisperStudioProps> = ({
     try {
       const s = await window.electronAPI?.getSettings?.();
       const status = await window.electronAPI?.checkBinaries?.();
-      let currentModel = s?.whisperModel || 'large-v3-turbo';
-      if (s?.customModelPath) {
-        const customName = status?.customModelDetectedName || s.customModelPath.replace(/^.*[\\/]/, '');
-        if (customName) currentModel = customName;
+      let currentModel = settings?.whisperModel || s?.whisperModel || 'large-v3-turbo';
+      const customPath = settings?.customModelPath !== undefined ? settings.customModelPath : s?.customModelPath;
+      if (customPath) {
+        const customName = status?.customModelDetectedName || customPath.replace(/^.*[\\/]/, '');
+        if (customName && (!currentModel || currentModel === 'large-v3-turbo')) {
+          currentModel = customName;
+        }
       }
       setActiveModel(currentModel);
 
@@ -94,17 +105,17 @@ export const WhisperStudio: React.FC<WhisperStudioProps> = ({
           if (!list.includes(m)) list.push(m);
         }
       }
-      if (s?.customModelPath) {
-        const customName = status?.customModelDetectedName || s.customModelPath.replace(/^.*[\\/]/, '');
+      if (customPath) {
+        const customName = status?.customModelDetectedName || customPath.replace(/^.*[\\/]/, '');
         if (customName && !list.includes(customName)) list.push(customName);
       }
       setAvailableModels(list);
     } catch {}
-  }, []);
+  }, [settings?.whisperModel, settings?.customModelPath]);
 
   useEffect(() => {
     refreshModels();
-  }, [refreshModels]);
+  }, [refreshModels, isActiveTab]);
 
   // Quality & Tuning State (Human Friendly)
   // 'anime' = Normal dialogue, 'bgm' = Loud music / action, 'fast' = Quiet & fast, 'custom' = Custom
@@ -887,6 +898,7 @@ export const WhisperStudio: React.FC<WhisperStudioProps> = ({
                       onClick={async () => {
                         setActiveModel(m);
                         try {
+                          await onSaveSettings?.({ whisperModel: m });
                           await window.electronAPI?.updateSettings?.({ whisperModel: m });
                         } catch {}
                       }}

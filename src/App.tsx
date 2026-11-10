@@ -1370,6 +1370,9 @@ export const App: React.FC = () => {
                 whisperExists={binaryStatus.whisperExists}
                 onRefreshLibrary={handleRefreshLibrary}
                 onOpenSettings={() => setSettingsOpen(true)}
+                settings={settings}
+                onSaveSettings={handleSaveSettings}
+                isActiveTab={currentTab === 'whisper'}
               />
             </Suspense>
           </div>

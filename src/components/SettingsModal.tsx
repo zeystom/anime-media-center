@@ -94,7 +94,6 @@ export const SettingsModal: React.FC<SettingsModalProps> = ({
   const [whisperPath, setWhisperPath] = useState(settings.whisperPath);
   const [whisperModel, setWhisperModel] = useState<string>(settings.whisperModel || 'large-v3-turbo');
   const [customModelPath, setCustomModelPath] = useState<string>(settings.customModelPath || '');
-  const [showCustomModelSection, setShowCustomModelSection] = useState(Boolean(settings.customModelPath));
   const [libraryFolders, setLibraryFolders] = useState<string[]>(
     Array.isArray(settings.libraryFolders) && settings.libraryFolders.length > 0
       ? settings.libraryFolders
@@ -192,7 +191,6 @@ export const SettingsModal: React.FC<SettingsModalProps> = ({
       setWhisperPath(settings.whisperPath);
       setWhisperModel(settings.whisperModel || 'large-v3-turbo');
       setCustomModelPath(settings.customModelPath || '');
-      setShowCustomModelSection(Boolean(settings.customModelPath));
       setCheckForUpdatesOnStartup(settings.checkForUpdatesOnStartup ?? true);
       setAutoUpdate(settings.autoUpdate ?? true);
       setLibraryFolders(
@@ -940,13 +938,7 @@ export const SettingsModal: React.FC<SettingsModalProps> = ({
             </div>
           </div>
 
-          <div className="flex items-center space-x-3">
-            <span
-              title={`Kaiko version ${appVersion}`}
-              className="text-xs font-mono font-medium px-2.5 py-1 rounded-lg bg-zinc-800/90 text-zinc-400 border border-white/10 select-none"
-            >
-              v{appVersion}
-            </span>
+          <div className="flex items-center space-x-2">
             <button
               type="button"
               onClick={handleClose}
@@ -1102,27 +1094,22 @@ export const SettingsModal: React.FC<SettingsModalProps> = ({
                     <ChevronDown className="w-4 h-4" />
                   )}
                 </div>
-                <div>
-                  <div className="flex items-center space-x-2">
-                    <label className="text-xs font-semibold text-zinc-200 uppercase tracking-wider flex items-center space-x-1.5 cursor-pointer">
-                      <Cpu className="w-3.5 h-3.5 text-zinc-400" />
-                      <span>Faster-Whisper AI Subtitles Engine</span>
-                    </label>
-                    {binaryStatus.whisperExists ? (
-                      <span className="inline-flex items-center space-x-1 px-2 py-0.5 rounded text-[10px] font-semibold bg-emerald-500/15 text-emerald-400 border border-emerald-500/25">
-                        <CheckCircle2 className="w-3 h-3" />
-                        <span>Ready</span>
-                      </span>
-                    ) : (
-                      <span className="inline-flex items-center space-x-1 px-2 py-0.5 rounded text-[10px] font-semibold bg-amber-500/15 text-amber-400 border border-amber-500/25">
-                        <AlertCircle className="w-3 h-3" />
-                        <span>Not Configured</span>
-                      </span>
-                    )}
-                  </div>
-                  <p className="text-[11px] text-zinc-400 mt-0.5">
-                    Faster-Whisper powers high-speed AI speech-to-text subtitle generation in Whisper Studio.
-                  </p>
+                <div className="flex items-center space-x-2">
+                  <label className="text-xs font-semibold text-zinc-200 uppercase tracking-wider flex items-center space-x-1.5 cursor-pointer">
+                    <Cpu className="w-3.5 h-3.5 text-zinc-400" />
+                    <span>Faster-Whisper Engine</span>
+                  </label>
+                  {binaryStatus.whisperExists ? (
+                    <span className="inline-flex items-center space-x-1 px-2 py-0.5 rounded text-[10px] font-semibold bg-emerald-500/15 text-emerald-400 border border-emerald-500/25">
+                      <CheckCircle2 className="w-3 h-3" />
+                      <span>Ready</span>
+                    </span>
+                  ) : (
+                    <span className="inline-flex items-center space-x-1 px-2 py-0.5 rounded text-[10px] font-semibold bg-amber-500/15 text-amber-400 border border-amber-500/25">
+                      <AlertCircle className="w-3 h-3" />
+                      <span>Not Configured</span>
+                    </span>
+                  )}
                 </div>
               </button>
 
@@ -1213,9 +1200,8 @@ export const SettingsModal: React.FC<SettingsModalProps> = ({
 
             {/* Faster-Whisper Binary Path & Setup */}
             <div className="space-y-1.5">
-              <label className="text-xs font-medium text-zinc-300 flex items-center justify-between">
-                <span>Faster-Whisper-XXL Executable (faster-whisper-xxl.exe)</span>
-                <span className="text-[10px] text-zinc-500 font-normal">Required for Whisper Studio</span>
+              <label className="text-xs font-medium text-zinc-300">
+                Faster-Whisper-XXL Executable
               </label>
               <div className="flex items-center space-x-2">
                 <div className="relative flex-1">
@@ -1273,256 +1259,107 @@ export const SettingsModal: React.FC<SettingsModalProps> = ({
 
             {/* AI Subtitle Model Section */}
             <div className="space-y-3 pt-3 border-t border-white/10">
-              <div className="flex items-center justify-between">
-                <div>
-                  <label className="text-xs font-semibold text-zinc-200 uppercase tracking-wider flex items-center space-x-2">
-                    <Sparkles className="w-3.5 h-3.5 text-zinc-400" />
-                    <span>AI Subtitle Model</span>
-                  </label>
-                  <p className="text-[11px] text-zinc-400">
-                    Choose which AI model Whisper Studio uses for transcription, or download the default model.
-                  </p>
-                </div>
-              </div>
+              <label className="text-xs font-semibold text-zinc-200 uppercase tracking-wider flex items-center space-x-2">
+                <Sparkles className="w-3.5 h-3.5 text-zinc-400" />
+                <span>AI Subtitle Model</span>
+              </label>
 
-              {/* Selectable Model Options */}
-              <div className="space-y-2">
-                {/* 1. Default Model (large-v3-turbo) */}
-                <div
-                  onClick={() => {
-                    if (customModelPath) {
-                      setCustomModelPath('');
-                      setWhisperModel('large-v3-turbo');
-                      onSave({ customModelPath: '', whisperModel: 'large-v3-turbo' });
-                      showGlobalToast('Active model set to large-v3-turbo', 'success');
-                    } else if (whisperModel !== 'large-v3-turbo') {
-                      setWhisperModel('large-v3-turbo');
-                      onSave({ whisperModel: 'large-v3-turbo' });
-                      showGlobalToast('Active model set to large-v3-turbo', 'success');
-                    }
-                  }}
-                  className={`p-3.5 rounded-xl border transition-all cursor-pointer ${
-                    !customModelPath && whisperModel === 'large-v3-turbo'
-                      ? 'bg-indigo-600/10 border-indigo-500/50 shadow-md ring-1 ring-indigo-500/30'
-                      : 'bg-zinc-900/60 border-white/5 hover:border-zinc-700 hover:bg-zinc-900/90'
-                  }`}
-                >
-                  <div className="flex flex-col sm:flex-row items-start sm:items-center justify-between gap-3">
-                    <div className="flex items-start space-x-3">
-                      {/* Radio indicator */}
-                      <div className="mt-0.5 shrink-0">
-                        {!customModelPath && whisperModel === 'large-v3-turbo' ? (
-                          <div className="w-4 h-4 rounded-full border-2 border-indigo-400 bg-indigo-500 flex items-center justify-center">
-                            <div className="w-1.5 h-1.5 rounded-full bg-white" />
-                          </div>
-                        ) : (
-                          <div className="w-4 h-4 rounded-full border border-zinc-600 bg-zinc-800" />
-                        )}
-                      </div>
-
-                      <div className="space-y-1">
-                        <div className="flex items-center space-x-2 flex-wrap gap-y-1">
-                          <span className="text-xs font-mono font-bold text-white">large-v3-turbo</span>
-                          <span className="px-2 py-0.5 rounded text-[10px] font-semibold bg-indigo-500/20 text-indigo-300 border border-indigo-500/30">
-                            Default • Recommended
-                          </span>
-                          {!customModelPath && whisperModel === 'large-v3-turbo' && (
-                            <span className="px-1.5 py-0.5 rounded text-[10px] font-semibold bg-emerald-500/20 text-emerald-300 border border-emerald-500/30">
-                              Active
-                            </span>
-                          )}
-                        </div>
-                        <p className="text-[11px] text-zinc-400">
-                          State-of-the-art accuracy with up to 8x faster inference speed (~1.5 GB).
-                        </p>
-                      </div>
-                    </div>
-
-                    <div className="shrink-0 flex items-center space-x-2 self-end sm:self-center" onClick={(e) => e.stopPropagation()}>
-                      {downloadingModel === 'large-v3-turbo' ? (
-                        <div className="flex items-center space-x-2">
-                          <span className="text-xs font-mono text-indigo-300 font-semibold animate-pulse">
-                            {downloadProgress.percent !== null ? `${downloadProgress.percent}%` : 'Downloading...'}
-                          </span>
-                          <button
-                            type="button"
-                            onClick={handleCancelDownloadModel}
-                            className="px-2.5 py-1 rounded-lg text-xs bg-red-500/20 hover:bg-red-500/30 text-red-300 border border-red-500/30 transition-colors"
-                          >
-                            Cancel
-                          </button>
-                        </div>
-                      ) : binaryStatus.isDefaultModelInstalled || binaryStatus.modelExists ? (
-                        <span className="inline-flex items-center space-x-1.5 px-3 py-1.5 rounded-lg bg-emerald-500/10 border border-emerald-500/20 text-emerald-400 text-xs font-semibold">
-                          <CheckCircle2 className="w-3.5 h-3.5 text-emerald-400" />
-                          <span>Installed</span>
-                        </span>
-                      ) : (
-                        <button
-                          type="button"
-                          disabled={!binaryStatus.whisperExists || Boolean(downloadingModel)}
-                          onClick={handleDownloadModel}
-                          className="inline-flex items-center space-x-1.5 px-3.5 py-1.5 rounded-lg bg-indigo-600 hover:bg-indigo-500 disabled:opacity-50 text-white font-medium text-xs shadow transition-colors"
-                        >
-                          <Download className="w-3.5 h-3.5" />
-                          <span>Download large-v3-turbo</span>
-                        </button>
-                      )}
-                    </div>
-                  </div>
-
-                  {/* Progress bar during download */}
-                  {downloadingModel === 'large-v3-turbo' && (
-                    <div className="mt-3 pt-2.5 border-t border-white/5 space-y-1.5 animate-in fade-in">
-                      <div className="w-full bg-zinc-800 rounded-full h-1.5 overflow-hidden">
-                        <div
-                          className="bg-indigo-500 h-full transition-[width] duration-150 ease-out"
-                          style={{ width: `${downloadProgress.percent || 5}%` }}
-                        />
-                      </div>
-                      {downloadProgress.text && (
-                        <p className="text-[10px] font-mono text-zinc-400 truncate">
-                          {downloadProgress.text}
-                        </p>
-                      )}
-                    </div>
-                  )}
+              {/* Default Model (large-v3-turbo) Card */}
+              <div className="p-3 rounded-xl bg-zinc-900/60 border border-white/5 flex items-center justify-between">
+                <div className="flex items-center space-x-2">
+                  <span className="text-xs font-mono font-bold text-white">large-v3-turbo</span>
+                  <span className="px-2 py-0.5 rounded text-[10px] font-semibold bg-indigo-500/20 text-indigo-300 border border-indigo-500/30">
+                    Default (~1.5 GB)
+                  </span>
                 </div>
 
-                {/* 2. Other Models Detected in _models (e.g. medium, tiny, small, base) */}
-                {binaryStatus.detectedCustomModels && binaryStatus.detectedCustomModels.length > 0 && (
-                  <div className="space-y-1.5 pt-1">
-                    <span className="text-[11px] text-zinc-400 font-medium block">
-                      Other Models Installed Locally in _models:
-                    </span>
-                    <div className="grid grid-cols-1 sm:grid-cols-2 gap-2">
-                      {binaryStatus.detectedCustomModels.map((m) => {
-                        const isSelected = !customModelPath && whisperModel === m;
-                        return (
-                          <div
-                            key={m}
-                            onClick={() => {
-                              setCustomModelPath('');
-                              setWhisperModel(m);
-                              onSave({ customModelPath: '', whisperModel: m });
-                              showGlobalToast(`Active model set to ${m}`, 'success');
-                            }}
-                            className={`p-3 rounded-xl border transition-all cursor-pointer flex items-center justify-between ${
-                              isSelected
-                                ? 'bg-indigo-600/10 border-indigo-500/50 shadow-sm ring-1 ring-indigo-500/30'
-                                : 'bg-zinc-900/60 border-white/5 hover:border-zinc-700 hover:bg-zinc-900/90'
-                            }`}
-                          >
-                            <div className="flex items-center space-x-2.5 truncate">
-                              <div className="shrink-0">
-                                {isSelected ? (
-                                  <div className="w-4 h-4 rounded-full border-2 border-indigo-400 bg-indigo-500 flex items-center justify-center">
-                                    <div className="w-1.5 h-1.5 rounded-full bg-white" />
-                                  </div>
-                                ) : (
-                                  <div className="w-4 h-4 rounded-full border border-zinc-600 bg-zinc-800" />
-                                )}
-                              </div>
-                              <div className="truncate">
-                                <span className="text-xs font-mono font-semibold text-zinc-200 block truncate">{m}</span>
-                                <span className="text-[10px] text-zinc-500">Local model</span>
-                              </div>
-                            </div>
-
-                            <div className="shrink-0 ml-2">
-                              {isSelected ? (
-                                <span className="px-1.5 py-0.5 rounded text-[10px] font-semibold bg-emerald-500/20 text-emerald-300 border border-emerald-500/30">
-                                  Active
-                                </span>
-                              ) : (
-                                <span className="text-[10px] text-zinc-400 hover:text-white font-medium">
-                                  Select
-                                </span>
-                              )}
-                            </div>
-                          </div>
-                        );
-                      })}
-                    </div>
-                  </div>
-                )}
-
-                {/* 3. Custom Model on Disk (Optional) */}
-                {customModelPath && (
-                  <div
-                    onClick={() => {
-                      onSave({ customModelPath, whisperModel });
-                      showGlobalToast(`Active model set to custom (${binaryStatus.customModelDetectedName || 'model'})`, 'success');
-                    }}
-                    className="p-3 rounded-xl border bg-purple-600/10 border-purple-500/50 shadow-md ring-1 ring-purple-500/30 space-y-1.5 cursor-pointer"
-                  >
-                    <div className="flex items-center justify-between">
-                      <div className="flex items-center space-x-2.5 truncate">
-                        <div className="w-4 h-4 rounded-full border-2 border-purple-400 bg-purple-500 flex items-center justify-center shrink-0">
-                          <div className="w-1.5 h-1.5 rounded-full bg-white" />
-                        </div>
-                        <div className="truncate">
-                          <span className="text-xs font-mono font-bold text-white block truncate">
-                            Custom: {binaryStatus.customModelDetectedName || customModelPath.replace(/^.*[\\/]/, '')}
-                          </span>
-                          <span className="text-[10px] font-mono text-zinc-400 block truncate" title={customModelPath}>
-                            {customModelPath}
-                          </span>
-                        </div>
-                      </div>
-
-                      <div className="shrink-0 flex items-center space-x-2 ml-2" onClick={(e) => e.stopPropagation()}>
-                        <span className="px-1.5 py-0.5 rounded text-[10px] font-semibold bg-purple-500/20 text-purple-300 border border-purple-500/30">
-                          Active
-                        </span>
-                        <button
-                          type="button"
-                          onClick={handleResetToDefaultModel}
-                          className="text-[11px] text-red-400 hover:text-red-300 underline font-medium transition-colors"
-                        >
-                          Remove
-                        </button>
-                      </div>
-                    </div>
-                  </div>
-                )}
-              </div>
-
-              {/* Custom Model Folder Picker Section */}
-              <div className="pt-1">
-                <button
-                  type="button"
-                  onClick={() => setShowCustomModelSection(!showCustomModelSection)}
-                  className="text-[11px] text-zinc-400 hover:text-zinc-200 underline font-medium transition-colors flex items-center space-x-1"
-                >
-                  <span>{showCustomModelSection ? 'Hide Custom Model Browser' : '+ Use Custom Model from Folder...'}</span>
-                </button>
-
-                {showCustomModelSection && (
-                  <div className="mt-2 p-3 rounded-xl bg-zinc-900/60 border border-white/5 space-y-2.5 animate-in fade-in duration-150">
-                    <p className="text-[11px] text-zinc-400 leading-relaxed">
-                      Select any folder containing a Faster-Whisper model on disk. Kaiko will auto-detect its name and set it as your active model.
-                    </p>
-
+                <div className="shrink-0 flex items-center space-x-2">
+                  {downloadingModel === 'large-v3-turbo' ? (
                     <div className="flex items-center space-x-2">
-                      <input
-                        type="text"
-                        readOnly
-                        placeholder="Select custom model directory..."
-                        value={customModelPath}
-                        className="flex-1 px-3 py-1.5 rounded-lg bg-zinc-950 border border-white/10 text-xs font-mono text-zinc-200 truncate focus:outline-none"
-                      />
+                      <span className="text-xs font-mono text-indigo-300 font-semibold animate-pulse">
+                        {downloadProgress.percent !== null ? `${downloadProgress.percent}%` : 'Downloading...'}
+                      </span>
                       <button
                         type="button"
-                        onClick={handleBrowseCustomModel}
-                        className="flex items-center space-x-1.5 px-3 py-1.5 rounded-lg bg-zinc-800 hover:bg-zinc-700 text-zinc-200 border border-white/10 text-xs font-medium transition-colors shrink-0"
+                        onClick={handleCancelDownloadModel}
+                        className="px-2.5 py-1 rounded-lg text-xs bg-red-500/20 hover:bg-red-500/30 text-red-300 border border-red-500/30 transition-colors"
                       >
-                        <FolderOpen className="w-3.5 h-3.5 text-zinc-400" />
-                        <span>Browse Folder</span>
+                        Cancel
                       </button>
                     </div>
+                  ) : binaryStatus.isDefaultModelInstalled || binaryStatus.modelExists ? (
+                    <span className="inline-flex items-center space-x-1.5 px-3 py-1.5 rounded-lg bg-emerald-500/10 border border-emerald-500/20 text-emerald-400 text-xs font-semibold">
+                      <CheckCircle2 className="w-3.5 h-3.5 text-emerald-400" />
+                      <span>Installed</span>
+                    </span>
+                  ) : (
+                    <button
+                      type="button"
+                      disabled={!binaryStatus.whisperExists || Boolean(downloadingModel)}
+                      onClick={handleDownloadModel}
+                      className="inline-flex items-center space-x-1.5 px-3.5 py-1.5 rounded-lg bg-indigo-600 hover:bg-indigo-500 disabled:opacity-50 text-white font-medium text-xs shadow transition-colors"
+                    >
+                      <Download className="w-3.5 h-3.5" />
+                      <span>Download Model</span>
+                    </button>
+                  )}
+                </div>
+              </div>
+
+              {/* Progress bar during download */}
+              {downloadingModel === 'large-v3-turbo' && (
+                <div className="space-y-1.5 animate-in fade-in">
+                  <div className="w-full bg-zinc-800 rounded-full h-1.5 overflow-hidden">
+                    <div
+                      className="bg-indigo-500 h-full transition-[width] duration-150 ease-out"
+                      style={{ width: `${downloadProgress.percent || 5}%` }}
+                    />
                   </div>
-                )}
+                  {downloadProgress.text && (
+                    <p className="text-[10px] font-mono text-zinc-400 truncate">
+                      {downloadProgress.text}
+                    </p>
+                  )}
+                </div>
+              )}
+
+              {/* Custom Model Folder (Optional) */}
+              <div className="space-y-1.5 pt-1">
+                <label className="text-xs font-medium text-zinc-300 flex items-center justify-between">
+                  <span>Custom Model Folder (Optional)</span>
+                  {customModelPath && (
+                    <span className="text-[10px] text-zinc-400 font-mono">
+                      {binaryStatus.customModelDetectedName || 'Custom'}
+                    </span>
+                  )}
+                </label>
+                <div className="flex items-center space-x-2">
+                  <input
+                    type="text"
+                    readOnly
+                    placeholder="Specify folder if using a separate downloaded model..."
+                    value={customModelPath}
+                    className="flex-1 px-3 py-2 rounded-lg bg-zinc-900 border border-white/10 text-xs font-mono text-zinc-200 truncate focus:outline-none"
+                  />
+                  <button
+                    type="button"
+                    onClick={handleBrowseCustomModel}
+                    className="flex items-center space-x-1.5 px-3 py-2 rounded-lg bg-zinc-800 hover:bg-zinc-700 text-zinc-200 border border-white/10 text-xs font-medium transition-colors shrink-0"
+                  >
+                    <FolderOpen className="w-3.5 h-3.5 text-zinc-400" />
+                    <span>Browse</span>
+                  </button>
+                  {customModelPath && (
+                    <button
+                      type="button"
+                      onClick={handleResetToDefaultModel}
+                      className="px-2.5 py-2 rounded-lg bg-red-500/10 hover:bg-red-500/20 text-red-400 text-xs font-medium border border-red-500/20 transition-colors shrink-0"
+                      title="Clear custom model"
+                    >
+                      Clear
+                    </button>
+                  )}
+                </div>
               </div>
             </div>
               </div>
