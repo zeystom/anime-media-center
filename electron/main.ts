@@ -643,6 +643,9 @@ function setupIpcHandlers() {
       child.on('close', (code) => {
         cleanup();
         if (code === 0) {
+          if (mainWindow && !mainWindow.isDestroyed()) {
+            mainWindow.webContents.send('whisper:model-download-complete', { modelName: targetModel, success: true });
+          }
           try {
             if (Notification.isSupported()) {
               new Notification({

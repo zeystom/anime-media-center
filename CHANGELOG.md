@@ -1,19 +1,28 @@
 # Changelog
 
-## 1.0.7 — Built-in FFmpeg, streamlined Whisper onboarding & default large-v3-turbo model downloader
+## 1.0.7 — Built-in FFmpeg, Visual Whisper Studio, Model Presets & Notification Center Integration
 
 - **Built-in FFmpeg Media Engine:**
   - FFmpeg is now automatically fetched and bundled directly into the installer/application package (`bin/ffmpeg.exe`), enabling out-of-the-box support for 10-bit HEVC, MKV audio/subtitle extraction, and audio transcoding without requiring manual user downloads or external tools.
   - Eliminated redundant FFmpeg setup clutter from Settings; auto-detection seamlessly locates the bundled binary across installed, portable, or project paths.
-- **Streamlined Whisper Studio & Onboarding:**
-  - Removed startup binary warning banner in general library navigation so users can enjoy playback immediately without unnecessary notifications.
-  - Setup guidance is surfaced contextualized within the Whisper Studio tab only when subtitle generation is needed.
-  - Added clean, direct links to Faster-Whisper-XXL releases and Subtitle Edit for zero-friction engine setup.
-- **Focused Model Selection with Default large-v3-turbo:**
-  - Standardized on the state-of-the-art `large-v3-turbo` model by default (delivering near large-v3 accuracy at up to 8x faster inference speed).
-  - Replaced confusing multi-model selection grids with a focused default card featuring a 1-click in-app downloader with real-time download progress tracking and cancellation.
-  - Added seamless custom model support: users can select custom model folders from disk with auto-detection of model names and instant fallback to default.
+- **Visual Anime Selection in Whisper Studio:**
+  - Replaced raw disk path picking with interactive visual anime cards from the local library, complete with poster art, episode counts, and status indicators.
+  - Added a responsive modal library browser with search and filter tabs (All, Needs Subtitles, Has AI Subs).
+  - Consolidated redundant model badges down to a single clean badge in the header.
+- **Preset Model Quick-Download & Local Model Detection:**
+  - Fast 1-click in-app downloading for `large-v3-turbo` (Default & Recommended), `medium` (Mid-Range GPU), and `small` (CPU / Low VRAM) with real-time download percentage progress.
+  - Added "Other Locally Installed Models" section displaying any locally detected models (such as `tiny` from Subtitle Edit or HuggingFace cache) with one-click selection.
+  - Added download guard: prevents subtitle generation errors while a model is in the middle of downloading, with live status pills on the model buttons.
+- **Comprehensive Subtitle Detection & Dynamic Character Tracking:**
+  - Accurately detects and distinguishes embedded dubtitles (SDH), embedded stylized signs/dialogue, and external SRTs alongside AI-generated subtitles.
+  - Dynamic character name detection via AniList updates automatically whenever a different anime is chosen.
+  - Locked anime selection and episode controls while subtitles are actively generating to prevent race conditions.
+- **Audio & Notification Polish:**
+  - Suppressed the sharp system beep / console bell emitted by `faster-whisper-xxl` upon completion by passing `--beep_off`.
+  - Full Notification Center integration: completed episodes and finished batches route into the app's persistent Notifications drawer (`Navbar` bell) with direct "Whisper Studio" action navigation.
+  - Simultaneous non-intrusive in-app toasts and quiet native Windows desktop notifications.
 - **UI & Localization Polish:**
+  - Cleaned up AI section in Settings with collapsible details and eliminated text clutter.
   - Verified 100% English UI consistency across all settings, buttons, dialogs, badges, and notifications.
 
 ## 1.0.6 — Intelligent P2P release ranking, quality-first filtering & UI polish

@@ -114,6 +114,7 @@ export const Navbar: React.FC<NavbarProps> = ({
   const notificationTone = (item: AppNotification) => item.tone || (
     item.kind === 'airing' ? (item.finalEpisode ? 'purple' : 'green')
       : item.kind === 'follow' ? 'green'
+      : item.kind === 'whisper' ? 'purple'
         : item.state === 'error' ? 'red'
           : item.state === 'completed' ? 'green' : 'cyan'
   );
@@ -365,7 +366,17 @@ export const Navbar: React.FC<NavbarProps> = ({
                 ) : notifications.map((item) => (
                   <div key={item.id} className={`mb-1 flex gap-3 rounded-xl border p-3 ${toneClasses[notificationTone(item)]?.card || 'border-white/[0.06]'} ${item.read ? 'bg-transparent' : 'bg-white/[0.04]'}`}>
                     <div className={`mt-0.5 flex h-8 w-8 shrink-0 items-center justify-center rounded-lg ${toneClasses[notificationTone(item)]?.icon || 'bg-zinc-400/10 text-zinc-300'}`}>
-                      {item.kind === 'airing' ? <Radio className="h-4 w-4" /> : item.kind === 'follow' ? <Bell className="h-4 w-4" /> : item.state === 'error' ? <AlertTriangle className="h-4 w-4" /> : <Download className="h-4 w-4" />}
+                      {item.kind === 'airing' ? (
+                        <Radio className="h-4 w-4" />
+                      ) : item.kind === 'follow' ? (
+                        <Bell className="h-4 w-4" />
+                      ) : item.kind === 'whisper' ? (
+                        <Sparkles className="h-4 w-4" />
+                      ) : item.state === 'error' ? (
+                        <AlertTriangle className="h-4 w-4" />
+                      ) : (
+                        <Download className="h-4 w-4" />
+                      )}
                     </div>
                     <div className="min-w-0 flex-1">
                       <p className="text-xs font-semibold text-zinc-100">{item.title}</p>
@@ -384,6 +395,8 @@ export const Navbar: React.FC<NavbarProps> = ({
                           <button type="button" onClick={() => { onNotificationRead(item.id); onNotificationAction(item); setNotificationsOpen(false); }} className={`rounded-lg px-2.5 py-1 text-[10px] font-bold transition ${item.finalEpisode ? 'bg-violet-400/10 text-violet-200 hover:bg-violet-400/20' : 'bg-emerald-400/10 text-emerald-200 hover:bg-emerald-400/20'}`}>Find EP {item.episode}</button>
                         ) : item.kind === 'download' ? (
                           <button type="button" onClick={() => { onNotificationRead(item.id); onNotificationAction(item); setNotificationsOpen(false); }} className="rounded-lg bg-emerald-400/10 px-2.5 py-1 text-[10px] font-bold text-emerald-200 transition hover:bg-emerald-400/20">Downloads</button>
+                        ) : item.kind === 'whisper' ? (
+                          <button type="button" onClick={() => { onNotificationRead(item.id); onNotificationAction(item); setNotificationsOpen(false); }} className="rounded-lg bg-indigo-400/10 px-2.5 py-1 text-[10px] font-bold text-indigo-200 transition hover:bg-indigo-400/20">Whisper Studio</button>
                         ) : item.kind !== 'follow' && !item.read ? (
                           <button type="button" onClick={() => onNotificationRead(item.id)} className="text-[10px] font-semibold text-zinc-500 hover:text-zinc-200">Mark read</button>
                         ) : null}

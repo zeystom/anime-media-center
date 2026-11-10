@@ -65,6 +65,7 @@ export interface ElectronAPI {
   cancelWhisperModelDownload?: () => Promise<boolean>;
   onModelDownloadProgress?: (callback: (data: { modelName: string; percent: number | null; text: string }) => void) => () => void;
   onWhisperModelDownloadStatus?: (callback: (data: { isDownloading: boolean; modelName: string | null }) => void) => () => void;
+  onWhisperModelDownloadComplete?: (callback: (data: { modelName: string; success: boolean }) => void) => () => void;
   onWhisperEpisodeDone?: (callback: (data: { fileName: string; filePath: string; index: number; total: number }) => void) => () => void;
   autoDetectBinaries: () => Promise<{ ffmpegPath: string; whisperPath: string }>;
   openExternalUrl: (url: string) => Promise<boolean>;

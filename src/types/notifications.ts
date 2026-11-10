@@ -3,7 +3,7 @@ export type NotificationTone = 'green' | 'purple' | 'blue' | 'red' | 'amber' | '
 
 export interface AppNotification {
   id: string
-  kind: 'download' | 'airing' | 'follow'
+  kind: 'download' | 'airing' | 'follow' | 'whisper'
   title: string
   message: string
   createdAt: number

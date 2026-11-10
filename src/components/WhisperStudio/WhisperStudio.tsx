@@ -475,22 +475,10 @@ export const WhisperStudio: React.FC<WhisperStudioProps> = ({
       setIsProcessing(true);
     });
 
-    const unsubDone = window.electronAPI.onWhisperDone((result) => {
+    const unsubDone = window.electronAPI.onWhisperDone(() => {
       setIsProcessing(false);
       setCurrentFile('');
       onRefreshLibrary();
-      if (result && result.completedCount > 0) {
-        showGlobalToast(
-          `Batch complete: Subtitles generated for ${result.completedCount} episode${result.completedCount === 1 ? '' : 's'}!`,
-          'success',
-          5000
-        );
-      }
-    });
-
-    const unsubEpDone = window.electronAPI?.onWhisperEpisodeDone?.((data) => {
-      const displayTitle = cleanEpisodeTitle(data.fileName).displayTitle || data.fileName;
-      showGlobalToast(`Subtitles ready for "${displayTitle}" (${data.index + 1}/${data.total})`, 'success', 3500);
     });
 
     const unsubModelStatus = window.electronAPI?.onWhisperModelDownloadStatus?.((data) => {
@@ -509,7 +497,6 @@ export const WhisperStudio: React.FC<WhisperStudioProps> = ({
       unsubLog();
       unsubProgress();
       unsubDone();
-      if (unsubEpDone) unsubEpDone();
       if (unsubModelStatus) unsubModelStatus();
       if (unsubModelProg) unsubModelProg();
     };

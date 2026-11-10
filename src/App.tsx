@@ -7,7 +7,7 @@ import { CompletionPrompt, CompletionPromptData } from './components/common/Comp
 import { AnimeFolder, Episode, AppSettings, PlaybackProgress, UserLibraryEntry, P2pState, UpdateInfoPayload } from './types';
 import { useLocalStatus } from './hooks/useLocalStatus';
 import { ToastProvider, showGlobalToast } from './components/Toast';
-import { getPathBasename, getPathDirname, formatFileSize, cleanSeriesTitle } from './utils/format';
+import { getPathBasename, getPathDirname, formatFileSize, cleanSeriesTitle, cleanEpisodeTitle } from './utils/format';
 import { toRailItem } from './hooks/useCatalog';
 import type { RailItem } from './hooks/useCatalog';
 import type { AppNotification, FavouriteAnime, FollowedAnime } from './types/notifications';
@@ -647,15 +647,44 @@ export const App: React.FC = () => {
       setIsWhisperActive(true);
     });
 
-    const unsubDone = window.electronAPI.onWhisperDone(() => {
+    const unsubDone = window.electronAPI.onWhisperDone((result) => {
       setIsWhisperActive(false);
+      if (result && result.completedCount > 0) {
+        addNotification({
+          kind: 'whisper',
+          title: 'Whisper Batch Completed',
+          message: `Generated AI subtitles for ${result.completedCount} episode${result.completedCount === 1 ? '' : 's'}.`,
+          tone: 'green',
+        });
+      }
+    });
+
+    const unsubEpisodeDone = window.electronAPI?.onWhisperEpisodeDone?.((data) => {
+      const displayTitle = cleanEpisodeTitle(data.fileName).displayTitle || data.fileName;
+      addNotification({
+        kind: 'whisper',
+        title: 'Episode Subtitles Ready',
+        message: `Generated subtitles for "${displayTitle}" (${data.index + 1}/${data.total})`,
+        tone: 'purple',
+      });
+    });
+
+    const unsubModelComplete = window.electronAPI?.onWhisperModelDownloadComplete?.((data) => {
+      addNotification({
+        kind: 'whisper',
+        title: 'Model Ready',
+        message: `Whisper model "${data.modelName}" is downloaded and ready to use.`,
+        tone: 'green',
+      });
     });
 
     return () => {
       unsubProgress();
       unsubDone();
+      if (unsubEpisodeDone) unsubEpisodeDone();
+      if (unsubModelComplete) unsubModelComplete();
     };
-  }, [loadInitialData]);
+  }, [loadInitialData, addNotification]);
 
   // Refresh Library with concurrent scan protection
   const handleRefreshLibrary = useCallback(async () => {
@@ -1221,6 +1250,9 @@ export const App: React.FC = () => {
               } else if (item.kind === 'download') {
                 setDetailSource(null);
                 setCurrentTab('downloads');
+              } else if (item.kind === 'whisper') {
+                setDetailSource(null);
+                setCurrentTab('whisper');
               }
             }}
             isWhisperActive={isWhisperActive}

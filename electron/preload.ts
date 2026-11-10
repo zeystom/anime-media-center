@@ -30,6 +30,11 @@ contextBridge.exposeInMainWorld('electronAPI', {
     ipcRenderer.on('whisper:model-download-status', handler);
     return () => ipcRenderer.removeListener('whisper:model-download-status', handler);
   },
+  onWhisperModelDownloadComplete: (callback: (data: { modelName: string; success: boolean }) => void) => {
+    const handler = (_event: Electron.IpcRendererEvent, data: { modelName: string; success: boolean }) => callback(data);
+    ipcRenderer.on('whisper:model-download-complete', handler);
+    return () => ipcRenderer.removeListener('whisper:model-download-complete', handler);
+  },
   autoDetectBinaries: () => ipcRenderer.invoke('auto-detect-binaries'),
   openExternalUrl: (url: string) => ipcRenderer.invoke('open-external-url', url),
   getLibraryCache: (rootPath?: string | string[]) => ipcRenderer.invoke('get-library-cache', rootPath),

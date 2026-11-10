@@ -21,7 +21,7 @@ Kaiko organizes anime files already on your drives, finds catalog information, a
 - **Anime discovery:** browse seasonal, popular, and trending titles; filter by genre, format, status, score, and age rating. Age ratings use a bundled index and refresh in the background every three days.
 - **Personal tracking:** favourite any title, follow airing anime for new-episode alerts, manage a watchlist, and filter your local collection by favourites, followed titles, or currently watching.
 - **Subtitles:** play common external and embedded subtitle formats, customize their appearance, and show dialogue and styled signs together where available.
-- **Whisper Studio:** generate subtitles locally with Faster-Whisper. Kaiko defaults to the high-accuracy `large-v3-turbo` model with 1-click in-app downloading and real-time progress, or auto-detects any custom model selected from disk.
+- **Whisper Studio:** visual anime selection from library, automated character name detection via AniList, and subtitle generation locally with Faster-Whisper. Choose between 1-click in-app model downloads (including default high-accuracy `large-v3-turbo`, `medium`, and `small`) or any custom locally detected model. Subtitle progress seamlessly routes to toasts, native desktop notifications, and the in-app notification center.
 - **Optional P2P:** the integrated WebTorrent engine is off by default and requires explicit consent. It searches RSS/Torznab feeds that you configure. Kaiko does not bundle indexer accounts, feeds, torrent files, or anime video files.
 - **Windows integration:** themed app icon, installer, desktop and Start menu shortcuts, and a small launcher.
 
@@ -35,7 +35,7 @@ For a magnet link that contains no tracker address, the engine appends a small l
 
 Download the `Kaiko Setup 1.0.7.exe` installer from the project’s GitHub Releases page, run it, and choose an install folder. The installer creates shortcuts. Updates can also be installed directly from within the app via **Settings → Application Updates** or the startup update prompt. During a normal uninstall, Kaiko asks separately whether to remove saved settings, anime lists, and watch history, and whether to clear the contents of configured media-library folders. Both choices default to **No**; deleting library contents requires a second confirmation listing the folders. Clearing a library folder removes every file inside it, not just Kaiko downloads, and leaves the folder itself in place. Silent uninstall and app upgrades preserve personal data. The first launch may take a little longer while Windows initializes Electron.
 
-FFmpeg is bundled directly into Kaiko for seamless playback and extraction out-of-the-box. Faster-Whisper can be detected automatically from Subtitle Edit or downloaded via the standalone release from GitHub and configured in **Settings**. The default `large-v3-turbo` AI model can be downloaded in 1-click directly from the Settings menu.
+FFmpeg is bundled directly into Kaiko for seamless playback and extraction out-of-the-box. Faster-Whisper can be detected automatically from Subtitle Edit or downloaded via the standalone release from GitHub and configured in **Settings**. Recommended AI models (`large-v3-turbo`, `medium`, `small`) can be downloaded in 1-click directly from the Settings menu.
 
 ## Build from source
 
