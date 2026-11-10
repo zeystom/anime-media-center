@@ -1,11 +1,18 @@
 import fs from 'node:fs';
 import path from 'node:path';
 import { execSync } from 'node:child_process';
+import { fileURLToPath } from 'node:url';
 
+const __filename = fileURLToPath(import.meta.url);
+const __dirname = path.dirname(__filename);
+const rootDir = path.resolve(__dirname, '..');
+
+const pkg = JSON.parse(fs.readFileSync(path.join(rootDir, 'package.json'), 'utf8'));
+const VERSION = pkg.version || '1.0.9';
 const OWNER = 'zeystom';
 const REPO = 'anime-media-center';
-const TAG = 'v1.0.8';
-const RELEASE_NAME = 'Kaiko 1.0.8';
+const TAG = `v${VERSION}`;
+const RELEASE_NAME = `Kaiko ${VERSION}`;
 
 function getGitHubToken() {
   if (process.env.GH_TOKEN) return process.env.GH_TOKEN;
@@ -31,31 +38,32 @@ if (!token) {
   process.exit(1);
 }
 
-const RELEASE_BODY = `## What's new in v1.0.8
+const RELEASE_BODY = `## What's new in v${VERSION}
 
-### ⚡ In-App Faster-Whisper-XXL Engine Downloader & Auto-Setup
-- **1-Click Engine Installation:** Download and configure the standalone \`Faster-Whisper-XXL\` speech-to-text engine directly inside Kaiko without ever having to visit GitHub, manually download \`.7z\` archives, or extract files with third-party tools.
-- **Real-Time Download Progress:** Built-in streaming download engine with live percentage, transfer speed (MB/s), received/total size, and cancellation support.
-- **Native Archive Extraction:** Uses Windows native \`tar.exe\` / \`libarchive\` to automatically extract the engine into persistent application storage (\`AppData/Roaming/Kaiko/bin/faster-whisper-xxl\`).
-- **Immediate Setup:** Accessible from both **Settings → Whisper** and the **Whisper Studio** setup banner with immediate auto-detection upon completion.
+### 🗜️ Bundled 7-Zip Engine & Zero-Dependency Archive Decompression
+- **Decompression Fix for Windows 10 & 11:** Fixed decompression failure (exit code 1) on Windows 10 and systems where Windows \`tar.exe\` lacked native \`.7z\` / \`libarchive\` format support.
+- **Bundled 7-Zip Binaries:** Included lightweight, standalone 7-Zip binaries (\`bin/7z.exe\` and \`bin/7z.dll\`) directly within Kaiko's application resources (\`resources/bin/\`), guaranteeing 100% extraction reliability on all Windows versions with zero external tools or dependencies required.
+- **Extractor Cascade:** Added smart extraction tool resolution that prioritizes the bundled 7-Zip engine with fallbacks to system 7-Zip and Windows \`tar.exe\`.
+- **Live Extraction Progress:** Streamed real-time unpacking percentage (\`-bsp1\`) directly to the UI during Faster-Whisper-XXL engine installation, along with detailed stdout and stderr diagnostics.
+
+### ⚡ Faster-Whisper-XXL In-App Downloader
+- **1-Click Engine Installation:** Direct streaming download of the standalone \`Faster-Whisper-XXL\` speech-to-text engine within Kaiko without manual archive extraction.
+- **Real-Time Speed & Progress:** Live MB/s speed, downloaded/total megabytes, percentage, and cancellation support.
 
 ### 🎨 Rich Release Notes Formatting in Updater
-- **GitHub & Markdown Rendering:** The update notification modal now parses and renders formatted HTML / Markdown release notes directly from GitHub releases instead of showing raw markup tags.
-- **Styled Typography & Dark Theme:** Headings, bulleted lists, bold text, inline code badges, and code blocks styled to match Kaiko's dark purple aesthetic.
-- **Secure DOM Sanitization:** Comprehensive sanitization prevents XSS vulnerabilities and malicious script execution.
-- **Safe External Link Handling:** Release note links securely launch in your system's default browser rather than navigating the app window.
-- **Expanded Scroll View:** Increased container height with smooth scrolling for easier reading of release highlights.
+- **GitHub & Markdown Rendering:** The update notification modal parses and renders formatted HTML / Markdown release notes directly from GitHub releases with dark theme styling.
+- **Safe DOM Sanitization & External Links:** Comprehensive sanitization prevents script injection, and release note links safely launch in your default system browser.
 
 ---
 ### Assets included:
-- \`Kaiko-Setup-1.0.8.exe\` — Windows NSIS installer
+- \`Kaiko-Setup-${VERSION}.exe\` — Windows NSIS installer
 - \`latest.yml\` — Auto-update metadata for electron-updater
 `;
 
 const ASSETS = [
-  { name: 'Kaiko-Setup-1.0.8.exe', file: 'dist-build/Kaiko-Setup-1.0.8.exe', type: 'application/octet-stream' },
-  { name: 'Kaiko-Setup-1.0.8.exe.blockmap', file: 'dist-build/Kaiko Setup 1.0.8.exe.blockmap', type: 'application/octet-stream' },
-  { name: 'Kaiko.Setup.1.0.8.exe', file: 'dist-build/Kaiko.Setup.1.0.8.exe', type: 'application/octet-stream' },
+  { name: `Kaiko-Setup-${VERSION}.exe`, file: `dist-build/Kaiko-Setup-${VERSION}.exe`, type: 'application/octet-stream' },
+  { name: `Kaiko-Setup-${VERSION}.exe.blockmap`, file: `dist-build/Kaiko Setup ${VERSION}.exe.blockmap`, type: 'application/octet-stream' },
+  { name: `Kaiko.Setup.${VERSION}.exe`, file: `dist-build/Kaiko.Setup.${VERSION}.exe`, type: 'application/octet-stream' },
   { name: 'latest.yml', file: 'dist-build/latest.yml', type: 'text/yaml' }
 ];
 

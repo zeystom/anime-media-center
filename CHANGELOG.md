@@ -1,5 +1,13 @@
 # Changelog
 
+## 1.0.9 — Bundled 7-Zip Engine & Zero-Dependency Archive Decompression
+
+- **Bundled 7-Zip Decompression Engine (`7z.exe` + `7z.dll`):**
+  - Resolved Faster-Whisper-XXL engine decompression failure (exit code 1) on Windows 10 and systems where Windows `tar.exe` lacks native `.7z` / `libarchive` format support.
+  - Bundled lightweight, standalone 7-Zip decompression binaries (`bin/7z.exe` and `bin/7z.dll`) directly into Kaiko's application resources (`resources/bin/`), guaranteeing 100% extraction reliability on all Windows versions with zero external dependencies.
+  - Added smart extraction cascade prioritizing the bundled 7-Zip engine, with graceful fallbacks to user-installed 7-Zip and system `tar.exe`.
+  - Added real-time extraction progress percentage streaming (`-bsp1`) directly in the UI during unpacking with detailed stdout and stderr error reporting.
+
 ## 1.0.8 — In-App Faster-Whisper-XXL Engine Downloader & Rich Release Notes Formatting
 
 - **In-App Faster-Whisper-XXL Engine Downloader & Auto-Setup:**

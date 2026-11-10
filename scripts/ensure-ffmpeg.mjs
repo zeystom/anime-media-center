@@ -8,7 +8,30 @@ const __dirname = path.dirname(__filename);
 const rootDir = path.resolve(__dirname, '..');
 const binDir = path.join(rootDir, 'bin');
 const ffmpegExe = path.join(binDir, 'ffmpeg.exe');
+const sevenZipExe = path.join(binDir, '7z.exe');
+const sevenZipDll = path.join(binDir, '7z.dll');
 
+if (!fs.existsSync(binDir)) {
+  fs.mkdirSync(binDir, { recursive: true });
+}
+
+// 1. Ensure 7z.exe and 7z.dll for archive decompression
+if (!fs.existsSync(sevenZipExe) || !fs.existsSync(sevenZipDll)) {
+  const vendorDir = path.join(rootDir, 'node_modules', 'electron-winstaller', 'vendor');
+  const sourceExe = path.join(vendorDir, '7z-x64.exe');
+  const sourceDll = path.join(vendorDir, '7z-x64.dll');
+  if (fs.existsSync(sourceExe) && fs.existsSync(sourceDll)) {
+    fs.copyFileSync(sourceExe, sevenZipExe);
+    fs.copyFileSync(sourceDll, sevenZipDll);
+    console.log('[ensure-binaries] Successfully placed 7z.exe and 7z.dll in', binDir);
+  } else {
+    console.warn('[ensure-binaries] 7z vendor binaries not found in node_modules/electron-winstaller/vendor');
+  }
+} else {
+  console.log('[ensure-binaries] 7z.exe and 7z.dll are present at', binDir);
+}
+
+// 2. Ensure ffmpeg.exe
 if (fs.existsSync(ffmpegExe)) {
   console.log('[ensure-ffmpeg] ffmpeg.exe is present at', ffmpegExe);
   process.exit(0);

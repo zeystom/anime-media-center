@@ -31,7 +31,7 @@ export function getAppVersion(): string {
       if (v) return v;
     }
   } catch {}
-  return '1.0.8';
+  return '1.0.9';
 }
 
 let updaterState: UpdaterState = {

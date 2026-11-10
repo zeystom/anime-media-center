@@ -1,6 +1,6 @@
 {
   "name": "anime-media-center",
-  "version": "1.0.8",
+  "version": "1.0.9",
   "description": "Kaiko — your anime library and home media center",
   "type": "module",
   "main": "dist-electron/bootstrap.js",
@@ -27,6 +27,14 @@
       {
         "from": "bin/ffmpeg.exe",
         "to": "bin/ffmpeg.exe"
+      },
+      {
+        "from": "bin/7z.exe",
+        "to": "bin/7z.exe"
+      },
+      {
+        "from": "bin/7z.dll",
+        "to": "bin/7z.dll"
       }
     ],
     "publish": [

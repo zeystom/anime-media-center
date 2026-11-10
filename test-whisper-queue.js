@@ -225,6 +225,21 @@ async function runTests() {
   assert(whisperStudioSrc.includes('onWhisperEngineDownloadProgress'), 'WhisperStudio must listen to onWhisperEngineDownloadProgress');
   console.log('✓ WhisperStudio correctly includes in-app engine installer banner.');
 
+  // 6. Bundled 7-Zip & Archive Extractor Invariants
+  console.log('Testing 7-Zip bundling and resolveArchiveExtractor invariants...');
+  const downloaderSrc = fs.readFileSync(path.join(__dirname, 'electron', 'whisperEngineDownloader.ts'), 'utf-8');
+  assert(downloaderSrc.includes('resolveArchiveExtractor'), 'whisperEngineDownloader must include resolveArchiveExtractor');
+  assert(downloaderSrc.includes('resourcesPath'), 'resolveArchiveExtractor must check process.resourcesPath');
+  assert(downloaderSrc.includes('7z.exe'), 'resolveArchiveExtractor must prioritize 7z.exe');
+
+  const pkgJson = JSON.parse(fs.readFileSync(path.join(__dirname, 'package.json'), 'utf-8'));
+  const extraRes = pkgJson.build && pkgJson.build.extraResources ? pkgJson.build.extraResources : [];
+  assert(extraRes.some((r) => r.from === 'bin/7z.exe'), 'package.json extraResources must bundle bin/7z.exe');
+  assert(extraRes.some((r) => r.from === 'bin/7z.dll'), 'package.json extraResources must bundle bin/7z.dll');
+  assert(fs.existsSync(path.join(__dirname, 'bin', '7z.exe')), 'bin/7z.exe must exist in project bin directory');
+  assert(fs.existsSync(path.join(__dirname, 'bin', '7z.dll')), 'bin/7z.dll must exist in project bin directory');
+  console.log('✓ 7-Zip binaries and extraResources invariants verified.');
+
   console.log('\nAll Faster-Whisper-XXL in-app downloader tests passed successfully!');
 }
 

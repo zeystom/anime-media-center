@@ -172,7 +172,7 @@ export const SettingsModal: React.FC<SettingsModalProps> = ({
   const providerImportRef = useRef<HTMLInputElement>(null);
 
   // Application update state
-  const [appVersion, setAppVersion] = useState<string>('1.0.8');
+  const [appVersion, setAppVersion] = useState<string>('1.0.9');
   const [checkForUpdatesOnStartup, setCheckForUpdatesOnStartup] = useState<boolean>(
     settings.checkForUpdatesOnStartup ?? true
   );
@@ -181,7 +181,7 @@ export const SettingsModal: React.FC<SettingsModalProps> = ({
   );
   const [updaterState, setUpdaterState] = useState<UpdaterState>({
     status: 'idle',
-    currentVersion: '1.0.8',
+    currentVersion: '1.0.9',
     updateInfo: null,
     downloadProgress: null,
     error: null,

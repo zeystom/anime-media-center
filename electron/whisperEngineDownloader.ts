@@ -3,7 +3,7 @@ import fs from 'fs';
 import path from 'path';
 import { spawn, ChildProcess } from 'child_process';
 import { resolveUserDataPath } from './userDataPath';
-import { storage, autoDetectWhisperPath, findExecutableInDir } from './storage';
+import { storage, autoDetectWhisperPath, findExecutableInDir, findExecutableInPath } from './storage';
 
 export interface WhisperEngineDownloadProgress {
   isDownloading: boolean;
@@ -103,6 +103,93 @@ async function resolveReleaseAsset(): Promise<{ url: string; size: number }> {
     url: DEFAULT_FALLBACK_URL,
     size: DEFAULT_EXPECTED_SIZE,
   };
+}
+
+export interface ArchiveExtractor {
+  type: '7z' | 'tar';
+  path: string;
+  cwd: string;
+}
+
+/**
+ * Resolves the best available extraction tool for .7z archives.
+ * Prioritizes the bundled 7z.exe (with 7z.dll), falling back to system 7-Zip, then tar.exe.
+ */
+export function resolveArchiveExtractor(): ArchiveExtractor | null {
+  // 1. Packaged application resources (bundled in NSIS installer: resources/bin/7z.exe)
+  if (process.resourcesPath) {
+    const bundled7z = path.join(process.resourcesPath, 'bin', '7z.exe');
+    if (fs.existsSync(bundled7z)) {
+      return { type: '7z', path: bundled7z, cwd: path.dirname(bundled7z) };
+    }
+  }
+
+  // 2. Application path (development mode / unpacked)
+  if (app && typeof app.getAppPath === 'function') {
+    try {
+      const app7z = path.join(app.getAppPath(), 'bin', '7z.exe');
+      if (fs.existsSync(app7z)) {
+        return { type: '7z', path: app7z, cwd: path.dirname(app7z) };
+      }
+    } catch {}
+  }
+
+  // 3. Local repo bin directory
+  const local7z = path.join(process.cwd(), 'bin', '7z.exe');
+  if (fs.existsSync(local7z)) {
+    return { type: '7z', path: local7z, cwd: path.dirname(local7z) };
+  }
+
+  // 4. Executable sibling directory
+  try {
+    const execDir = path.dirname(process.execPath);
+    const execBin7z = path.join(execDir, 'bin', '7z.exe');
+    if (fs.existsSync(execBin7z)) {
+      return { type: '7z', path: execBin7z, cwd: path.dirname(execBin7z) };
+    }
+    const execRes7z = path.join(execDir, 'resources', 'bin', '7z.exe');
+    if (fs.existsSync(execRes7z)) {
+      return { type: '7z', path: execRes7z, cwd: path.dirname(execRes7z) };
+    }
+  } catch {}
+
+  // 5. Node modules vendor (development fallback)
+  const vendor7z = path.join(process.cwd(), 'node_modules', 'electron-winstaller', 'vendor', '7z-x64.exe');
+  if (fs.existsSync(vendor7z)) {
+    return { type: '7z', path: vendor7z, cwd: path.dirname(vendor7z) };
+  }
+
+  // 6. User installed 7-Zip in standard system paths
+  const systemCandidates = [
+    'C:\\Program Files\\7-Zip\\7z.exe',
+    'C:\\Program Files (x86)\\7-Zip\\7z.exe',
+  ];
+  for (const cand of systemCandidates) {
+    if (fs.existsSync(cand)) {
+      return { type: '7z', path: cand, cwd: path.dirname(cand) };
+    }
+  }
+
+  const fromPath7z = findExecutableInPath('7z.exe');
+  if (fromPath7z) {
+    return { type: '7z', path: fromPath7z, cwd: path.dirname(fromPath7z) };
+  }
+  const fromPath7za = findExecutableInPath('7za.exe');
+  if (fromPath7za) {
+    return { type: '7z', path: fromPath7za, cwd: path.dirname(fromPath7za) };
+  }
+
+  // 7. Fallback to Windows built-in tar.exe (for systems where bsdtar supports .7z)
+  const tarFromPath = findExecutableInPath('tar.exe');
+  if (tarFromPath) {
+    return { type: 'tar', path: tarFromPath, cwd: process.cwd() };
+  }
+  const sysTar = 'C:\\Windows\\System32\\tar.exe';
+  if (fs.existsSync(sysTar)) {
+    return { type: 'tar', path: sysTar, cwd: process.cwd() };
+  }
+
+  return null;
 }
 
 /**
@@ -211,23 +298,63 @@ export async function downloadWhisperEngine(): Promise<{ success: boolean; whisp
 
     // Phase: Extracting
     engineState.phase = 'extracting';
-    engineState.percent = 100;
+    engineState.percent = 0;
     engineState.bytesPerSecond = 0;
-    engineState.message = 'Extracting engine files into application storage (this may take 1-2 minutes)...';
+    engineState.message = 'Extracting Faster-Whisper-XXL engine into application storage...';
     broadcastState();
 
     if (!fs.existsSync(targetDir)) {
       fs.mkdirSync(targetDir, { recursive: true });
     }
 
-    // Extract using Windows built-in tar (bsdtar with native libarchive 7z extraction support)
+    const extractor = resolveArchiveExtractor();
+    if (!extractor) {
+      throw new Error('No archive extraction tool found (neither bundled 7z.exe nor system tar.exe available)');
+    }
+
+    console.log(`[WhisperEngineDownloader] Extracting via ${extractor.type} (${extractor.path}) to ${targetDir}`);
+
     await new Promise<void>((resolve, reject) => {
-      const child = spawn('tar.exe', ['-xf', tempArchive, '-C', targetDir], { windowsHide: true });
+      let args: string[] = [];
+      if (extractor.type === '7z') {
+        // -y: assume yes on all queries, -aoa: overwrite all, -bsp1: stream extraction percentage to stdout
+        args = ['x', tempArchive, `-o${targetDir}`, '-y', '-aoa', '-bsp1'];
+      } else {
+        args = ['-xf', tempArchive, '-C', targetDir];
+      }
+
+      const child = spawn(extractor.path, args, {
+        cwd: extractor.cwd,
+        windowsHide: true,
+      });
       activeExtractProcess = child;
+
+      let stdoutText = '';
+      let stderrText = '';
+
+      child.stdout?.on('data', (chunk) => {
+        const text = chunk.toString();
+        stdoutText += text;
+        if (extractor.type === '7z') {
+          const match = text.match(/(\d+)%/);
+          if (match) {
+            const pct = parseInt(match[1], 10);
+            if (!isNaN(pct) && pct >= 0 && pct <= 100) {
+              engineState.percent = pct;
+              engineState.message = `Extracting Faster-Whisper-XXL engine (${pct}%)...`;
+              broadcastState();
+            }
+          }
+        }
+      });
+
+      child.stderr?.on('data', (chunk) => {
+        stderrText += chunk.toString();
+      });
 
       child.on('error', (err) => {
         activeExtractProcess = null;
-        reject(new Error(`Failed to run tar extraction tool: ${err.message}`));
+        reject(new Error(`Failed to run ${extractor.type} extraction tool: ${err.message}`));
       });
 
       child.on('close', (code) => {
@@ -235,7 +362,9 @@ export async function downloadWhisperEngine(): Promise<{ success: boolean; whisp
         if (code === 0) {
           resolve();
         } else {
-          reject(new Error(`Extraction process failed with exit code ${code}`));
+          const detail = (stderrText || stdoutText).trim();
+          const cleanDetail = detail ? detail.replace(/\r?\n/g, ' ').slice(0, 300) : '';
+          reject(new Error(`Extraction process failed with exit code ${code}${cleanDetail ? `: ${cleanDetail}` : ''}`));
         }
       });
     });
