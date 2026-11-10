@@ -25,7 +25,16 @@ import { syncBackupNow, getBackupStatus, detectRestoreState, restoreFromBackup, 
 import { exportWatchlist, importWatchlist, MAL_ONLY_ANILIST_ID_BASE } from './watchlistIO';
 import { initTorrentEngine, engineSetEnabled, engineAddDownload, enginePause, engineResume, engineCancel, engineGetState, engineShutdown } from './torrentEngine';
 import { searchProviders, rankReleasesForEpisode, isExplicitEpisodeMismatch, explicitReleasePart, isExplicitPartMismatch, isExplicitSeasonMismatch, getEpisodeReleaseSizeWarning, sanitizeSearchQuery, extractInfoHash, fetchReleaseDescription, inspectReleaseResults, computeTitleRelevance } from './indexers';
-import { initUpdater, checkForUpdates, downloadUpdate, installUpdate, getUpdaterState, getAppVersion, getStartupUpdateInfo } from './updater';
+import {
+  initUpdater,
+  checkForUpdates,
+  downloadUpdate,
+  installUpdate,
+  getUpdaterState,
+  getAppVersion,
+  getStartupUpdateInfo,
+  fetchReleaseNotesForVersion,
+} from './updater';
 import {
   initWhisperEngineDownloader,
   downloadWhisperEngine,
@@ -1715,6 +1724,9 @@ function setupIpcHandlers() {
   ipcMain.handle('updater:get-state', () => getUpdaterState());
   ipcMain.handle('updater:check', async () => checkForUpdates(false));
   ipcMain.handle('updater:download', async () => downloadUpdate());
+  ipcMain.handle('updater:get-release-notes', async (_event, version?: string) =>
+    fetchReleaseNotesForVersion(version || getAppVersion())
+  );
   ipcMain.handle('updater:install', async () => {
     installUpdate();
     return { success: true };

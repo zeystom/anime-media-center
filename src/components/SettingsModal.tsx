@@ -407,6 +407,23 @@ export const SettingsModal: React.FC<SettingsModalProps> = ({
     }
   };
 
+  const handleOpenWhatsNew = async (versionToView?: string) => {
+    const targetVer = versionToView || updaterState.updateInfo?.version || appVersion;
+    let notes = updaterState.updateInfo?.releaseNotes;
+    if (!notes && window.electronAPI?.getReleaseNotes) {
+      try {
+        notes = await window.electronAPI.getReleaseNotes(targetVer);
+      } catch {}
+    }
+    setManualUpdateInfo({
+      version: targetVer,
+      releaseDate: updaterState.updateInfo?.releaseDate,
+      releaseNotes: notes || null,
+      downloadUrl: updaterState.updateInfo?.downloadUrl,
+    });
+    setManualUpdateModalOpen(true);
+  };
+
   const handleDownloadUpdate = async () => {
     if (window.electronAPI?.downloadUpdate) {
       setUpdaterDisplayPercent(0);
@@ -1806,14 +1823,24 @@ export const SettingsModal: React.FC<SettingsModalProps> = ({
 
                   <div className="flex items-center space-x-2 shrink-0">
                     {updaterState.status === 'available' ? (
-                      <button
-                        type="button"
-                        onClick={handleDownloadUpdate}
-                        className="flex items-center space-x-1.5 px-3.5 py-1.5 rounded-lg bg-purple-600 hover:bg-purple-500 text-white text-xs font-medium transition-all shadow-sm"
-                      >
-                        <Download className="w-3.5 h-3.5" />
-                        <span>Update Now</span>
-                      </button>
+                      <>
+                        <button
+                          type="button"
+                          onClick={() => handleOpenWhatsNew()}
+                          className="flex items-center space-x-1.5 px-3 py-1.5 rounded-lg bg-zinc-800 hover:bg-zinc-700 text-purple-300 border border-purple-500/30 text-xs font-medium transition-all shadow-sm"
+                        >
+                          <Sparkles className="w-3.5 h-3.5" />
+                          <span>What's New</span>
+                        </button>
+                        <button
+                          type="button"
+                          onClick={() => handleOpenWhatsNew()}
+                          className="flex items-center space-x-1.5 px-3.5 py-1.5 rounded-lg bg-purple-600 hover:bg-purple-500 text-white text-xs font-medium transition-all shadow-sm"
+                        >
+                          <Download className="w-3.5 h-3.5" />
+                          <span>Update Now</span>
+                        </button>
+                      </>
                     ) : updaterState.status === 'downloaded' ? (
                       <button
                         type="button"
@@ -1824,15 +1851,26 @@ export const SettingsModal: React.FC<SettingsModalProps> = ({
                         <span>Restart &amp; Install</span>
                       </button>
                     ) : (
-                      <button
-                        type="button"
-                        onClick={handleCheckForUpdates}
-                        disabled={updaterState.status === 'checking' || updaterState.status === 'downloading'}
-                        className="flex items-center space-x-1.5 px-3.5 py-1.5 rounded-lg bg-zinc-800 hover:bg-zinc-700 disabled:opacity-50 text-zinc-100 border border-white/10 text-xs font-medium transition-all shadow-sm"
-                      >
-                        <RefreshCw className={`w-3.5 h-3.5 ${updaterState.status === 'checking' ? 'animate-spin text-purple-400' : ''}`} />
-                        <span>{updaterState.status === 'checking' ? 'Checking...' : 'Check for Updates'}</span>
-                      </button>
+                      <>
+                        <button
+                          type="button"
+                          onClick={() => handleOpenWhatsNew(appVersion)}
+                          className="flex items-center space-x-1.5 px-2.5 py-1.5 rounded-lg bg-zinc-800 hover:bg-zinc-700 text-zinc-300 border border-white/10 text-xs font-medium transition-all shadow-sm"
+                          title="View release notes for this version"
+                        >
+                          <Sparkles className="w-3.5 h-3.5 text-purple-400" />
+                          <span>What's New</span>
+                        </button>
+                        <button
+                          type="button"
+                          onClick={handleCheckForUpdates}
+                          disabled={updaterState.status === 'checking' || updaterState.status === 'downloading'}
+                          className="flex items-center space-x-1.5 px-3.5 py-1.5 rounded-lg bg-zinc-800 hover:bg-zinc-700 disabled:opacity-50 text-zinc-100 border border-white/10 text-xs font-medium transition-all shadow-sm"
+                        >
+                          <RefreshCw className={`w-3.5 h-3.5 ${updaterState.status === 'checking' ? 'animate-spin text-purple-400' : ''}`} />
+                          <span>{updaterState.status === 'checking' ? 'Checking...' : 'Check for Updates'}</span>
+                        </button>
+                      </>
                     )}
                   </div>
                 </div>

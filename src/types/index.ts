@@ -196,6 +196,7 @@ export interface ElectronAPI {
   checkForUpdates: () => Promise<import('../../electron/types').UpdaterState>;
   downloadUpdate: () => Promise<{ success: boolean; error?: string }>;
   installUpdate: () => Promise<{ success: boolean }>;
+  getReleaseNotes: (version?: string) => Promise<string | null>;
   onUpdaterStateChanged: (callback: (state: import('../../electron/types').UpdaterState) => void) => () => void;
   onStartupUpdateAvailable: (callback: (info: import('../../electron/types').UpdateInfoPayload) => void) => () => void;
 }

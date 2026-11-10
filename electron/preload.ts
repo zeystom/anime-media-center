@@ -202,6 +202,7 @@ contextBridge.exposeInMainWorld('electronAPI', {
   checkForUpdates: () => ipcRenderer.invoke('updater:check'),
   downloadUpdate: () => ipcRenderer.invoke('updater:download'),
   installUpdate: () => ipcRenderer.invoke('updater:install'),
+  getReleaseNotes: (version?: string) => ipcRenderer.invoke('updater:get-release-notes', version),
   onUpdaterStateChanged: (callback: (state: import('./types').UpdaterState) => void) => {
     const handler = (_event: any, state: import('./types').UpdaterState) => callback(state);
     ipcRenderer.on('updater:state-changed', handler);

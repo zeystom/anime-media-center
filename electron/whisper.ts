@@ -631,10 +631,6 @@ export class WhisperManager {
           args.push('--initial_prompt', prompt.trim());
         }
 
-        if (opts.hotwords && opts.hotwords.trim()) {
-          args.push('--hotwords', opts.hotwords.trim());
-        }
-
         args.push(
           '--sentence',
           '--max_line_width', maxLineWidth.toString(),

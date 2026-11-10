@@ -84,6 +84,38 @@ export function getAutoUpdater(): AppUpdater | null {
   return autoUpdaterInstance;
 }
 
+export async function fetchReleaseNotesForVersion(version: string): Promise<string | null> {
+  if (!version) return null;
+  try {
+    const cleanTag = version.startsWith('v') ? version : `v${version}`;
+    const resp = await fetch(`https://api.github.com/repos/${GITHUB_OWNER}/${GITHUB_REPO}/releases/tags/${cleanTag}`, {
+      headers: { 'User-Agent': `Kaiko/${updaterState.currentVersion || getAppVersion()}` },
+    });
+    if (resp.ok) {
+      const data: any = await resp.json();
+      if (data && typeof data.body === 'string' && data.body.trim()) {
+        return data.body.trim();
+      }
+    }
+  } catch (e) {
+    console.warn(`[Updater] Failed to fetch release notes for tag ${version}:`, e);
+  }
+
+  // Fallback to latest release if specific tag fails
+  try {
+    const resp = await fetch(`https://api.github.com/repos/${GITHUB_OWNER}/${GITHUB_REPO}/releases/latest`, {
+      headers: { 'User-Agent': `Kaiko/${updaterState.currentVersion || getAppVersion()}` },
+    });
+    if (resp.ok) {
+      const data: any = await resp.json();
+      if (data && typeof data.body === 'string' && data.body.trim()) {
+        return data.body.trim();
+      }
+    }
+  } catch {}
+  return null;
+}
+
 export function initUpdater(mainWindowGetter: () => BrowserWindow | null): void {
   getMainWindowRef = mainWindowGetter;
   updaterState.currentVersion = getAppVersion();
@@ -115,13 +147,17 @@ export function initUpdater(mainWindowGetter: () => BrowserWindow | null): void 
     broadcastState();
   });
 
-  updater.on('update-available', (info: UpdateInfo) => {
+  updater.on('update-available', async (info: UpdateInfo) => {
     const rawNotes = info.releaseNotes;
     let notes: string | null = null;
     if (typeof rawNotes === 'string') {
       notes = rawNotes;
     } else if (Array.isArray(rawNotes)) {
       notes = rawNotes.map((n) => (typeof n === 'string' ? n : n.note || '')).join('\n');
+    }
+
+    if (!notes || !notes.trim()) {
+      notes = await fetchReleaseNotesForVersion(info.version);
     }
 
     const payload: UpdateInfoPayload = {
@@ -237,6 +273,51 @@ export async function checkForUpdates(isStartup = false): Promise<UpdaterState> 
       const res = await updater.checkForUpdates();
       if (res && res.updateInfo) {
         checkedViaAutoUpdater = true;
+        const info = res.updateInfo;
+        const tag = (info.version || '').replace(/^v/i, '').trim();
+        const cur = updaterState.currentVersion;
+
+        let notes: string | null = null;
+        if (typeof info.releaseNotes === 'string') {
+          notes = info.releaseNotes;
+        } else if (Array.isArray(info.releaseNotes)) {
+          notes = info.releaseNotes.map((n: any) => (typeof n === 'string' ? n : n.note || '')).join('\n');
+        }
+
+        if (!notes || !notes.trim()) {
+          notes = await fetchReleaseNotesForVersion(tag);
+        }
+
+        const payload: UpdateInfoPayload = {
+          version: tag,
+          releaseDate: info.releaseDate,
+          releaseNotes: notes,
+        };
+
+        if (tag && isNewerVersion(tag, cur)) {
+          updaterState.status = 'available';
+          updaterState.updateInfo = payload;
+          updaterState.error = null;
+          broadcastState();
+
+          if (isStartupCheckInProgress) {
+            isStartupCheckInProgress = false;
+            broadcastStartupPrompt(payload);
+          } else {
+            const s = storage.getSettings();
+            if (s.autoUpdate !== false) {
+              downloadUpdate().catch((e) => console.warn('[Updater] Auto-download failed:', e));
+            }
+          }
+          return { ...updaterState };
+        } else {
+          updaterState.status = 'not-available';
+          updaterState.updateInfo = tag ? { version: tag, releaseNotes: notes } : null;
+          updaterState.error = null;
+          isStartupCheckInProgress = false;
+          broadcastState();
+          return { ...updaterState };
+        }
       }
     } catch (err: any) {
       console.warn('[Updater] autoUpdater.checkForUpdates() threw, will try fallback:', err?.message || err);

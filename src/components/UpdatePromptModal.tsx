@@ -29,10 +29,27 @@ export const UpdatePromptModal: React.FC<UpdatePromptModalProps> = ({
   const [progress, setProgress] = useState<UpdateProgressPayload | null>(null);
   const [displayPercent, setDisplayPercent] = useState<number>(0);
   const [error, setError] = useState<string | null>(null);
+  const [asyncReleaseNotes, setAsyncReleaseNotes] = useState<string | null>(updateInfo.releaseNotes || null);
+
+  useEffect(() => {
+    if (updateInfo.releaseNotes) {
+      setAsyncReleaseNotes(updateInfo.releaseNotes);
+      return;
+    }
+    if (updateInfo.version && window.electronAPI?.getReleaseNotes) {
+      window.electronAPI
+        .getReleaseNotes(updateInfo.version)
+        .then((notes) => {
+          if (notes) setAsyncReleaseNotes(notes);
+        })
+        .catch(() => {});
+    }
+  }, [updateInfo.version, updateInfo.releaseNotes]);
 
   const formattedReleaseNotes = useMemo(() => {
-    return updateInfo.releaseNotes ? formatReleaseNotesHtml(updateInfo.releaseNotes) : '';
-  }, [updateInfo.releaseNotes]);
+    const raw = asyncReleaseNotes || updateInfo.releaseNotes;
+    return raw ? formatReleaseNotesHtml(raw) : '';
+  }, [asyncReleaseNotes, updateInfo.releaseNotes]);
 
   const handleReleaseNotesClick = (e: React.MouseEvent<HTMLDivElement>) => {
     const anchor = (e.target as HTMLElement).closest('a');
@@ -231,18 +248,22 @@ export const UpdatePromptModal: React.FC<UpdatePromptModalProps> = ({
                 You can update now directly without re-downloading through Git.
               </p>
 
-              {updateInfo.releaseNotes && (
-                <div className="space-y-1.5">
-                  <span className="text-[11px] font-semibold text-zinc-400 uppercase tracking-wider">
-                    What's New:
-                  </span>
+              <div className="space-y-1.5">
+                <span className="text-[11px] font-semibold text-zinc-400 uppercase tracking-wider">
+                  What's New in v{updateInfo.version}:
+                </span>
+                {formattedReleaseNotes ? (
                   <div
                     className="release-notes-content p-3.5 rounded-xl bg-zinc-900/60 border border-white/5 max-h-56 overflow-y-auto text-xs text-zinc-300 font-sans"
                     dangerouslySetInnerHTML={{ __html: formattedReleaseNotes }}
                     onClick={handleReleaseNotesClick}
                   />
-                </div>
-              )}
+                ) : (
+                  <div className="p-3.5 rounded-xl bg-zinc-900/40 border border-white/5 text-xs text-zinc-400 font-sans animate-pulse">
+                    Loading release notes...
+                  </div>
+                )}
+              </div>
 
               {error && (
                 <div className="p-3 rounded-xl bg-red-950/40 border border-red-500/40 text-xs text-red-200">
