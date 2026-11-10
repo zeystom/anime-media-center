@@ -24,6 +24,8 @@ import {
   Rss,
   Languages,
   Sparkles,
+  ChevronDown,
+  ChevronUp,
 } from 'lucide-react';
 import { AppSettings } from '../types';
 import type { P2pState, RssProvider, UpdaterState } from '../types';
@@ -138,6 +140,7 @@ export const SettingsModal: React.FC<SettingsModalProps> = ({
 
   const [isDetecting, setIsDetecting] = useState(false);
   const [showSetupGuide, setShowSetupGuide] = useState(false);
+  const [isWhisperSectionExpanded, setIsWhisperSectionExpanded] = useState(true);
   const [confirmDeleteIndex, setConfirmDeleteIndex] = useState<number | null>(null);
 
   // Data & Backup section state
@@ -1087,25 +1090,53 @@ export const SettingsModal: React.FC<SettingsModalProps> = ({
           {/* Section: Faster-Whisper AI Subtitles Engine */}
           <div className="space-y-3 pt-3 border-t border-white/10">
             <div className="flex items-center justify-between">
-              <div>
-                <label className="text-xs font-semibold text-zinc-200 uppercase tracking-wider flex items-center space-x-2">
-                  <Cpu className="w-3.5 h-3.5 text-zinc-400" />
-                  <span>Faster-Whisper AI Subtitles Engine</span>
-                </label>
-                <p className="text-[11px] text-zinc-400">
-                  Faster-Whisper powers high-speed AI speech-to-text subtitle generation in Whisper Studio.
-                </p>
-              </div>
+              <button
+                type="button"
+                onClick={() => setIsWhisperSectionExpanded(!isWhisperSectionExpanded)}
+                className="flex items-start space-x-2.5 text-left group transition-colors select-none"
+              >
+                <div className="p-1 rounded-lg bg-zinc-800/80 border border-white/5 group-hover:border-white/15 text-zinc-400 group-hover:text-zinc-200 transition-colors mt-0.5">
+                  {isWhisperSectionExpanded ? (
+                    <ChevronUp className="w-4 h-4" />
+                  ) : (
+                    <ChevronDown className="w-4 h-4" />
+                  )}
+                </div>
+                <div>
+                  <div className="flex items-center space-x-2">
+                    <label className="text-xs font-semibold text-zinc-200 uppercase tracking-wider flex items-center space-x-1.5 cursor-pointer">
+                      <Cpu className="w-3.5 h-3.5 text-zinc-400" />
+                      <span>Faster-Whisper AI Subtitles Engine</span>
+                    </label>
+                    {binaryStatus.whisperExists ? (
+                      <span className="inline-flex items-center space-x-1 px-2 py-0.5 rounded text-[10px] font-semibold bg-emerald-500/15 text-emerald-400 border border-emerald-500/25">
+                        <CheckCircle2 className="w-3 h-3" />
+                        <span>Ready</span>
+                      </span>
+                    ) : (
+                      <span className="inline-flex items-center space-x-1 px-2 py-0.5 rounded text-[10px] font-semibold bg-amber-500/15 text-amber-400 border border-amber-500/25">
+                        <AlertCircle className="w-3 h-3" />
+                        <span>Not Configured</span>
+                      </span>
+                    )}
+                  </div>
+                  <p className="text-[11px] text-zinc-400 mt-0.5">
+                    Faster-Whisper powers high-speed AI speech-to-text subtitle generation in Whisper Studio.
+                  </p>
+                </div>
+              </button>
 
               <div className="flex items-center space-x-2 shrink-0">
-                <button
-                  type="button"
-                  onClick={() => setShowSetupGuide(!showSetupGuide)}
-                  className="flex items-center space-x-1 px-2.5 py-1 rounded-lg text-[11px] font-medium text-zinc-400 hover:text-white hover:bg-zinc-800/80 transition-colors"
-                >
-                  <HelpCircle className="w-3.5 h-3.5 text-zinc-400" />
-                  <span>{showSetupGuide ? 'Hide Guide' : 'Setup Guide'}</span>
-                </button>
+                {isWhisperSectionExpanded && (
+                  <button
+                    type="button"
+                    onClick={() => setShowSetupGuide(!showSetupGuide)}
+                    className="flex items-center space-x-1 px-2.5 py-1 rounded-lg text-[11px] font-medium text-zinc-400 hover:text-white hover:bg-zinc-800/80 transition-colors"
+                  >
+                    <HelpCircle className="w-3.5 h-3.5 text-zinc-400" />
+                    <span>{showSetupGuide ? 'Hide Guide' : 'Setup Guide'}</span>
+                  </button>
+                )}
 
                 <button
                   type="button"
@@ -1120,7 +1151,9 @@ export const SettingsModal: React.FC<SettingsModalProps> = ({
               </div>
             </div>
 
-            {/* Setup & Installation Guide Card (Expandable) */}
+            {isWhisperSectionExpanded && (
+              <div className="space-y-3 pt-1 animate-in fade-in duration-150">
+                {/* Setup & Installation Guide Card (Expandable) */}
             {showSetupGuide && (
               <div className="p-3.5 rounded-xl bg-zinc-900/90 border border-white/10 space-y-2.5 animate-in fade-in duration-150">
                 <div className="flex items-center justify-between">
@@ -1249,12 +1282,6 @@ export const SettingsModal: React.FC<SettingsModalProps> = ({
                   <p className="text-[11px] text-zinc-400">
                     Choose which AI model Whisper Studio uses for transcription, or download the default model.
                   </p>
-                </div>
-                <div className="flex items-center space-x-1.5">
-                  <span className="text-[10px] text-zinc-500">Active Model:</span>
-                  <span className="text-xs font-mono font-semibold text-indigo-300 bg-indigo-500/15 border border-indigo-500/30 px-2 py-0.5 rounded-md">
-                    {customModelPath ? (binaryStatus.customModelDetectedName || customModelPath.replace(/^.*[\\/]/, '')) : whisperModel}
-                  </span>
                 </div>
               </div>
 
@@ -1498,6 +1525,8 @@ export const SettingsModal: React.FC<SettingsModalProps> = ({
                 )}
               </div>
             </div>
+              </div>
+            )}
           </div>
 
           {/* Section: Application Updates */}

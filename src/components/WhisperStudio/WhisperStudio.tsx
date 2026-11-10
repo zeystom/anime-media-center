@@ -80,10 +80,14 @@ export const WhisperStudio: React.FC<WhisperStudioProps> = ({
   const refreshModels = React.useCallback(async () => {
     try {
       const s = await window.electronAPI?.getSettings?.();
-      const currentModel = s?.whisperModel || 'large-v3-turbo';
+      const status = await window.electronAPI?.checkBinaries?.();
+      let currentModel = s?.whisperModel || 'large-v3-turbo';
+      if (s?.customModelPath) {
+        const customName = status?.customModelDetectedName || s.customModelPath.replace(/^.*[\\/]/, '');
+        if (customName) currentModel = customName;
+      }
       setActiveModel(currentModel);
 
-      const status = await window.electronAPI?.checkBinaries?.();
       const list = ['large-v3-turbo'];
       if (status?.detectedCustomModels) {
         for (const m of status.detectedCustomModels) {
@@ -1124,7 +1128,7 @@ export const WhisperStudio: React.FC<WhisperStudioProps> = ({
 
             {/* Subtle Milestone 4 Summary Line */}
             <div className="pt-2 text-[11px] text-zinc-500 flex items-center space-x-1.5 flex-wrap">
-              <span className="font-mono text-zinc-400">large-v3-turbo</span>
+              <span className="font-mono text-zinc-400">{activeModel}</span>
               <span>·</span>
               <span>Accurate Timestamps</span>
               <span>·</span>
