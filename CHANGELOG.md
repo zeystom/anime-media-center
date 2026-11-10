@@ -1,5 +1,21 @@
 # Changelog
 
+## 1.0.14 — Manual Update Confirmation, Differential Blockmap Updates & Complete WebTorrent Purge
+
+- **Manual Update Confirmation (No Unwanted Background Downloads):**
+  - Eliminated automatic background update downloads on update discovery. The app now only discovers and presents the update and What's New notes, leaving downloading entirely to the user's explicit action ("Update Now").
+  - Set `autoUpdater.autoDownload = false` and `autoInstallOnAppQuit = false` to guarantee electron-updater never downloads updates unprompted.
+- **Differential Delta Updates (Save Bandwidth & Avoid 160 MB Downloads):**
+  - Prioritized `electron-updater` differential blockmap updates (`NsisUpdater`) for packaged installations. It downloads only modified code chunks (typically 5–15 MB) instead of re-downloading the entire 168 MB installer.
+  - Standardized installer artifact naming to `Kaiko-Setup-${version}.exe` and `.blockmap` in electron-builder configuration, ensuring blockmaps and checksums align seamlessly with GitHub release metadata.
+  - Streaming direct download fallback retains full real-time chunk progress, MB/s speed, and byte counters if differential updates are unavailable.
+  - Fixed stream finish listener in `downloadDirectAsset` so completion promises never stall or miss `'finish'`.
+- **Settings "Update Now" One-Click Download:**
+  - Fixed the "Update Now" button in Settings to directly initiate update downloading and display the live progress bar inline, while "What's New" opens the release highlights modal.
+- **Permanent WebTorrent Memory Purge & Duplicate Torrent Fix:**
+  - Addressed WebTorrent's internal asynchronous array retention by actively pruning and splicing cancelled, errored, or retried torrents directly out of `client.torrents`.
+  - Re-adding any previously deleted or stalled release now reliably starts a clean download without triggering `"Cannot add duplicate torrent"`.
+
 ## 1.0.13 — Live Update Progress Bar, Duplicate Torrent Prevention & Clean WebTorrent Unregister
 
 - **Live Streaming Update Progress Bar:**

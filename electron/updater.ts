@@ -177,12 +177,6 @@ export function initUpdater(mainWindowGetter: () => BrowserWindow | null): void 
     if (isStartupCheckInProgress) {
       isStartupCheckInProgress = false;
       broadcastStartupPrompt(payload);
-    } else {
-      const s = storage.getSettings();
-      if (s.autoUpdate !== false) {
-        // Auto-download in background if enabled
-        downloadUpdate().catch((e) => console.warn('[Updater] Auto-download failed:', e));
-      }
     }
   });
 
@@ -306,11 +300,6 @@ export async function checkForUpdates(isStartup = false): Promise<UpdaterState> 
           if (isStartupCheckInProgress) {
             isStartupCheckInProgress = false;
             broadcastStartupPrompt(payload);
-          } else {
-            const s = storage.getSettings();
-            if (s.autoUpdate !== false) {
-              downloadUpdate().catch((e) => console.warn('[Updater] Auto-download failed:', e));
-            }
           }
           return { ...updaterState };
         } else {
@@ -358,11 +347,6 @@ export async function checkForUpdates(isStartup = false): Promise<UpdaterState> 
           if (isStartupCheckInProgress) {
             isStartupCheckInProgress = false;
             broadcastStartupPrompt(payload);
-          } else {
-            const s = storage.getSettings();
-            if (s.autoUpdate !== false) {
-              downloadUpdate().catch((e) => console.warn('[Updater] Auto-download failed:', e));
-            }
           }
           return { ...updaterState };
         } else {
@@ -457,10 +441,14 @@ async function downloadDirectAsset(url: string, fileName?: string | null, expect
         broadcastState();
       }
     }
-    fileStream.end();
     await new Promise<void>((resolve, reject) => {
-      fileStream.on('finish', () => resolve());
-      fileStream.on('error', reject);
+      if (fileStream.writableFinished) {
+        resolve();
+        return;
+      }
+      fileStream.once('finish', () => resolve());
+      fileStream.once('error', (err: any) => reject(err));
+      fileStream.end();
     });
 
     downloadedInstallerPath = targetPath;
@@ -492,7 +480,19 @@ export async function downloadUpdate(): Promise<{ success: boolean; error?: stri
       updaterState.downloadProgress = { percent: 1, bytesPerSecond: 0, transferred: 0, total: 160 * 1024 * 1024 };
       broadcastState();
 
-      // Ensure downloadUrl and fileName are always populated
+      // 1. In packaged app, try electron-updater differential download first (uses blockmap to download only changed delta)
+      const updater = getAutoUpdater();
+      if (updater && app && app.isPackaged) {
+        try {
+          console.log('[Updater] Attempting differential update via electron-updater...');
+          await updater.downloadUpdate();
+          return { success: true };
+        } catch (diffErr: any) {
+          console.warn('[Updater] Differential download via autoUpdater failed, falling back to full installer:', diffErr?.message || diffErr);
+        }
+      }
+
+      // 2. Direct streaming asset download fallback (downloads full installer with live progress tracking)
       let dlUrl = updaterState.updateInfo?.downloadUrl;
       const targetVersion = updaterState.updateInfo?.version;
       if (!dlUrl && targetVersion) {
@@ -503,25 +503,13 @@ export async function downloadUpdate(): Promise<{ success: boolean; error?: stri
         }
       }
 
-      // 1. Direct streaming asset download guarantees smooth real-time progress updates with speed and transferred bytes
       if (dlUrl) {
         try {
-          console.log('[Updater] Downloading installer with live progress tracking:', dlUrl);
+          console.log('[Updater] Downloading full installer asset with live progress tracking:', dlUrl);
           await downloadDirectAsset(dlUrl, updaterState.updateInfo?.fileName, updaterState.updateInfo?.fileSize);
           return { success: true };
         } catch (directErr: any) {
-          console.warn('[Updater] Direct streaming download failed, falling back to electron-updater:', directErr?.message || directErr);
-        }
-      }
-
-      // 2. Fallback to electron-updater if direct download was not possible
-      const updater = getAutoUpdater();
-      if (updater) {
-        try {
-          await updater.downloadUpdate();
-          return { success: true };
-        } catch (err: any) {
-          console.warn('[Updater] autoUpdater.downloadUpdate() threw:', err?.message || err);
+          console.warn('[Updater] Direct streaming download failed:', directErr?.message || directErr);
         }
       }
 

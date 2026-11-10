@@ -40,12 +40,17 @@ if (!token) {
 
 const RELEASE_BODY = `## What's new in v${VERSION}
 
-### 📊 Real-Time Update Download Progress Bar
-- **Live Progress Tracking:** Manual update downloads in Settings and the update prompt modal now stream chunks with live percentage (1% → 100%), real-time download speed in MB/s, and transferred bytes counter.
-- **Immediate Sync:** Opening the update modal instantly syncs with any in-flight download progress instead of staying stuck at 0%.
+### 🛑 Manual Update Confirmation & No Auto-Downloads
+- **User Confirmation Required:** Updates are now strictly downloaded only when you click **"Update Now"**. The app will no longer begin downloading the installer behind your back while you are viewing "What's New".
+- **Explicit Auto-Update Safeguard:** Configured \`autoUpdater.autoDownload = false\` so electron-updater never initiates downloads without user authorization.
+
+### ⚡ Differential Delta Updates (Save Bandwidth & Avoid 160 MB Downloads)
+- **Differential Blockmap Updates:** Packaged installations now utilize NSIS blockmap delta downloading to fetch only changed code chunks (typically ~5–15 MB) instead of re-downloading the entire 168 MB installer file.
+- **Direct Streaming Fallback:** If differential blockmaps are unavailable, the direct streaming download falls back seamlessly with real-time percentage, MB/s speed, and byte counters.
+- **Settings "Update Now":** Clicking "Update Now" in Settings immediately starts downloading with the inline progress bar.
 
 ### 🚫 Complete Torrent Cleanup & Duplicate Error Fix
-- **No More "Cannot Add Duplicate Torrent":** Deleting or canceling a downloading or connecting torrent now thoroughly terminates and purges the torrent from WebTorrent client memory.
+- **No More "Cannot Add Duplicate Torrent":** Deleting or canceling a downloading or connecting torrent now thoroughly terminates and purges the torrent from WebTorrent client memory and active torrents arrays.
 - **Clean Retries:** Re-adding a previously failed or stalled release automatically purges lingering instances and starts a fresh download.
 
 ---
@@ -56,7 +61,7 @@ const RELEASE_BODY = `## What's new in v${VERSION}
 
 const ASSETS = [
   { name: `Kaiko-Setup-${VERSION}.exe`, file: `dist-build/Kaiko-Setup-${VERSION}.exe`, type: 'application/octet-stream' },
-  { name: `Kaiko-Setup-${VERSION}.exe.blockmap`, file: `dist-build/Kaiko Setup ${VERSION}.exe.blockmap`, type: 'application/octet-stream' },
+  { name: `Kaiko-Setup-${VERSION}.exe.blockmap`, file: `dist-build/Kaiko-Setup-${VERSION}.exe.blockmap`, type: 'application/octet-stream' },
   { name: `Kaiko.Setup.${VERSION}.exe`, file: `dist-build/Kaiko.Setup.${VERSION}.exe`, type: 'application/octet-stream' },
   { name: 'latest.yml', file: 'dist-build/latest.yml', type: 'text/yaml' }
 ];
@@ -130,10 +135,21 @@ async function main() {
   const spaceExe = path.join(rootDir, `dist-build/Kaiko Setup ${VERSION}.exe`);
   const hyphenExe = path.join(rootDir, `dist-build/Kaiko-Setup-${VERSION}.exe`);
   const dotExe = path.join(rootDir, `dist-build/Kaiko.Setup.${VERSION}.exe`);
+  const spaceMap = path.join(rootDir, `dist-build/Kaiko Setup ${VERSION}.exe.blockmap`);
+  const hyphenMap = path.join(rootDir, `dist-build/Kaiko-Setup-${VERSION}.exe.blockmap`);
 
-  if (fs.existsSync(spaceExe)) {
+  if (fs.existsSync(hyphenExe)) {
+    if (!fs.existsSync(spaceExe)) fs.copyFileSync(hyphenExe, spaceExe);
+    if (!fs.existsSync(dotExe)) fs.copyFileSync(hyphenExe, dotExe);
+  } else if (fs.existsSync(spaceExe)) {
     if (!fs.existsSync(hyphenExe)) fs.copyFileSync(spaceExe, hyphenExe);
     if (!fs.existsSync(dotExe)) fs.copyFileSync(spaceExe, dotExe);
+  }
+
+  if (fs.existsSync(hyphenMap) && !fs.existsSync(spaceMap)) {
+    fs.copyFileSync(hyphenMap, spaceMap);
+  } else if (fs.existsSync(spaceMap) && !fs.existsSync(hyphenMap)) {
+    fs.copyFileSync(spaceMap, hyphenMap);
   }
 
   for (const asset of ASSETS) {

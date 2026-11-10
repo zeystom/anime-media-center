@@ -1002,6 +1002,17 @@ async function activateJob(job: InternalJob): Promise<void> {
     // Purge any lingering torrent in WebTorrent client before adding, eliminating "Cannot add duplicate torrent"
     if (c) {
       try {
+        if (typeof (c as any).remove === 'function' && Array.isArray((c as any).torrents)) {
+          const norm = (job.infoHash || '').toLowerCase().trim()
+          for (let i = (c as any).torrents.length - 1; i >= 0; i--) {
+            const t = (c as any).torrents[i]
+            const tHash = (t?.infoHash || '').toLowerCase().trim()
+            if (tHash === norm || t === job.torrent || t === job.connectingTorrent) {
+              try { t.destroy?.(undefined, () => {}) } catch {}
+              try { (c as any).torrents.splice(i, 1) } catch {}
+            }
+          }
+        }
         const existing = (c as any).get?.(job.infoHash)
         if (existing) {
           try { existing.destroy(undefined, () => {}) } catch {}
@@ -1498,6 +1509,17 @@ export async function engineAddDownload(params: { item: ReleaseSearchResult; tit
         try { oldTorrent.destroy(null, () => {}) } catch {}
       }
       if (client) {
+        if (typeof (client as any).remove === 'function' && Array.isArray((client as any).torrents)) {
+          const norm = infoHash.toLowerCase().trim()
+          for (let i = (client as any).torrents.length - 1; i >= 0; i--) {
+            const t = (client as any).torrents[i]
+            const tHash = (t?.infoHash || '').toLowerCase().trim()
+            if (tHash === norm || t === oldTorrent) {
+              try { t.destroy?.(undefined, () => {}) } catch {}
+              try { (client as any).torrents.splice(i, 1) } catch {}
+            }
+          }
+        }
         try { (client as any).get?.(infoHash)?.destroy?.(undefined, () => {}) } catch {}
         try { (client as any).remove?.(infoHash, undefined, () => {}) } catch {}
       }
@@ -1715,6 +1737,16 @@ export async function engineCancel(infoHash: string, removeFiles = false): Promi
   const job = jobs.get(key)
   if (!job) {
     if (client) {
+      if (typeof (client as any).remove === 'function' && Array.isArray((client as any).torrents)) {
+        for (let i = (client as any).torrents.length - 1; i >= 0; i--) {
+          const t = (client as any).torrents[i]
+          const tHash = (t?.infoHash || '').toLowerCase().trim()
+          if (tHash === key || tHash === normHash(infoHash)) {
+            try { t.destroy?.(removeFiles ? { destroyStore: true } : undefined, () => {}) } catch {}
+            try { (client as any).torrents.splice(i, 1) } catch {}
+          }
+        }
+      }
       try { (client as any).get?.(infoHash)?.destroy?.(removeFiles ? { destroyStore: true } : undefined, () => {}) } catch {}
       try { (client as any).get?.(key)?.destroy?.(removeFiles ? { destroyStore: true } : undefined, () => {}) } catch {}
       try { (client as any).remove?.(infoHash, removeFiles ? { destroyStore: true } : undefined, () => {}) } catch {}
@@ -1744,6 +1776,16 @@ export async function engineCancel(infoHash: string, removeFiles = false): Promi
   }
   // Guarantee removal from WebTorrent client so it never throws "Cannot add duplicate torrent"
   if (client) {
+    if (typeof (client as any).remove === 'function' && Array.isArray((client as any).torrents)) {
+      for (let i = (client as any).torrents.length - 1; i >= 0; i--) {
+        const t = (client as any).torrents[i]
+        const tHash = (t?.infoHash || '').toLowerCase().trim()
+        if (tHash === key || tHash === normHash(infoHash) || t === torrent) {
+          try { t.destroy?.(removeFiles ? { destroyStore: true } : undefined, () => {}) } catch {}
+          try { (client as any).torrents.splice(i, 1) } catch {}
+        }
+      }
+    }
     try { (client as any).get?.(infoHash)?.destroy?.(removeFiles ? { destroyStore: true } : undefined, () => {}) } catch {}
     try { (client as any).get?.(key)?.destroy?.(removeFiles ? { destroyStore: true } : undefined, () => {}) } catch {}
     try { (client as any).remove?.(infoHash, removeFiles ? { destroyStore: true } : undefined, () => {}) } catch {}
