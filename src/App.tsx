@@ -121,7 +121,7 @@ export const App: React.FC = () => {
   const [whisperMounted, setWhisperMounted] = useState(false);
   const [settingsMounted, setSettingsMounted] = useState(false);
   const [startupUpdate, setStartupUpdate] = useState<UpdateInfoPayload | null>(null);
-  const [appVersion, setAppVersion] = useState<string>('1.0.10');
+  const [appVersion, setAppVersion] = useState<string>('1.0.11');
 
   useEffect(() => {
     const api = window.electronAPI;
@@ -1030,13 +1030,18 @@ export const App: React.FC = () => {
   };
 
   // Switch episode inside Player
-  const handlePlayerEpisodeChange = (newEpisode: Episode) => {
+  const handlePlayerEpisodeChange = (newEpisode: Episode, startAt?: number) => {
     const parentFolder = folders.find((f) => f.episodes.some((e) => e.filePath === newEpisode.filePath));
     if (parentFolder) {
       setSelectedFolder(parentFolder);
     }
+    const saved = history[newEpisode.filePath];
+    const initial =
+      typeof startAt === 'number' && startAt >= 0
+        ? startAt
+        : (saved?.currentTime && !saved.completed ? saved.currentTime : 0);
+    setPlayerInitialTime(initial);
     setActivePlayerEpisode(newEpisode);
-    setPlayerInitialTime(0);
   };
 
   // Fired by the player once per episode when it crosses the completion

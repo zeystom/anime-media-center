@@ -474,3 +474,60 @@ export async function cancelWhisperEngineDownload(): Promise<boolean> {
 
   return true;
 }
+
+/**
+ * Deletes the installed Faster-Whisper-XXL engine from application storage.
+ */
+export async function deleteWhisperEngine(): Promise<{ success: boolean; error?: string }> {
+  try {
+    if (engineState.isDownloading) {
+      await cancelWhisperEngineDownload();
+    }
+
+    const userData = app ? resolveUserDataPath() : path.join(process.env.APPDATA || '', 'Kaiko');
+    const kaikoDir = path.join(userData, 'bin', 'faster-whisper-xxl');
+
+    if (fs.existsSync(kaikoDir)) {
+      try {
+        fs.rmSync(kaikoDir, { recursive: true, force: true, maxRetries: 3, retryDelay: 100 });
+      } catch (rmErr: any) {
+        console.warn('[WhisperEngineDownloader] Failed to remove kaikoDir:', rmErr);
+      }
+    }
+
+    const settings = storage.getSettings();
+    if (settings.whisperPath) {
+      try {
+        const resolvedWhisper = path.resolve(settings.whisperPath);
+        const resolvedUserData = path.resolve(userData);
+        if (resolvedWhisper.startsWith(resolvedUserData) && fs.existsSync(resolvedWhisper)) {
+          try {
+            fs.rmSync(resolvedWhisper, { recursive: true, force: true, maxRetries: 3, retryDelay: 100 });
+          } catch {}
+        }
+      } catch {}
+    }
+
+    // Always clear saved whisperPath in settings and invalidate detection cache
+    storage.updateSettings({ whisperPath: '' });
+    autoDetectWhisperPath(true);
+
+    engineState = {
+      isDownloading: false,
+      phase: 'idle',
+      percent: 0,
+      transferred: 0,
+      total: 0,
+      bytesPerSecond: 0,
+      error: null,
+      whisperPath: null,
+      message: '',
+    };
+    broadcastState();
+
+    return { success: true };
+  } catch (err: any) {
+    return { success: false, error: err?.message || 'Failed to delete engine' };
+  }
+}
+

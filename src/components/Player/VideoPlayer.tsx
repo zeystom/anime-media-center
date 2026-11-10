@@ -44,7 +44,7 @@ interface VideoPlayerProps {
   onUpdateSettings?: (updated: Partial<AppSettings>) => void;
   history: Record<string, any>;
   onClose: () => void;
-  onEpisodeChange: (episode: Episode) => void;
+  onEpisodeChange: (episode: Episode, startAt?: number) => void;
   onEpisodeCompleted?: (episode: Episode) => void;
 }
 
@@ -723,10 +723,16 @@ export const VideoPlayer: React.FC<VideoPlayerProps> = ({
         }
 
         // Setup Stream URL
+        const savedProgress = history[episode.filePath];
+        const effectiveStartTime =
+          typeof initialTime === 'number' && initialTime > 0
+            ? initialTime
+            : (savedProgress?.currentTime && !savedProgress.completed ? savedProgress.currentTime : 0);
+
         const { url: streamUrl, actualStartTime } = await window.electronAPI.getStreamUrl(
           episode.filePath,
           defaultAudioIdx,
-          initialTime
+          effectiveStartTime
         );
 
         if (!isMounted) return;
@@ -1235,8 +1241,10 @@ export const VideoPlayer: React.FC<VideoPlayerProps> = ({
   const handlePlayNextEpisode = useCallback(() => {
     if (!nextEpisode) return;
     showRipple('forward', `Next: ${formatEpisodeDisplayTitle(nextEpisode)}`);
-    onEpisodeChange(nextEpisode);
-  }, [nextEpisode, onEpisodeChange]);
+    const saved = history[nextEpisode.filePath];
+    const resumeTime = saved?.currentTime && !saved.completed ? saved.currentTime : 0;
+    onEpisodeChange(nextEpisode, resumeTime);
+  }, [nextEpisode, onEpisodeChange, history, showRipple]);
 
   // Contextual Skip Intro / Opening (accurate chapter/subtitle end or informative feedback)
   const handleSkipIntro = useCallback(() => {
@@ -1983,7 +1991,9 @@ export const VideoPlayer: React.FC<VideoPlayerProps> = ({
         autoPlayNext={autoPlayNext}
         onToggleAutoPlayNext={() => setAutoPlayNext((prev) => !prev)}
         onSelectEpisode={(newEp) => {
-          onEpisodeChange(newEp);
+          const saved = history[newEp.filePath];
+          const resumeTime = saved?.currentTime && !saved.completed ? saved.currentTime : 0;
+          onEpisodeChange(newEp, resumeTime);
         }}
         animeTitle={effectiveAnimeTitle}
         folderPath={folderPath}

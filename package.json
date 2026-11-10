@@ -1,6 +1,6 @@
 {
   "name": "anime-media-center",
-  "version": "1.0.10",
+  "version": "1.0.11",
   "description": "Kaiko — your anime library and home media center",
   "type": "module",
   "main": "dist-electron/bootstrap.js",
@@ -9,8 +9,8 @@
     "build": "tsc && vite build",
     "start": "electron .",
     "package": "node scripts/ensure-ffmpeg.mjs && npm run build && electron-builder",
-    "test": "node test-episodes.js && node test-release-parser.js && node test-path-security.js && node test-torrents.js && node test-whisper-queue.js && node test-catalog-cache.js && node test-library-manager.js && node test-watchlist-io.js && node test-indexers.js && node test-torrent-engine.js && node test-milestone1.js && node test-milestone2.js && node test-milestone3.js && node test-milestone4.js && node test-updater.js",
-    "test:all": "node test-episodes.js && node test-release-parser.js && node test-path-security.js && node test-torrents.js && node test-whisper-queue.js && node test-catalog-cache.js && node test-library-manager.js && node test-watchlist-io.js && node test-indexers.js && node test-torrent-engine.js && node test-milestone1.js && node test-milestone1-adversarial.js && node test-milestone2.js && node test-milestone2-adversarial.js && node test-milestone3.js && node test-milestone3-adversarial.js && node test-milestone4.js && node test-milestone4-adversarial.js && node test-milestone4-challenger2.js && node test-updater.js",
+    "test": "node test-episodes.js && node test-release-parser.js && node test-path-security.js && node test-torrents.js && node test-whisper-queue.js && node test-catalog-cache.js && node test-library-manager.js && node test-watchlist-io.js && node test-indexers.js && node test-torrent-engine.js && node test-milestone1.js && node test-milestone2.js && node test-milestone3.js && node test-milestone4.js && node test-updater.js && node test-whisper-prompt.js",
+    "test:all": "node test-episodes.js && node test-release-parser.js && node test-path-security.js && node test-torrents.js && node test-whisper-queue.js && node test-catalog-cache.js && node test-library-manager.js && node test-watchlist-io.js && node test-indexers.js && node test-torrent-engine.js && node test-milestone1.js && node test-milestone1-adversarial.js && node test-milestone2.js && node test-milestone2-adversarial.js && node test-milestone3.js && node test-milestone3-adversarial.js && node test-milestone4.js && node test-milestone4-adversarial.js && node test-milestone4-challenger2.js && node test-updater.js && node test-whisper-prompt.js",
     "update:age-ratings": "node scripts/update-age-ratings.mjs"
   },
   "build": {

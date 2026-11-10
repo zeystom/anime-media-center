@@ -20,6 +20,7 @@ contextBridge.exposeInMainWorld('electronAPI', {
     ipcRenderer.invoke('check-binaries', paths),
   downloadWhisperModel: (modelName: string) => ipcRenderer.invoke('download-whisper-model', modelName),
   cancelWhisperModelDownload: () => ipcRenderer.invoke('cancel-whisper-model-download'),
+  deleteWhisperModel: (modelName: string) => ipcRenderer.invoke('delete-whisper-model', modelName),
   onModelDownloadProgress: (callback: (data: { modelName: string; percent: number | null; text: string }) => void) => {
     const handler = (_event: Electron.IpcRendererEvent, data: { modelName: string; percent: number | null; text: string }) => callback(data);
     ipcRenderer.on('whisper:model-download-progress', handler);
@@ -37,6 +38,7 @@ contextBridge.exposeInMainWorld('electronAPI', {
   },
   downloadWhisperEngine: () => ipcRenderer.invoke('download-whisper-engine'),
   cancelWhisperEngineDownload: () => ipcRenderer.invoke('cancel-whisper-engine-download'),
+  deleteWhisperEngine: () => ipcRenderer.invoke('delete-whisper-engine'),
   getWhisperEngineDownloadStatus: () => ipcRenderer.invoke('get-whisper-engine-download-status'),
   onWhisperEngineDownloadProgress: (callback: (data: any) => void) => {
     const handler = (_event: Electron.IpcRendererEvent, data: any) => callback(data);

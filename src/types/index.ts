@@ -66,8 +66,10 @@ export interface ElectronAPI {
   }>;
   downloadWhisperModel?: (modelName: string) => Promise<{ success: boolean; modelName?: string; error?: string; cancelled?: boolean }>;
   cancelWhisperModelDownload?: () => Promise<boolean>;
+  deleteWhisperModel?: (modelName: string) => Promise<{ success: boolean; modelName?: string; deletedCount?: number; error?: string }>;
   downloadWhisperEngine?: () => Promise<{ success: boolean; whisperPath?: string; error?: string }>;
   cancelWhisperEngineDownload?: () => Promise<boolean>;
+  deleteWhisperEngine?: () => Promise<{ success: boolean; error?: string }>;
   getWhisperEngineDownloadStatus?: () => Promise<WhisperEngineDownloadProgress>;
   onWhisperEngineDownloadProgress?: (callback: (data: WhisperEngineDownloadProgress) => void) => () => void;
   onWhisperEngineDownloadStatus?: (callback: (data: { isDownloading: boolean; phase?: string; error?: string | null }) => void) => () => void;
@@ -100,7 +102,17 @@ export interface ElectronAPI {
   ) => Promise<{ success: boolean; error?: string }>;
   cancelWhisper: () => Promise<void>;
   getWhisperStatus: () => Promise<import('../../electron/types').WhisperStatus>;
-  getAnimeCharacters: (title: string, anilistId?: number) => Promise<{ id: number; title: string; characters: string[] } | null>;
+  getAnimeCharacters: (
+    title: string,
+    anilistId?: number
+  ) => Promise<{
+    id: number;
+    title: string;
+    characters: string[];
+    initialPrompt?: string;
+    hotwords?: string;
+    allCharacterNames?: string[];
+  } | null>;
   onWhisperLog: (callback: (log: import('../../electron/types').WhisperLogMessage) => void) => () => void;
   onWhisperProgress: (callback: (data: {
     currentFile: string;

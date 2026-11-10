@@ -221,6 +221,8 @@ export const WhisperStudio: React.FC<WhisperStudioProps> = ({
 
   // Auto-detected Character Names state
   const [detectedCharacters, setDetectedCharacters] = useState<string[]>([]);
+  const [detectedHotwords, setDetectedHotwords] = useState<string>('');
+  const [detectedAllCharacterNames, setDetectedAllCharacterNames] = useState<string[]>([]);
   const [isDetectingCharacters, setIsDetectingCharacters] = useState<boolean>(false);
   const [detectedAnimeTitle, setDetectedAnimeTitle] = useState<string>('');
   const [userPromptOverride, setUserPromptOverride] = useState<string | null>(null);
@@ -424,6 +426,8 @@ export const WhisperStudio: React.FC<WhisperStudioProps> = ({
   // Auto-detect character names via AniList API when anime folder changes
   useEffect(() => {
     setDetectedCharacters([]);
+    setDetectedHotwords('');
+    setDetectedAllCharacterNames([]);
     setDetectedAnimeTitle('');
     setUserPromptOverride(null);
 
@@ -445,11 +449,19 @@ export const WhisperStudio: React.FC<WhisperStudioProps> = ({
         if (res && res.characters && res.characters.length > 0) {
           setDetectedCharacters(res.characters);
           setDetectedAnimeTitle(res.title || animeTitle);
+          if (res.hotwords) setDetectedHotwords(res.hotwords);
+          if (res.allCharacterNames) setDetectedAllCharacterNames(res.allCharacterNames);
         } else {
           setDetectedCharacters([]);
+          setDetectedHotwords('');
+          setDetectedAllCharacterNames([]);
         }
       } catch {
-        if (isMounted) setDetectedCharacters([]);
+        if (isMounted) {
+          setDetectedCharacters([]);
+          setDetectedHotwords('');
+          setDetectedAllCharacterNames([]);
+        }
       } finally {
         if (isMounted) setIsDetectingCharacters(false);
       }
@@ -581,18 +593,11 @@ export const WhisperStudio: React.FC<WhisperStudioProps> = ({
   // Computes active initial prompt automatically without user friction
   const activePrompt = useMemo(() => {
     if (userPromptOverride !== null) return userPromptOverride;
-    const suffix =
-      qualityOption === 'bgm'
-        ? 'Anime dialogue, spoken conversation over music, no singing, no lyrics.'
-        : qualityOption === 'fast'
-        ? 'Clean dialogue and conversations.'
-        : 'Anime dialogue, conversational speech, clean subtitles.';
-
     if (detectedCharacters.length > 0) {
-      return `${detectedCharacters.join(', ')}. ${suffix}`;
+      return `Dialogue from an anime episode. Characters: ${detectedCharacters.join(', ')}.`;
     }
-    return suffix;
-  }, [userPromptOverride, qualityOption, detectedCharacters]);
+    return 'Dialogue from an anime episode.';
+  }, [userPromptOverride, detectedCharacters]);
 
   const isCustomQuality = useMemo(() => {
     if (qualityOption === 'custom') return true;
@@ -621,6 +626,13 @@ export const WhisperStudio: React.FC<WhisperStudioProps> = ({
       compressionRatioThreshold: antiStutter ? 2.8 : 2.4,
       noSpeechThreshold: vadSensitivity === 'high' ? 0.7 : 0.6,
       initialPrompt: activePrompt,
+      hotwords: detectedHotwords || undefined,
+      characterNamesForCorrection:
+        detectedAllCharacterNames.length > 0
+          ? detectedAllCharacterNames
+          : detectedCharacters.length > 0
+          ? detectedCharacters
+          : undefined,
       maxLineWidth: 46,
       maxLineCount: 2,
       maxCommaCent: preventSingleWords ? 100 : 70,
@@ -1300,14 +1312,24 @@ export const WhisperStudio: React.FC<WhisperStudioProps> = ({
                               type="button"
                               disabled={isProcessing}
                               onClick={() => {
-                                const tokens = activePrompt.split(',').map((t) => t.trim()).filter(Boolean);
-                                const idx = tokens.findIndex((t) => t.toLowerCase() === char.toLowerCase());
-                                if (idx !== -1) {
-                                  tokens.splice(idx, 1);
+                                let currentNames: string[] = [];
+                                const charMatch = activePrompt.match(/Characters:\s*([^.]+)/i);
+                                if (charMatch) {
+                                  currentNames = charMatch[1].split(',').map((t) => t.trim()).filter(Boolean);
                                 } else {
-                                  tokens.unshift(char);
+                                  currentNames = activePrompt.split(',').map((t) => t.trim()).filter(Boolean);
                                 }
-                                setUserPromptOverride(tokens.join(', '));
+                                const idx = currentNames.findIndex((t) => t.toLowerCase() === char.toLowerCase());
+                                if (idx !== -1) {
+                                  currentNames.splice(idx, 1);
+                                } else {
+                                  currentNames.push(char);
+                                }
+                                if (currentNames.length > 0) {
+                                  setUserPromptOverride(`Dialogue from an anime episode. Characters: ${currentNames.join(', ')}.`);
+                                } else {
+                                  setUserPromptOverride('Dialogue from an anime episode.');
+                                }
                               }}
                               className={`px-2 py-0.5 rounded text-[10px] font-medium border transition-colors ${
                                 isInPrompt

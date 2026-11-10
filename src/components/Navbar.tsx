@@ -1,5 +1,5 @@
 import React, { useEffect, useRef, useState } from 'react';
-import { House, Compass, Film, CalendarDays, HardDrive, Sparkles, Settings as SettingsIcon, Terminal, ShieldCheck, ShieldAlert, Search, Bell, CheckCheck, Trash2, Download, Radio, History, AlertTriangle, Minus, Square, Copy, X } from 'lucide-react';
+import { House, Compass, Film, CalendarDays, HardDrive, Sparkles, Settings as SettingsIcon, ShieldCheck, ShieldAlert, Search, Bell, CheckCheck, Trash2, Download, Radio, History, AlertTriangle, Minus, Square, Copy, X } from 'lucide-react';
 import { useCatalogSearch, type RailItem } from '../hooks/useCatalog';
 import type { AppNotification } from '../types/notifications';
 
@@ -311,16 +311,6 @@ export const Navbar: React.FC<NavbarProps> = ({
 
       {/* Right Action Icons */}
       <div className="relative z-10 flex items-center space-x-3">
-        {isWhisperActive && (
-          <div
-            onClick={() => onSelectTab('whisper')}
-            className="hidden sm:flex items-center space-x-2 px-2.5 py-1 rounded-full bg-indigo-500/10 border border-indigo-500/30 text-indigo-300 text-xs font-medium cursor-pointer hover:bg-indigo-500/20 transition-colors"
-          >
-            <Terminal className="w-3.5 h-3.5 animate-pulse" />
-            <span>Transcribing in background</span>
-          </div>
-        )}
-
         {p2pIndicator?.enabled && !downloadsActive && p2pIndicator.status !== 'Idle' && (
           <div
             title={p2pIndicator.status}

@@ -1,5 +1,41 @@
 # Changelog
 
+## 1.0.11 — In-App Model & Engine Deletion, Windows Long Path Fix, Subtitle Single-Word Merging & Smart Prompt Overhaul
+
+- **Subtitle Single-Word Merge & 2-Line Formatting Overhaul:**
+  - Resolved an issue where merging isolated single words created an awkward 3rd subtitle line or messy capitalization.
+  - Enforced a strict maximum of 2 lines per subtitle cue (`max_line_count: 2`) with smart mid-sentence line balancing (`maxLineWidth: 44`); merges that would overflow into a 3rd row are automatically rejected.
+  - Implemented smart casing: lowercases isolated words when merged mid-sentence (e.g. `"I think"` + `"So."` -> `"I think so."`), while properly preserving proper nouns, character names, and pronouns (`"I"`, `"I'm"`).
+  - Implemented start-of-cue uppercasing and subsequent word lowercasing when prepending (e.g. `"because"` + `"He was tired."` -> `"Because he was tired."`).
+- **Whisper Initial Prompt & Hotwords Generator Overhaul:**
+  - Reworked character prompt generation from the ground up to follow natural speech priors: `"Dialogue from an anime episode. Characters: {names}."`.
+  - Removed prompt leak artifacts (`"Anime dialogue, conversational speech, clean subtitles"`).
+  - Enforced strict token budget (<= 180 tokens) with token-aware character ranking.
+  - Prioritized `MAIN` characters before `SUPPORTING`, completely skipping `BACKGROUND` and episodic extras.
+  - Normalized API character data: stripped voice tags, titles, honorifics, and parentheses; fixed Japanese surname-first ordering (`"Yeager Eren"` -> `"Eren Yeager"`); and filtered out non-name descriptions (`"Kyon no Imouto"`, `"X's sister"`, `"Townsperson A"`).
+  - Length trimming: full names for top 3 characters, spoken/first names for remaining characters.
+  - Ambiguous common English word names (`"Light"`, `"Ray"`, `"May"`, `"Rose"`, etc.) pushed to the end of candidate lists to prevent Whisper substitutions.
+  - Added `--hotwords` support passing top character names as a single comma-separated string to Faster-Whisper.
+- **RapidFuzz-Style Fuzzy Character Name Post-Processing & Hallucination Filtering:**
+  - Integrated conservative whole-word fuzzy spelling correction (Levenshtein distance <= 2, ratio >= 86%) for character names using the unconstrained full cast list.
+  - English dictionary stoplist protection: common English words are strictly immune from name replacement.
+  - Automatic silence and music loop hallucination filtering (`"Thank you for watching"`, `"Subtitles by..."`, repetitive loops).
+- **In-Player Episode Drawer Resume Progress Fix:**
+  - Resolved an issue where selecting an episode from the in-player side drawer or next episode switcher always restarted from 0:00 instead of resuming from the user's saved watch progress.
+- **Windows Long Path (MAX_PATH 260 Chars) Whisper Generation Fix:**
+  - Fixed `FileNotFoundError: [Errno 2] No such file or directory` when Faster-Whisper finishes transcribing episodes with long filenames and release group tags (e.g. `Even.the.Student.Council.Has.Its.Holes.S01E01...`).
+  - Eliminated redundant 100+ character duplicated subfolder names in `AppData/Roaming/Kaiko/whisper_tmp/<runId>/<long_file_id>/<long_file_id>.srt`, replacing them with a compact hash-based directory in system temp (`Temp/kaiko_w/<run>_<hash>`), reducing path length by over 130 characters and preventing Windows MAX_PATH failures.
+  - Added fallback subtitle file resolution in staging directories to ensure output files are reliably captured regardless of minor naming sanitizations.
+- **In-App Engine & Model Deletion:**
+  - Added full capability to delete installed AI Whisper models directly from within Settings with 1-click confirmation, cleanly freeing disk space from HuggingFace cache and local model directories.
+  - Added dedicated **Delete Engine** control in Settings to remove the installed Faster-Whisper-XXL standalone engine from application storage whenever needed.
+- **Simplified Model Management in Settings:**
+  - Removed confusing "Active" / "Inactive" model selection badges, radio circles, and "Select" action buttons from Settings.
+  - Model selection is handled directly on-the-fly in **Whisper Studio**, while Settings now purely provides clean **Download** and **Delete** actions for each model.
+- **Settings & Navbar De-clutter:**
+  - Removed verbose descriptive subtitles under section headers in Settings (Media Folders, Title Language, Application Updates, Data & Backup, and P2P & Downloads) for a sleek, compact settings layout.
+  - Removed the redundant "Transcribing in background" badge from the top navigation bar, preserving clean UI aesthetics while keeping the active generation indicator on the Whisper Studio tab.
+
 ## 1.0.10 — Model Download Polish, Robust Cancellation, Whisper Auto-Select & Manual Update Prompt
 
 - **Model Download Progress & TQDM Output Sanitization:**

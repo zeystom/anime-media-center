@@ -317,6 +317,7 @@ export interface WhisperOptions {
   compressionRatioThreshold?: number;
   noSpeechThreshold?: number;
   initialPrompt?: string;
+  hotwords?: string;
   temperature?: number;
   maxLineWidth?: number;
   maxLineCount?: number;
@@ -326,6 +327,8 @@ export interface WhisperOptions {
   channelMode?: 'auto' | 'fc';
   speechNorm?: boolean;
   selectedFilePaths?: string[];
+  hallucinationList?: string[];
+  characterNamesForCorrection?: string[];
 }
 
 export interface WhisperQueueItem {

@@ -1,8 +1,9 @@
 import { spawn, ChildProcess } from 'child_process';
 import fs from 'fs';
 import path from 'path';
+import crypto from 'crypto';
+import os from 'os';
 import { app, BrowserWindow, Notification } from 'electron';
-import { resolveUserDataPath } from './userDataPath';
 import { WhisperLogMessage, WhisperQueueItem, WhisperStatus, WhisperOptions, WhisperLiveCue } from './types';
 import { storage } from './storage';
 import { probeMkv, invalidateProbeCache } from './ffmpeg';
@@ -47,25 +48,38 @@ export function cleanJapaneseArtifacts(text: string): string {
   return text.replace(/[\u3040-\u309f\u30a0-\u30ff\u4e00-\u9faf]/gu, '').replace(/\s{2,}/g, ' ').trim();
 }
 
+import {
+  correctCharacterSpellings,
+  filterHallucinations,
+  mergeIsolatedSingleWords,
+  CueBlock,
+} from './whisperPostProcess';
+
+export interface CleanSubtitleOptions {
+  characterNames?: string[];
+  hallucinationList?: string[];
+  maxLineWidth?: number;
+  maxLineCount?: number;
+  onCorrection?: (orig: string, repl: string, similarity: number, segmentId?: number | string) => void;
+}
+
 /**
  * Normalizes and cleans generated SRT subtitles:
- * 1. Merges isolated single-word fragments caused by mid-sentence punctuation/pauses.
- * 2. Removes empty cues or trailing lonely hyphens/music note artifacts.
- * 3. Formats sequential 1-based subtitle indices and standardized timecodes.
- * 4. Filters out Japanese lyrics / kanji / kana when transcribing English subtitles.
+ * 1. Filters out Japanese lyrics / kanji / kana when transcribing English subtitles.
+ * 2. Filters out silence/music hallucinations ("Thank you for watching", "Subtitles by...").
+ * 3. Merges isolated single-word fragments without ever creating a 3rd line or wonky capitalization.
+ * 4. Corrects near-miss character name spellings using RapidFuzz-style fuzzy matching.
+ * 5. Formats sequential 1-based subtitle indices and standardized timecodes.
  */
-export function cleanSubtitleSrt(srtContent: string, isEnglish: boolean = true): string {
+export function cleanSubtitleSrt(
+  srtContent: string,
+  isEnglish: boolean = true,
+  options?: CleanSubtitleOptions
+): string {
   if (!srtContent || typeof srtContent !== 'string') return srtContent;
 
   try {
     const rawBlocks = srtContent.replace(/\r\n/g, '\n').split(/\n\s*\n/);
-    interface CueBlock {
-      start: string;
-      end: string;
-      startMs: number;
-      endMs: number;
-      text: string;
-    }
 
     function timecodeToMs(tc: string): number {
       const match = tc.match(/(?:(\d+):)?(\d+):(\d+)[,.](\d+)/);
@@ -77,7 +91,7 @@ export function cleanSubtitleSrt(srtContent: string, isEnglish: boolean = true):
       return h * 3600000 + m * 60000 + s * 1000 + ms;
     }
 
-    const cues: CueBlock[] = [];
+    let cues: CueBlock[] = [];
 
     for (const raw of rawBlocks) {
       const trimmed = raw.trim();
@@ -120,49 +134,36 @@ export function cleanSubtitleSrt(srtContent: string, isEnglish: boolean = true):
       });
     }
 
-    if (cues.length <= 1) return srtContent;
+    if (cues.length === 0) return srtContent;
 
-    // Merge isolated 1-word orphan fragments
-    const merged: CueBlock[] = [];
-    for (let i = 0; i < cues.length; i++) {
-      const cur = cues[i];
-      const words = cur.text.trim().split(/\s+/);
-      const isSingleWord = words.length === 1 && cur.text.length < 15;
+    // 1. Filter known silence/music hallucinations
+    cues = filterHallucinations(cues, options?.hallucinationList);
 
-      if (isSingleWord && i + 1 < cues.length) {
-        const next = cues[i + 1];
-        const gap = next.startMs - cur.endMs;
-        const curEndsSentence = /[.!?…]$/.test(cur.text.trim());
-
-        // Prepend orphan word if next cue is very close (< 600ms) and cur does not end sentence
-        if (gap >= 0 && gap < 600 && !curEndsSentence) {
-          next.text = `${cur.text} ${next.text}`;
-          next.start = cur.start;
-          next.startMs = cur.startMs;
-          continue;
-        }
-      }
-
-      if (isSingleWord && merged.length > 0) {
-        const prev = merged[merged.length - 1];
-        const gap = cur.startMs - prev.endMs;
-        const prevEndsSentence = /[.!?…]$/.test(prev.text.trim());
-
-        // Append orphan word if close to previous cue (< 400ms) and prev does not end sentence
-        if (gap >= 0 && gap < 400 && !prevEndsSentence) {
-          prev.text = `${prev.text} ${cur.text}`;
-          prev.end = cur.end;
-          prev.endMs = cur.endMs;
-          continue;
-        }
-      }
-
-      merged.push(cur);
+    // 2. Fuzzy spelling correction for anime character names (runs before merge to establish proper names)
+    if (options?.characterNames && options.characterNames.length > 0) {
+      cues = cues.map((cue, idx) => {
+        const correctedText = correctCharacterSpellings(
+          cue.text,
+          options.characterNames!,
+          idx + 1,
+          options.onCorrection
+        );
+        return {
+          ...cue,
+          text: correctedText,
+        };
+      });
     }
 
+    // 3. Merge isolated single-word fragments (strictly capped to max 2 lines with proper casing)
+    const maxLineWidth = options?.maxLineWidth ?? 44;
+    const maxLineCount = options?.maxLineCount ?? 2;
+    cues = mergeIsolatedSingleWords(cues, maxLineWidth, maxLineCount, options?.characterNames);
+
+    // 4. Format sequential 1-based subtitle indices and clean output
     let out = '';
-    for (let i = 0; i < merged.length; i++) {
-      const c = merged[i];
+    for (let i = 0; i < cues.length; i++) {
+      const c = cues[i];
       out += `${i + 1}\n${c.start} --> ${c.end}\n${c.text}\n\n`;
     }
 
@@ -534,8 +535,12 @@ export class WhisperManager {
     mainWindow: BrowserWindow,
     isTrackSurround = false
   ): Promise<void> {
-    const fileId = path.parse(item.filePath).name.replace(/[^a-zA-Z0-9_-]/g, '_');
-    const tmpDir = path.join(resolveUserDataPath(), 'whisper_tmp', runId, fileId);
+    // Use short hash-based temp directory to prevent Windows MAX_PATH (260 char) errors
+    // with long anime filenames and release group tags.
+    const fileHash = crypto.createHash('md5').update(item.filePath).digest('hex').slice(0, 8);
+    const shortRunId = (runId || '').slice(-6) || 'def';
+    const baseTemp = app ? app.getPath('temp') : os.tmpdir();
+    const tmpDir = path.join(baseTemp, 'kaiko_w', `${shortRunId}_${fileHash}`);
 
     fs.mkdirSync(tmpDir, { recursive: true });
 
@@ -565,7 +570,7 @@ export class WhisperManager {
         let defaultVadPad = 900;
         let defaultNoSpeech = 0.6;
         let defaultCompressionRatio = 2.8;
-        let defaultPrompt = 'Anime dialogue, conversational speech, clean subtitles.';
+        let defaultPrompt = 'Dialogue from an anime episode.';
         let defaultSpeechNorm = false;
 
         if (preset === 'bgm') {
@@ -574,7 +579,7 @@ export class WhisperManager {
           defaultVadPad = 1000;
           defaultNoSpeech = 0.7;
           defaultCompressionRatio = 2.8;
-          defaultPrompt = 'Anime dialogue, spoken conversation over music, no singing, no lyrics.';
+          defaultPrompt = 'Dialogue from an anime episode.';
           defaultSpeechNorm = true;
         } else if (preset === 'fast') {
           defaultVadThreshold = 0.45;
@@ -582,7 +587,7 @@ export class WhisperManager {
           defaultVadPad = 900;
           defaultNoSpeech = 0.6;
           defaultCompressionRatio = 2.4;
-          defaultPrompt = 'Clean dialogue and conversations.';
+          defaultPrompt = 'Dialogue from an anime episode.';
         }
 
         const settings = storage.getSettings();
@@ -624,6 +629,10 @@ export class WhisperManager {
 
         if (prompt && prompt.trim() && prompt !== 'None') {
           args.push('--initial_prompt', prompt.trim());
+        }
+
+        if (opts.hotwords && opts.hotwords.trim()) {
+          args.push('--hotwords', opts.hotwords.trim());
         }
 
         args.push(
@@ -702,17 +711,39 @@ export class WhisperManager {
       });
 
       // Verification: ensure output .srt exists and has size > 0
-      const producedSrt = path.join(tmpDir, `${baseName}.srt`);
+      let producedSrt = path.join(tmpDir, `${baseName}.srt`);
+
+      if (!fs.existsSync(producedSrt)) {
+        try {
+          const files = fs.readdirSync(tmpDir);
+          const srtFile = files.find((f) => f.toLowerCase().endsWith('.srt'));
+          if (srtFile) {
+            producedSrt = path.join(tmpDir, srtFile);
+          }
+        } catch {}
+      }
 
       if (!fs.existsSync(producedSrt) || fs.statSync(producedSrt).size === 0) {
         throw new Error('No subtitle file produced (no speech detected?)');
       }
 
-      // Clean up isolated single words, Japanese song lyrics, and normalize SRT
+      // Clean up isolated single words, filter hallucinations, and apply fuzzy character correction
       try {
         const rawSrt = fs.readFileSync(producedSrt, 'utf-8');
         const isEnglish = (this.activeOptions.language || 'en') === 'en';
-        const cleaned = cleanSubtitleSrt(rawSrt, isEnglish);
+        const cleaned = cleanSubtitleSrt(rawSrt, isEnglish, {
+          characterNames: this.activeOptions.characterNamesForCorrection,
+          hallucinationList: this.activeOptions.hallucinationList,
+          maxLineWidth: this.activeOptions.maxLineWidth ?? 44,
+          maxLineCount: this.activeOptions.maxLineCount ?? 2,
+          onCorrection: (orig, repl, sim, seg) => {
+            this.sendLog(
+              mainWindow,
+              'info',
+              `[FuzzyCorrection] Segment #${seg}: "${orig}" -> "${repl}" (${sim}% similarity match)`
+            );
+          },
+        });
         fs.writeFileSync(producedSrt, cleaned, 'utf-8');
       } catch {}
 

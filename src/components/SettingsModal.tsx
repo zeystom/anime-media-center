@@ -152,6 +152,11 @@ export const SettingsModal: React.FC<SettingsModalProps> = ({
   const [isWhisperSectionExpanded, setIsWhisperSectionExpanded] = useState(true);
   const [confirmDeleteIndex, setConfirmDeleteIndex] = useState<number | null>(null);
 
+  const [confirmDeleteEngine, setConfirmDeleteEngine] = useState<boolean>(false);
+  const [isDeletingEngine, setIsDeletingEngine] = useState<boolean>(false);
+  const [confirmDeleteModel, setConfirmDeleteModel] = useState<string | null>(null);
+  const [isDeletingModel, setIsDeletingModel] = useState<string | null>(null);
+
   // Data & Backup section state
   const [backupStatus, setBackupStatus] = useState<BackupStatusInfo | null>(null);
   const [restoreAvailable, setRestoreAvailable] = useState(false);
@@ -173,7 +178,7 @@ export const SettingsModal: React.FC<SettingsModalProps> = ({
   const providerImportRef = useRef<HTMLInputElement>(null);
 
   // Application update state
-  const [appVersion, setAppVersion] = useState<string>('1.0.10');
+  const [appVersion, setAppVersion] = useState<string>('1.0.11');
   const [checkForUpdatesOnStartup, setCheckForUpdatesOnStartup] = useState<boolean>(
     settings.checkForUpdatesOnStartup ?? true
   );
@@ -182,7 +187,7 @@ export const SettingsModal: React.FC<SettingsModalProps> = ({
   );
   const [updaterState, setUpdaterState] = useState<UpdaterState>({
     status: 'idle',
-    currentVersion: '1.0.10',
+    currentVersion: '1.0.11',
     updateInfo: null,
     downloadProgress: null,
     error: null,
@@ -554,6 +559,58 @@ export const SettingsModal: React.FC<SettingsModalProps> = ({
     }
   };
 
+  const handleDeleteWhisperEngine = async () => {
+    if (!window.electronAPI?.deleteWhisperEngine) return;
+    setIsDeletingEngine(true);
+    try {
+      const res = await window.electronAPI.deleteWhisperEngine();
+      if (res?.success) {
+        setWhisperPath('');
+        await onSave({ whisperPath: '' });
+        showGlobalToast('Faster-Whisper engine deleted.', 'info');
+        const status = await window.electronAPI.checkBinaries({
+          ffmpegPath,
+          whisperPath: '',
+          modelName: whisperModel,
+          customModelPath,
+        });
+        setBinaryStatus(status);
+      } else {
+        showGlobalToast(`Failed to delete engine: ${res?.error || 'Unknown error'}`, 'error');
+      }
+    } catch (err: any) {
+      showGlobalToast(`Error deleting engine: ${err?.message || err}`, 'error');
+    } finally {
+      setIsDeletingEngine(false);
+      setConfirmDeleteEngine(false);
+    }
+  };
+
+  const handleDeleteModel = async (modelId: string) => {
+    if (!window.electronAPI?.deleteWhisperModel) return;
+    setIsDeletingModel(modelId);
+    try {
+      const res = await window.electronAPI.deleteWhisperModel(modelId);
+      if (res?.success) {
+        showGlobalToast(`Model "${modelId}" deleted successfully.`, 'info');
+        const status = await window.electronAPI.checkBinaries({
+          ffmpegPath,
+          whisperPath,
+          modelName: whisperModel,
+          customModelPath,
+        });
+        setBinaryStatus(status);
+      } else {
+        showGlobalToast(`Failed to delete model: ${res?.error || 'Unknown error'}`, 'error');
+      }
+    } catch (err: any) {
+      showGlobalToast(`Error deleting model: ${err?.message || err}`, 'error');
+    } finally {
+      setIsDeletingModel(null);
+      setConfirmDeleteModel(null);
+    }
+  };
+
   const handleBrowseCustomModel = async () => {
     const folder = await window.electronAPI.browseFolder(customModelPath || undefined);
     if (folder) {
@@ -570,12 +627,6 @@ export const SettingsModal: React.FC<SettingsModalProps> = ({
     setWhisperModel('large-v3-turbo');
     onSave({ customModelPath: '', whisperModel: 'large-v3-turbo' });
     showGlobalToast('Reset to default model (large-v3-turbo)', 'info');
-  };
-
-  const handleSelectDetectedModel = (modelName: string) => {
-    setWhisperModel(modelName);
-    onSave({ whisperModel: modelName });
-    showGlobalToast(`Active model set to ${modelName}`, 'success');
   };
 
   const handleBrowseWhisper = async () => {
@@ -1043,15 +1094,10 @@ export const SettingsModal: React.FC<SettingsModalProps> = ({
           {/* Section: Anime Media Folders */}
           <div className="space-y-2">
             <div className="flex items-center justify-between">
-              <div>
-                <label className="text-xs font-semibold text-zinc-200 uppercase tracking-wider flex items-center space-x-2">
-                  <Folder className="w-3.5 h-3.5 text-zinc-400" />
-                  <span>Anime Media Folders ({libraryFolders.length})</span>
-                </label>
-                <p className="text-[11px] text-zinc-400">
-                  Add directories across different drives (e.g. D:\films, E:\Anime). Incomplete downloads stay hidden and appear here when ready.
-                </p>
-              </div>
+              <label className="text-xs font-semibold text-zinc-200 uppercase tracking-wider flex items-center space-x-2">
+                <Folder className="w-3.5 h-3.5 text-zinc-400" />
+                <span>Anime Media Folders ({libraryFolders.length})</span>
+              </label>
 
               <button
                 type="button"
@@ -1132,15 +1178,10 @@ export const SettingsModal: React.FC<SettingsModalProps> = ({
 
           {/* Section: Anime Title Language */}
           <div className="space-y-3 pt-3 border-t border-white/10">
-            <div>
-              <label className="text-xs font-semibold text-zinc-200 uppercase tracking-wider flex items-center space-x-2">
-                <Languages className="w-3.5 h-3.5 text-zinc-400" />
-                <span>Anime Title Language</span>
-              </label>
-              <p className="text-[11px] text-zinc-400">
-                Choose whether titles across Discovery, Home, and details appear in English, Romanized Japanese, or Original Japanese.
-              </p>
-            </div>
+            <label className="text-xs font-semibold text-zinc-200 uppercase tracking-wider flex items-center space-x-2">
+              <Languages className="w-3.5 h-3.5 text-zinc-400" />
+              <span>Anime Title Language</span>
+            </label>
 
             <div className="grid grid-cols-3 gap-2.5">
               {[
@@ -1327,7 +1368,7 @@ export const SettingsModal: React.FC<SettingsModalProps> = ({
                 </button>
               </div>
 
-              {/* In-app engine downloader / setup */}
+              {/* In-app engine downloader / setup / deletion */}
               {isDownloadingEngine ? (
                 <div className="space-y-2 p-3.5 rounded-xl bg-purple-950/30 border border-purple-500/30 text-xs text-zinc-200">
                   <div className="flex items-center justify-between">
@@ -1370,7 +1411,58 @@ export const SettingsModal: React.FC<SettingsModalProps> = ({
                     )}
                   </div>
                 </div>
-              ) : !binaryStatus.whisperExists && (
+              ) : binaryStatus.whisperExists ? (
+                confirmDeleteEngine ? (
+                  <div className="flex items-center justify-between gap-3 p-3.5 rounded-xl bg-red-950/40 border border-red-500/40 animate-in fade-in duration-150">
+                    <div className="flex items-center space-x-2 text-xs text-red-200 min-w-0 flex-1">
+                      <AlertTriangle className="w-3.5 h-3.5 text-red-400 shrink-0" />
+                      <span className="truncate">
+                        Delete Faster-Whisper-XXL engine from application storage?
+                      </span>
+                    </div>
+                    <div className="flex items-center space-x-2 shrink-0">
+                      <button
+                        type="button"
+                        disabled={isDeletingEngine}
+                        onClick={() => setConfirmDeleteEngine(false)}
+                        className="px-2.5 py-1 rounded-lg text-[11px] font-medium text-zinc-300 hover:text-white bg-zinc-800 hover:bg-zinc-700 transition-colors"
+                      >
+                        Cancel
+                      </button>
+                      <button
+                        type="button"
+                        disabled={isDeletingEngine}
+                        onClick={handleDeleteWhisperEngine}
+                        className="px-2.5 py-1 rounded-lg text-[11px] font-bold text-white bg-red-600 hover:bg-red-500 transition-colors shadow-sm disabled:opacity-50"
+                      >
+                        {isDeletingEngine ? 'Deleting...' : 'Confirm Delete'}
+                      </button>
+                    </div>
+                  </div>
+                ) : (
+                  <div className="flex flex-col sm:flex-row items-start sm:items-center justify-between gap-3 p-3 rounded-xl bg-zinc-900/60 border border-white/5 text-xs text-zinc-300">
+                    <div className="space-y-0.5 min-w-0">
+                      <div className="flex items-center space-x-1.5 font-medium text-zinc-200 text-xs">
+                        <CheckCircle2 className="w-3.5 h-3.5 text-emerald-400 shrink-0" />
+                        <span>Faster-Whisper-XXL Engine Ready</span>
+                      </div>
+                      <p className="text-[11px] text-zinc-400 truncate">
+                        {whisperPath || 'Engine configured in application storage'}
+                      </p>
+                    </div>
+                    <div className="flex items-center space-x-2 shrink-0 self-end sm:self-center">
+                      <button
+                        type="button"
+                        onClick={() => setConfirmDeleteEngine(true)}
+                        className="flex items-center space-x-1.5 px-3 py-1.5 rounded-lg bg-red-500/10 hover:bg-red-500/20 text-red-400 hover:text-red-300 border border-red-500/20 text-xs font-medium transition-colors shrink-0"
+                      >
+                        <Trash2 className="w-3.5 h-3.5" />
+                        <span>Delete Engine</span>
+                      </button>
+                    </div>
+                  </div>
+                )
+              ) : (
                 <div className="flex flex-col sm:flex-row items-start sm:items-center justify-between gap-3 p-3.5 rounded-xl bg-purple-950/25 border border-purple-500/25 text-xs text-zinc-300">
                   <div className="space-y-0.5 min-w-0">
                     <div className="flex items-center space-x-1.5 font-semibold text-white text-xs">
@@ -1434,55 +1526,30 @@ export const SettingsModal: React.FC<SettingsModalProps> = ({
                       ? binaryStatus.isDefaultModelInstalled ||
                         Boolean(binaryStatus.installedModels?.some((m) => m.toLowerCase().includes('large-v3-turbo')))
                       : Boolean(binaryStatus.installedModels?.some((m) => m.toLowerCase().includes(model.id.toLowerCase())));
-                  const isCurrentActive = isInstalled && !customModelPath && whisperModel === model.id;
                   const isThisDownloading = downloadingModel === model.id;
+                  const isConfirmingDelete = confirmDeleteModel === model.id;
+                  const isThisDeleting = isDeletingModel === model.id;
 
                   return (
                     <div
                       key={model.id}
-                      className={`p-3 rounded-xl border transition-all ${
-                        isCurrentActive
-                          ? 'bg-indigo-950/30 border-indigo-500/70 shadow-sm ring-1 ring-indigo-500/40'
-                          : 'bg-zinc-900/60 border-white/5 hover:border-zinc-700'
-                      }`}
+                      className="p-3 rounded-xl border bg-zinc-900/60 border-white/5 hover:border-zinc-700/60 transition-all"
                     >
                       <div className="flex items-center justify-between gap-3">
-                        <div
-                          onClick={() => {
-                            if (isInstalled && !isCurrentActive) {
-                              setWhisperModel(model.id);
-                              setCustomModelPath('');
-                              onSave({ whisperModel: model.id, customModelPath: '' });
-                            }
-                          }}
-                          className={`flex items-center space-x-2.5 min-w-0 ${
-                            isInstalled ? 'cursor-pointer' : ''
-                          }`}
-                        >
-                          <div className="flex items-center justify-center shrink-0">
-                            {isCurrentActive ? (
-                              <div className="w-3.5 h-3.5 rounded-full bg-indigo-500 flex items-center justify-center">
-                                <div className="w-1.5 h-1.5 rounded-full bg-white" />
-                              </div>
-                            ) : isInstalled ? (
-                              <div className="w-3.5 h-3.5 rounded-full border border-zinc-600 hover:border-zinc-400" />
-                            ) : null}
-                          </div>
-                          <div className="space-y-0.5 min-w-0">
-                            <div className="flex items-center space-x-2 flex-wrap">
-                              <span className="text-xs font-mono font-bold text-white">
-                                {model.name}
+                        <div className="space-y-0.5 min-w-0">
+                          <div className="flex items-center space-x-2 flex-wrap">
+                            <span className="text-xs font-mono font-bold text-white">
+                              {model.name}
+                            </span>
+                            {isInstalled && (
+                              <span className="px-1.5 py-0.5 rounded text-[10px] font-semibold bg-emerald-500/15 text-emerald-300 border border-emerald-500/25">
+                                Installed
                               </span>
-                              {isCurrentActive && (
-                                <span className="px-1.5 py-0.2 rounded text-[10px] font-semibold bg-emerald-500/20 text-emerald-300 border border-emerald-500/30">
-                                  Active
-                                </span>
-                              )}
-                            </div>
-                            <p className="text-[10px] text-zinc-400 truncate">
-                              {model.badge}
-                            </p>
+                            )}
                           </div>
+                          <p className="text-[10px] text-zinc-400 truncate">
+                            {model.badge}
+                          </p>
                         </div>
 
                         <div className="shrink-0 flex items-center space-x-2">
@@ -1499,24 +1566,33 @@ export const SettingsModal: React.FC<SettingsModalProps> = ({
                                 Cancel
                               </button>
                             </div>
+                          ) : isConfirmingDelete ? (
+                            <div className="flex items-center space-x-1.5">
+                              <button
+                                type="button"
+                                disabled={isThisDeleting}
+                                onClick={() => setConfirmDeleteModel(null)}
+                                className="px-2.5 py-1 rounded-lg text-[11px] font-medium text-zinc-300 hover:text-white bg-zinc-800 hover:bg-zinc-700 transition-colors"
+                              >
+                                Cancel
+                              </button>
+                              <button
+                                type="button"
+                                disabled={isThisDeleting}
+                                onClick={() => handleDeleteModel(model.id)}
+                                className="px-2.5 py-1 rounded-lg text-[11px] font-bold text-white bg-red-600 hover:bg-red-500 transition-colors shadow-sm disabled:opacity-50"
+                              >
+                                {isThisDeleting ? 'Deleting...' : 'Confirm'}
+                              </button>
+                            </div>
                           ) : isInstalled ? (
                             <button
                               type="button"
-                              onClick={() => {
-                                if (!isCurrentActive) {
-                                  setWhisperModel(model.id);
-                                  setCustomModelPath('');
-                                  onSave({ whisperModel: model.id, customModelPath: '' });
-                                }
-                              }}
-                              className={`inline-flex items-center space-x-1.5 px-3 py-1.5 rounded-lg text-xs font-semibold transition-colors ${
-                                isCurrentActive
-                                  ? 'bg-emerald-500/10 border border-emerald-500/20 text-emerald-400 cursor-default'
-                                  : 'bg-zinc-800 hover:bg-zinc-700 border border-white/10 text-zinc-300 hover:text-white cursor-pointer'
-                              }`}
+                              onClick={() => setConfirmDeleteModel(model.id)}
+                              className="inline-flex items-center space-x-1.5 px-3 py-1.5 rounded-lg bg-red-500/10 hover:bg-red-500/20 text-red-400 hover:text-red-300 border border-red-500/20 text-xs font-medium transition-colors"
                             >
-                              <CheckCircle2 className="w-3.5 h-3.5 text-emerald-400" />
-                              <span>{isCurrentActive ? 'Active' : 'Select'}</span>
+                              <Trash2 className="w-3.5 h-3.5" />
+                              <span>Delete</span>
                             </button>
                           ) : (
                             <button
@@ -1567,57 +1643,58 @@ export const SettingsModal: React.FC<SettingsModalProps> = ({
                         Other Locally Installed Models ({otherDetected.length})
                       </span>
                       <span className="text-[10px] text-zinc-500">
-                        Found in Faster-Whisper _models folder
+                        Found in Faster-Whisper or HuggingFace cache
                       </span>
                     </div>
                     <div className="grid grid-cols-1 sm:grid-cols-2 gap-2">
                       {otherDetected.map((m) => {
-                        const isCurrentActive = !customModelPath && whisperModel === m;
+                        const isConfirmingDelete = confirmDeleteModel === m;
+                        const isThisDeleting = isDeletingModel === m;
+
                         return (
                           <div
                             key={m}
-                            onClick={() => {
-                              if (!isCurrentActive) {
-                                setWhisperModel(m);
-                                setCustomModelPath('');
-                                onSave({ whisperModel: m, customModelPath: '' });
-                                showGlobalToast(`Active model set to ${m}`, 'success');
-                              }
-                            }}
-                            className={`p-2.5 rounded-xl border flex items-center justify-between cursor-pointer transition-all ${
-                              isCurrentActive
-                                ? 'bg-indigo-950/30 border-indigo-500/70 ring-1 ring-indigo-500/40 shadow-sm'
-                                : 'bg-zinc-900/60 border-white/5 hover:border-zinc-700'
-                            }`}
+                            className="p-2.5 rounded-xl border flex items-center justify-between bg-zinc-900/60 border-white/5 hover:border-zinc-700/60 transition-all"
                           >
-                            <div className="flex items-center space-x-2.5 min-w-0">
-                              <div className="shrink-0">
-                                {isCurrentActive ? (
-                                  <div className="w-3.5 h-3.5 rounded-full bg-indigo-500 flex items-center justify-center">
-                                    <div className="w-1.5 h-1.5 rounded-full bg-white" />
-                                  </div>
-                                ) : (
-                                  <div className="w-3.5 h-3.5 rounded-full border border-zinc-600 hover:border-zinc-400" />
-                                )}
-                              </div>
-                              <div className="min-w-0 space-y-0.5">
-                                <span className="text-xs font-mono font-bold text-white block truncate">
-                                  {m}
-                                </span>
-                                <span className="text-[10px] text-zinc-400 block truncate">
-                                  Local model · {m === 'tiny' ? '~75 MB' : 'cached'}
-                                </span>
-                              </div>
+                            <div className="min-w-0 space-y-0.5 pr-2">
+                              <span className="text-xs font-mono font-bold text-white block truncate">
+                                {m}
+                              </span>
+                              <span className="text-[10px] text-zinc-400 block truncate">
+                                Local model · {m === 'tiny' ? '~75 MB' : m === 'base' ? '~140 MB' : 'cached'}
+                              </span>
                             </div>
-                            <span
-                              className={`text-[10px] font-semibold px-2 py-0.5 rounded ${
-                                isCurrentActive
-                                  ? 'bg-emerald-500/20 text-emerald-300 border border-emerald-500/30'
-                                  : 'bg-zinc-800 text-zinc-400 border border-white/5'
-                              }`}
-                            >
-                              {isCurrentActive ? 'Active' : 'Select'}
-                            </span>
+                            <div className="shrink-0">
+                              {isConfirmingDelete ? (
+                                <div className="flex items-center space-x-1.5">
+                                  <button
+                                    type="button"
+                                    disabled={isThisDeleting}
+                                    onClick={() => setConfirmDeleteModel(null)}
+                                    className="px-2 py-1 rounded-lg text-[11px] font-medium text-zinc-300 hover:text-white bg-zinc-800 hover:bg-zinc-700 transition-colors"
+                                  >
+                                    Cancel
+                                  </button>
+                                  <button
+                                    type="button"
+                                    disabled={isThisDeleting}
+                                    onClick={() => handleDeleteModel(m)}
+                                    className="px-2 py-1 rounded-lg text-[11px] font-bold text-white bg-red-600 hover:bg-red-500 transition-colors shadow-sm disabled:opacity-50"
+                                  >
+                                    {isThisDeleting ? '...' : 'Confirm'}
+                                  </button>
+                                </div>
+                              ) : (
+                                <button
+                                  type="button"
+                                  onClick={() => setConfirmDeleteModel(m)}
+                                  className="inline-flex items-center space-x-1 px-2.5 py-1 rounded-lg bg-red-500/10 hover:bg-red-500/20 text-red-400 hover:text-red-300 border border-red-500/20 text-xs font-medium transition-colors"
+                                >
+                                  <Trash2 className="w-3 h-3" />
+                                  <span>Delete</span>
+                                </button>
+                              )}
+                            </div>
                           </div>
                         );
                       })}
@@ -1671,15 +1748,10 @@ export const SettingsModal: React.FC<SettingsModalProps> = ({
 
           {/* Section: Application Updates */}
           <div className="space-y-3 pt-3 border-t border-white/10">
-            <div>
-              <label className="text-xs font-semibold text-zinc-200 uppercase tracking-wider flex items-center space-x-2">
-                <RefreshCw className="w-3.5 h-3.5 text-zinc-400" />
-                <span>Application Updates</span>
-              </label>
-              <p className="text-[11px] text-zinc-400">
-                Manage update checking and installation from GitHub Releases without re-downloading or pulling through Git.
-              </p>
-            </div>
+            <label className="text-xs font-semibold text-zinc-200 uppercase tracking-wider flex items-center space-x-2">
+              <RefreshCw className="w-3.5 h-3.5 text-zinc-400" />
+              <span>Application Updates</span>
+            </label>
 
             <div className="space-y-2">
               {/* Toggle 1: Search updates on start */}
@@ -1809,15 +1881,10 @@ export const SettingsModal: React.FC<SettingsModalProps> = ({
 
           {/* Section: Data & Backup */}
           <div className="space-y-3 pt-3 border-t border-white/10">
-            <div>
-              <label className="text-xs font-semibold text-zinc-200 uppercase tracking-wider flex items-center space-x-2">
-                <Database className="w-3.5 h-3.5 text-zinc-400" />
-                <span>Data &amp; Backup</span>
-              </label>
-              <p className="text-[11px] text-zinc-400">
-                Back up watch history, season rules and your list to Documents, and move your watchlist in or out.
-              </p>
-            </div>
+            <label className="text-xs font-semibold text-zinc-200 uppercase tracking-wider flex items-center space-x-2">
+              <Database className="w-3.5 h-3.5 text-zinc-400" />
+              <span>Data &amp; Backup</span>
+            </label>
 
             {/* Documents backup card */}
             <div className="space-y-2.5 rounded-xl bg-zinc-900/90 border border-white/10 p-3.5">
@@ -1944,15 +2011,10 @@ export const SettingsModal: React.FC<SettingsModalProps> = ({
 
           {/* Section: P2P & Downloads */}
           <div className="space-y-3 pt-3 border-t border-white/10">
-            <div>
-              <label className="text-xs font-semibold text-zinc-200 uppercase tracking-wider flex items-center space-x-2">
-                <Share2 className="w-3.5 h-3.5 text-zinc-400" />
-                <span>P2P &amp; Downloads</span>
-              </label>
-              <p className="text-[11px] text-zinc-400">
-                BitTorrent engine with speed limits and your own RSS/Torznab indexers.
-              </p>
-            </div>
+            <label className="text-xs font-semibold text-zinc-200 uppercase tracking-wider flex items-center space-x-2">
+              <Share2 className="w-3.5 h-3.5 text-zinc-400" />
+              <span>P2P &amp; Downloads</span>
+            </label>
 
             {/* Master engine toggle card */}
             <div className="flex items-center justify-between gap-3 rounded-xl bg-zinc-900/90 border border-white/10 p-3.5">
@@ -2075,7 +2137,6 @@ export const SettingsModal: React.FC<SettingsModalProps> = ({
                       <p className="text-[10px] text-zinc-500">How long to keep seeding once done.</p>
                     </div>
                   </div>
-                  <p className="text-[10px] text-zinc-500">Changes apply live to the torrent engine.</p>
                 </div>
                 <div className="space-y-2.5 rounded-xl bg-zinc-900/90 border border-white/10 p-3.5">
                   <div className="flex items-center justify-between">

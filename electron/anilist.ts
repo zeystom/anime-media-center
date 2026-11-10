@@ -651,6 +651,14 @@ export async function queryFranchiseMedia(ids: number[]): Promise<AniListMedia[]
   return (data.Page?.media ?? []).filter((item): item is AniListMedia => !!item);
 }
 
+import {
+  prioritizeCharacters,
+  buildInitialPrompt,
+  buildHotwords,
+  buildFullCharacterNameList,
+  RawCharacterEdge,
+} from './whisperPrompt';
+
 const CHARACTERS_QUERY = `
   query ($search: String, $id: Int) {
     Media(search: $search, id: $id, type: ANIME) {
@@ -660,14 +668,18 @@ const CHARACTERS_QUERY = `
         english
         native
       }
-      characters(sort: [ROLE, RELEVANCE, ID], perPage: 15) {
+      characters(sort: [ROLE, RELEVANCE, ID], perPage: 25) {
         edges {
           role
           node {
             name {
+              first
+              middle
+              last
               full
               native
               alternative
+              userPreferred
             }
           }
         }
@@ -680,13 +692,16 @@ export interface CharacterQueryResult {
   id: number;
   title: string;
   characters: string[];
+  initialPrompt?: string;
+  hotwords?: string;
+  allCharacterNames?: string[];
 }
 
 const charactersCache = new Map<string, CharacterQueryResult>();
 
 /**
  * Automatically retrieves character names for an anime by title or AniList ID.
- * Results are cached in memory.
+ * Results are normalized and cached in memory.
  */
 export async function queryAnimeCharacters(
   searchOrId: string | number
@@ -710,16 +725,7 @@ export async function queryAnimeCharacters(
         id: number;
         title?: { romaji?: string | null; english?: string | null; native?: string | null };
         characters?: {
-          edges?: Array<{
-            role?: string;
-            node?: {
-              name?: {
-                full?: string | null;
-                native?: string | null;
-                alternative?: string[] | null;
-              };
-            };
-          }>;
+          edges?: RawCharacterEdge[];
         };
       } | null;
     }>(CHARACTERS_QUERY, variables);
@@ -727,30 +733,24 @@ export async function queryAnimeCharacters(
     const media = data?.Media;
     if (!media || !media.id) return null;
 
-    const names: string[] = [];
-    const seen = new Set<string>();
-    const GENERIC_CHAR_REGEX = /^(machi no hito|townsperson|villager|narrator|announcer|student|teacher|doctor|nurse|father|mother|parent|guard|soldier|driver|waiter|clerk|crowd|passerby|thug|citizen|police|demon|monster|cat|dog|bird|boy|girl|man|woman|child|kid|extra|subordinate|operator)\b/i;
-
-    for (const edge of media.characters?.edges || []) {
-      const full = edge.node?.name?.full?.trim();
-      if (
-        full &&
-        full.length >= 2 &&
-        full.length <= 35 &&
-        !GENERIC_CHAR_REGEX.test(full) &&
-        !seen.has(full.toLowerCase())
-      ) {
-        seen.add(full.toLowerCase());
-        names.push(full);
-      }
-      if (names.length >= 12) break;
-    }
+    const rawEdges: RawCharacterEdge[] = media.characters?.edges || [];
+    const prioritized = prioritizeCharacters(rawEdges, 20);
 
     const title = media.title?.english || media.title?.romaji || variables.search || '';
+    const initialPrompt = buildInitialPrompt(prioritized);
+    const hotwords = buildHotwords(prioritized, 14);
+    const allCharacterNames = buildFullCharacterNameList(prioritized);
+
+    // Display names for UI tags: top characters with spoken or full names
+    const names = prioritized.map((c, idx) => (idx < 3 ? c.fullName : c.spokenName));
+
     const result: CharacterQueryResult = {
       id: media.id,
       title,
-      characters: names.slice(0, 12),
+      characters: names,
+      initialPrompt,
+      hotwords,
+      allCharacterNames,
     };
 
     charactersCache.set(cacheKey, result);

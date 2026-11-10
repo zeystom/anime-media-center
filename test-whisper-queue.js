@@ -190,10 +190,12 @@ async function runTests() {
   const preloadSrc = fs.readFileSync(path.join(__dirname, 'electron', 'preload.ts'), 'utf-8');
   assert(preloadSrc.includes('downloadWhisperEngine'), 'preload must expose downloadWhisperEngine');
   assert(preloadSrc.includes('cancelWhisperEngineDownload'), 'preload must expose cancelWhisperEngineDownload');
+  assert(preloadSrc.includes('deleteWhisperEngine'), 'preload must expose deleteWhisperEngine');
+  assert(preloadSrc.includes('deleteWhisperModel'), 'preload must expose deleteWhisperModel');
   assert(preloadSrc.includes('getWhisperEngineDownloadStatus'), 'preload must expose getWhisperEngineDownloadStatus');
   assert(preloadSrc.includes('onWhisperEngineDownloadProgress'), 'preload must expose onWhisperEngineDownloadProgress');
   assert(preloadSrc.includes('onWhisperEngineDownloadStatus'), 'preload must expose onWhisperEngineDownloadStatus');
-  console.log('✓ Preload correctly exposes all Whisper Engine Downloader APIs.');
+  console.log('✓ Preload correctly exposes all Whisper Engine Downloader & Deletion APIs.');
 
   // 3. Main Process IPC Invariants
   console.log('Testing main.ts registers Whisper Engine IPC handlers...');
@@ -201,19 +203,29 @@ async function runTests() {
   assert(mainSrc.includes('initWhisperEngineDownloader'), 'main must initialize WhisperEngineDownloader');
   assert(mainSrc.includes("'download-whisper-engine'"), 'main must handle download-whisper-engine IPC');
   assert(mainSrc.includes("'cancel-whisper-engine-download'"), 'main must handle cancel-whisper-engine-download IPC');
+  assert(mainSrc.includes("'delete-whisper-engine'"), 'main must handle delete-whisper-engine IPC');
+  assert(mainSrc.includes("'delete-whisper-model'"), 'main must handle delete-whisper-model IPC');
   assert(mainSrc.includes("'get-whisper-engine-download-status'"), 'main must handle get-whisper-engine-download-status IPC');
   assert(mainSrc.includes('isDownloadingEngine'), 'checkBinaries must return isDownloadingEngine state');
   console.log('✓ Main process correctly registers all Whisper Engine IPC handlers.');
 
-  // 4. SettingsModal In-App Engine Download Invariants
-  console.log('Testing SettingsModal.tsx renders in-app engine installer with English UI...');
+  // 4. SettingsModal In-App Engine Download & Deletion Invariants
+  console.log('Testing SettingsModal.tsx renders in-app engine installer and deletion controls...');
   const settingsModalSrc = fs.readFileSync(path.join(__dirname, 'src', 'components', 'SettingsModal.tsx'), 'utf-8');
   assert(settingsModalSrc.includes('handleDownloadWhisperEngine'), 'SettingsModal must have handleDownloadWhisperEngine');
   assert(settingsModalSrc.includes('handleCancelWhisperEngineDownload'), 'SettingsModal must have handleCancelWhisperEngineDownload');
+  assert(settingsModalSrc.includes('handleDeleteWhisperEngine'), 'SettingsModal must have handleDeleteWhisperEngine');
+  assert(settingsModalSrc.includes('handleDeleteModel'), 'SettingsModal must have handleDeleteModel');
+  assert(settingsModalSrc.includes('Delete Engine'), 'SettingsModal must have "Delete Engine" button');
   assert(settingsModalSrc.includes('Download Engine'), 'SettingsModal must have "Download Engine" button');
-  assert(settingsModalSrc.includes('onWhisperEngineDownloadProgress'), 'SettingsModal must listen to onWhisperEngineDownloadProgress');
-  assert(settingsModalSrc.includes('Extracting Faster-Whisper-XXL Engine'), 'SettingsModal must have extracting progress label in English');
-  console.log('✓ SettingsModal correctly includes in-app engine installer and progress handling.');
+  assert(!settingsModalSrc.includes('Active model set to'), 'SettingsModal must not have Active model selection notifications');
+  console.log('✓ SettingsModal correctly includes model/engine deletion controls and clean button actions.');
+
+  // 4b. Navbar Background Badge Invariant
+  console.log('Testing Navbar.tsx has removed the background transcribing badge...');
+  const navbarSrc = fs.readFileSync(path.join(__dirname, 'src', 'components', 'Navbar.tsx'), 'utf-8');
+  assert(!navbarSrc.includes('Transcribing in background'), 'Navbar must not contain "Transcribing in background" badge');
+  console.log('✓ Navbar background badge verified removed.');
 
   // 5. WhisperStudio In-App Engine Download Invariants
   console.log('Testing WhisperStudio.tsx renders in-app engine installer banner with English UI...');

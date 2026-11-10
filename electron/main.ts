@@ -31,6 +31,7 @@ import {
   downloadWhisperEngine,
   cancelWhisperEngineDownload,
   getWhisperEngineState,
+  deleteWhisperEngine,
 } from './whisperEngineDownloader';
 
 const __filename = fileURLToPath(import.meta.url);
@@ -520,6 +521,50 @@ function setupIpcHandlers() {
     return false;
   }
 
+  function safeRemoveDir(targetPath: string): void {
+    try {
+      fs.rmSync(targetPath, { recursive: true, force: true, maxRetries: 3, retryDelay: 100 });
+    } catch (err: any) {
+      try {
+        const makeWritable = (p: string) => {
+          try { fs.chmodSync(p, 0o666); } catch {}
+          if (fs.existsSync(p) && fs.statSync(p).isDirectory()) {
+            for (const item of fs.readdirSync(p)) {
+              makeWritable(path.join(p, item));
+            }
+          }
+        };
+        makeWritable(targetPath);
+        fs.rmSync(targetPath, { recursive: true, force: true, maxRetries: 3, retryDelay: 100 });
+      } catch (innerErr) {
+        console.warn(`[safeRemoveDir] Failed to remove ${targetPath}:`, innerErr);
+        throw innerErr;
+      }
+    }
+  }
+
+  function matchesModelName(folderName: string, targetModel: string): boolean {
+    const normFolder = folderName.toLowerCase();
+    const normTarget = targetModel.toLowerCase();
+
+    if (normFolder === normTarget) return true;
+    if (normFolder === `faster-whisper-${normTarget}`) return true;
+
+    if (normFolder.startsWith('models--')) {
+      const cleaned = normFolder
+        .replace(/^models--.*?--/, '')
+        .replace(/^faster-whisper-/, '');
+      if (cleaned === normTarget) return true;
+      if (normFolder.endsWith(`--faster-whisper-${normTarget}`)) return true;
+      if (normFolder.endsWith(`--${normTarget}`)) return true;
+    }
+
+    const stripped = normFolder.replace(/^faster-whisper-/, '');
+    if (stripped === normTarget) return true;
+
+    return false;
+  }
+
   function parseModelDownloadOutput(raw: string): { percent: number | null; text: string } {
     // Strip ANSI escape codes and normalize whitespace
     const clean = raw
@@ -777,12 +822,94 @@ function setupIpcHandlers() {
     return false;
   });
 
+  ipcMain.handle('delete-whisper-model', async (_event, modelName: string) => {
+    if (!modelName || typeof modelName !== 'string') {
+      return { success: false, error: 'Model name is required' };
+    }
+
+    const targetModel = modelName.trim();
+
+    // If this model is currently downloading, abort download first
+    if (activeModelDownloadName && activeModelDownloadName.toLowerCase() === targetModel.toLowerCase()) {
+      activeModelDownloadCancelled = true;
+      if (activeModelDownloadProcess) {
+        try {
+          activeModelDownloadProcess.kill();
+        } catch {}
+        activeModelDownloadProcess = null;
+        activeModelDownloadName = null;
+      }
+      if (mainWindow && !mainWindow.isDestroyed()) {
+        mainWindow.webContents.send('whisper:model-download-status', { isDownloading: false, modelName: null });
+      }
+    }
+
+    const settings = storage.getSettings();
+    const whisperPath = settings.whisperPath || autoDetectWhisperPath();
+    const userData = app ? resolveUserDataPath() : path.join(process.env.APPDATA || '', 'Kaiko');
+
+    const candidateDirs = [
+      whisperPath ? path.join(path.dirname(whisperPath), '_models') : null,
+      path.join(userData, 'bin', 'faster-whisper-xxl', '_models'),
+      path.join(process.env.USERPROFILE || process.env.HOME || '', '.cache', 'huggingface', 'hub'),
+      process.env.HF_HOME ? path.join(process.env.HF_HOME, 'hub') : null,
+      process.env.HUGGINGFACE_HUB_CACHE || null,
+    ].filter((d): d is string => Boolean(d && typeof d === 'string'));
+
+    const uniqueDirs = Array.from(new Set(candidateDirs.map((d) => path.resolve(d))));
+    let deletedCount = 0;
+
+    for (const dir of uniqueDirs) {
+      if (!fs.existsSync(dir)) continue;
+      try {
+        const files = fs.readdirSync(dir);
+        for (const f of files) {
+          if (matchesModelName(f, targetModel)) {
+            const fullModelPath = path.join(dir, f);
+            try {
+              safeRemoveDir(fullModelPath);
+              deletedCount++;
+            } catch (delErr: any) {
+              console.warn(`[deleteWhisperModel] Failed to delete ${fullModelPath}:`, delErr?.message || delErr);
+            }
+
+            const locksEntry = path.join(dir, '.locks', f);
+            if (fs.existsSync(locksEntry)) {
+              try {
+                safeRemoveDir(locksEntry);
+              } catch {}
+            }
+          }
+        }
+      } catch (err: any) {
+        console.warn(`[deleteWhisperModel] Error scanning directory ${dir}:`, err?.message || err);
+      }
+    }
+
+    if (settings.customModelPath) {
+      const customBase = path.basename(settings.customModelPath);
+      if (matchesModelName(customBase, targetModel) || settings.customModelPath === targetModel) {
+        storage.updateSettings({ customModelPath: '' });
+      }
+    }
+
+    if (settings.whisperModel && settings.whisperModel.toLowerCase() === targetModel.toLowerCase()) {
+      storage.updateSettings({ whisperModel: 'large-v3-turbo' });
+    }
+
+    return { success: true, modelName: targetModel, deletedCount };
+  });
+
   ipcMain.handle('download-whisper-engine', async () => {
     return downloadWhisperEngine();
   });
 
   ipcMain.handle('cancel-whisper-engine-download', async () => {
     return cancelWhisperEngineDownload();
+  });
+
+  ipcMain.handle('delete-whisper-engine', async () => {
+    return deleteWhisperEngine();
   });
 
   ipcMain.handle('get-whisper-engine-download-status', async () => {

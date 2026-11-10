@@ -40,21 +40,38 @@ if (!token) {
 
 const RELEASE_BODY = `## What's new in v${VERSION}
 
-### ⚡ Model Download Polish & Output Sanitization
-- **Clean Progress Display:** Sanitized Faster-Whisper terminal output, removing raw ANSI escape codes, carriage returns, and terminal blocks. Shows clean status with file name, megabytes transferred, speed (MB/s), and estimated time remaining.
-- **Graceful Cancellation:** Eliminates \`null\` error messages when cancelling model downloads in Settings.
-- **Model Integrity Validation:** Performs deep file validation (\`model.bin\` / \`model.safetensors\` > 50 MB) before marking models as installed, preventing cancelled partial folders from falsely appearing as installed or active.
-- **Fixed Active Model Badge:** Uninstalled models will never display as "Active".
+### 🎙️ Subtitle Single-Word Merging & 2-Line Formatting Overhaul
+- **Strict 2-Row Guarantee:** Subtitles are strictly formatted to at most 2 lines (\`max_line_count: 2\`) with smart mid-sentence line balancing. Any merge that would overflow into an awkward 3rd line is prevented.
+- **Smart Capitalization Handling:** Mid-sentence orphan words are cleanly lowercased (e.g. \`"I think"\` + \`"So."\` → \`"I think so."\`), while properly preserving proper nouns, character names, and pronouns (\`"I"\`, \`"I'm"\`).
+- **Natural Start-of-Cue Casing:** Orphan words prepended to subsequent cues are capitalized and the following word lowercased (e.g. \`"because"\` + \`"He was late."\` → \`"Because he was late."\`).
 
-### 🎙️ Whisper Studio Auto-Selection
-- **Always Pre-Selects Episodes Needing AI Subs:** Episodes without AI dubtitles (\`.whisper.srt\`) are now automatically selected, even if they contain regular Japanese translation subtitles (embedded or external). Only episodes that already have AI dubtitles are excluded from selection.
-- **Informative Live Model Download Status:** When Faster-Whisper downloads models on-the-fly during generation, the header and Live Dialogue stream show clear \`Downloading AI Model...\` badges and explanations.
+### 🧠 Whisper Initial Prompt & Hotwords Generator Overhaul
+- **Priors-Compliant Natural Template:** Replaced instruction-style commands with natural spoken dialogue priors: \`"Dialogue from an anime episode. Characters: {names}."\`.
+- **Eliminated Command Leaks:** Removed phrases like \`"clean subtitles"\` and \`"conversational speech"\` that Whisper often mistook as transcript text and leaked into subtitles.
+- **Strict Token Budgeting:** Enforced token budget (≤ 180 tokens) with token-aware character ranking to prevent context window overflows.
+- **Role Prioritization & Filtering:** \`MAIN\` characters prioritized first, then \`SUPPORTING\`. Completely skips \`BACKGROUND\` and episodic extras.
+- **API Character Normalization:** Strips voice actor tags, parentheses, honorifics, titles, and non-name descriptions (\`"Kyon no Imouto"\`, \`"X's sister"\`, \`"Townsperson A"\`). Corrects Japanese surname-first ordering (\`"Yeager Eren"\` → \`"Eren Yeager"\`).
+- **Length Trimming & Ambiguous Names:** Full names for top 3 characters, spoken/first names for characters 4+. Common English word names (\`"Light"\`, \`"Ray"\`, \`"May"\`, \`"Rose"\`, etc.) pushed to the end to prevent Whisper substitutions.
+- **Faster-Whisper \`--hotwords\` Integration:** Automatically passes the top character names via \`--hotwords\` for every segment window.
 
-### 🔔 Manual Update Prompt in Settings
-- **Rich Release Modal on Manual Check:** Clicking "Check for Updates" in Settings now opens the formatted Update Available dialog with release highlights when a new version is found (with the "Don't show again" checkbox hidden for on-demand checks).
+### 🔍 RapidFuzz-Style Fuzzy Character Corrector & Hallucination Filter
+- **Whole-Word Fuzzy Spelling Correction:** Corrects near-miss character name spellings in English transcripts using the unconstrained full cast list (Levenshtein distance ≤ 2, ratio ≥ 86%).
+- **English Dictionary Stoplist Protection:** Top common English words are strictly immune from name replacement.
+- **Silence & Music Hallucination Filtering:** Automatically drops known Whisper hallucinations on non-speech segments (\`"Thank you for watching"\`, \`"Subtitles by..."\`, repetitive loops).
 
-### 🗜️ Zero-Dependency 7-Zip Decompression
-- Bundled standalone 7-Zip engine (\`7z.exe\` + \`7z.dll\`) guarantees 100% extraction reliability on all Windows versions (Windows 10 & 11) for Faster-Whisper-XXL engine installation.
+### 🛠️ In-App Model & Engine Deletion in Settings
+- **1-Click Deletion with Confirmation:** Delete installed Whisper AI models directly from Settings to easily free disk space.
+- **Engine Deletion:** Dedicated control to remove the standalone Faster-Whisper-XXL engine from application storage.
+- **Simplified Model Management:** Removed confusing Active/Select radio controls from Settings; active model selection is handled directly on-the-fly in Whisper Studio.
+
+### ⚡ Windows MAX_PATH (260 Chars) Whisper Fix
+- Resolved \`FileNotFoundError: [Errno 2]\` on long filenames by switching intermediate staging files to compact hashes in system temp (\`Temp/kaiko_w/<run>_<hash>\`), shortening paths by over 130 characters.
+
+### 🎬 Player Episode Drawer Progress Resume Fix
+- Selecting an episode from the in-player drawer or next-up button resumes playback from saved progress instead of restarting from 0:00.
+
+### 🧹 UI De-clutter
+- Removed verbose subtitle descriptions from Settings headers and removed the redundant "Transcribing in background" badge from the top navbar.
 
 ---
 ### Assets included:
