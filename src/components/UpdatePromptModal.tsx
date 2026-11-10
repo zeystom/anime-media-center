@@ -71,26 +71,52 @@ export const UpdatePromptModal: React.FC<UpdatePromptModalProps> = ({
   useEffect(() => {
     if (!isOpen) return;
     const api = window.electronAPI;
-    if (!api?.onUpdaterStateChanged) return;
+    if (!api) return;
 
-    const unsub = api.onUpdaterStateChanged((state: UpdaterState) => {
-      if (state.status === 'downloading') {
-        setIsDownloading(true);
-        if (state.downloadProgress) {
-          setProgress(state.downloadProgress);
+    if (typeof api.getUpdaterState === 'function') {
+      api.getUpdaterState().then((state) => {
+        if (!state) return;
+        if (state.status === 'downloading') {
+          setIsDownloading(true);
+          if (state.downloadProgress) {
+            setProgress(state.downloadProgress);
+            if (typeof state.downloadProgress.percent === 'number') {
+              setDisplayPercent(Math.round(state.downloadProgress.percent));
+            }
+          }
+        } else if (state.status === 'downloaded') {
+          setIsDownloading(false);
+          setIsDownloaded(true);
+        } else if (state.status === 'error') {
+          setIsDownloading(false);
+          setError(state.error || 'Failed to download update');
         }
-      } else if (state.status === 'downloaded') {
-        setIsDownloading(false);
-        setIsDownloaded(true);
-      } else if (state.status === 'error') {
-        setIsDownloading(false);
-        setError(state.error || 'Failed to download update');
-      }
-    });
+      }).catch(() => {});
+    }
 
-    return () => {
-      unsub();
-    };
+    if (typeof api.onUpdaterStateChanged === 'function') {
+      const unsub = api.onUpdaterStateChanged((state: UpdaterState) => {
+        if (state.status === 'downloading') {
+          setIsDownloading(true);
+          if (state.downloadProgress) {
+            setProgress(state.downloadProgress);
+            if (typeof state.downloadProgress.percent === 'number') {
+              setDisplayPercent((prev) => Math.max(prev, Math.round(state.downloadProgress!.percent)));
+            }
+          }
+        } else if (state.status === 'downloaded') {
+          setIsDownloading(false);
+          setIsDownloaded(true);
+        } else if (state.status === 'error') {
+          setIsDownloading(false);
+          setError(state.error || 'Failed to download update');
+        }
+      });
+
+      return () => {
+        unsub();
+      };
+    }
   }, [isOpen]);
 
   useEffect(() => {

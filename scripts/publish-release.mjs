@@ -40,29 +40,13 @@ if (!token) {
 
 const RELEASE_BODY = `## What's new in v${VERSION}
 
-### ⚡ BitTorrent Connecting & Metadata Timeout Fix
-- **Fixed Connection Stalls:** Resolved an issue where newly connected peers were inadvertently dropped after 15s before extension handshakes and PEX could complete. Each peer connection now has a guaranteed 12s window for handshake and peer exchange.
-- **Active DHT & Tracker Discovery:** Added periodic DHT \`lookup(infoHash)\` and tracker announces every 8–15s during the connecting phase to rapidly locate seeders.
-- **Enhanced Swarm Trackers:** Added high-availability public UDP, HTTP/HTTPS, and WebTorrent WebSocket trackers with automatic deduplication, plus DHT bootstrap nodes (\`router.bittorrent.com\`, \`dht.transmissionbt.com\`).
-- **Extended Watchdog:** Increased metadata discovery watchdog to 180s.
+### 📊 Real-Time Update Download Progress Bar
+- **Live Progress Tracking:** Manual update downloads in Settings and the update prompt modal now stream chunks with live percentage (1% → 100%), real-time download speed in MB/s, and transferred bytes counter.
+- **Immediate Sync:** Opening the update modal instantly syncs with any in-flight download progress instead of staying stuck at 0%.
 
-### 🔄 Live Subtitle Refresh in Whisper Studio & Detail View
-- **Instant UI Updates:** Generated subtitles (\`.whisper.srt\`) immediately appear as completed in Whisper Studio and Anime Detail views without requiring an application restart.
-- **Robust Path Normalization:** Normalized cross-platform slash conventions and case sensitivity between Windows paths and renderer state.
-- **Automatic Cache Invalidation:** The library disk scan cache is automatically purged when an episode finishes transcribing.
-
-### 🎬 High-FPS Subtitle Sync & Audio Drift Compensation
-- **Frame-Accurate Subtitles:** Replaced the 250ms HTML5 \`onTimeUpdate\` subtitle clock with a \`requestVideoFrameCallback\` animation loop, syncing subtitles directly with displayed video frames at 60+ FPS.
-- **Audio Resync on Weaker Hardware:** Added \`aresample=async=1000:min_hard_comp=0.100000\` to dynamically eliminate audio drift exceeding 100ms.
-- **Transcode Performance Cap:** Capped CPU video transcoding to 1080p (\`min(1920,iw)\`) with bounded threads, preventing 4K HEVC releases from pegging weak CPUs to 100%.
-- **ASS Subtitle Optimization:** Chronologically sorted combined ASS dialog events and increased JASSUB font cache to 32.
-
-### 📐 Player Top Bar Title Full-Width Expansion
-- **No More Title Truncation:** Removed artificial width restrictions (\`max-w-md md:max-w-2xl\`) in the player top navbar, allowing long anime and episode titles to expand naturally across the entire screen.
-- **Complete Title Tooltips:** Hovering over the title displays the full formatted anime title and episode name.
-
-### 🔧 Faster-Whisper Compatibility
-- Removed unsupported \`--hotwords\` CLI parameter to eliminate \`faster-whisper-xxl\` exit code 2 errors.
+### 🚫 Complete Torrent Cleanup & Duplicate Error Fix
+- **No More "Cannot Add Duplicate Torrent":** Deleting or canceling a downloading or connecting torrent now thoroughly terminates and purges the torrent from WebTorrent client memory.
+- **Clean Retries:** Re-adding a previously failed or stalled release automatically purges lingering instances and starts a fresh download.
 
 ---
 ### Assets included:

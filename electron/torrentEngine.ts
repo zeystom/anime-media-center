@@ -999,6 +999,17 @@ async function activateJob(job: InternalJob): Promise<void> {
     if (typeof s.uploadSpeedLimitMBps === 'number' && s.uploadSpeedLimitMBps > 0) {
       opts.uploadLimit = Math.floor(s.uploadSpeedLimitMBps * 1024 * 1024)
     }
+    // Purge any lingering torrent in WebTorrent client before adding, eliminating "Cannot add duplicate torrent"
+    if (c) {
+      try {
+        const existing = (c as any).get?.(job.infoHash)
+        if (existing) {
+          try { existing.destroy(undefined, () => {}) } catch {}
+          try { (c as any).remove?.(job.infoHash, undefined, () => {}) } catch {}
+        }
+      } catch {}
+    }
+
     const connectingTorrent = c.add(payload, opts, undefined) as TorrentLike | undefined
     if (connectingTorrent && typeof connectingTorrent.on === 'function') {
       job.connectingTorrent = connectingTorrent
@@ -1486,8 +1497,13 @@ export async function engineAddDownload(params: { item: ReleaseSearchResult; tit
       if (oldTorrent) {
         try { oldTorrent.destroy(null, () => {}) } catch {}
       }
+      if (client) {
+        try { (client as any).get?.(infoHash)?.destroy?.(undefined, () => {}) } catch {}
+        try { (client as any).remove?.(infoHash, undefined, () => {}) } catch {}
+      }
       existingJob.status = 'queued'
       existingJob.error = undefined
+      existingJob.connectingSince = undefined
       existingJob.fileSelectionDone = false
       existingJob.selectedFiles = null
       existingJob.selectedDone = 0
@@ -1697,10 +1713,19 @@ export function engineResume(infoHash: string): { success: boolean; error?: stri
 export async function engineCancel(infoHash: string, removeFiles = false): Promise<{ success: boolean; error?: string }> {
   const key = normHash(infoHash)
   const job = jobs.get(key)
-  if (!job) return { success: false, error: 'Unknown download' }
+  if (!job) {
+    if (client) {
+      try { (client as any).get?.(infoHash)?.destroy?.(removeFiles ? { destroyStore: true } : undefined, () => {}) } catch {}
+      try { (client as any).get?.(key)?.destroy?.(removeFiles ? { destroyStore: true } : undefined, () => {}) } catch {}
+      try { (client as any).remove?.(infoHash, removeFiles ? { destroyStore: true } : undefined, () => {}) } catch {}
+      try { (client as any).remove?.(key, removeFiles ? { destroyStore: true } : undefined, () => {}) } catch {}
+    }
+    return { success: false, error: 'Unknown download' }
+  }
   jobs.delete(key)
-  const torrent = job.torrent
+  const torrent = job.torrent || job.connectingTorrent
   job.torrent = null
+  job.connectingTorrent = null
   if (torrent) {
     await new Promise<void>((resolve) => {
       let settled = false
@@ -1709,13 +1734,20 @@ export async function engineCancel(infoHash: string, removeFiles = false): Promi
         settled = true
         resolve()
       }
-      const guard = setTimeout(finish, 3000)
+      setTimeout(finish, 3000)
       try {
         torrent.destroy(removeFiles ? { destroyStore: true } : undefined, () => finish())
       } catch {
         finish()
       }
     })
+  }
+  // Guarantee removal from WebTorrent client so it never throws "Cannot add duplicate torrent"
+  if (client) {
+    try { (client as any).get?.(infoHash)?.destroy?.(removeFiles ? { destroyStore: true } : undefined, () => {}) } catch {}
+    try { (client as any).get?.(key)?.destroy?.(removeFiles ? { destroyStore: true } : undefined, () => {}) } catch {}
+    try { (client as any).remove?.(infoHash, removeFiles ? { destroyStore: true } : undefined, () => {}) } catch {}
+    try { (client as any).remove?.(key, removeFiles ? { destroyStore: true } : undefined, () => {}) } catch {}
   }
   if (removeFiles) cleanupStage(job)
   writePersistFileNow()

@@ -1,5 +1,17 @@
 # Changelog
 
+## 1.0.13 — Live Update Progress Bar, Duplicate Torrent Prevention & Clean WebTorrent Unregister
+
+- **Live Streaming Update Progress Bar:**
+  - Fixed an issue where manual update downloads in Settings or the update modal stayed frozen at 0% without showing progress.
+  - Prioritized direct streaming downloads with live progress chunk reading, real-time speed calculation (MB/s), transferred bytes counter, and immediate visual progress bar movement.
+  - Automatically synchronized in-flight download progress as soon as the update prompt modal opens.
+- **Prevent "Cannot Add Duplicate Torrent" on Deleted / Retried Torrents:**
+  - Fixed an issue where deleting a stalled or connecting torrent left the internal WebTorrent client instance alive in memory, causing subsequent downloads of the same release to fail with a "Duplicate torrent" error.
+  - `engineCancel` now thoroughly destroys both `job.torrent` and `job.connectingTorrent`, explicitly purging the infoHash from the WebTorrent client instance.
+  - `activateJob` proactively purges any orphaned client instance before calling `client.add()`.
+  - Re-adding a previously failed or stalled release cleanly resets the job to queued and re-downloads fresh.
+
 ## 1.0.12 — BitTorrent Engine Connection Fix, Live Subtitle Refresh, High-FPS Subtitle Sync & Player Title Polish
 
 - **BitTorrent Connecting & Metadata Timeout Resolution:**

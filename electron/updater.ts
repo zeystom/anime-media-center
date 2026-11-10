@@ -160,10 +160,13 @@ export function initUpdater(mainWindowGetter: () => BrowserWindow | null): void 
       notes = await fetchReleaseNotesForVersion(info.version);
     }
 
+    const dlUrl = `https://github.com/${GITHUB_OWNER}/${GITHUB_REPO}/releases/download/v${info.version}/Kaiko-Setup-${info.version}.exe`;
     const payload: UpdateInfoPayload = {
       version: info.version,
       releaseDate: info.releaseDate,
       releaseNotes: notes,
+      downloadUrl: dlUrl,
+      fileName: `Kaiko-Setup-${info.version}.exe`,
     };
 
     updaterState.status = 'available';
@@ -421,6 +424,15 @@ async function downloadDirectAsset(url: string, fileName?: string | null, expect
   let lastTime = Date.now();
   let lastBytes = 0;
 
+  // Immediate initial progress tick so the UI progress bar wakes up at 1%
+  updaterState.downloadProgress = {
+    percent: 1,
+    bytesPerSecond: 0,
+    transferred: 0,
+    total,
+  };
+  broadcastState();
+
   try {
     while (true) {
       const { done, value } = await reader.read();
@@ -430,12 +442,12 @@ async function downloadDirectAsset(url: string, fileName?: string | null, expect
       maxTransferredBytes = Math.max(maxTransferredBytes, transferred);
 
       const now = Date.now();
-      if (now - lastTime >= 200) {
+      if (now - lastTime >= 150) {
         const bps = Math.round(((transferred - lastBytes) / (now - lastTime)) * 1000);
         lastTime = now;
         lastBytes = transferred;
         const currentPercent = total > 0 ? Math.min(100, Math.round((maxTransferredBytes / total) * 100)) : 0;
-        maxDownloadPercent = Math.max(maxDownloadPercent, currentPercent);
+        maxDownloadPercent = Math.max(maxDownloadPercent, Math.max(1, currentPercent));
         updaterState.downloadProgress = {
           percent: maxDownloadPercent,
           bytesPerSecond: Math.max(0, bps),
@@ -477,37 +489,46 @@ export async function downloadUpdate(): Promise<{ success: boolean; error?: stri
   activeDownloadPromise = (async () => {
     try {
       updaterState.status = 'downloading';
-      updaterState.downloadProgress = { percent: 0, bytesPerSecond: 0, transferred: 0, total: 100 };
+      updaterState.downloadProgress = { percent: 1, bytesPerSecond: 0, transferred: 0, total: 160 * 1024 * 1024 };
       broadcastState();
 
+      // Ensure downloadUrl and fileName are always populated
+      let dlUrl = updaterState.updateInfo?.downloadUrl;
+      const targetVersion = updaterState.updateInfo?.version;
+      if (!dlUrl && targetVersion) {
+        dlUrl = `https://github.com/${GITHUB_OWNER}/${GITHUB_REPO}/releases/download/v${targetVersion}/Kaiko-Setup-${targetVersion}.exe`;
+        if (updaterState.updateInfo) {
+          updaterState.updateInfo.downloadUrl = dlUrl;
+          updaterState.updateInfo.fileName = `Kaiko-Setup-${targetVersion}.exe`;
+        }
+      }
+
+      // 1. Direct streaming asset download guarantees smooth real-time progress updates with speed and transferred bytes
+      if (dlUrl) {
+        try {
+          console.log('[Updater] Downloading installer with live progress tracking:', dlUrl);
+          await downloadDirectAsset(dlUrl, updaterState.updateInfo?.fileName, updaterState.updateInfo?.fileSize);
+          return { success: true };
+        } catch (directErr: any) {
+          console.warn('[Updater] Direct streaming download failed, falling back to electron-updater:', directErr?.message || directErr);
+        }
+      }
+
+      // 2. Fallback to electron-updater if direct download was not possible
       const updater = getAutoUpdater();
       if (updater) {
         try {
           await updater.downloadUpdate();
           return { success: true };
         } catch (err: any) {
-          console.warn('[Updater] autoUpdater.downloadUpdate() threw, will try direct download fallback:', err?.message || err);
-        }
-      }
-
-      const dlUrl = updaterState.updateInfo?.downloadUrl;
-      if (dlUrl) {
-        try {
-          await downloadDirectAsset(dlUrl, updaterState.updateInfo?.fileName, updaterState.updateInfo?.fileSize);
-          return { success: true };
-        } catch (fallbackErr: any) {
-          console.warn('[Updater] Direct download fallback failed:', fallbackErr?.message || fallbackErr);
-          updaterState.status = 'error';
-          updaterState.error = fallbackErr?.message || 'Download failed';
-          broadcastState();
-          return { success: false, error: updaterState.error || 'Download failed' };
+          console.warn('[Updater] autoUpdater.downloadUpdate() threw:', err?.message || err);
         }
       }
 
       updaterState.status = 'error';
-      updaterState.error = 'No download URL available for update';
+      updaterState.error = 'Could not download update file';
       broadcastState();
-      return { success: false, error: updaterState.error || 'No download URL available for update' };
+      return { success: false, error: updaterState.error };
     } finally {
       activeDownloadPromise = null;
     }

@@ -199,8 +199,10 @@ export const SettingsModal: React.FC<SettingsModalProps> = ({
   useEffect(() => {
     if (updaterState.downloadProgress && typeof updaterState.downloadProgress.percent === 'number') {
       setUpdaterDisplayPercent((prev) => Math.max(prev, Math.round(updaterState.downloadProgress!.percent)));
+    } else if (updaterState.status === 'downloaded') {
+      setUpdaterDisplayPercent(100);
     }
-  }, [updaterState.downloadProgress]);
+  }, [updaterState.downloadProgress, updaterState.status]);
 
   useEffect(() => {
     if (isOpen) {
