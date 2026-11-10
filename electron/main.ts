@@ -23,7 +23,7 @@ import { getUpdatedAgeRatings, startAgeRatingsUpdater } from './ageRatings';
 import { computeDiskUsage, computeStorageOverview, deleteAnime, deleteEpisodes } from './libraryManager';
 import { syncBackupNow, getBackupStatus, detectRestoreState, restoreFromBackup, scheduleBackupSync } from './userDataBackup';
 import { exportWatchlist, importWatchlist, MAL_ONLY_ANILIST_ID_BASE } from './watchlistIO';
-import { initTorrentEngine, engineSetEnabled, engineAddDownload, enginePause, engineResume, engineCancel, engineGetState, engineShutdown } from './torrentEngine';
+import { initTorrentEngine, engineSetEnabled, engineAddDownload, enginePause, engineResume, engineCancel, engineGetState, engineShutdown, engineGetJobDiagnostics } from './torrentEngine';
 import { searchProviders, rankReleasesForEpisode, isExplicitEpisodeMismatch, explicitReleasePart, isExplicitPartMismatch, isExplicitSeasonMismatch, getEpisodeReleaseSizeWarning, sanitizeSearchQuery, extractInfoHash, fetchReleaseDescription, inspectReleaseResults, computeTitleRelevance } from './indexers';
 import {
   initUpdater,
@@ -1695,6 +1695,10 @@ function setupIpcHandlers() {
 
   ipcMain.handle('p2p:cancel', async (_event, infoHash: string, removeFiles?: boolean) => {
     return engineCancel(infoHash, Boolean(removeFiles));
+  });
+
+  ipcMain.handle('p2p:get-diagnostics', async (_event, infoHash: string) => {
+    return engineGetJobDiagnostics(infoHash);
   });
 
   ipcMain.handle('p2p:set-limits', async (_event, limits: { maxConcurrent?: number; downloadSpeedMBps?: number; uploadSpeedMBps?: number; seedMinutes?: number }) => {

@@ -40,22 +40,15 @@ if (!token) {
 
 const RELEASE_BODY = `## What's new in v${VERSION}
 
-### 🛑 Manual Update Confirmation & No Auto-Downloads
-- **User Confirmation Required:** Updates are now strictly downloaded only when you click **"Update Now"**. The app will no longer begin downloading the installer behind your back while you are viewing "What's New".
-- **Explicit Auto-Update Safeguard:** Configured \`autoUpdater.autoDownload = false\` so electron-updater never initiates downloads without user authorization.
-
-### ⚡ Differential Delta Updates (Save Bandwidth & Avoid 160 MB Downloads)
-- **Differential Blockmap Updates:** Packaged installations now utilize NSIS blockmap delta downloading to fetch only changed code chunks (typically ~5–15 MB) instead of re-downloading the entire 168 MB installer file.
-- **Direct Streaming Fallback:** If differential blockmaps are unavailable, the direct streaming download falls back seamlessly with real-time percentage, MB/s speed, and byte counters.
-- **Settings "Update Now":** Clicking "Update Now" in Settings immediately starts downloading with the inline progress bar.
-
-### 🚫 Complete Torrent Cleanup & Duplicate Error Fix
-- **No More "Cannot Add Duplicate Torrent":** Deleting or canceling a downloading or connecting torrent now thoroughly terminates and purges the torrent from WebTorrent client memory and active torrents arrays.
-- **Clean Retries:** Re-adding a previously failed or stalled release automatically purges lingering instances and starts a fresh download.
+### 📋 Clean Torrent Downloads UI & Full Diagnostic Clipboard Export
+- **Decluttered Torrent Cards:** Removed raw internal technical diagnostics, tracker timeout warnings, and error traces from direct text display on torrent cards in the Downloads tab. The cards now stay clean, showing title, episode badges, status, file size, peers, live speeds, and selected files.
+- **Notepad Button for Full History Copy:** Added a notepad icon button to every torrent item. One click copies the entire chronological event history, active peer wires, tracker states, DHT lookup, piece availability, and diagnostics to the clipboard, with an instant toast notification.
+- **Post-Cancel Diagnostic Caching:** Diagnostic snapshots are preserved in memory even if a torrent was recently cancelled or completed, allowing full post-mortem inspection.
 
 ---
 ### Assets included:
 - \`Kaiko-Setup-${VERSION}.exe\` — Windows NSIS installer
+- \`Kaiko-Setup-${VERSION}.exe.blockmap\` — Differential update blockmap
 - \`latest.yml\` — Auto-update metadata for electron-updater
 `;
 

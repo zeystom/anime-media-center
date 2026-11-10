@@ -126,6 +126,8 @@ interface InternalJob {
   /** Speed limit flags (legacy, kept for compatibility) */
   dlLimitedByCap?: boolean
   ulLimitedByCap?: boolean
+  /** Chronological event log recorded for diagnostic export */
+  eventLogs?: Array<{ time: string; msg: string; level?: 'info' | 'warn' | 'error' }>
 }
 
 const DOWNLOADS_FILE = 'downloads.json'
@@ -135,9 +137,19 @@ let client: TorrentClientLike | null = null
 let enabled = false
 const jobs = new Map<string, InternalJob>()
 const diagnosedTorrents = new WeakSet<TorrentLike>()
+const recentDiagnostics = new Map<string, string>()
 let seqCounter = 0
 
 // ---- Utilities ---------------------------------------------------------------
+
+function addJobLog(job: InternalJob, msg: string, level: 'info' | 'warn' | 'error' = 'info'): void {
+  if (!job.eventLogs) job.eventLogs = []
+  const time = new Date().toISOString().replace('T', ' ').slice(0, 19)
+  job.eventLogs.push({ time, msg, level })
+  if (job.eventLogs.length > 300) {
+    job.eventLogs.shift()
+  }
+}
 
 function log(...args: unknown[]): void {
   console.log('[torrentEngine]', ...args)
@@ -549,6 +561,104 @@ export function engineGetState(): { enabled: boolean; consentAccepted: boolean; 
   }
 }
 
+export function engineGetJobDiagnostics(infoHash: string): string {
+  const key = normHash(infoHash)
+  const job = jobs.get(key)
+  const cached = recentDiagnostics.get(key)
+  const now = new Date().toISOString()
+  if (!job) {
+    if (cached) return cached
+    return `================================================================================\nKAIKO TORRENT DIAGNOSTICS\n================================================================================\nTime: ${now}\nNotice: Torrent "${infoHash}" is not active in memory (cancelled or already cleared).\n`
+  }
+
+  const t = job.torrent || job.connectingTorrent || null
+  const lines: string[] = []
+  lines.push('================================================================================')
+  lines.push('KAIKO TORRENT FULL DIAGNOSTIC REPORT')
+  lines.push('================================================================================')
+  lines.push(`Generated: ${now}`)
+  lines.push(`App Version: 1.0.15 (Platform: ${process.platform}, Arch: ${process.arch}, Node: ${process.version})`)
+  lines.push('')
+  lines.push('--- [1] JOB OVERVIEW ---')
+  lines.push(`Title: ${job.title}`)
+  lines.push(`Release: ${job.releaseTitle || 'N/A'}`)
+  lines.push(`InfoHash: ${job.infoHash}`)
+  lines.push(`Status: ${job.status}`)
+  lines.push(`Added At: ${new Date(job.addedAt).toISOString()}`)
+  lines.push(`Anime Folder: ${job.animeFolder}`)
+  lines.push(`Staging Directory: ${job.downloadDir}`)
+  lines.push(`Magnet URI: ${job.magnetUri}`)
+  lines.push(`Reported Seeders at Search: ${job.reportedSeeders ?? 'N/A'} (Provider: ${job.providerName || 'N/A'})`)
+  lines.push(`Requested Episode: ${job.requestedEpisode ?? 'All / Season'}`)
+  if (job.requestedEpisodes) lines.push(`Requested Episodes: [${job.requestedEpisodes.join(', ')}]`)
+  if (job.requestedSeason != null) lines.push(`Requested Season: ${job.requestedSeason}`)
+  lines.push(`Error: ${job.error || 'None'}`)
+  lines.push(`Last Warning: ${job.lastWarning || 'None'}`)
+  lines.push('')
+  lines.push('--- [2] LIVE SWARM & TRANSFER METRICS ---')
+  const progressPct = job.selectedProgress != null ? (job.selectedProgress * 100).toFixed(1) + '%' : (t?.progress ? (t.progress * 100).toFixed(1) + '%' : '0%')
+  lines.push(`Progress: ${progressPct}`)
+  lines.push(`Downloaded Bytes: ${t?.downloaded || 0} / ${job.selectedTotalBytes || t?.length || 0}`)
+  lines.push(`Download Speed: ${((t?.downloadSpeed || 0) / (1024 * 1024)).toFixed(2)} MB/s`)
+  lines.push(`Upload Speed: ${((t?.uploadSpeed || 0) / (1024 * 1024)).toFixed(2)} MB/s`)
+  lines.push(`Connected Live Peers (numPeers): ${t?.numPeers ?? 0}`)
+  lines.push(`Missing Pieces: ${job.missingPieces ?? 'N/A'}`)
+  lines.push(`Available Missing Pieces: ${job.availableMissingPieces ?? 'N/A'}`)
+  lines.push(`Stall Recovery Count: ${job.stallRecoveryCount || 0}`)
+  lines.push('')
+  lines.push('--- [3] SELECTED FILES ---')
+  if (job.selectedFiles && job.selectedFiles.length > 0) {
+    for (const f of job.selectedFiles) {
+      lines.push(`* ${f.name} (length: ${f.length || 0} B, done: ${Boolean(f.done)}, progress: ${f.progress || 0})`)
+    }
+  } else {
+    lines.push('(None selected yet / metadata loading)')
+  }
+  lines.push('')
+  lines.push('--- [4] ACTIVE WIRES (CONNECTED PEERS) ---')
+  const wires = (t as any)?.wires
+  if (Array.isArray(wires) && wires.length > 0) {
+    wires.forEach((w: any, idx: number) => {
+      const addr = w.remoteAddress ? `${w.remoteAddress}:${w.remotePort || ''}` : 'unknown'
+      const clientStr = w.peerExtendedHandshake?.v || w.type || 'unknown'
+      const hasMeta = Boolean(w.peerExtendedHandshake?.m?.ut_metadata)
+      const metaSize = w.peerExtendedHandshake?.metadata_size || 'N/A'
+      const downRate = ((w.downloadSpeed?.() || 0) / 1024).toFixed(1)
+      const upRate = ((w.uploadSpeed?.() || 0) / 1024).toFixed(1)
+      const connectedSec = w._connectedAt ? Math.floor((Date.now() - w._connectedAt) / 1000) : 0
+      lines.push(`[Wire #${idx + 1}] ${addr} | Client: ${clientStr} | Age: ${connectedSec}s | ↓${downRate}KB/s ↑${upRate}KB/s | ut_metadata: ${hasMeta} (size: ${metaSize}) | Pieces: ${w._lastMetadataPieces || 0}`)
+    })
+  } else {
+    lines.push('(No active peer wires connected currently)')
+  }
+  lines.push('')
+  lines.push('--- [5] TRACKERS & DHT ---')
+  const discovery = (t as any)?.discovery
+  const trackers = discovery?.tracker?.trackers
+  if (Array.isArray(trackers) && trackers.length > 0) {
+    for (const tr of trackers) {
+      lines.push(`- ${tr.announceUrl || tr.url || tr} (state: ${tr.state || 'N/A'}, peers: ${tr.peers || 0})`)
+    }
+  } else {
+    lines.push(`Configured fallback trackers: ${FALLBACK_TRACKERS.length}`)
+  }
+  const dht = (t as any)?.discovery?.dht || (client as any)?.dht
+  lines.push(`DHT Listening: ${Boolean(dht?.listening)}, DHT Nodes: ${dht?.nodes?.length || 0}`)
+  lines.push('')
+  lines.push('--- [6] CHRONOLOGICAL EVENT HISTORY ---')
+  if (job.eventLogs && job.eventLogs.length > 0) {
+    for (const logItem of job.eventLogs) {
+      lines.push(`[${logItem.time}] [${(logItem.level || 'info').toUpperCase()}] ${logItem.msg}`)
+    }
+  } else {
+    lines.push('(No event logs recorded for this job)')
+  }
+  lines.push('================================================================================')
+  const report = lines.join('\n')
+  recentDiagnostics.set(key, report)
+  return report
+}
+
 function toTorrentJob(job: InternalJob): TorrentJob {
   const t = job.torrent || job.connectingTorrent || null
   // For selective jobs report progress over the selected files; torrent-level
@@ -620,6 +730,7 @@ function attachClientHandlers(c: TorrentClientLike): void {
     if (!job || job.status === 'error') return
     job.status = 'error'
     job.error = errMsg(err)
+    addJobLog(job, `Client-level error: ${errMsg(err)}`, 'error')
     emitState()
     writePersistFileNow()
   })
@@ -651,6 +762,7 @@ function startTicker(): void {
         const reported = job.reportedSeeders == null ? '' : ` The indexer reported ${job.reportedSeeders} seeders at search time; that count is not live.`
         job.error = `No torrent metadata after ${CONNECTING_WATCHDOG_MS / 1000}s. App connected to ${livePeers} peers.${reported}${trackerDetail} Check tracker/DHT access or try another release.`
         warn(`job ${job.infoHash}: `, job.error)
+        addJobLog(job, `Watchdog timeout after ${CONNECTING_WATCHDOG_MS / 1000}s: ${job.error}`, 'error')
         try { job.connectingTorrent?.destroy(undefined, () => {}) } catch {}
         job.connectingTorrent = null
         emitState()
@@ -669,6 +781,7 @@ function startTicker(): void {
           try { disc?.dht?.lookup?.(job.infoHash) } catch {}
           try { (client as any)?.dht?.lookup?.(job.infoHash) } catch {}
           try { disc?._dhtAnnounce?.() } catch {}
+          addJobLog(job, `Active discovery: polled trackers & DHT lookup. Live peers: ${numPeers}`)
         }
 
         // Wire maintenance: cycle unproductive or stalled peers so WebTorrent connects to new discovered peers
@@ -683,11 +796,13 @@ function startTicker(): void {
               const hasExtended = handshake && typeof handshake === 'object' && Object.keys(handshake).length > 0
               if (!hasExtended) {
                 // Handshake never completed in 12s -> drop unresponsive wire
+                addJobLog(job, `Dropping peer ${wire.remoteAddress || 'wire'}: handshake incomplete after 12s`, 'warn')
                 try { wire.destroy() } catch {}
                 continue
               }
               // If remote peer explicitly lacks metadata support or metadata size
               if (!handshake.m?.ut_metadata || !handshake.metadata_size || wire._noMetadata) {
+                addJobLog(job, `Dropping peer ${wire.remoteAddress || 'wire'}: lacks ut_metadata extension or size`, 'warn')
                 try { wire.destroy() } catch {}
                 continue
               }
@@ -706,11 +821,13 @@ function startTicker(): void {
               if (piecesCount > (wire._lastMetadataPieces || 0)) {
                 wire._lastMetadataPieces = piecesCount
                 wire._lastPieceAt = now
+                addJobLog(job, `Metadata pieces received: ${piecesCount} pieces from ${wire.remoteAddress || 'peer'}`)
               }
 
               if (piecesCount === 0) {
                 if (wireElapsed >= 30_000) {
                   // Stalled peer for >30s: delivered 0 pieces -> drop wire to cycle connection slot
+                  addJobLog(job, `Dropping peer ${wire.remoteAddress || 'wire'}: 0 metadata pieces in 30s`, 'warn')
                   try { wire.destroy() } catch {}
                 } else if (wireElapsed >= 15_000 && wireElapsed % 5_000 < 1_000) {
                   // Re-request metadata pieces in case initial request was missed
@@ -720,8 +837,10 @@ function startTicker(): void {
                 // Peer has delivered pieces: allow time to finish, only drop if stalled for >35s with no new pieces
                 const pieceStallTime = wire._lastPieceAt ? now - wire._lastPieceAt : 0
                 if (pieceStallTime >= 35_000) {
+                  addJobLog(job, `Dropping peer ${wire.remoteAddress || 'wire'}: piece delivery stalled for >35s`, 'warn')
                   try { wire.destroy() } catch {}
                 } else if (pieceStallTime >= 15_000 && pieceStallTime % 5_000 < 1_000) {
+                  // Re-request metadata pieces in case initial request was missed
                   try { wire.ut_metadata?.fetch?.() } catch {}
                 }
               }
@@ -790,6 +909,7 @@ function handleTorrentReady(torrent: TorrentLike): void {
   job.torrent = torrent
   job.connectingTorrent = null
   if (typeof torrent.magnetURI === 'string' && torrent.magnetURI) job.magnetUri = torrent.magnetURI
+  addJobLog(job, `Torrent metadata resolved successfully. Files in release: ${torrent.files?.length || 0}`)
   attachTorrentDiagnostics(job, torrent)
   if (job.status === 'paused') {
     // Pause was clicked while the metadata was still loading — honor it now.
@@ -824,20 +944,27 @@ function attachTorrentDiagnostics(job: InternalJob, torrent: TorrentLike): void 
     if (jobs.get(job.infoHash) !== job || (job.torrent !== torrent && job.connectingTorrent !== torrent)) return
     const message = errMsg(err)
     warn(`torrent ${job.infoHash} failed:`, message)
+    addJobLog(job, `Torrent client error: ${message}`, 'error')
     failJob(job, `Torrent client error: ${message}`)
   })
   torrent.on('warning', (err: unknown) => {
     if (jobs.get(job.infoHash) !== job || (job.torrent !== torrent && job.connectingTorrent !== torrent)) return
     job.lastWarning = errMsg(err)
     warn(`torrent ${job.infoHash} warning:`, job.lastWarning)
+    addJobLog(job, `Torrent warning: ${job.lastWarning}`, 'warn')
     emitState()
   })
   if (typeof torrent.on === 'function') {
     torrent.on('wire', (wire: any) => {
       if (wire) {
         wire._connectedAt = Date.now()
-        wire.ut_metadata?.on?.('warning', () => {
+        addJobLog(job, `Peer wire connected: ${wire.remoteAddress || 'unknown'}:${wire.remotePort || ''} (${wire.clientName || 'unknown client'})`)
+        wire.ut_metadata?.on?.('warning', (wErr: any) => {
           wire._noMetadata = true
+          addJobLog(job, `Peer ${wire.remoteAddress || 'wire'} ut_metadata warning: ${errMsg(wErr)}`, 'warn')
+        })
+        wire.on?.('close', () => {
+          addJobLog(job, `Peer wire closed: ${wire.remoteAddress || 'unknown'}`)
         })
       }
     })
@@ -899,7 +1026,7 @@ function resumePersistedJobs(): number {
     const animeFolder = typeof entry.animeFolder === 'string' && entry.animeFolder
       ? entry.animeFolder
       : path.join(base, sanitizePathSegment(entry.title || infoHash))
-    jobs.set(infoHash, {
+    const jobObj: InternalJob = {
       infoHash,
       title: typeof entry.title === 'string' ? entry.title : infoHash,
       releaseTitle: typeof entry.releaseTitle === 'string' ? entry.releaseTitle : undefined,
@@ -928,7 +1055,9 @@ function resumePersistedJobs(): number {
       selectedTotalBytes: 0,
       reportedSeeders: typeof entry.reportedSeeders === 'number' ? entry.reportedSeeders : null,
       providerName: typeof entry.providerName === 'string' ? entry.providerName : undefined,
-    })
+    }
+    addJobLog(jobObj, 'Restored job from persistent cache')
+    jobs.set(infoHash, jobObj)
     added += 1
   }
   if (added > 0) {
@@ -973,10 +1102,12 @@ async function activateJob(job: InternalJob): Promise<void> {
   const s = getSettings()
   if (!isEngineAllowed(s)) return
   setJobStatus(job, 'connecting')
+  addJobLog(job, `Activating download job. Target stage: ${job.downloadDir}`)
   const c = await getClient()
   if (jobs.get(job.infoHash) !== job) return
   if (!c) {
     job.status = 'queued'
+    addJobLog(job, 'Client unavailable, job re-queued', 'warn')
     return
   }
   try {
@@ -1108,6 +1239,7 @@ function restartStalledJob(job: InternalJob): void {
   job.torrent = null
   job.recoveryInProgress = true
   job.lastWarning = undefined
+  addJobLog(job, `Stall detected: no progress for 75s. Restarting peer discovery (attempt ${job.stallRecoveryCount}/2).`, 'warn')
   emitState()
 
   let finished = false
@@ -1374,6 +1506,7 @@ function selectFilesForJob(job: InternalJob, torrent: TorrentLike): TorrentFileL
       file.deselect?.()
     }
   }
+  addJobLog(job, `Selected ${chosen.length} of ${torrent.files.length} file(s) for download: ${chosen.map((f) => f.name).slice(0, 5).join(', ')}${chosen.length > 5 ? '...' : ''}`)
   return chosen
 }
 
@@ -1382,6 +1515,7 @@ function failJob(job: InternalJob, message: string): void {
   job.error = message
   job.selectedFiles = []
   job.selectedProgress = null
+  addJobLog(job, `Job failed: ${message}`, 'error')
   emitState()
   writePersistFileNow()
 }
@@ -1409,6 +1543,7 @@ function onTorrentDone(job: InternalJob, torrent: TorrentLike): void {
   const seedMinutes = Math.max(0, typeof s.seedMinutesAfterComplete === 'number' ? s.seedMinutesAfterComplete : 0)
   console.log('[torrentEngine] torrent done, seedMinutes:', seedMinutes)
   job.completedAt = Date.now()
+  addJobLog(job, `Download completed. Seeding for ${seedMinutes}m.`)
   if (seedMinutes <= 0) {
     setJobStatus(job, 'completed')
     // A selected file emits `done` from inside WebTorrent's `_checkDone()`.
@@ -1418,6 +1553,7 @@ function onTorrentDone(job: InternalJob, torrent: TorrentLike): void {
     // even though all bytes were downloaded. Let the completion stack unwind.
     setImmediate(() => {
       if (job.torrent !== torrent) return // it was cancelled or replaced meanwhile
+      engineGetJobDiagnostics(job.infoHash) // snapshot for recentDiagnostics cache
       torrent.destroy(undefined, () => {
         cleanupStage(job)
         if (jobs.get(job.infoHash) === job) jobs.delete(job.infoHash)
@@ -1534,6 +1670,7 @@ export async function engineAddDownload(params: { item: ReleaseSearchResult; tit
       existingJob.filesProgress = []
       existingJob.lastProgressAt = undefined
       existingJob.lastProgressBytes = undefined
+      addJobLog(existingJob, 'Re-queued job from error state for retry')
       emitState()
       writePersistFileNow()
       runScheduler()
@@ -1642,6 +1779,7 @@ export async function engineAddDownload(params: { item: ReleaseSearchResult; tit
     reportedSeeders: typeof params.item.seeders === 'number' ? params.item.seeders : null,
     providerName: params.item.providerName,
   }
+  addJobLog(job, `Job created and queued. Title: "${title}", Seeders: ${job.reportedSeeders ?? 'N/A'}, Provider: ${job.providerName || 'N/A'}`)
   jobs.set(infoHash, job)
   writePersistFileNow()
   emitState()
@@ -1706,6 +1844,7 @@ export function enginePause(infoHash: string): { success: boolean; error?: strin
     }
   }
   setJobStatus(job, 'paused')
+  addJobLog(job, 'Job paused by user')
   runScheduler()
   return { success: true }
 }
@@ -1728,6 +1867,7 @@ export function engineResume(infoHash: string): { success: boolean; error?: stri
     job.status = 'queued'
     runScheduler()
   }
+  addJobLog(job, 'Job resumed by user')
   emitState()
   return { success: true }
 }
@@ -1754,6 +1894,8 @@ export async function engineCancel(infoHash: string, removeFiles = false): Promi
     }
     return { success: false, error: 'Unknown download' }
   }
+  addJobLog(job, `Job cancelled by user (removeFiles=${removeFiles})`)
+  engineGetJobDiagnostics(key)
   jobs.delete(key)
   const torrent = job.torrent || job.connectingTorrent
   job.torrent = null

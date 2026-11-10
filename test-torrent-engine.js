@@ -26,6 +26,7 @@ const {
   engineCancel,
   engineGetState,
   engineShutdown,
+  engineGetJobDiagnostics,
   sanitizePathSegment,
   extractInfoHashFromMagnet,
   extractTorrentMeta,
@@ -638,6 +639,39 @@ await expectCase('(9) persisted unfinished jobs are silently re-added on enable'
     'persisted jobs re-activated'
   )
   assert.strictEqual(fake2.added.length, 2, 'both markers re-added to the client')
+  engineShutdown()
+})
+
+await expectCase('(10) engineGetJobDiagnostics generates detailed report and caches upon cancel', async () => {
+  engineShutdown()
+  const { fake } = setupEngine()
+  fake.registry.set(HASH_A, { files: ['DiagShow S01E01.mkv'], name: 'DiagShow', infoHash: HASH_A })
+  assert.strictEqual((await engineSetEnabled(true)).success, true)
+  const res = await engineAddDownload({ item: magnetItem(HASH_A), title: 'Diagnostics Test Show', episode: 1 })
+  assert.strictEqual(res.success, true)
+  await until(() => statusOf(HASH_A) === 'downloading', 'job is downloading')
+
+  // Generate live report
+  const liveReport = engineGetJobDiagnostics(HASH_A)
+  assert.ok(liveReport.includes('KAIKO TORRENT FULL DIAGNOSTIC REPORT'), 'contains header')
+  assert.ok(liveReport.includes('Diagnostics Test Show'), 'contains title')
+  assert.ok(liveReport.includes('LIVE SWARM & TRANSFER METRICS'), 'contains swarm metrics')
+  assert.ok(liveReport.includes('CHRONOLOGICAL EVENT HISTORY'), 'contains event history')
+  assert.ok(liveReport.includes('DiagShow S01E01.mkv'), 'contains selected file')
+
+  // Cancel the job
+  const cancelRes = await engineCancel(HASH_A)
+  assert.strictEqual(cancelRes.success, true)
+
+  // Report should still be retrievable from recentDiagnostics cache
+  const cachedReport = engineGetJobDiagnostics(HASH_A)
+  assert.strictEqual(cachedReport.includes('KAIKO TORRENT FULL DIAGNOSTIC REPORT'), true)
+  assert.strictEqual(cachedReport.includes('Diagnostics Test Show'), true)
+
+  // Non-existent hash
+  const missingReport = engineGetJobDiagnostics('1111111111111111111111111111111111111111')
+  assert.ok(missingReport.includes('is not active in memory'), 'handles unknown hash safely')
+
   engineShutdown()
 })
 

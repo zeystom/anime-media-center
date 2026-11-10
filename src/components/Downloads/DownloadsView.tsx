@@ -6,7 +6,7 @@
  * onP2pStateChanged).
  */
 import React, { useCallback, useEffect, useMemo, useRef, useState } from 'react'
-import { AlertTriangle, Check, Film, FolderOpen, HardDrive, Pause, Play, RefreshCw, Trash2, X } from 'lucide-react'
+import { AlertTriangle, Check, Film, FileText, FolderOpen, HardDrive, Pause, Play, RefreshCw, Trash2, X } from 'lucide-react'
 import type { AnimeFolder, P2pState, StorageOverview, StorageTitleUsage, TorrentJob, TorrentJobStatus } from '../../types'
 import { formatFileSize } from '../../utils/format'
 import { showGlobalToast } from '../Toast'
@@ -61,54 +61,6 @@ function jobStatusChip(status: TorrentJobStatus): { label: string; className: st
 /** Formats bytes/sec as MB/s with one decimal. */
 function formatSpeedMBs(bytesPerSecond: number): string {
   return `${(bytesPerSecond / (1024 * 1024)).toFixed(1)} MB/s`
-}
-
-function getJobDiagnostic(job: TorrentJob): string | null {
-  if (job.status === 'error') {
-    return job.error || 'The app could not start this download. Check the error details and try again.'
-  }
-  if (job.status === 'queued') return 'Waiting for a free download slot in the app.'
-  if (job.status === 'connecting') {
-    if ((job.stallRecoveryCount || 0) > 0) {
-      return `Refreshing peer connections to retry the missing data (attempt ${job.stallRecoveryCount}/2). The partial download is being kept.`
-    }
-    const reported = job.reportedSeeders == null
-      ? 'The indexer did not report a seed count.'
-      : job.reportedSeeders === 0
-        ? 'The indexer reported 0 seeders when searched; this release may be inactive.'
-        : `${job.providerName || 'The indexer'} reported ${job.reportedSeeders} seeders at search time; that count is not live.`
-    const waited = (job.connectingSeconds ?? 0) > 15
-      ? ` Waiting ${Math.floor((job.connectingSeconds ?? 0) / 60)}m ${String((job.connectingSeconds ?? 0) % 60).padStart(2, '0')}s for metadata.`
-      : ' Waiting for torrent metadata.'
-    const livePeers = ` App connected to ${job.peers || 0} live peers.`
-    const networkWarning = job.torrentWarning ? ` WebTorrent warning: ${job.torrentWarning}.` : ''
-    return `${reported}${waited}${livePeers}${networkWarning} If it stays here, check tracker/DHT access or try another release.`
-  }
-  if (job.status === 'downloading' && (job.noProgressSeconds || 0) >= 30) {
-    const elapsed = job.noProgressSeconds || 0
-    const waited = elapsed >= 60
-      ? `${Math.floor(elapsed / 60)}m ${String(elapsed % 60).padStart(2, '0')}s`
-      : `${elapsed}s`
-    if ((job.peers || 0) === 0) {
-      return `No data received for ${waited} and no peers are connected. The release may be inactive, or the network may be blocking BitTorrent.`
-    }
-    if (job.torrentWarning) {
-      return `No data received for ${waited}. WebTorrent reported: ${job.torrentWarning}`
-    }
-    if ((job.stallRecoveryCount || 0) >= 2 && (job.availableMissingPieces || 0) > 0) {
-      return `No data received for ${waited} after two peer refreshes. Peers advertise the remaining pieces, but none is arriving; check free disk space, network filtering, or try another source.`
-    }
-    if (job.missingPieces != null && job.availableMissingPieces != null) {
-      if (job.availableMissingPieces === 0 && job.missingPieces > 0) {
-        return `No data received for ${waited}. None of the ${job.peers} connected peers advertises the ${job.missingPieces} remaining piece${job.missingPieces === 1 ? '' : 's'}; this points to an incomplete swarm. The indexer's seed count is not live.`
-      }
-      if (job.availableMissingPieces > 0) {
-        return `No data received for ${waited}, although peers advertise ${job.availableMissingPieces} of ${job.missingPieces} missing pieces. Check the torrent error details, disk space, and network; the swarm does have some required pieces.`
-      }
-    }
-    return `No new data received for ${waited} despite ${job.peers} connected peers. They may not have the remaining pieces; the seed count from search time is not live. If this continues, try another release.`
-  }
-  return null
 }
 
 export const DownloadsView: React.FC<DownloadsViewProps> = ({ onRefreshLibrary, folders }) => {
@@ -211,6 +163,26 @@ export const DownloadsView: React.FC<DownloadsViewProps> = ({ onRefreshLibrary, 
       console.error('Failed to open folder:', err)
       showGlobalToast('Failed to open the download folder', 'error')
     })
+  }
+
+  const handleCopyDiagnostics = async (infoHash: string) => {
+    try {
+      const getDiag = window.electronAPI?.getTorrentDiagnostics
+      if (!getDiag) {
+        showGlobalToast('Diagnostics not available in current environment', 'warning')
+        return
+      }
+      const report = await getDiag(infoHash)
+      if (report) {
+        await navigator.clipboard.writeText(report)
+        showGlobalToast('Torrent diagnostics copied to clipboard', 'success')
+      } else {
+        showGlobalToast('No diagnostic history available for this torrent', 'warning')
+      }
+    } catch (err) {
+      console.error('Failed to copy torrent diagnostics:', err)
+      showGlobalToast('Failed to copy diagnostics to clipboard', 'error')
+    }
   }
 
   const handleDeleteConfirmed = async () => {
@@ -468,7 +440,6 @@ export const DownloadsView: React.FC<DownloadsViewProps> = ({ onRefreshLibrary, 
               const confirming = confirmCancelHash === job.infoHash
               const progressPct = Math.max(0, Math.min(100, job.progress || 0))
               const showSpeeds = (job.downloadSpeed || 0) > 0 || (job.uploadSpeed || 0) > 0
-              const diagnostic = getJobDiagnostic(job)
 
               return (
                 <div
@@ -532,14 +503,17 @@ export const DownloadsView: React.FC<DownloadsViewProps> = ({ onRefreshLibrary, 
                           Selected: {job.selectedFiles.slice(0, 2).join(', ')}{job.selectedFiles.length > 2 ? ` +${job.selectedFiles.length - 2} more` : ''}
                         </p>
                       )}
-                      {diagnostic && (
-                        <p className={`mt-1 text-[11px] leading-relaxed 2xl:text-xs ${job.status === 'error' ? 'text-red-300' : job.reportedSeeders === 0 || (job.noProgressSeconds || 0) >= 30 ? 'text-amber-300' : 'text-zinc-400'}`}>
-                          {diagnostic}
-                        </p>
-                      )}
                     </div>
 
                     <div className="flex shrink-0 items-center gap-1.5">
+                      <button
+                        type="button"
+                        onClick={() => handleCopyDiagnostics(job.infoHash)}
+                        title="Copy diagnostic history to clipboard"
+                        className="flex h-8 w-8 items-center justify-center rounded-full border border-white/10 bg-zinc-800/60 text-zinc-400 transition-colors hover:bg-zinc-700/60 hover:text-white"
+                      >
+                        <FileText className="h-4 w-4" />
+                      </button>
                       {(canPause || canResume) && (
                         <button
                           type="button"

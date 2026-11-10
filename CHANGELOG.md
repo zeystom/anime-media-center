@@ -1,5 +1,22 @@
 # Changelog
 
+## 1.0.15 — Clean Torrent Cards & Full Diagnostic History Clipboard Export
+
+- **Clean Torrent Downloads UI (No Raw Log Clutter):**
+  - Removed raw internal technical diagnostics, tracker timeout warnings, and error traces from direct text display on torrent cards in the Downloads tab.
+  - The card now remains clean and focused: series title, episode/season badges, clean status chip, progress bar, file size, peer count, live transfer speeds, and selected files.
+- **Copy Full Diagnostic History Button (Notepad Icon):**
+  - Added a notepad (`FileText`) button to every torrent item in the Downloads page.
+  - Clicking the notepad instantly exports the complete chronological event history and network diagnostics to the clipboard, along with an instant toast notification.
+  - The exported report contains:
+    - **Job Overview**: title, release name, infoHash, status, added date, folder/staging paths, magnet URI, reported seeders vs provider.
+    - **Live Swarm & Transfer Metrics**: progress %, downloaded / total bytes, download / upload speeds, live connected peers, missing pieces, available missing pieces, stall recovery count.
+    - **Selected Files**: file names, lengths, done status, progress.
+    - **Active Wires**: remote address/port, client version/peer ID, connection age, down/up speeds, `ut_metadata` extension support & size, delivered metadata pieces.
+    - **Trackers & DHT**: active tracker URLs and announce states, DHT listening status & node count.
+    - **Chronological Event Log**: every timestamped action from job creation to present (connecting, wire handshakes, metadata pieces received, timeouts, file selection, stall restarts).
+  - Diagnostic history is cached even after cancelling or clearing a torrent, so diagnostics remain exportable.
+
 ## 1.0.14 — Manual Update Confirmation, Differential Blockmap Updates & Complete WebTorrent Purge
 
 - **Manual Update Confirmation (No Unwanted Background Downloads):**

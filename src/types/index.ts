@@ -185,6 +185,7 @@ export interface ElectronAPI {
   pauseDownload: (infoHash: string) => Promise<{ success: boolean }>;
   resumeDownload: (infoHash: string) => Promise<{ success: boolean }>;
   cancelDownload: (infoHash: string, removeFiles?: boolean) => Promise<{ success: boolean; error?: string }>;
+  getTorrentDiagnostics?: (infoHash: string) => Promise<string>;
   setP2pLimits: (limits: { maxConcurrent?: number; downloadSpeedMBps?: number; uploadSpeedMBps?: number; seedMinutes?: number }) => Promise<AppSettings>;
   getP2pProviders: () => Promise<RssProvider[]>;
   saveP2pProviders: (providers: RssProvider[]) => Promise<{ success: boolean; error?: string }>;

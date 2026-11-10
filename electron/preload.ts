@@ -186,6 +186,7 @@ contextBridge.exposeInMainWorld('electronAPI', {
   pauseDownload: (infoHash: string) => ipcRenderer.invoke('p2p:pause', infoHash),
   resumeDownload: (infoHash: string) => ipcRenderer.invoke('p2p:resume', infoHash),
   cancelDownload: (infoHash: string, removeFiles?: boolean) => ipcRenderer.invoke('p2p:cancel', infoHash, removeFiles),
+  getTorrentDiagnostics: (infoHash: string) => ipcRenderer.invoke('p2p:get-diagnostics', infoHash) as Promise<string>,
   setP2pLimits: (limits: { maxConcurrent?: number; seedMinutes?: number }) =>
     ipcRenderer.invoke('p2p:set-limits', limits),
   getP2pProviders: () => ipcRenderer.invoke('p2p:get-providers'),
