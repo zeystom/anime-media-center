@@ -1,7 +1,7 @@
 import { spawn, ChildProcess } from 'child_process';
 import fs from 'fs';
 import path from 'path';
-import { app, BrowserWindow } from 'electron';
+import { app, BrowserWindow, Notification } from 'electron';
 import { resolveUserDataPath } from './userDataPath';
 import { WhisperLogMessage, WhisperQueueItem, WhisperStatus, WhisperOptions, WhisperLiveCue } from './types';
 import { storage } from './storage';
@@ -401,6 +401,14 @@ export class WhisperManager {
             item.progress = 100;
             completedCount++;
             this.sendLog(mainWindow, 'success', `[${i + 1}/${this.queue.length}] Completed: ${item.fileName}`);
+            if (mainWindow && !mainWindow.isDestroyed()) {
+              mainWindow.webContents.send('whisper-episode-done', {
+                fileName: item.fileName,
+                filePath: item.filePath,
+                index: i,
+                total: this.queue.length,
+              });
+            }
           } catch (err: any) {
             if (this.cancelled || this.currentRunId !== runId) {
               item.status = 'cancelled';
@@ -428,6 +436,17 @@ export class WhisperManager {
 
         if (mainWindow && !mainWindow.isDestroyed()) {
           mainWindow.webContents.send('whisper-done', { completedCount, failedCount });
+        }
+        if (completedCount > 0) {
+          try {
+            if (Notification.isSupported()) {
+              new Notification({
+                title: 'Kaiko - Subtitles Ready',
+                body: `Generated AI subtitles for ${completedCount} episode${completedCount === 1 ? '' : 's'}.`,
+                silent: true,
+              }).show();
+            }
+          } catch {}
         }
         this.sendLog(
           mainWindow,
@@ -614,7 +633,8 @@ export class WhisperManager {
           '--max_comma_cent', maxCommaCent.toString(),
           '--min_dist_to_end', minDistToEnd.toString(),
           '--output_format', 'srt',
-          '--output_dir', tmpDir
+          '--output_dir', tmpDir,
+          '--beep_off'
         );
 
         if (speechNorm) {

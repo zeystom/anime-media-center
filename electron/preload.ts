@@ -25,6 +25,11 @@ contextBridge.exposeInMainWorld('electronAPI', {
     ipcRenderer.on('whisper:model-download-progress', handler);
     return () => ipcRenderer.removeListener('whisper:model-download-progress', handler);
   },
+  onWhisperModelDownloadStatus: (callback: (data: { isDownloading: boolean; modelName: string | null }) => void) => {
+    const handler = (_event: Electron.IpcRendererEvent, data: { isDownloading: boolean; modelName: string | null }) => callback(data);
+    ipcRenderer.on('whisper:model-download-status', handler);
+    return () => ipcRenderer.removeListener('whisper:model-download-status', handler);
+  },
   autoDetectBinaries: () => ipcRenderer.invoke('auto-detect-binaries'),
   openExternalUrl: (url: string) => ipcRenderer.invoke('open-external-url', url),
   getLibraryCache: (rootPath?: string | string[]) => ipcRenderer.invoke('get-library-cache', rootPath),
@@ -75,6 +80,11 @@ contextBridge.exposeInMainWorld('electronAPI', {
     const handler = (_event: any, result: any) => callback(result);
     ipcRenderer.on('whisper-done', handler);
     return () => ipcRenderer.removeListener('whisper-done', handler);
+  },
+  onWhisperEpisodeDone: (callback: (data: { fileName: string; filePath: string; index: number; total: number }) => void) => {
+    const handler = (_event: any, data: any) => callback(data);
+    ipcRenderer.on('whisper-episode-done', handler);
+    return () => ipcRenderer.removeListener('whisper-episode-done', handler);
   },
   openFolderInExplorer: (folderPath: string) => ipcRenderer.invoke('open-folder', folderPath),
   checkDownloadProgress: (filePaths: string[]) => ipcRenderer.invoke('check-download-progress', filePaths),

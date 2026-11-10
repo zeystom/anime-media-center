@@ -58,10 +58,14 @@ export interface ElectronAPI {
     detectedCustomModels?: string[];
     customModelPath?: string;
     customModelDetectedName?: string | null;
+    isDownloadingModel?: boolean;
+    downloadingModelName?: string | null;
   }>;
   downloadWhisperModel?: (modelName: string) => Promise<{ success: boolean; modelName?: string; error?: string }>;
   cancelWhisperModelDownload?: () => Promise<boolean>;
   onModelDownloadProgress?: (callback: (data: { modelName: string; percent: number | null; text: string }) => void) => () => void;
+  onWhisperModelDownloadStatus?: (callback: (data: { isDownloading: boolean; modelName: string | null }) => void) => () => void;
+  onWhisperEpisodeDone?: (callback: (data: { fileName: string; filePath: string; index: number; total: number }) => void) => () => void;
   autoDetectBinaries: () => Promise<{ ffmpegPath: string; whisperPath: string }>;
   openExternalUrl: (url: string) => Promise<boolean>;
   getLibraryCache: (rootPath?: string | string[]) => Promise<import('../../electron/types').AnimeFolder[] | null>;

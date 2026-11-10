@@ -33,6 +33,7 @@ import {
 import { cleanSeriesTitle, cleanEpisodeTitle } from '../../utils/format';
 import { TerminalLog } from './TerminalLog';
 import { LiveDialogueStream } from './LiveDialogueStream';
+import { showGlobalToast } from '../Toast';
 
 import type { AppSettings } from '../../types';
 
@@ -222,12 +223,19 @@ export const WhisperStudio: React.FC<WhisperStudioProps> = ({
   const [userPromptOverride, setUserPromptOverride] = useState<string | null>(null);
   const [activeModel, setActiveModel] = useState<string>('large-v3-turbo');
   const [availableModels, setAvailableModels] = useState<string[]>(['large-v3-turbo']);
+  const [downloadingModelName, setDownloadingModelName] = useState<string | null>(null);
+  const [downloadingModelPercent, setDownloadingModelPercent] = useState<number | null>(null);
 
   // Load configured Whisper model and scan available models from application settings & binary check
   const refreshModels = React.useCallback(async () => {
     try {
       const s = await window.electronAPI?.getSettings?.();
       const status = await window.electronAPI?.checkBinaries?.();
+      if (status?.isDownloadingModel && status?.downloadingModelName) {
+        setDownloadingModelName(status.downloadingModelName);
+      } else if (status && !status.isDownloadingModel) {
+        setDownloadingModelName(null);
+      }
       let currentModel = settings?.whisperModel || s?.whisperModel || 'large-v3-turbo';
       const customPath = settings?.customModelPath !== undefined ? settings.customModelPath : s?.customModelPath;
       if (customPath) {
@@ -467,18 +475,45 @@ export const WhisperStudio: React.FC<WhisperStudioProps> = ({
       setIsProcessing(true);
     });
 
-    const unsubDone = window.electronAPI.onWhisperDone((_result) => {
+    const unsubDone = window.electronAPI.onWhisperDone((result) => {
       setIsProcessing(false);
       setCurrentFile('');
       onRefreshLibrary();
+      if (result && result.completedCount > 0) {
+        showGlobalToast(
+          `Batch complete: Subtitles generated for ${result.completedCount} episode${result.completedCount === 1 ? '' : 's'}!`,
+          'success',
+          5000
+        );
+      }
+    });
+
+    const unsubEpDone = window.electronAPI?.onWhisperEpisodeDone?.((data) => {
+      const displayTitle = cleanEpisodeTitle(data.fileName).displayTitle || data.fileName;
+      showGlobalToast(`Subtitles ready for "${displayTitle}" (${data.index + 1}/${data.total})`, 'success', 3500);
+    });
+
+    const unsubModelStatus = window.electronAPI?.onWhisperModelDownloadStatus?.((data) => {
+      setDownloadingModelName(data.isDownloading ? data.modelName : null);
+      if (!data.isDownloading) {
+        setDownloadingModelPercent(null);
+        refreshModels();
+      }
+    });
+
+    const unsubModelProg = window.electronAPI?.onModelDownloadProgress?.((data) => {
+      setDownloadingModelPercent(data.percent);
     });
 
     return () => {
       unsubLog();
       unsubProgress();
       unsubDone();
+      if (unsubEpDone) unsubEpDone();
+      if (unsubModelStatus) unsubModelStatus();
+      if (unsubModelProg) unsubModelProg();
     };
-  }, [onRefreshLibrary]);
+  }, [onRefreshLibrary, refreshModels]);
 
   const handleBrowseFolder = async () => {
     if (isProcessing) return;
@@ -567,6 +602,10 @@ export const WhisperStudio: React.FC<WhisperStudioProps> = ({
 
   const handleStartSeason = async () => {
     if (!selectedFolder) return;
+    if (downloadingModelName) {
+      showGlobalToast(`Cannot start generation: model "${downloadingModelName}" is currently downloading.`, 'warning');
+      return;
+    }
     if (!whisperExists) {
       if (onOpenSettings) onOpenSettings();
       return;
@@ -605,6 +644,10 @@ export const WhisperStudio: React.FC<WhisperStudioProps> = ({
 
   const handleStartSingleEpisode = async (ep: Episode) => {
     if (!selectedFolder || !whisperExists) return;
+    if (downloadingModelName) {
+      showGlobalToast(`Cannot start generation: model "${downloadingModelName}" is currently downloading.`, 'warning');
+      return;
+    }
     setIsProcessing(true);
     setLiveCues([]);
     setLogs((prev) => [
@@ -733,12 +776,15 @@ export const WhisperStudio: React.FC<WhisperStudioProps> = ({
           ) : (
             <button
               onClick={handleStartSeason}
-              disabled={!selectedFolder || episodes.length === 0 || probing || !whisperExists || selectedEpisodePaths.size === 0}
+              disabled={!selectedFolder || episodes.length === 0 || probing || !whisperExists || selectedEpisodePaths.size === 0 || Boolean(downloadingModelName)}
+              title={downloadingModelName ? `Cannot start generation: model "${downloadingModelName}" is downloading` : undefined}
               className="flex items-center space-x-2 px-6 py-2.5 rounded-xl bg-gradient-to-r from-red-600 to-indigo-600 hover:from-red-500 hover:to-indigo-500 text-white font-bold text-xs shadow-lg shadow-indigo-600/20 transition-all hover:scale-[1.02] active:scale-[0.98] disabled:opacity-50 disabled:cursor-not-allowed"
             >
               <Play className="w-4 h-4 fill-white" />
               <span>
-                {selectedEpisodePaths.size === 0
+                {downloadingModelName
+                  ? `Model "${downloadingModelName}" downloading...`
+                  : selectedEpisodePaths.size === 0
                   ? 'Select episodes to generate'
                   : `Generate subtitles for ${selectedEpisodePaths.size} episode${selectedEpisodePaths.size === 1 ? '' : 's'}`}
               </span>
@@ -1078,26 +1124,36 @@ export const WhisperStudio: React.FC<WhisperStudioProps> = ({
               <div className="flex flex-wrap gap-1.5">
                 {availableModels.map((m) => {
                   const isSelected = activeModel === m;
+                  const isDownloading = downloadingModelName === m;
                   return (
                     <button
                       key={m}
                       type="button"
-                      disabled={isProcessing}
+                      disabled={isProcessing || isDownloading}
                       onClick={async () => {
+                        if (isDownloading) return;
                         setActiveModel(m);
                         try {
                           await onSaveSettings?.({ whisperModel: m });
                           await window.electronAPI?.updateSettings?.({ whisperModel: m });
                         } catch {}
                       }}
-                      className={`flex items-center space-x-1 px-2.5 py-1 rounded-lg text-xs font-mono font-medium border transition-all ${
-                        isSelected
+                      className={`flex items-center space-x-1.5 px-2.5 py-1 rounded-lg text-xs font-mono font-medium border transition-all ${
+                        isDownloading
+                          ? 'bg-amber-500/15 text-amber-300 border-amber-500/30 cursor-wait animate-pulse'
+                          : isSelected
                           ? 'bg-indigo-600/30 text-indigo-200 border-indigo-500/60 shadow-sm ring-1 ring-indigo-500/40'
                           : 'bg-zinc-900/80 text-zinc-400 border-white/5 hover:border-zinc-700 hover:text-zinc-200'
                       }`}
                     >
                       <span>{m}</span>
-                      {isSelected && <span className="text-indigo-300 font-sans text-[10px]">✓</span>}
+                      {isDownloading ? (
+                        <span className="text-amber-400 font-sans text-[10px] font-bold">
+                          {downloadingModelPercent !== null ? `(${downloadingModelPercent}%)` : '(downloading...)'}
+                        </span>
+                      ) : isSelected ? (
+                        <span className="text-indigo-300 font-sans text-[10px]">✓</span>
+                      ) : null}
                     </button>
                   );
                 })}
@@ -1494,7 +1550,7 @@ export const WhisperStudio: React.FC<WhisperStudioProps> = ({
                         )}
 
                         {/* Quick Transcribe Single Episode Button */}
-                        {!isProcessing && (
+                        {!isProcessing && !downloadingModelName && (
                           <button
                             type="button"
                             onClick={() => handleStartSingleEpisode(ep)}

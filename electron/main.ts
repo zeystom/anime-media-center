@@ -1,4 +1,4 @@
-import { app, BrowserWindow, ipcMain, dialog, shell, Menu } from 'electron';
+import { app, BrowserWindow, ipcMain, dialog, shell, Menu, Notification } from 'electron';
 import path from 'path';
 import fs from 'fs';
 import { spawn, ChildProcess } from 'child_process';
@@ -485,6 +485,7 @@ function setupIpcHandlers() {
   });
 
   let activeModelDownloadProcess: ChildProcess | null = null;
+  let activeModelDownloadName: string | null = null;
 
   ipcMain.handle('check-binaries', async (_event, paths?: { ffmpegPath?: string; whisperPath?: string; modelName?: string; customModelPath?: string }) => {
     const settings = storage.getSettings();
@@ -561,6 +562,8 @@ function setupIpcHandlers() {
       detectedCustomModels,
       customModelPath,
       customModelDetectedName,
+      isDownloadingModel: Boolean(activeModelDownloadProcess),
+      downloadingModelName: activeModelDownloadName,
     };
   });
 
@@ -602,12 +605,22 @@ function setupIpcHandlers() {
     fs.writeFileSync(dummyWavPath, buf);
 
     return new Promise((resolve) => {
-      const args = [dummyWavPath, '--model', targetModel, '--output_dir', tempDir];
+      activeModelDownloadName = targetModel;
+      if (mainWindow && !mainWindow.isDestroyed()) {
+        mainWindow.webContents.send('whisper:model-download-status', { isDownloading: true, modelName: targetModel });
+      }
+
+      // '--beep_off' disables the loud system bell on completion
+      const args = [dummyWavPath, '--model', targetModel, '--output_dir', tempDir, '--beep_off'];
       const child = spawn(whisperPath, args, { windowsHide: true });
       activeModelDownloadProcess = child;
 
       const cleanup = () => {
         activeModelDownloadProcess = null;
+        activeModelDownloadName = null;
+        if (mainWindow && !mainWindow.isDestroyed()) {
+          mainWindow.webContents.send('whisper:model-download-status', { isDownloading: false, modelName: null });
+        }
         try { if (fs.existsSync(dummyWavPath)) fs.unlinkSync(dummyWavPath); } catch {}
         const dummySrt = dummyWavPath.replace(/\.wav$/, '.srt');
         try { if (fs.existsSync(dummySrt)) fs.unlinkSync(dummySrt); } catch {}
@@ -630,6 +643,15 @@ function setupIpcHandlers() {
       child.on('close', (code) => {
         cleanup();
         if (code === 0) {
+          try {
+            if (Notification.isSupported()) {
+              new Notification({
+                title: 'Kaiko - Model Ready',
+                body: `Whisper model "${targetModel}" downloaded and ready to use.`,
+                silent: true,
+              }).show();
+            }
+          } catch {}
           resolve({ success: true, modelName: targetModel });
         } else {
           resolve({ success: false, error: `Download process exited with code ${code}` });
@@ -649,6 +671,10 @@ function setupIpcHandlers() {
         activeModelDownloadProcess.kill();
       } catch {}
       activeModelDownloadProcess = null;
+      activeModelDownloadName = null;
+      if (mainWindow && !mainWindow.isDestroyed()) {
+        mainWindow.webContents.send('whisper:model-download-status', { isDownloading: false, modelName: null });
+      }
       return true;
     }
     return false;
@@ -1028,6 +1054,12 @@ function setupIpcHandlers() {
 
   ipcMain.handle('start-whisper-season', async (_event, folderPath: string, audioTrackNum: number, skipExistingSrt: boolean, options?: any) => {
     if (!mainWindow) return { success: false, error: 'No main window' };
+    if (activeModelDownloadProcess) {
+      return {
+        success: false,
+        error: `Cannot start subtitle generation: model "${activeModelDownloadName || 'download'}" is currently downloading. Please wait for the download to finish.`,
+      };
+    }
     return await whisperManager.startQueue(folderPath, audioTrackNum, skipExistingSrt, mainWindow, options);
   });
 

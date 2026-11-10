@@ -123,6 +123,8 @@ export const SettingsModal: React.FC<SettingsModalProps> = ({
     installedModels?: string[];
     detectedCustomModels?: string[];
     customModelDetectedName?: string | null;
+    isDownloadingModel?: boolean;
+    downloadingModelName?: string | null;
   }>({
     ffmpegExists: false,
     whisperExists: false,
@@ -131,6 +133,8 @@ export const SettingsModal: React.FC<SettingsModalProps> = ({
     modelName: 'large-v3-turbo',
     installedModels: [],
     detectedCustomModels: [],
+    isDownloadingModel: false,
+    downloadingModelName: null,
   });
 
   const [downloadingModel, setDownloadingModel] = useState<string | null>(null);
@@ -228,12 +232,15 @@ export const SettingsModal: React.FC<SettingsModalProps> = ({
         .checkBinaries({ ffmpegPath, whisperPath, modelName: whisperModel, customModelPath })
         .then((status) => {
           setBinaryStatus(status);
+          if (status.isDownloadingModel && status.downloadingModelName) {
+            setDownloadingModel(status.downloadingModelName);
+          }
         })
         .catch(() => {});
     }
   }, [isOpen, ffmpegPath, whisperPath, whisperModel, customModelPath]);
 
-  // Listen for Whisper model download progress
+  // Listen for Whisper model download progress and status
   useEffect(() => {
     if (!isOpen) return;
     const api = window.electronAPI;
@@ -243,6 +250,20 @@ export const SettingsModal: React.FC<SettingsModalProps> = ({
         percent: data.percent,
         text: data.text,
       });
+    });
+    return unsub;
+  }, [isOpen]);
+
+  useEffect(() => {
+    if (!isOpen) return;
+    const api = window.electronAPI;
+    if (!api?.onWhisperModelDownloadStatus) return;
+    const unsub = api.onWhisperModelDownloadStatus((data) => {
+      if (data.isDownloading && data.modelName) {
+        setDownloadingModel(data.modelName);
+      } else {
+        setDownloadingModel(null);
+      }
     });
     return unsub;
   }, [isOpen]);
@@ -1411,6 +1432,79 @@ export const SettingsModal: React.FC<SettingsModalProps> = ({
                   );
                 })}
               </div>
+
+              {/* Other Locally Installed Models */}
+              {(() => {
+                const presets = ['large-v3-turbo', 'medium', 'small'];
+                const otherDetected = (binaryStatus.installedModels || []).filter(
+                  (m) => !presets.includes(m.toLowerCase())
+                );
+                if (otherDetected.length === 0) return null;
+                return (
+                  <div className="space-y-1.5 pt-2">
+                    <div className="flex items-center justify-between">
+                      <span className="text-xs font-semibold text-zinc-300">
+                        Other Locally Installed Models ({otherDetected.length})
+                      </span>
+                      <span className="text-[10px] text-zinc-500">
+                        Found in Faster-Whisper _models folder
+                      </span>
+                    </div>
+                    <div className="grid grid-cols-1 sm:grid-cols-2 gap-2">
+                      {otherDetected.map((m) => {
+                        const isCurrentActive = !customModelPath && whisperModel === m;
+                        return (
+                          <div
+                            key={m}
+                            onClick={() => {
+                              if (!isCurrentActive) {
+                                setWhisperModel(m);
+                                setCustomModelPath('');
+                                onSave({ whisperModel: m, customModelPath: '' });
+                                showGlobalToast(`Active model set to ${m}`, 'success');
+                              }
+                            }}
+                            className={`p-2.5 rounded-xl border flex items-center justify-between cursor-pointer transition-all ${
+                              isCurrentActive
+                                ? 'bg-indigo-950/30 border-indigo-500/70 ring-1 ring-indigo-500/40 shadow-sm'
+                                : 'bg-zinc-900/60 border-white/5 hover:border-zinc-700'
+                            }`}
+                          >
+                            <div className="flex items-center space-x-2.5 min-w-0">
+                              <div className="shrink-0">
+                                {isCurrentActive ? (
+                                  <div className="w-3.5 h-3.5 rounded-full bg-indigo-500 flex items-center justify-center">
+                                    <div className="w-1.5 h-1.5 rounded-full bg-white" />
+                                  </div>
+                                ) : (
+                                  <div className="w-3.5 h-3.5 rounded-full border border-zinc-600 hover:border-zinc-400" />
+                                )}
+                              </div>
+                              <div className="min-w-0 space-y-0.5">
+                                <span className="text-xs font-mono font-bold text-white block truncate">
+                                  {m}
+                                </span>
+                                <span className="text-[10px] text-zinc-400 block truncate">
+                                  Local model · {m === 'tiny' ? '~75 MB' : 'cached'}
+                                </span>
+                              </div>
+                            </div>
+                            <span
+                              className={`text-[10px] font-semibold px-2 py-0.5 rounded ${
+                                isCurrentActive
+                                  ? 'bg-emerald-500/20 text-emerald-300 border border-emerald-500/30'
+                                  : 'bg-zinc-800 text-zinc-400 border border-white/5'
+                              }`}
+                            >
+                              {isCurrentActive ? 'Active' : 'Select'}
+                            </span>
+                          </div>
+                        );
+                      })}
+                    </div>
+                  </div>
+                );
+              })()}
 
               {/* Custom Model Folder (Optional) */}
               <div className="space-y-1.5 pt-1">
