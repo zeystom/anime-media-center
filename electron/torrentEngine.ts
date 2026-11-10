@@ -36,6 +36,7 @@ export interface TorrentLike {
   infoHash: string
   name?: string
   magnetURI?: string
+  torrentFile?: Buffer | Uint8Array
   files?: TorrentFileLike[]
   paused?: boolean
   done?: boolean
@@ -169,6 +170,15 @@ function errMsg(err: unknown): string {
 
 function normHash(infoHash: unknown): string {
   return typeof infoHash === 'string' ? infoHash.trim().toLowerCase() : ''
+}
+
+function getCachedTorrentPath(infoHash: unknown): string | null {
+  if (!deps?.persistDir) return null
+  const h = normHash(infoHash)
+  if (!h) return null
+  const dir = path.join(deps.persistDir, 'torrents')
+  try { fs.mkdirSync(dir, { recursive: true }) } catch {}
+  return path.join(dir, `${h}.torrent`)
 }
 
 export function sanitizePathSegment(raw: string): string {
@@ -746,7 +756,7 @@ function attachClientHandlers(c: TorrentClientLike): void {
 }
 
 /** How long a 'connecting' job may wait for metadata before it is failed with an actionable error. */
-const CONNECTING_WATCHDOG_MS = 180_000
+const CONNECTING_WATCHDOG_MS = 300_000
 
 /**
  * One module-wide 1s ticker drives per-file progress, the connecting watchdog
@@ -761,13 +771,17 @@ function startTicker(): void {
     const now = Date.now()
     for (const [, job] of jobs) {
       if (job.status === 'connecting' && job.connectingSince && now - job.connectingSince > CONNECTING_WATCHDOG_MS) {
-        job.status = 'error'
         const livePeers = job.connectingTorrent?.numPeers ?? 0
+        // If there are live peers connected, give extra time up to 10 mins (don't fail prematurely)
+        if (livePeers > 0 && now - job.connectingSince < CONNECTING_WATCHDOG_MS * 2) {
+          continue
+        }
+        job.status = 'error'
         const trackerDetail = job.lastWarning ? ` Last network warning: ${job.lastWarning}.` : ''
         const reported = job.reportedSeeders == null ? '' : ` The indexer reported ${job.reportedSeeders} seeders at search time; that count is not live.`
-        job.error = `No torrent metadata after ${CONNECTING_WATCHDOG_MS / 1000}s. App connected to ${livePeers} peers.${reported}${trackerDetail} Check tracker/DHT access or try another release.`
+        job.error = `No torrent metadata after ${Math.round((now - job.connectingSince) / 1000)}s. App connected to ${livePeers} peers.${reported}${trackerDetail} Check tracker/DHT access or try another release.`
         warn(`job ${job.infoHash}: `, job.error)
-        addJobLog(job, `Watchdog timeout after ${CONNECTING_WATCHDOG_MS / 1000}s: ${job.error}`, 'error')
+        addJobLog(job, `Watchdog timeout after ${Math.round((now - job.connectingSince) / 1000)}s: ${job.error}`, 'error')
         try { job.connectingTorrent?.destroy(undefined, () => {}) } catch {}
         job.connectingTorrent = null
         emitState()
@@ -776,79 +790,23 @@ function startTicker(): void {
       if (job.status === 'connecting') {
         const elapsed = job.connectingSince ? now - job.connectingSince : 0
         const connTorrent = job.connectingTorrent as any
-        const disc = connTorrent?.discovery
 
-        // Active peer discovery: periodically refresh tracker announce and actively query DHT lookup
+        // Gentle peer discovery: query DHT lookup if 0 peers found after 20s
         const numPeers = connTorrent?.numPeers ?? 0
-        const pollInterval = numPeers === 0 ? 8 : 15
-        if (elapsed > 0 && Math.floor(elapsed / 1000) % pollInterval === 0) {
-          try { disc?.tracker?.update?.() } catch {}
-          try { disc?.dht?.lookup?.(job.infoHash) } catch {}
+        if (numPeers === 0 && elapsed > 20_000 && Math.floor(elapsed / 1000) % 30 === 0) {
           try { (client as any)?.dht?.lookup?.(job.infoHash) } catch {}
-          try { disc?._dhtAnnounce?.() } catch {}
-          addJobLog(job, `Active discovery: polled trackers & DHT lookup. Live peers: ${numPeers}`)
+          addJobLog(job, 'Discovery: queried DHT lookup for peers.')
         }
 
-        // Wire maintenance: cycle unproductive or stalled peers so WebTorrent connects to new discovered peers
+        // Wire maintenance: gentle idle check after 90s of no activity
         const wires = connTorrent?.wires
         if (Array.isArray(wires)) {
           for (const wire of wires) {
             if (!wire._connectedAt) wire._connectedAt = now
             const wireElapsed = now - wire._connectedAt
-            // Allow at least 12 seconds for handshake and peer exchange (PEX)
-            if (wireElapsed >= 12_000) {
-              const handshake = wire?.peerExtendedHandshake
-              const hasExtended = handshake && typeof handshake === 'object' && Object.keys(handshake).length > 0
-              if (!hasExtended) {
-                // Handshake never completed in 12s -> drop unresponsive wire
-                addJobLog(job, `Dropping peer ${wire.remoteAddress || 'wire'}: handshake incomplete after 12s`, 'warn')
-                try { wire.destroy() } catch {}
-                continue
-              }
-              // If remote peer explicitly lacks metadata support or metadata size
-              if (!handshake.m?.ut_metadata || !handshake.metadata_size || wire._noMetadata) {
-                addJobLog(job, `Dropping peer ${wire.remoteAddress || 'wire'}: lacks ut_metadata extension or size`, 'warn')
-                try { wire.destroy() } catch {}
-                continue
-              }
-              // Count delivered metadata pieces via BitField buffer
-              const bitfield = wire.ut_metadata?._bitfield
-              let piecesCount = 0
-              if (bitfield && bitfield.buffer) {
-                for (let i = 0; i < bitfield.buffer.length; i++) {
-                  let b = bitfield.buffer[i]
-                  while (b > 0) {
-                    if (b & 1) piecesCount++
-                    b >>= 1
-                  }
-                }
-              }
-              if (piecesCount > (wire._lastMetadataPieces || 0)) {
-                wire._lastMetadataPieces = piecesCount
-                wire._lastPieceAt = now
-                addJobLog(job, `Metadata pieces received: ${piecesCount} pieces from ${wire.remoteAddress || 'peer'}`)
-              }
-
-              if (piecesCount === 0) {
-                if (wireElapsed >= 30_000) {
-                  // Stalled peer for >30s: delivered 0 pieces -> drop wire to cycle connection slot
-                  addJobLog(job, `Dropping peer ${wire.remoteAddress || 'wire'}: 0 metadata pieces in 30s`, 'warn')
-                  try { wire.destroy() } catch {}
-                } else if (wireElapsed >= 15_000 && wireElapsed % 5_000 < 1_000) {
-                  // Re-request metadata pieces in case initial request was missed
-                  try { wire.ut_metadata?.fetch?.() } catch {}
-                }
-              } else {
-                // Peer has delivered pieces: allow time to finish, only drop if stalled for >35s with no new pieces
-                const pieceStallTime = wire._lastPieceAt ? now - wire._lastPieceAt : 0
-                if (pieceStallTime >= 35_000) {
-                  addJobLog(job, `Dropping peer ${wire.remoteAddress || 'wire'}: piece delivery stalled for >35s`, 'warn')
-                  try { wire.destroy() } catch {}
-                } else if (pieceStallTime >= 15_000 && pieceStallTime % 5_000 < 1_000) {
-                  // Re-request metadata pieces in case initial request was missed
-                  try { wire.ut_metadata?.fetch?.() } catch {}
-                }
-              }
+            if (wireElapsed >= 90_000 && !wire.ut_metadata?._metadataComplete && (wire.downloaded || 0) === 0) {
+              addJobLog(job, `Dropping idle peer ${wire.remoteAddress || 'wire'} after 90s of no activity`, 'warn')
+              try { wire.destroy() } catch {}
             }
           }
         }
@@ -916,6 +874,22 @@ function handleTorrentReady(torrent: TorrentLike): void {
   }
   job.torrent = torrent
   job.connectingTorrent = null
+  if (torrent.torrentFile) {
+    const cachePath = getCachedTorrentPath(job.infoHash)
+    if (cachePath && !fs.existsSync(cachePath)) {
+      try {
+        const rawBuf = Buffer.isBuffer(torrent.torrentFile)
+          ? torrent.torrentFile
+          : Buffer.from(torrent.torrentFile as any)
+        if (rawBuf.length > 0) {
+          fs.writeFileSync(cachePath, rawBuf)
+          addJobLog(job, `Cached full .torrent file to disk (${rawBuf.length} bytes)`)
+        }
+      } catch (err) {
+        warn('failed to cache .torrent file:', errMsg(err))
+      }
+    }
+  }
   if (typeof torrent.magnetURI === 'string' && torrent.magnetURI) job.magnetUri = torrent.magnetURI
   addJobLog(job, `Torrent metadata resolved successfully. Files in release: ${torrent.files?.length || 0}`)
   attachTorrentDiagnostics(job, torrent)
@@ -1130,6 +1104,19 @@ async function activateJob(job: InternalJob): Promise<void> {
     warn('could not create download dir:', errMsg(err))
   }
   const payload = ensureMagnetTrackers(job.magnetUri)
+  let torrentInput: string | Buffer = payload
+  const cachedPath = getCachedTorrentPath(job.infoHash)
+  if (cachedPath && fs.existsSync(cachedPath)) {
+    try {
+      const buf = fs.readFileSync(cachedPath)
+      if (buf && buf.length > 0) {
+        torrentInput = buf
+        addJobLog(job, `Loaded full .torrent metadata from disk cache (${buf.length} bytes)`)
+      }
+    } catch (err) {
+      warn(`Failed to read cached .torrent for ${job.infoHash}:`, errMsg(err))
+    }
+  }
   job.connectingSince = Date.now()
   try {
     const opts: Record<string, unknown> = {
@@ -1165,7 +1152,7 @@ async function activateJob(job: InternalJob): Promise<void> {
       } catch {}
     }
 
-    const connectingTorrent = c.add(payload, opts, undefined) as TorrentLike | undefined
+    const connectingTorrent = c.add(torrentInput, opts, undefined) as TorrentLike | undefined
     if (connectingTorrent && typeof connectingTorrent.on === 'function') {
       job.connectingTorrent = connectingTorrent
       attachTorrentDiagnostics(job, connectingTorrent)
@@ -1642,6 +1629,14 @@ export async function engineAddDownload(params: { item: ReleaseSearchResult; tit
     }
     infoHash = meta.infoHash
     magnetUri = meta.magnetUri || downloadUrl
+    const cachePath = getCachedTorrentPath(infoHash)
+    if (cachePath && buf) {
+      try {
+        fs.writeFileSync(cachePath, buf)
+      } catch (e) {
+        warn('failed to cache .torrent file:', errMsg(e))
+      }
+    }
   } else {
     return { success: false, error: 'downloadUrl must be a magnet: URI or an http(s) .torrent link' }
   }
@@ -1960,7 +1955,13 @@ export async function engineCancel(infoHash: string, removeFiles = false): Promi
     try { (client as any).remove?.(infoHash, removeFiles ? { destroyStore: true } : undefined, () => {}) } catch {}
     try { (client as any).remove?.(key, removeFiles ? { destroyStore: true } : undefined, () => {}) } catch {}
   }
-  if (removeFiles) cleanupStage(job)
+  if (removeFiles) {
+    cleanupStage(job)
+    const cachedTorrent = getCachedTorrentPath(key)
+    if (cachedTorrent && fs.existsSync(cachedTorrent)) {
+      try { fs.unlinkSync(cachedTorrent) } catch {}
+    }
+  }
   writePersistFileNow()
   emitState()
   runScheduler()

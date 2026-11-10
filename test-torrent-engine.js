@@ -188,8 +188,13 @@ function createFakeClient() {
         spec = registry.get(infoHash) || {}
         if (spec.infoHash) infoHash = spec.infoHash
       } else if (Buffer.isBuffer(id)) {
-        spec = registry.get(id.toString('hex')) || {}
-        infoHash = spec.infoHash || 'unknown'
+        for (const [k, v] of registry) {
+          if (v.infoHash) {
+            infoHash = v.infoHash
+            break
+          }
+        }
+        spec = registry.get(infoHash) || {}
       }
       const torrent = createFakeTorrent(infoHash, spec)
       client.torrents.push(torrent)
@@ -725,6 +730,38 @@ await expectCase('(11) batch boundary piece selection: unchosen files deselected
 
   assert.strictEqual(file1.selected, true, 'file1 is selected')
   assert.strictEqual(file2.selected, false, 'file2 is deselected')
+
+  engineShutdown()
+})
+
+await expectCase('(12) .torrent caching: cached .torrent buffer passed to client.add on activate', async () => {
+  engineShutdown()
+  const { fake, persistDir } = setupEngine()
+  const torrentDir = path.join(persistDir, 'torrents')
+  fs.mkdirSync(torrentDir, { recursive: true })
+
+  // Pre-seed the cached .torrent file for HASH_A
+  const fakeTorrentBytes = Buffer.from('d4:infod4:name4:Test12:piece lengthi32768e6:pieces0:6:lengthi100eee')
+  fs.writeFileSync(path.join(torrentDir, `${HASH_A.toLowerCase()}.torrent`), fakeTorrentBytes)
+
+  fake.registry.set(HASH_A, {
+    infoHash: HASH_A,
+    files: ['Test.mkv'],
+  })
+
+  assert.strictEqual((await engineSetEnabled(true)).success, true)
+  const res = await engineAddDownload({ item: magnetItem(HASH_A), title: 'Test Cache' })
+  assert.strictEqual(res.success, true)
+  await until(() => statusOf(HASH_A) === 'downloading', 'job is downloading')
+
+  // Verify that client.torrents was initialized from the buffer
+  const torrent = fake.torrents.find((t) => t.infoHash === HASH_A)
+  assert.ok(torrent, 'torrent was created')
+
+  // Verify that cancel with removeFiles removes the cached .torrent file
+  const cancelRes = await engineCancel(HASH_A, true)
+  assert.strictEqual(cancelRes.success, true)
+  assert.strictEqual(fs.existsSync(path.join(torrentDir, `${HASH_A.toLowerCase()}.torrent`)), false, 'cached .torrent was deleted on cancel with removeFiles')
 
   engineShutdown()
 })

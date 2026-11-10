@@ -1788,12 +1788,12 @@ export const VideoPlayer: React.FC<VideoPlayerProps> = ({
           </button>
 
           <div className="min-w-0 flex-1">
-            <div className="flex items-center space-x-2.5 min-w-0">
-              <span className="px-2 py-0.5 rounded text-xs font-bold bg-red-600 text-white shrink-0">
+            <div className="flex items-start sm:items-center space-x-2.5 min-w-0">
+              <span className="px-2 py-0.5 rounded text-xs font-bold bg-red-600 text-white shrink-0 mt-0.5 sm:mt-0">
                 {parsed.episodeLabel || episode.episodeNumber}
               </span>
               <h1
-                className="text-sm md:text-base font-bold text-white tracking-tight truncate flex-1 min-w-0"
+                className="text-sm md:text-base font-bold text-white tracking-tight line-clamp-2 flex-1 min-w-0 break-words leading-tight"
                 title={fullPlayerTitle}
               >
                 {fullPlayerTitle}

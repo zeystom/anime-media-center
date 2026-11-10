@@ -236,7 +236,7 @@ export const EpisodeRow: React.FC<EpisodeRowProps> = ({
         </div>
       ) : (
         <div className="p-3">
-          <h3 className="line-clamp-1 min-h-5 text-xs font-semibold text-zinc-100" title={displayTitle}>{displayTitle}</h3>
+          <h3 className="line-clamp-2 min-h-5 text-xs font-semibold leading-tight text-zinc-100" title={displayTitle}>{displayTitle}</h3>
           {relativeAir && (
             <p className={`mt-1 truncate text-[10px] font-medium ${relativeAir.future ? 'text-cyan-200/80' : 'text-zinc-400'}`} title={airDateLabel || undefined}>
               {relativeAir.future ? `Airs ${relativeAir.label}` : `Aired ${relativeAir.label}`}

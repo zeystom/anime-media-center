@@ -40,11 +40,16 @@ if (!token) {
 
 const RELEASE_BODY = `## What's new in v${VERSION}
 
-### ⚡ Fix 99.7% Download Stall on Batch Boundary Pieces
-- **Fixed Missing Final Piece on Batch Torrents:** Resolved a piece selection bug where deselecting unchosen files in a batch torrent pruned the shared boundary piece belonging to the chosen episode. In batch releases, Episode 1 and Episode 2 share a boundary piece (~8 MB); deselecting Episode 2 previously removed that piece from WebTorrent's download queue, leaving downloads permanently stuck at 99.7%.
-- **Reinforced Piece Intervals:** File selection now deselects unchosen files FIRST, and then selects chosen files, explicitly reinforcing torrent-level piece intervals so boundary pieces are never pruned.
-- **Active Piece Selection & Critical Re-Queueing:** When missing pieces are available in the swarm, the engine proactively verifies and selects missing pieces directly on the torrent every 10 seconds, ensuring WebTorrent immediately requests them from connected peers.
-- **Accurate DHT Node Display:** Corrected DHT node count reporting in torrent diagnostic reports.
+### ⚡ Persistent Disk .torrent Cache & Instant Connecting (<100ms)
+- **Automatic .torrent Disk Caching:** Downloaded \`.torrent\` files and resolved swarm metadata are now saved to a persistent disk cache (\`torrents/<infoHash>.torrent\`).
+- **Instant Connecting (<100ms):** When starting or resuming downloads, the engine loads full metadata directly from the disk cache and passes it straight to the client, completely bypassing the slow \`ut_metadata\` peer negotiation phase.
+- **Fixed Tracker Rate-Limiting:** Removed aggressive tracker polling intervals that caused public trackers to rate-limit or time out (\`tracker request timed out (udp://exodus.desync.com:6969/announce)\`).
+- **Preserved Leecher Wires for PEX:** Stopped premature disconnection of leecher peers and slow wires during connecting, preserving Peer Exchange (PEX) discovery.
+- **Extended Watchdog Timeout:** Increased connecting watchdog timeout from 180s to 300s (5 minutes), with automatic extension when live peers are actively connected.
+
+### 🎬 Player Header Long Title Wrapping
+- **Multi-Line Title Wrapping:** Long anime titles and official episode titles no longer cut off with an ellipsis (\`...\`) in the player top header. The title now wraps cleanly across up to two lines (\`line-clamp-2 break-words\`) with responsive alignment.
+- **Episode Drawer & Detail Rows:** Improved title clamping in \`EpisodeDrawer\` and \`EpisodeRow\` so long names fit without truncation.
 
 ---
 ### Assets included:

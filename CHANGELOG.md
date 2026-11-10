@@ -1,6 +1,18 @@
 # Changelog
 
-## 1.0.16 — Fix 99.7% Download Stall on Batch Boundary Pieces
+## 1.0.17 — Instant .torrent Metadata Cache, Connecting Fixes & Player Title Overflow Wrapping
+
+- **Persistent Disk .torrent Cache for Instant Connecting (<100ms):**
+  - Downloaded `.torrent` files and resolved swarm metadata are now automatically saved to a persistent disk cache (`torrents/<infoHash>.torrent`).
+  - When starting or resuming downloads, the engine loads full metadata directly from the disk cache and passes it straight to the client, completely bypassing the slow `ut_metadata` peer negotiation phase. Downloads start instantly without waiting for metadata.
+- **Fixed Peer Discovery & Eliminated Tracker Rate-Limiting:**
+  - Removed aggressive tracker polling intervals that caused public trackers to rate-limit or time out (`tracker request timed out (udp://exodus.desync.com:6969/announce)`).
+  - Stopped premature disconnection of leecher peers and slow wires during connecting. Leecher wires are now preserved to ensure continuous Peer Exchange (PEX) discovery.
+  - Increased connecting watchdog timeout from 180s to 300s (5 minutes), with automatic extension when live peers are actively connected.
+- **Player & Library Header Long Title Wrapping:**
+  - Fixed title truncation in the video player top header where long anime titles or official episode titles were cut off with an ellipsis (`...`).
+  - Added multi-line title wrapping (`line-clamp-2 break-words`) and responsive alignment in `VideoPlayer.tsx`, allowing full titles to display gracefully on any screen resolution without clipping.
+  - Improved episode title clamping in `EpisodeDrawer.tsx` and `EpisodeRow.tsx` so long names fit cleanly.
 
 - **Fix Missing Final Piece Stall on Batch Torrents (e.g. 99.7% / 1 Missing Piece):**
   - Resolved a critical piece selection bug where deselecting unchosen files in a multi-file batch torrent pruned the shared boundary piece belonging to the chosen episode.

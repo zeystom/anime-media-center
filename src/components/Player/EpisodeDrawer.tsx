@@ -146,7 +146,7 @@ const EpisodeDrawerItem: React.FC<EpisodeItemProps> = ({
         {/* Main Title Row */}
         <div className="flex items-center justify-between gap-1.5">
           <h4
-            className={`text-xs sm:text-sm font-semibold truncate ${
+            className={`text-xs sm:text-sm font-semibold line-clamp-2 leading-tight ${
               isPlaying ? 'text-red-400 font-bold' : 'text-zinc-100 group-hover:text-white'
             }`}
             title={fullDisplayTitle}
