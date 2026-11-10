@@ -52,22 +52,79 @@ function combineAss(ass1: string, ass2: string): string {
   if (!ass1) return ass2;
   if (!ass2) return ass1;
 
-  const ass2Styles = ass2.match(/\[V4\+ Styles\]([\s\S]*?)(\[Events\]|$)/i);
-  const ass2Events = ass2.match(/\[Events\]([\s\S]*?)$/i);
+  const ass2StylesMatch = ass2.match(/\[V4\+ Styles\]([\s\S]*?)(\[Events\]|$)/i);
+  const ass2EventsMatch = ass2.match(/\[Events\]([\s\S]*?)$/i);
+
+  // Check PlayResY scale ratio if both headers define resolution
+  const resY1 = parseInt(ass1.match(/PlayResY:\s*(\d+)/i)?.[1] || '0', 10);
+  const resY2 = parseInt(ass2.match(/PlayResY:\s*(\d+)/i)?.[1] || '0', 10);
+  const scale = resY1 > 0 && resY2 > 0 && resY1 !== resY2 ? resY1 / resY2 : 1;
 
   let combined = ass1;
-  if (ass2Styles && ass2Styles[1]) {
-    const styles = ass2Styles[1].split('\n').filter((l) => l.trim().startsWith('Style:'));
-    if (styles.length > 0) {
-      combined = combined.replace(/\[Events\]/i, `${styles.join('\n')}\n\n[Events]`);
+  if (ass2StylesMatch && ass2StylesMatch[1]) {
+    const rawStyles = ass2StylesMatch[1].split('\n').filter((l) => l.trim().startsWith('Style:'));
+    const namespacedStyles: string[] = [];
+    for (const styleLine of rawStyles) {
+      const m = styleLine.match(/^Style:\s*([^,]+)(.*)$/i);
+      if (m) {
+        const styleName = m[1].trim();
+        let rest = m[2];
+        if (scale !== 1) {
+          // Format: Name, Fontname, Fontsize, ...
+          const parts = rest.split(',');
+          if (parts.length >= 3) {
+            const origSize = parseFloat(parts[2]) || 0;
+            if (origSize > 0) parts[2] = Math.round(origSize * scale).toString();
+            rest = parts.join(',');
+          }
+        }
+        namespacedStyles.push(`Style: __s2_${styleName}${rest}`);
+      } else {
+        namespacedStyles.push(styleLine);
+      }
+    }
+    if (namespacedStyles.length > 0) {
+      combined = combined.replace(/\[Events\]/i, `${namespacedStyles.join('\n')}\n\n[Events]`);
     }
   }
-  if (ass2Events && ass2Events[1]) {
-    const lines = ass2Events[1].split('\n').filter((l) => l.trim().startsWith('Dialogue:'));
-    if (lines.length > 0) {
-      combined = combined.trim() + '\n' + lines.join('\n');
+
+  if (ass2EventsMatch && ass2EventsMatch[1]) {
+    const rawLines = ass2EventsMatch[1].split('\n').filter((l) => /^(?:Dialogue|Comment):/i.test(l.trim()));
+    const namespacedLines: string[] = [];
+    for (const line of rawLines) {
+      const dlgMatch = line.match(/^((?:Dialogue|Comment):\s*[^,]+,[^,]+,[^,]+,)([^,]+)(,.*)$/i);
+      if (dlgMatch) {
+        const head = dlgMatch[1];
+        const style = dlgMatch[2].trim();
+        const tail = dlgMatch[3];
+        namespacedLines.push(`${head}__s2_${style}${tail}`);
+      } else {
+        namespacedLines.push(line);
+      }
+    }
+
+    if (namespacedLines.length > 0) {
+      combined = combined.trim() + '\n' + namespacedLines.join('\n');
     }
   }
+
+  // Sort events chronologically to minimize libass frame-lookup overhead on weaker PCs
+  const eventsSplit = combined.split(/\[Events\]/i);
+  if (eventsSplit.length === 2) {
+    const header = eventsSplit[0] + '[Events]\n';
+    const eventLines = eventsSplit[1].split('\n');
+    const formatLine = eventLines.find((l) => l.trim().startsWith('Format:')) || 'Format: Layer, Start, End, Style, Name, MarginL, MarginR, MarginV, Effect, Text';
+    const dialogueLines = eventLines.filter((l) => /^(?:Dialogue|Comment):/i.test(l.trim()));
+    dialogueLines.sort((a, b) => {
+      const mA = a.match(/^(?:Dialogue|Comment):\s*[^,]+,\s*([^,]+)/i);
+      const mB = b.match(/^(?:Dialogue|Comment):\s*[^,]+,\s*([^,]+)/i);
+      const tA = mA ? parseAssTimestamp(mA[1]) : 0;
+      const tB = mB ? parseAssTimestamp(mB[1]) : 0;
+      return tA - tB;
+    });
+    combined = header + formatLine + '\n' + dialogueLines.join('\n') + '\n';
+  }
+
   return combined;
 }
 
@@ -296,6 +353,26 @@ export const VideoPlayer: React.FC<VideoPlayerProps> = ({
     return fromFolder || '';
   }, [animeTitle, folder, parsed.seriesTitle, folderPath]);
 
+  // Full formatted episode title for top header and tooltip
+  const fullPlayerTitle = useMemo(() => {
+    const formattedEpTitle = formatEpisodeDisplayTitle(
+      parsed.displayTitle,
+      episode.kitsuTitle || episode.episodeTitle
+    );
+    const series = effectiveAnimeTitle || parsed.seriesTitle;
+    if (series && formattedEpTitle) {
+      return `${series} — ${formattedEpTitle}`;
+    }
+    return series || formattedEpTitle || episode.fileName;
+  }, [
+    effectiveAnimeTitle,
+    parsed.seriesTitle,
+    parsed.displayTitle,
+    episode.kitsuTitle,
+    episode.episodeTitle,
+    episode.fileName,
+  ]);
+
   // Remote episodes enrichment when anilistId is available
   const [remoteEpisodes, setRemoteEpisodes] = useState<Map<number, { title: string | null; thumbnailUrl: string | null }>>(new Map());
   const anilistId = folder?.anilistId;
@@ -446,6 +523,35 @@ export const VideoPlayer: React.FC<VideoPlayerProps> = ({
   streamStartTimeRef.current = streamStartTime;
   const syncOffsetRef = useRef<number>(0);
   syncOffsetRef.current = syncOffset;
+
+  // High-precision video frame synchronizer: updates absolute playback time on every presented frame,
+  // completely eliminating the 250ms HTML5 onTimeUpdate lag for secondary subtitles and cues.
+  useEffect(() => {
+    const video = videoRef.current;
+    if (!video || !('requestVideoFrameCallback' in video)) return;
+
+    let callbackId: number | undefined;
+    let isActive = true;
+
+    const onFrame = (_now: DOMHighResTimeStamp, metadata?: any) => {
+      if (!isActive) return;
+      const mediaTime = typeof metadata?.mediaTime === 'number' ? metadata.mediaTime : video.currentTime;
+      setVideoElementTime(mediaTime);
+      if (pendingSeekTargetRef.current === null) {
+        timeRef.current = streamStartTimeRef.current + mediaTime;
+      }
+      callbackId = (video as any).requestVideoFrameCallback(onFrame);
+    };
+
+    callbackId = (video as any).requestVideoFrameCallback(onFrame);
+
+    return () => {
+      isActive = false;
+      if (callbackId && 'cancelVideoFrameCallback' in video) {
+        (video as any).cancelVideoFrameCallback(callbackId);
+      }
+    };
+  }, [episode.filePath]);
 
   // UI Drawer / Modals
   const [isTrackControlsOpen, setIsTrackControlsOpen] = useState<boolean>(false);
@@ -864,7 +970,7 @@ export const VideoPlayer: React.FC<VideoPlayerProps> = ({
           try {
             const uniqueFonts = [...new Set(assFonts)]
               .filter((f) => !f.toLowerCase().includes('arialunicodems') && !f.toLowerCase().endsWith('.ttc'))
-              .slice(0, 16);
+              .slice(0, 32);
 
             console.log(
               `[VideoPlayer] Initializing JASSUB with ${uniqueFonts.length} fonts and combined ASS styles`
@@ -879,6 +985,10 @@ export const VideoPlayer: React.FC<VideoPlayerProps> = ({
               modernWasmUrl,
               timeOffset: streamStartTimeRef.current + syncOffsetRef.current,
               debug: false,
+              prescaleFactor: 1.0,
+              maxRenderHeight: 1080,
+              libassMemoryLimit: 128,
+              libassGlyphLimit: 4096,
             });
             jassubRef.current = jassub;
             setIsMainAssActive(mainIsAss);
@@ -1668,31 +1778,25 @@ export const VideoPlayer: React.FC<VideoPlayerProps> = ({
           areControlsVisible ? 'opacity-100 pointer-events-auto' : 'opacity-0 pointer-events-none'
         }`}
       >
-        <div className="flex items-center space-x-4">
+        <div className="flex items-center space-x-4 flex-1 min-w-0 mr-4">
           <button
             onClick={onClose}
-            className="p-2 rounded-xl bg-black/60 hover:bg-black/80 text-zinc-200 hover:text-white border border-white/10 transition-all hover:scale-105"
+            className="p-2 rounded-xl bg-black/60 hover:bg-black/80 text-zinc-200 hover:text-white border border-white/10 transition-all hover:scale-105 shrink-0"
             aria-label="Back to Library [Esc]"
           >
             <ArrowLeft className="w-5 h-5" />
           </button>
 
-          <div className="min-w-0">
-            <div className="flex items-center space-x-2.5">
+          <div className="min-w-0 flex-1">
+            <div className="flex items-center space-x-2.5 min-w-0">
               <span className="px-2 py-0.5 rounded text-xs font-bold bg-red-600 text-white shrink-0">
                 {parsed.episodeLabel || episode.episodeNumber}
               </span>
               <h1
-                className="text-sm md:text-base font-bold text-white tracking-tight truncate max-w-md md:max-w-2xl"
-                title={episode.fileName}
+                className="text-sm md:text-base font-bold text-white tracking-tight truncate flex-1 min-w-0"
+                title={fullPlayerTitle}
               >
-                {effectiveAnimeTitle || parsed.seriesTitle
-                  ? `${effectiveAnimeTitle || parsed.seriesTitle} — ${formatEpisodeDisplayTitle(
-                      parsed.displayTitle,
-                      episode.kitsuTitle || episode.episodeTitle
-                    )}`
-                  : formatEpisodeDisplayTitle(parsed.displayTitle, episode.kitsuTitle || episode.episodeTitle) ||
-                    episode.fileName}
+                {fullPlayerTitle}
               </h1>
             </div>
           </div>
@@ -1700,7 +1804,7 @@ export const VideoPlayer: React.FC<VideoPlayerProps> = ({
 
         {/* Right side of top navbar: only subtle Subtitle Loading Spinner if active */}
         {subtitlesLoading && (
-          <div className="flex items-center space-x-1.5 px-3 py-1.5 rounded-xl bg-indigo-500/20 border border-indigo-500/40 text-xs text-indigo-300 backdrop-blur-md animate-pulse">
+          <div className="flex items-center space-x-1.5 px-3 py-1.5 rounded-xl bg-indigo-500/20 border border-indigo-500/40 text-xs text-indigo-300 backdrop-blur-md animate-pulse shrink-0">
             <div className="w-3 h-3 border-2 border-indigo-400 border-t-transparent rounded-full animate-spin" />
             <span>Loading Subtitles...</span>
           </div>

@@ -177,12 +177,12 @@ export const EpisodeRow: React.FC<EpisodeRowProps> = ({
           <div className="absolute bottom-0 left-0 right-0 h-1.5 bg-black/60"><div className={`h-full ${playbackProgress.completed ? 'bg-emerald-400' : 'bg-rose-500'}`} style={{ width: `${watchedPercent}%` }} /></div>
         )}
 
-        {!isFeatureFilm && (playbackProgress?.currentTime || local?.duration || local?.hasExternalSrt || local?.hasEmbeddedDubtitles || local?.hasEmbeddedSubtitles) && (
+        {!isFeatureFilm && (playbackProgress?.currentTime || local?.duration || local?.hasWhisperSrt || local?.hasExternalSrt || local?.hasEmbeddedDubtitles || local?.hasEmbeddedSubtitles) && (
           <div className="pointer-events-none absolute left-3 top-3 z-10 flex max-w-[calc(100%-1.5rem)] items-center gap-1.5">
-            {(local?.hasEmbeddedDubtitles || local?.hasEmbeddedSubtitles || local?.hasExternalSrt) && (
-              <span className={`inline-flex shrink-0 items-center gap-1 rounded-md border px-1.5 py-1 text-[10px] font-semibold shadow-sm backdrop-blur-md ${local.hasEmbeddedDubtitles ? 'border-purple-200/25 bg-[#17121f]/85 text-purple-100' : 'border-emerald-200/25 bg-[#101b19]/85 text-emerald-100'}`}>
+            {(local?.hasWhisperSrt || local?.hasEmbeddedDubtitles || local?.hasEmbeddedSubtitles || local?.hasExternalSrt) && (
+              <span className={`inline-flex shrink-0 items-center gap-1 rounded-md border px-1.5 py-1 text-[10px] font-semibold shadow-sm backdrop-blur-md ${local.hasWhisperSrt ? 'border-indigo-400/30 bg-[#131224]/85 text-indigo-200' : local.hasEmbeddedDubtitles ? 'border-purple-200/25 bg-[#17121f]/85 text-purple-100' : 'border-emerald-200/25 bg-[#101b19]/85 text-emerald-100'}`}>
                 <Subtitles className="h-3 w-3" />
-                {local.hasEmbeddedDubtitles ? 'Dub Sub' : local.hasEmbeddedSubtitles ? 'Sub' : 'Ext Sub'}
+                {local.hasWhisperSrt ? 'AI Sub' : local.hasEmbeddedDubtitles ? 'Dub Sub' : local.hasEmbeddedSubtitles ? 'Sub' : 'Ext Sub'}
               </span>
             )}
             {playbackProgress?.currentTime ? (

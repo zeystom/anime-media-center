@@ -327,6 +327,16 @@ export class StorageService {
     }
   }
 
+  clearLibraryCache(): void {
+    try {
+      if (fs.existsSync(this.libraryCacheFile)) {
+        fs.unlinkSync(this.libraryCacheFile);
+      }
+    } catch (error) {
+      console.warn('[Storage] Could not clear library scan cache:', error);
+    }
+  }
+
   getThumbnailDir(): string {
     const dir = path.join(this.baseDir, 'thumbnails');
     if (!fs.existsSync(dir)) {

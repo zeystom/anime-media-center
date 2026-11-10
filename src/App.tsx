@@ -667,6 +667,7 @@ export const App: React.FC = () => {
         message: `Generated subtitles for "${displayTitle}" (${data.index + 1}/${data.total})`,
         tone: 'purple',
       });
+      handleRefreshLibrary();
     });
 
     const unsubModelComplete = window.electronAPI?.onWhisperModelDownloadComplete?.((data) => {
@@ -725,12 +726,23 @@ export const App: React.FC = () => {
 
         if (scanned.length > 0) {
           setSelectedFolder((prev) => {
-            const exists = scanned.find((f) => f.folderPath === prev?.folderPath);
+            const exists = scanned.find(
+              (f) => f.folderPath.replace(/[/\\]+$/, '').toLowerCase() === prev?.folderPath?.replace(/[/\\]+$/, '').toLowerCase()
+            );
             return exists || findLastWatchedFolder(scanned, watchHistory) || scanned[0];
           });
         } else {
           setSelectedFolder(null);
         }
+
+        // Live update active anime detail view if currently open
+        setDetailSource((prev) => {
+          if (!prev || prev.kind !== 'local') return prev;
+          const updated = scanned.find(
+            (f) => f.folderPath.replace(/[/\\]+$/, '').toLowerCase() === prev.folder.folderPath.replace(/[/\\]+$/, '').toLowerCase()
+          );
+          return updated ? { kind: 'local', folder: updated } : prev;
+        });
       } while (scanPendingRef.current);
     } catch (err) {
       console.error('Error refreshing library:', err);

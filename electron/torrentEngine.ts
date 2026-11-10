@@ -314,21 +314,56 @@ export function extractTorrentMeta(buf: Buffer): TorrentMeta | null {
 import crypto from 'crypto'
 
 const FALLBACK_TRACKERS = [
+  // High-availability public UDP trackers
   'udp://tracker.opentrackr.org:1337/announce',
-  'udp://open.demonii.com:1337/announce',
-  'udp://tracker.openbittorrent.com:6969/announce',
+  'udp://open.tracker.cl:1337/announce',
   'udp://open.stealth.si:80/announce',
-  'udp://tracker.open-internet.nl:6969/announce',
-  'udp://exodus.desync.com:6969/announce',
   'udp://tracker.torrent.eu.org:451/announce',
-  'udp://tracker.tiny-vps.com:6969/announce',
+  'udp://tracker.dler.org:6969/announce',
+  'udp://p4p.arenabg.com:1337/announce',
+  'udp://tracker.openbittorrent.com:6969/announce',
+  'udp://open.demonii.com:1337/announce',
+  'udp://explodie.org:6969/announce',
+  'udp://tracker.moeking.me:6969/announce',
+  'udp://tracker.bitsearch.to:1337/announce',
+  'udp://tracker.filemail.com:6969/announce',
+  'udp://tracker.open-internet.nl:6969/announce',
+  // HTTP/HTTPS fallbacks (vital when UDP is blocked by ISP/firewall/VPN)
+  'http://tracker.opentrackr.org:1337/announce',
+  'http://tracker.dler.org:6969/announce',
+  'http://open.tracker.cl:1337/announce',
+  'http://tracker.files.fm:6969/announce',
+  'http://tracker.gbitt.info:80/announce',
+  // WebTorrent WebSocket swarms
+  'wss://tracker.openwebtorrent.com',
+  'wss://tracker.btorrent.xyz',
 ]
 
 export function ensureMagnetTrackers(magnetUri: string): string {
   if (!magnetUri || !magnetUri.startsWith('magnet:')) return magnetUri
-  if (/[?&]tr=/i.test(magnetUri)) return magnetUri
-  const encoded = FALLBACK_TRACKERS.map((t) => `tr=${encodeURIComponent(t)}`).join('&')
-  return `${magnetUri}&${encoded}`
+
+  // Extract all existing trackers in the magnet URI to prevent duplicates
+  const normTracker = (t: string) => t.toLowerCase().replace(/\/+$/, '')
+  const existingTrackers = new Set<string>()
+  const trMatches = magnetUri.matchAll(/[?&]tr=([^&]+)/gi)
+  for (const m of trMatches) {
+    try {
+      existingTrackers.add(normTracker(decodeURIComponent(m[1])))
+    } catch {
+      existingTrackers.add(normTracker(m[1]))
+    }
+  }
+
+  const toAdd: string[] = []
+  for (const tracker of FALLBACK_TRACKERS) {
+    if (!existingTrackers.has(normTracker(tracker))) {
+      toAdd.push(`tr=${encodeURIComponent(tracker)}`)
+    }
+  }
+
+  if (toAdd.length === 0) return magnetUri
+  const delimiter = magnetUri.includes('?') ? '&' : '?'
+  return `${magnetUri}${delimiter}${toAdd.join('&')}`
 }
 
 type FetchLike = (
@@ -448,7 +483,21 @@ export async function engineSetEnabled(wantEnabled: boolean): Promise<{ success:
       } else {
         // @ts-ignore -- untyped ESM-only dependency, loaded lazily on purpose
         const { default: Client } = await import('webtorrent')
-        client = new Client() as unknown as TorrentClientLike
+        client = new Client({
+          maxConns: 100,
+          dht: {
+            bootstrap: [
+              'router.bittorrent.com:6881',
+              'router.utorrent.com:6881',
+              'dht.transmissionbt.com:6881',
+              'dht.libtorrent.org:25401',
+              'dht.aelitis.com:6881',
+            ],
+          },
+          tracker: {
+            announce: FALLBACK_TRACKERS,
+          },
+        }) as unknown as TorrentClientLike
       }
       attachClientHandlers(client)
     }
@@ -581,7 +630,7 @@ function attachClientHandlers(c: TorrentClientLike): void {
 }
 
 /** How long a 'connecting' job may wait for metadata before it is failed with an actionable error. */
-const CONNECTING_WATCHDOG_MS = 120_000
+const CONNECTING_WATCHDOG_MS = 180_000
 
 /**
  * One module-wide 1s ticker drives per-file progress, the connecting watchdog
@@ -608,6 +657,77 @@ function startTicker(): void {
         continue
       }
       if (job.status === 'connecting') {
+        const elapsed = job.connectingSince ? now - job.connectingSince : 0
+        const connTorrent = job.connectingTorrent as any
+        const disc = connTorrent?.discovery
+
+        // Active peer discovery: periodically refresh tracker announce and actively query DHT lookup
+        const numPeers = connTorrent?.numPeers ?? 0
+        const pollInterval = numPeers === 0 ? 8 : 15
+        if (elapsed > 0 && Math.floor(elapsed / 1000) % pollInterval === 0) {
+          try { disc?.tracker?.update?.() } catch {}
+          try { disc?.dht?.lookup?.(job.infoHash) } catch {}
+          try { (client as any)?.dht?.lookup?.(job.infoHash) } catch {}
+          try { disc?._dhtAnnounce?.() } catch {}
+        }
+
+        // Wire maintenance: cycle unproductive or stalled peers so WebTorrent connects to new discovered peers
+        const wires = connTorrent?.wires
+        if (Array.isArray(wires)) {
+          for (const wire of wires) {
+            if (!wire._connectedAt) wire._connectedAt = now
+            const wireElapsed = now - wire._connectedAt
+            // Allow at least 12 seconds for handshake and peer exchange (PEX)
+            if (wireElapsed >= 12_000) {
+              const handshake = wire?.peerExtendedHandshake
+              const hasExtended = handshake && typeof handshake === 'object' && Object.keys(handshake).length > 0
+              if (!hasExtended) {
+                // Handshake never completed in 12s -> drop unresponsive wire
+                try { wire.destroy() } catch {}
+                continue
+              }
+              // If remote peer explicitly lacks metadata support or metadata size
+              if (!handshake.m?.ut_metadata || !handshake.metadata_size || wire._noMetadata) {
+                try { wire.destroy() } catch {}
+                continue
+              }
+              // Count delivered metadata pieces via BitField buffer
+              const bitfield = wire.ut_metadata?._bitfield
+              let piecesCount = 0
+              if (bitfield && bitfield.buffer) {
+                for (let i = 0; i < bitfield.buffer.length; i++) {
+                  let b = bitfield.buffer[i]
+                  while (b > 0) {
+                    if (b & 1) piecesCount++
+                    b >>= 1
+                  }
+                }
+              }
+              if (piecesCount > (wire._lastMetadataPieces || 0)) {
+                wire._lastMetadataPieces = piecesCount
+                wire._lastPieceAt = now
+              }
+
+              if (piecesCount === 0) {
+                if (wireElapsed >= 30_000) {
+                  // Stalled peer for >30s: delivered 0 pieces -> drop wire to cycle connection slot
+                  try { wire.destroy() } catch {}
+                } else if (wireElapsed >= 15_000 && wireElapsed % 5_000 < 1_000) {
+                  // Re-request metadata pieces in case initial request was missed
+                  try { wire.ut_metadata?.fetch?.() } catch {}
+                }
+              } else {
+                // Peer has delivered pieces: allow time to finish, only drop if stalled for >35s with no new pieces
+                const pieceStallTime = wire._lastPieceAt ? now - wire._lastPieceAt : 0
+                if (pieceStallTime >= 35_000) {
+                  try { wire.destroy() } catch {}
+                } else if (pieceStallTime >= 15_000 && pieceStallTime % 5_000 < 1_000) {
+                  try { wire.ut_metadata?.fetch?.() } catch {}
+                }
+              }
+            }
+          }
+        }
         emitState()
         continue
       }
@@ -712,6 +832,16 @@ function attachTorrentDiagnostics(job: InternalJob, torrent: TorrentLike): void 
     warn(`torrent ${job.infoHash} warning:`, job.lastWarning)
     emitState()
   })
+  if (typeof torrent.on === 'function') {
+    torrent.on('wire', (wire: any) => {
+      if (wire) {
+        wire._connectedAt = Date.now()
+        wire.ut_metadata?.on?.('warning', () => {
+          wire._noMetadata = true
+        })
+      }
+    })
+  }
 }
 
 /**
@@ -858,7 +988,10 @@ async function activateJob(job: InternalJob): Promise<void> {
   const payload = ensureMagnetTrackers(job.magnetUri)
   job.connectingSince = Date.now()
   try {
-    const opts: Record<string, unknown> = { path: job.downloadDir }
+    const opts: Record<string, unknown> = {
+      path: job.downloadDir,
+      announce: FALLBACK_TRACKERS,
+    }
     // webtorrent's throttle groups are in BYTES per second.
     if (typeof s.downloadSpeedLimitMBps === 'number' && s.downloadSpeedLimitMBps > 0) {
       opts.downloadLimit = Math.floor(s.downloadSpeedLimitMBps * 1024 * 1024) // MB/s -> B/s

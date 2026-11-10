@@ -40,38 +40,29 @@ if (!token) {
 
 const RELEASE_BODY = `## What's new in v${VERSION}
 
-### 🎙️ Subtitle Single-Word Merging & 2-Line Formatting Overhaul
-- **Strict 2-Row Guarantee:** Subtitles are strictly formatted to at most 2 lines (\`max_line_count: 2\`) with smart mid-sentence line balancing. Any merge that would overflow into an awkward 3rd line is prevented.
-- **Smart Capitalization Handling:** Mid-sentence orphan words are cleanly lowercased (e.g. \`"I think"\` + \`"So."\` → \`"I think so."\`), while properly preserving proper nouns, character names, and pronouns (\`"I"\`, \`"I'm"\`).
-- **Natural Start-of-Cue Casing:** Orphan words prepended to subsequent cues are capitalized and the following word lowercased (e.g. \`"because"\` + \`"He was late."\` → \`"Because he was late."\`).
+### ⚡ BitTorrent Connecting & Metadata Timeout Fix
+- **Fixed Connection Stalls:** Resolved an issue where newly connected peers were inadvertently dropped after 15s before extension handshakes and PEX could complete. Each peer connection now has a guaranteed 12s window for handshake and peer exchange.
+- **Active DHT & Tracker Discovery:** Added periodic DHT \`lookup(infoHash)\` and tracker announces every 8–15s during the connecting phase to rapidly locate seeders.
+- **Enhanced Swarm Trackers:** Added high-availability public UDP, HTTP/HTTPS, and WebTorrent WebSocket trackers with automatic deduplication, plus DHT bootstrap nodes (\`router.bittorrent.com\`, \`dht.transmissionbt.com\`).
+- **Extended Watchdog:** Increased metadata discovery watchdog to 180s.
 
-### 🧠 Whisper Initial Prompt & Hotwords Generator Overhaul
-- **Priors-Compliant Natural Template:** Replaced instruction-style commands with natural spoken dialogue priors: \`"Dialogue from an anime episode. Characters: {names}."\`.
-- **Eliminated Command Leaks:** Removed phrases like \`"clean subtitles"\` and \`"conversational speech"\` that Whisper often mistook as transcript text and leaked into subtitles.
-- **Strict Token Budgeting:** Enforced token budget (≤ 180 tokens) with token-aware character ranking to prevent context window overflows.
-- **Role Prioritization & Filtering:** \`MAIN\` characters prioritized first, then \`SUPPORTING\`. Completely skips \`BACKGROUND\` and episodic extras.
-- **API Character Normalization:** Strips voice actor tags, parentheses, honorifics, titles, and non-name descriptions (\`"Kyon no Imouto"\`, \`"X's sister"\`, \`"Townsperson A"\`). Corrects Japanese surname-first ordering (\`"Yeager Eren"\` → \`"Eren Yeager"\`).
-- **Length Trimming & Ambiguous Names:** Full names for top 3 characters, spoken/first names for characters 4+. Common English word names (\`"Light"\`, \`"Ray"\`, \`"May"\`, \`"Rose"\`, etc.) pushed to the end to prevent Whisper substitutions.
-- **Faster-Whisper \`--hotwords\` Integration:** Automatically passes the top character names via \`--hotwords\` for every segment window.
+### 🔄 Live Subtitle Refresh in Whisper Studio & Detail View
+- **Instant UI Updates:** Generated subtitles (\`.whisper.srt\`) immediately appear as completed in Whisper Studio and Anime Detail views without requiring an application restart.
+- **Robust Path Normalization:** Normalized cross-platform slash conventions and case sensitivity between Windows paths and renderer state.
+- **Automatic Cache Invalidation:** The library disk scan cache is automatically purged when an episode finishes transcribing.
 
-### 🔍 RapidFuzz-Style Fuzzy Character Corrector & Hallucination Filter
-- **Whole-Word Fuzzy Spelling Correction:** Corrects near-miss character name spellings in English transcripts using the unconstrained full cast list (Levenshtein distance ≤ 2, ratio ≥ 86%).
-- **English Dictionary Stoplist Protection:** Top common English words are strictly immune from name replacement.
-- **Silence & Music Hallucination Filtering:** Automatically drops known Whisper hallucinations on non-speech segments (\`"Thank you for watching"\`, \`"Subtitles by..."\`, repetitive loops).
+### 🎬 High-FPS Subtitle Sync & Audio Drift Compensation
+- **Frame-Accurate Subtitles:** Replaced the 250ms HTML5 \`onTimeUpdate\` subtitle clock with a \`requestVideoFrameCallback\` animation loop, syncing subtitles directly with displayed video frames at 60+ FPS.
+- **Audio Resync on Weaker Hardware:** Added \`aresample=async=1000:min_hard_comp=0.100000\` to dynamically eliminate audio drift exceeding 100ms.
+- **Transcode Performance Cap:** Capped CPU video transcoding to 1080p (\`min(1920,iw)\`) with bounded threads, preventing 4K HEVC releases from pegging weak CPUs to 100%.
+- **ASS Subtitle Optimization:** Chronologically sorted combined ASS dialog events and increased JASSUB font cache to 32.
 
-### 🛠️ In-App Model & Engine Deletion in Settings
-- **1-Click Deletion with Confirmation:** Delete installed Whisper AI models directly from Settings to easily free disk space.
-- **Engine Deletion:** Dedicated control to remove the standalone Faster-Whisper-XXL engine from application storage.
-- **Simplified Model Management:** Removed confusing Active/Select radio controls from Settings; active model selection is handled directly on-the-fly in Whisper Studio.
+### 📐 Player Top Bar Title Full-Width Expansion
+- **No More Title Truncation:** Removed artificial width restrictions (\`max-w-md md:max-w-2xl\`) in the player top navbar, allowing long anime and episode titles to expand naturally across the entire screen.
+- **Complete Title Tooltips:** Hovering over the title displays the full formatted anime title and episode name.
 
-### ⚡ Windows MAX_PATH (260 Chars) Whisper Fix
-- Resolved \`FileNotFoundError: [Errno 2]\` on long filenames by switching intermediate staging files to compact hashes in system temp (\`Temp/kaiko_w/<run>_<hash>\`), shortening paths by over 130 characters.
-
-### 🎬 Player Episode Drawer Progress Resume Fix
-- Selecting an episode from the in-player drawer or next-up button resumes playback from saved progress instead of restarting from 0:00.
-
-### 🧹 UI De-clutter
-- Removed verbose subtitle descriptions from Settings headers and removed the redundant "Transcribing in background" badge from the top navbar.
+### 🔧 Faster-Whisper Compatibility
+- Removed unsupported \`--hotwords\` CLI parameter to eliminate \`faster-whisper-xxl\` exit code 2 errors.
 
 ---
 ### Assets included:
@@ -150,6 +141,16 @@ async function main() {
 
   // Assets upload url format: https://uploads.github.com/repos/zeystom/anime-media-center/releases/440317132/assets{?name,label}
   const uploadBaseUrl = release.upload_url.split('{')[0];
+
+  // Ensure alias filenames exist for universal auto-updater and manual download compatibility
+  const spaceExe = path.join(rootDir, `dist-build/Kaiko Setup ${VERSION}.exe`);
+  const hyphenExe = path.join(rootDir, `dist-build/Kaiko-Setup-${VERSION}.exe`);
+  const dotExe = path.join(rootDir, `dist-build/Kaiko.Setup.${VERSION}.exe`);
+
+  if (fs.existsSync(spaceExe)) {
+    if (!fs.existsSync(hyphenExe)) fs.copyFileSync(spaceExe, hyphenExe);
+    if (!fs.existsSync(dotExe)) fs.copyFileSync(spaceExe, dotExe);
+  }
 
   for (const asset of ASSETS) {
     const filePath = path.resolve(asset.file);

@@ -140,10 +140,10 @@ export const SubtitleOverlay: React.FC<SubtitleOverlayProps> = ({
     return findActiveCues(mainCueIndex, adjustedTime, 3);
   }, [mainCueIndex, adjustedTime]);
 
-  // Find active signs/forced cue (Top)
-  const activeTopCue = useMemo(() => {
-    if (!topSubEnabled || topCueIndex.cues.length === 0) return null;
-    return findActiveCues(topCueIndex, adjustedTime, 1)[0] || null;
+  // Find active signs/forced cues (Top)
+  const activeTopCues = useMemo(() => {
+    if (!topSubEnabled || topCueIndex.cues.length === 0) return [];
+    return findActiveCues(topCueIndex, adjustedTime, 3);
   }, [topCueIndex, adjustedTime, topSubEnabled]);
 
   // Background style classes
@@ -179,9 +179,9 @@ export const SubtitleOverlay: React.FC<SubtitleOverlayProps> = ({
           controlsVisible ? 'translate-y-14' : 'translate-y-0'
         }`}
       >
-        {activeTopCue && (
+        {activeTopCues.length > 0 && (
           <div
-            className="max-w-4xl text-center px-4 py-1 rounded bg-black/60 transition-opacity duration-150 subtitles-overlay-top"
+            className="max-w-4xl text-center px-4 py-1 rounded bg-black/60 transition-opacity duration-150 subtitles-overlay-top flex flex-col space-y-1"
             style={{
               fontSize: `${Math.round(fontSize * 0.85)}px`,
               color: '#fef08a', // High-visibility soft yellow for signs/forced
@@ -189,8 +189,12 @@ export const SubtitleOverlay: React.FC<SubtitleOverlayProps> = ({
               textShadow: computedShadow,
             }}
           >
-            {activeTopCue.text.split('\n').map((line, idx) => (
-              <div key={idx}>{line}</div>
+            {activeTopCues.map((cue) => (
+              <div key={cue.id || cue.start}>
+                {cue.text.split('\n').map((line, idx) => (
+                  <div key={idx}>{line}</div>
+                ))}
+              </div>
             ))}
           </div>
         )}

@@ -754,8 +754,9 @@ export class WhisperManager {
         } catch {}
       }
 
-      // Invalidate probe cache so media player discovers the new subtitle immediately
+      // Invalidate probe cache and library cache so media player & UI discover the new subtitle immediately
       invalidateProbeCache(item.filePath);
+      storage.clearLibraryCache();
     } finally {
       // Clean up temporary output directory
       try {

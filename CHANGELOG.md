@@ -1,5 +1,29 @@
 # Changelog
 
+## 1.0.12 — BitTorrent Engine Connection Fix, Live Subtitle Refresh, High-FPS Subtitle Sync & Player Title Polish
+
+- **BitTorrent Connecting & Metadata Timeout Resolution:**
+  - Fixed a critical connection cycling bug where newly connected peers were severed after 15s before PEX (`ut_pex`) and metadata (`ut_metadata`) handshakes could complete.
+  - Implemented per-wire lifecycle tracking (`wire._connectedAt`), guaranteeing a 12-second grace period for handshakes and peer exchange.
+  - Added periodic active DHT `lookup(infoHash)` and tracker announces every 8–15s during the connecting phase.
+  - Added high-availability fallback trackers (public UDP, HTTP/HTTPS, and WebTorrent WebSocket swarms) and explicit DHT bootstrap nodes (`router.bittorrent.com`, `dht.transmissionbt.com`, etc.).
+  - Extended the connecting watchdog timeout to 180s.
+- **Whisper Live Subtitle Badge Refresh Without App Restart:**
+  - Resolved an issue where generated subtitles did not appear in Whisper Studio or Anime Detail View until restarting the application.
+  - Added real-time `onWhisperEpisodeDone` event processing in Whisper Studio with path normalization across Windows slash styles, immediately updating badges, folder statistics, and selection state.
+  - Added reactive `detailSource` updating in the main application view so currently inspected anime screens update subtitle indicators on the fly.
+  - Automatically invalidated disk scan cache (`storage.clearLibraryCache()`) upon subtitle completion.
+- **Player High-FPS Subtitle Synchronization & Audio Drift Compensation:**
+  - Implemented a `requestVideoFrameCallback` frame synchronizer in the video player, driving subtitle cues at the native display refresh rate (60+ FPS) and completely eliminating the 250ms HTML5 `onTimeUpdate` subtitle lag.
+  - Added `aresample=async=1000:min_hard_comp=0.100000` to the audio transcoding pipeline to hard-compensate for audio drift exceeding 100ms on weaker PCs.
+  - Capped CPU software transcoding output to 1080p (`min(1920,iw)`) and bounded worker threads to prevent 4K HEVC releases from starving CPU on lower-spec hardware.
+  - Sorted combined ASS dialogue events chronologically and increased JASSUB font cache to 32 to eliminate rendering bottlenecks on signs and songs tracks.
+- **Player Top Bar Title Width & Tooltip Polish:**
+  - Removed artificial `max-w-md md:max-w-2xl` width restrictions in the player header, allowing long anime and episode titles to expand naturally across the entire screen.
+  - Set `title` attribute to the full formatted anime and episode title for clean hover tooltips.
+- **Faster-Whisper CLI Compatibility:**
+  - Removed unsupported `--hotwords` command-line argument to prevent `faster-whisper-xxl` exit code 2 errors while preserving full prompt prioritization.
+
 ## 1.0.11 — In-App Model & Engine Deletion, Windows Long Path Fix, Subtitle Single-Word Merging & Smart Prompt Overhaul
 
 - **Subtitle Single-Word Merge & 2-Line Formatting Overhaul:**

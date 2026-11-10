@@ -1,4 +1,4 @@
-import React, { useState, useEffect, useMemo, useCallback } from 'react';
+import React, { useState, useEffect, useMemo, useCallback, useRef } from 'react';
 import {
   FolderOpen,
   Volume2,
@@ -85,6 +85,8 @@ export const WhisperStudio: React.FC<WhisperStudioProps> = ({
   }, [folders]);
 
   const [selectedFolder, setSelectedFolder] = useState<string>(initialFolder?.folderPath || '');
+  const selectedFolderRef = useRef<string>(selectedFolder);
+  selectedFolderRef.current = selectedFolder;
 
   // Default to first folder if no folder is selected
   useEffect(() => {
@@ -196,7 +198,7 @@ export const WhisperStudio: React.FC<WhisperStudioProps> = ({
 
   // Episode selection & filter
   const [selectedEpisodePaths, setSelectedEpisodePaths] = useState<Set<string>>(new Set());
-  const [episodeFilter, setEpisodeFilter] = useState<'all' | 'missing'>('missing');
+  const [episodeFilter, setEpisodeFilter] = useState<'all' | 'missing'>('all');
 
   // Whisper Queue & Execution State
   const [isProcessing, setIsProcessing] = useState<boolean>(false);
@@ -494,9 +496,82 @@ export const WhisperStudio: React.FC<WhisperStudioProps> = ({
       setIsProcessing(true);
     });
 
+    const unsubEpisodeDone = window.electronAPI?.onWhisperEpisodeDone?.((data) => {
+      const targetName = (data.fileName || '').toLowerCase();
+      const targetPath = (data.filePath || '').replace(/[/\\]+/g, '/').toLowerCase();
+
+      const isMatch = (name?: string, path?: string) => {
+        const n = (name || '').toLowerCase();
+        const p = (path || '').replace(/[/\\]+/g, '/').toLowerCase();
+        return n === targetName || p === targetPath || (targetName && p.endsWith('/' + targetName)) || (n && targetPath.endsWith('/' + n));
+      };
+
+      setEpisodes((prev) =>
+        prev.map((e) => {
+          if (isMatch(e.fileName, e.filePath)) {
+            return { ...e, hasWhisperSrt: true, hasExternalSrt: true };
+          }
+          return e;
+        })
+      );
+
+      // Deselect the completed episode from the selection set so it is not re-transcribed
+      setSelectedEpisodePaths((prev) => {
+        const next = new Set(prev);
+        for (const p of next) {
+          const normP = p.replace(/[/\\]+/g, '/').toLowerCase();
+          if (normP === targetPath || (data.fileName && normP.endsWith(targetName))) {
+            next.delete(p);
+          }
+        }
+        return next;
+      });
+
+      // Update libraryFolders immediately so top banner stats update reactively
+      setLibraryFolders((prev) =>
+        prev.map((f) => {
+          if (f.episodes && f.episodes.length > 0) {
+            const hasMatch = f.episodes.some((e) => isMatch(e.fileName, e.filePath));
+            if (hasMatch) {
+              const updatedEpisodes = f.episodes.map((e) =>
+                isMatch(e.fileName, e.filePath)
+                  ? { ...e, hasWhisperSrt: true, hasExternalSrt: true }
+                  : e
+              );
+              return {
+                ...f,
+                episodes: updatedEpisodes,
+                hasWhisperCount: updatedEpisodes.filter((e) => e.hasWhisperSrt).length,
+                hasSubtitlesCount: updatedEpisodes.filter((e) => e.hasExternalSrt).length,
+              };
+            }
+          }
+          return f;
+        })
+      );
+
+      const folderToFetch = selectedFolderRef.current;
+      if (folderToFetch) {
+        window.electronAPI.getFolderEpisodes(folderToFetch).then((freshEps) => {
+          if (freshEps && freshEps.length > 0) {
+            setEpisodes(freshEps);
+          }
+        }).catch(() => {});
+      }
+      onRefreshLibrary();
+    });
+
     const unsubDone = window.electronAPI.onWhisperDone(() => {
       setIsProcessing(false);
       setCurrentFile('');
+      const folderToFetch = selectedFolderRef.current;
+      if (folderToFetch) {
+        window.electronAPI.getFolderEpisodes(folderToFetch).then((freshEps) => {
+          if (freshEps && freshEps.length > 0) {
+            setEpisodes(freshEps);
+          }
+        }).catch(() => {});
+      }
       onRefreshLibrary();
     });
 
@@ -528,6 +603,7 @@ export const WhisperStudio: React.FC<WhisperStudioProps> = ({
       unsubLog();
       unsubProgress();
       unsubDone();
+      if (unsubEpisodeDone) unsubEpisodeDone();
       if (unsubModelStatus) unsubModelStatus();
       if (unsubModelProg) unsubModelProg();
       if (unsubEngineStatus) unsubEngineStatus();

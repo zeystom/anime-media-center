@@ -2,6 +2,7 @@ import http from 'http';
 import url from 'url';
 import fs from 'fs';
 import path from 'path';
+import os from 'os';
 import crypto from 'crypto';
 import { spawn, ChildProcess } from 'child_process';
 import { storage } from './storage';
@@ -301,14 +302,17 @@ export class LocalStreamServer {
           '-forced-idr', '1'
         );
       } else if (!videoFormat.canDirectStream) {
-        // CPU fallback: ultrafast libx264
+        // CPU fallback: ultrafast libx264 with bounded threads and 1080p scale cap to prevent CPU starvation on weak PCs
+        const cpuThreads = Math.max(1, Math.min(4, (os.cpus()?.length || 2) - 1));
         args.push(
+          '-vf', "scale=w='min(1920,iw)':h=-2",
           '-c:v', 'libx264',
           '-pix_fmt', 'yuv420p',
           '-preset', 'ultrafast',
           '-tune', 'zerolatency',
           '-crf', '20',
-          '-g', '24'
+          '-g', '24',
+          '-threads', cpuThreads.toString()
         );
       } else {
         // Native 8-bit H.264 input is copied directly with 0% CPU
@@ -319,7 +323,8 @@ export class LocalStreamServer {
         '-c:a', 'aac',
         '-ac', '2',
         '-b:a', '256k',
-        '-af', 'aresample=async=1:first_pts=0',
+        '-af', 'aresample=async=1000:min_hard_comp=0.100000',
+        '-max_muxing_queue_size', '1024',
         '-avoid_negative_ts', 'make_zero',
         '-map_chapters', '-1',
         '-dn',
