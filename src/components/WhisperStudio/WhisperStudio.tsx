@@ -13,6 +13,12 @@ import {
   Square,
   Users,
   ExternalLink,
+  Film,
+  Search,
+  ChevronLeft,
+  ChevronRight,
+  X,
+  Check,
 } from 'lucide-react';
 import {
   AnimeFolder,
@@ -38,6 +44,7 @@ interface WhisperStudioProps {
   settings?: AppSettings;
   onSaveSettings?: (newSettings: Partial<AppSettings>) => Promise<void> | void;
   isActiveTab?: boolean;
+  folders?: AnimeFolder[];
 }
 
 const STORAGE_KEY_WHISPER_TUNING = 'kaiko_whisper_tuning_preset';
@@ -50,8 +57,97 @@ export const WhisperStudio: React.FC<WhisperStudioProps> = ({
   settings,
   onSaveSettings,
   isActiveTab,
+  folders,
 }) => {
+  const [libraryFolders, setLibraryFolders] = useState<AnimeFolder[]>(folders || []);
+  const [showAnimePicker, setShowAnimePicker] = useState<boolean>(false);
+  const [pickerSearch, setPickerSearch] = useState<string>('');
+  const [pickerFilter, setPickerFilter] = useState<'all' | 'needs_subs' | 'has_subs'>('all');
+  const [pickerPage, setPickerPage] = useState<number>(1);
+  const ITEMS_PER_PAGE = 8;
+
+  // Sync library folders from props or electron library cache
+  useEffect(() => {
+    if (folders && folders.length > 0) {
+      setLibraryFolders(folders);
+    } else if (window.electronAPI?.getLibraryCache) {
+      window.electronAPI
+        .getLibraryCache()
+        .then((cached) => {
+          if (cached && cached.length > 0) setLibraryFolders(cached);
+        })
+        .catch(() => {});
+    }
+  }, [folders]);
+
   const [selectedFolder, setSelectedFolder] = useState<string>(initialFolder?.folderPath || '');
+
+  // Default to first folder if no folder is selected
+  useEffect(() => {
+    if (!selectedFolder) {
+      if (initialFolder?.folderPath) {
+        setSelectedFolder(initialFolder.folderPath);
+      } else if (libraryFolders.length > 0) {
+        setSelectedFolder(libraryFolders[0].folderPath);
+      }
+    }
+  }, [libraryFolders, initialFolder, selectedFolder]);
+
+  // Identify currently selected AnimeFolder object for rich card rendering
+  const currentAnime = useMemo(() => {
+    if (!selectedFolder) return null;
+    const norm = selectedFolder.replace(/[/\\]+$/, '').toLowerCase();
+    const found = libraryFolders.find(
+      (f) => f.folderPath.replace(/[/\\]+$/, '').toLowerCase() === norm
+    );
+    if (found) return found;
+    if (initialFolder && initialFolder.folderPath.replace(/[/\\]+$/, '').toLowerCase() === norm) {
+      return initialFolder;
+    }
+    return null;
+  }, [libraryFolders, selectedFolder, initialFolder]);
+
+  // Filtered & paginated folders for the Anime Picker modal
+  const filteredFolders = useMemo(() => {
+    return libraryFolders.filter((f) => {
+      const title = (f.canonicalTitle || f.folderName || '').toLowerCase();
+      const matchesSearch = !pickerSearch || title.includes(pickerSearch.toLowerCase().trim());
+      if (!matchesSearch) return false;
+      const whisperCount = f.hasWhisperCount ?? 0;
+      const total = f.totalEpisodes || f.episodes.length;
+      if (pickerFilter === 'needs_subs') {
+        return whisperCount < total;
+      }
+      if (pickerFilter === 'has_subs') {
+        return whisperCount > 0;
+      }
+      return true;
+    });
+  }, [libraryFolders, pickerSearch, pickerFilter]);
+
+  const totalPages = Math.max(1, Math.ceil(filteredFolders.length / ITEMS_PER_PAGE));
+  const currentPage = Math.min(pickerPage, totalPages);
+  const paginatedFolders = useMemo(() => {
+    const start = (currentPage - 1) * ITEMS_PER_PAGE;
+    return filteredFolders.slice(start, start + ITEMS_PER_PAGE);
+  }, [filteredFolders, currentPage]);
+
+  useEffect(() => {
+    setPickerPage(1);
+  }, [pickerSearch, pickerFilter]);
+
+  // Close Anime Picker Modal on Escape
+  useEffect(() => {
+    if (!showAnimePicker) return;
+    const handleKeyDown = (e: KeyboardEvent) => {
+      if (e.key === 'Escape') {
+        e.stopPropagation();
+        setShowAnimePicker(false);
+      }
+    };
+    window.addEventListener('keydown', handleKeyDown, true);
+    return () => window.removeEventListener('keydown', handleKeyDown, true);
+  }, [showAnimePicker]);
   const [episodes, setEpisodes] = useState<Episode[]>(initialFolder?.episodes || []);
   const [sampleAudioTracks, setSampleAudioTracks] = useState<AudioTrack[]>([]);
   const [selectedAudioTrackNum, setSelectedAudioTrackNum] = useState<number>(1);
@@ -557,14 +653,6 @@ export const WhisperStudio: React.FC<WhisperStudioProps> = ({
         <div>
           <div className="flex items-center space-x-2.5">
             <h1 className="text-xl font-bold text-white tracking-tight">Whisper Studio</h1>
-            <button
-              type="button"
-              onClick={onOpenSettings}
-              className="px-2 py-0.5 rounded text-xs font-mono font-bold bg-zinc-800 text-indigo-300 border border-zinc-700 hover:border-indigo-500/50 transition-colors"
-              title="Active model for Whisper Studio. Click to configure in Settings."
-            >
-              {activeModel}
-            </button>
           </div>
           <p className="text-xs text-zinc-400 mt-1">
             Batch-generate synchronized English SRT subtitles for local MKV anime seasons using faster-whisper-xxl.
@@ -638,69 +726,89 @@ export const WhisperStudio: React.FC<WhisperStudioProps> = ({
       <div className="flex-1 grid grid-cols-1 lg:grid-cols-12 gap-6 min-h-0">
         {/* Left Column: 3 Compact Steps */}
         <div className="lg:col-span-5 flex flex-col space-y-4 overflow-y-auto pr-1 scrollbar-thin">
-          {/* Step 1: Folder Selection */}
+          {/* Step 1: Anime Selection */}
           <div className="rounded-2xl bg-[#141418] border border-white/10 space-y-3 shadow-md p-4">
-            <span className="text-xs font-bold uppercase tracking-wider text-zinc-400 block">
-              1. Folder
-            </span>
+            <div className="flex items-center justify-between">
+              <span className="text-xs font-bold uppercase tracking-wider text-zinc-400">
+                1. Anime
+              </span>
 
-            <div className="flex items-center space-x-2">
-              <input
-                type="text"
-                readOnly
-                value={selectedFolder}
-                placeholder="Select an anime season directory..."
-                className="flex-1 px-3 py-2 rounded-lg bg-zinc-900 border border-zinc-700/80 text-xs font-mono text-zinc-200 truncate focus:outline-none"
-                title={selectedFolder}
-              />
-              <button
-                onClick={handleBrowseFolder}
-                disabled={isProcessing}
-                className="flex items-center space-x-1.5 px-3 py-2 rounded-lg bg-zinc-800 hover:bg-zinc-700 text-zinc-200 text-xs font-medium border border-zinc-700 transition-colors shrink-0 disabled:opacity-50"
-              >
-                <FolderOpen className="w-4 h-4 text-zinc-400" />
-                <span>Browse</span>
-              </button>
+              <div className="flex items-center space-x-2">
+                {libraryFolders.length > 0 && (
+                  <button
+                    type="button"
+                    disabled={isProcessing}
+                    onClick={() => setShowAnimePicker(true)}
+                    className="flex items-center space-x-1.5 px-2.5 py-1 rounded-lg bg-indigo-600/20 hover:bg-indigo-600/30 text-indigo-300 border border-indigo-500/30 text-xs font-medium transition-colors disabled:opacity-50"
+                  >
+                    <Film className="w-3.5 h-3.5" />
+                    <span>Change Anime</span>
+                  </button>
+                )}
+                <button
+                  type="button"
+                  disabled={isProcessing}
+                  onClick={handleBrowseFolder}
+                  title="Browse custom folder on disk"
+                  className="p-1.5 rounded-lg bg-zinc-800 hover:bg-zinc-700 text-zinc-400 hover:text-white border border-white/10 text-xs transition-colors disabled:opacity-50"
+                >
+                  <FolderOpen className="w-3.5 h-3.5" />
+                </button>
+              </div>
             </div>
 
-            {episodes.length > 0 && (
-              <div className="text-xs text-zinc-400 pt-0.5 flex items-center justify-between flex-wrap gap-2">
-                <span>
-                  {episodes.length} episodes ·{' '}
-                  {existingWhisperCount > 0 ? (
-                    <>
-                      <strong className="text-emerald-400 font-semibold">{existingWhisperCount}</strong> already have AI subtitles
-                    </>
-                  ) : existingAnySubCount > 0 ? (
-                    <>
-                      <strong className="text-emerald-400 font-semibold">{existingAnySubCount}</strong> already have subtitles
-                    </>
-                  ) : (
-                    <span>0 already have subtitles</span>
-                  )}
-                </span>
-                <div className="flex items-center space-x-1.5 flex-wrap">
-                  {episodes.some((e) => e.hasWhisperSrt) && (
-                    <span className="text-[10px] text-indigo-300 font-semibold bg-indigo-500/15 px-1.5 py-0.5 rounded border border-indigo-500/30">
-                      AI Sub ({existingWhisperCount})
+            {selectedFolder ? (
+              <div className="flex items-start space-x-3 p-3 rounded-xl bg-zinc-900/80 border border-white/5">
+                {currentAnime?.posterUrl ? (
+                  <img
+                    src={currentAnime.posterUrl}
+                    alt={currentAnime.canonicalTitle || currentAnime.folderName}
+                    className="w-14 h-20 rounded-lg object-cover border border-white/10 shrink-0 shadow-sm"
+                  />
+                ) : (
+                  <div className="w-14 h-20 rounded-lg bg-zinc-800 border border-white/10 flex items-center justify-center shrink-0 text-zinc-500">
+                    <Film className="w-6 h-6" />
+                  </div>
+                )}
+                <div className="flex-1 min-w-0 space-y-1.5">
+                  <h3
+                    className="text-sm font-bold text-white truncate"
+                    title={currentAnime?.canonicalTitle || currentAnime?.folderName || cleanSeriesTitle(selectedFolder)}
+                  >
+                    {cleanSeriesTitle(currentAnime?.canonicalTitle || currentAnime?.folderName || selectedFolder)}
+                  </h3>
+                  <div className="flex items-center space-x-2 flex-wrap gap-y-1 text-[11px]">
+                    <span className="text-zinc-400 font-medium">
+                      {episodes.length} episode{episodes.length === 1 ? '' : 's'}
                     </span>
-                  )}
-                  {episodes.some((e) => e.hasEmbeddedDubtitles) && (
-                    <span className="text-[10px] text-purple-300 font-semibold bg-purple-500/15 px-1.5 py-0.5 rounded border border-purple-500/30" title="Embedded English Dubtitles (SDH)">
-                      Dub Sub
-                    </span>
-                  )}
-                  {episodes.some((e) => !e.hasWhisperSrt && e.hasExternalSrt) && (
-                    <span className="text-[10px] text-blue-300 font-semibold bg-blue-500/15 px-1.5 py-0.5 rounded border border-blue-500/30" title="External Subtitle (.srt)">
-                      Ext Sub
-                    </span>
-                  )}
-                  {episodes.some((e) => !e.hasWhisperSrt && !e.hasExternalSrt && e.hasEmbeddedSubtitles) && (
-                    <span className="text-[10px] text-emerald-300 font-semibold bg-emerald-500/15 px-1.5 py-0.5 rounded border border-emerald-500/30" title="Embedded Subtitles">
-                      Sub
-                    </span>
-                  )}
+                    {existingWhisperCount > 0 ? (
+                      <span className="px-1.5 py-0.2 rounded text-[10px] font-semibold bg-emerald-500/20 text-emerald-300 border border-emerald-500/30">
+                        {existingWhisperCount} AI Sub{existingWhisperCount === 1 ? '' : 's'}
+                      </span>
+                    ) : (
+                      <span className="px-1.5 py-0.2 rounded text-[10px] font-medium bg-amber-500/10 text-amber-400 border border-amber-500/20">
+                        No AI Subs
+                      </span>
+                    )}
+                    {existingAnySubCount > existingWhisperCount && (
+                      <span className="px-1.5 py-0.2 rounded text-[10px] font-medium bg-zinc-800 text-zinc-300 border border-white/5">
+                        {existingAnySubCount - existingWhisperCount} ext sub{existingAnySubCount - existingWhisperCount === 1 ? '' : 's'}
+                      </span>
+                    )}
+                  </div>
+                  <p className="text-[10px] font-mono text-zinc-500 truncate" title={selectedFolder}>
+                    {selectedFolder}
+                  </p>
                 </div>
+              </div>
+            ) : (
+              <div
+                onClick={() => setShowAnimePicker(true)}
+                className="p-5 rounded-xl border border-dashed border-white/10 hover:border-indigo-500/50 bg-zinc-900/40 hover:bg-zinc-900/70 text-center cursor-pointer transition-all space-y-1.5"
+              >
+                <Film className="w-6 h-6 mx-auto text-zinc-400" />
+                <p className="text-xs font-medium text-zinc-200">Select an anime from library</p>
+                <p className="text-[11px] text-zinc-500">Choose a downloaded anime to generate subtitles</p>
               </div>
             )}
           </div>
@@ -873,7 +981,6 @@ export const WhisperStudio: React.FC<WhisperStudioProps> = ({
               <div className="flex items-center justify-between">
                 <div className="flex items-center space-x-1.5">
                   <span className="font-semibold text-zinc-300">AI Subtitle Model</span>
-                  <span className="text-[10px] text-zinc-500 font-mono">({activeModel})</span>
                 </div>
                 {onOpenSettings && (
                   <button
@@ -1140,8 +1247,6 @@ export const WhisperStudio: React.FC<WhisperStudioProps> = ({
 
             {/* Subtle Milestone 4 Summary Line */}
             <div className="pt-2 text-[11px] text-zinc-500 flex items-center space-x-1.5 flex-wrap">
-              <span className="font-mono text-zinc-400">{activeModel}</span>
-              <span>·</span>
               <span>Accurate Timestamps</span>
               <span>·</span>
               <span>English Dialogue</span>
@@ -1402,6 +1507,249 @@ export const WhisperStudio: React.FC<WhisperStudioProps> = ({
           </div>
         </div>
       </div>
+
+      {/* Anime Selection Modal */}
+      {showAnimePicker && (
+        <div
+          role="dialog"
+          aria-modal="true"
+          data-modal="true"
+          onClick={() => setShowAnimePicker(false)}
+          className="fixed inset-0 z-50 bg-black/80 backdrop-blur-sm flex items-center justify-center p-4 animate-in fade-in duration-200"
+        >
+          <div
+            onClick={(e) => e.stopPropagation()}
+            className="relative w-full max-w-3xl rounded-2xl bg-[#141418] border border-white/10 shadow-2xl flex flex-col max-h-[85vh] overflow-hidden"
+          >
+            {/* Modal Header */}
+            <div className="flex items-center justify-between p-4 border-b border-zinc-800 shrink-0">
+              <div className="flex items-center space-x-2">
+                <Film className="w-5 h-5 text-indigo-400" />
+                <h2 className="text-base font-bold text-white">Select Anime from Library</h2>
+                <span className="text-xs font-semibold px-2 py-0.5 rounded-full bg-zinc-800 text-zinc-300 border border-white/5">
+                  {filteredFolders.length}
+                </span>
+              </div>
+              <button
+                type="button"
+                onClick={() => setShowAnimePicker(false)}
+                className="p-1.5 rounded-lg text-zinc-400 hover:text-white hover:bg-zinc-800 transition-colors"
+                title="Close (Esc)"
+              >
+                <X className="w-4 h-4" />
+              </button>
+            </div>
+
+            {/* Search & Filter Bar */}
+            <div className="p-4 border-b border-zinc-800/80 bg-zinc-900/50 space-y-3 shrink-0">
+              <div className="relative">
+                <Search className="w-4 h-4 text-zinc-400 absolute left-3 top-1/2 -translate-y-1/2" />
+                <input
+                  type="text"
+                  autoFocus
+                  value={pickerSearch}
+                  onChange={(e) => setPickerSearch(e.target.value)}
+                  placeholder="Search downloaded anime by title..."
+                  className="w-full pl-9 pr-8 py-2 rounded-xl bg-zinc-900 border border-zinc-700/80 text-white text-xs placeholder-zinc-500 focus:outline-none focus:border-indigo-500 focus:ring-1 focus:ring-indigo-500"
+                />
+                {pickerSearch && (
+                  <button
+                    type="button"
+                    onClick={() => setPickerSearch('')}
+                    className="absolute right-2.5 top-1/2 -translate-y-1/2 text-zinc-400 hover:text-white"
+                  >
+                    <X className="w-3.5 h-3.5" />
+                  </button>
+                )}
+              </div>
+
+              <div className="flex items-center space-x-2 text-xs flex-wrap gap-y-1">
+                <button
+                  type="button"
+                  onClick={() => setPickerFilter('all')}
+                  className={`px-3 py-1 rounded-lg font-medium transition-colors ${
+                    pickerFilter === 'all'
+                      ? 'bg-indigo-600 text-white'
+                      : 'bg-zinc-800/80 text-zinc-400 hover:text-white hover:bg-zinc-800'
+                  }`}
+                >
+                  All ({libraryFolders.length})
+                </button>
+                <button
+                  type="button"
+                  onClick={() => setPickerFilter('needs_subs')}
+                  className={`px-3 py-1 rounded-lg font-medium transition-colors ${
+                    pickerFilter === 'needs_subs'
+                      ? 'bg-indigo-600 text-white'
+                      : 'bg-zinc-800/80 text-zinc-400 hover:text-white hover:bg-zinc-800'
+                  }`}
+                >
+                  Needs Subtitles ({libraryFolders.filter((f) => (f.hasWhisperCount ?? 0) < (f.totalEpisodes || f.episodes.length)).length})
+                </button>
+                <button
+                  type="button"
+                  onClick={() => setPickerFilter('has_subs')}
+                  className={`px-3 py-1 rounded-lg font-medium transition-colors ${
+                    pickerFilter === 'has_subs'
+                      ? 'bg-indigo-600 text-white'
+                      : 'bg-zinc-800/80 text-zinc-400 hover:text-white hover:bg-zinc-800'
+                  }`}
+                >
+                  Has AI Subs ({libraryFolders.filter((f) => (f.hasWhisperCount ?? 0) > 0).length})
+                </button>
+              </div>
+            </div>
+
+            {/* Anime Cards Grid */}
+            <div className="flex-1 overflow-y-auto p-4 min-h-[320px]">
+              {paginatedFolders.length === 0 ? (
+                <div className="flex flex-col items-center justify-center h-56 text-center space-y-2">
+                  <Film className="w-10 h-10 text-zinc-600" />
+                  <p className="text-sm font-semibold text-zinc-300">No downloaded anime found</p>
+                  <p className="text-xs text-zinc-500 max-w-sm">
+                    {pickerSearch
+                      ? 'Try searching with a different keyword or clear your filter.'
+                      : 'Add anime media folders in Settings to see your downloaded anime library here.'}
+                  </p>
+                </div>
+              ) : (
+                <div className="grid grid-cols-2 sm:grid-cols-3 md:grid-cols-4 gap-3">
+                  {paginatedFolders.map((folder) => {
+                    const isSelected =
+                      selectedFolder &&
+                      selectedFolder.replace(/[/\\]+$/, '').toLowerCase() ===
+                        folder.folderPath.replace(/[/\\]+$/, '').toLowerCase();
+                    const title = folder.canonicalTitle || folder.folderName || cleanSeriesTitle(folder.folderPath);
+                    const totalEps = folder.totalEpisodes || folder.episodes.length;
+                    const whisperCount = folder.hasWhisperCount ?? 0;
+                    return (
+                      <div
+                        key={folder.folderPath}
+                        onClick={() => {
+                          setSelectedFolder(folder.folderPath);
+                          setUserPromptOverride(null);
+                          setShowAnimePicker(false);
+                        }}
+                        className={`group relative flex flex-col rounded-xl overflow-hidden border cursor-pointer transition-all hover:scale-[1.02] ${
+                          isSelected
+                            ? 'bg-indigo-950/40 border-indigo-500 ring-2 ring-indigo-500/50 shadow-lg shadow-indigo-500/10'
+                            : 'bg-zinc-900/70 border-white/5 hover:border-zinc-700 hover:bg-zinc-800/60'
+                        }`}
+                      >
+                        {/* Poster with aspect ratio */}
+                        <div className="relative aspect-[3/4] w-full bg-zinc-800/80 overflow-hidden">
+                          {folder.posterUrl ? (
+                            <img
+                              src={folder.posterUrl}
+                              alt={title}
+                              className="w-full h-full object-cover group-hover:scale-105 transition-transform duration-300"
+                              loading="lazy"
+                            />
+                          ) : (
+                            <div className="w-full h-full flex flex-col items-center justify-center p-3 text-zinc-500">
+                              <Film className="w-8 h-8 mb-1" />
+                              <span className="text-[10px] text-center line-clamp-2 font-medium">{title}</span>
+                            </div>
+                          )}
+
+                          {/* Top Badges */}
+                          <div className="absolute top-2 left-2 flex flex-col gap-1">
+                            <span className="px-1.5 py-0.5 rounded text-[10px] font-semibold bg-black/75 text-zinc-200 backdrop-blur-sm shadow">
+                              {totalEps} ep{totalEps === 1 ? '' : 's'}
+                            </span>
+                          </div>
+
+                          <div className="absolute top-2 right-2 flex flex-col gap-1 items-end">
+                            {whisperCount > 0 && (
+                              <span className="px-1.5 py-0.5 rounded text-[10px] font-semibold bg-emerald-500/90 text-white backdrop-blur-sm shadow">
+                                AI Subbed
+                              </span>
+                            )}
+                            {isSelected && (
+                              <span className="p-1 rounded-full bg-indigo-600 text-white shadow ring-2 ring-white/20">
+                                <Check className="w-3 h-3 stroke-[3]" />
+                              </span>
+                            )}
+                          </div>
+                        </div>
+
+                        {/* Card Info */}
+                        <div className="p-2.5 space-y-1">
+                          <h4 className="text-xs font-bold text-white truncate" title={title}>
+                            {cleanSeriesTitle(title)}
+                          </h4>
+                          <div className="flex items-center justify-between text-[10px] text-zinc-400">
+                            {whisperCount > 0 ? (
+                              <span className="text-emerald-400 font-medium">
+                                {whisperCount}/{totalEps} AI Subs
+                              </span>
+                            ) : (
+                              <span className="text-amber-400/90">Needs subtitles</span>
+                            )}
+                          </div>
+                        </div>
+                      </div>
+                    );
+                  })}
+                </div>
+              )}
+            </div>
+
+            {/* Modal Footer with Pagination and Browse custom */}
+            <div className="p-3.5 border-t border-zinc-800 bg-zinc-900/80 flex items-center justify-between gap-3 shrink-0">
+              <button
+                type="button"
+                onClick={async () => {
+                  const folder = await window.electronAPI.browseFolder(selectedFolder);
+                  if (folder) {
+                    setSelectedFolder(folder);
+                    setUserPromptOverride(null);
+                    setShowAnimePicker(false);
+                  }
+                }}
+                className="flex items-center space-x-1.5 text-xs text-zinc-400 hover:text-white transition-colors py-1.5 px-2.5 rounded-lg hover:bg-zinc-800"
+              >
+                <FolderOpen className="w-3.5 h-3.5" />
+                <span>Browse folder on disk...</span>
+              </button>
+
+              {totalPages > 1 && (
+                <div className="flex items-center space-x-2">
+                  <button
+                    type="button"
+                    disabled={currentPage <= 1}
+                    onClick={() => setPickerPage((p) => Math.max(1, p - 1))}
+                    className="p-1 rounded-lg border border-white/5 bg-zinc-800 text-zinc-300 hover:text-white disabled:opacity-40 disabled:cursor-not-allowed"
+                    title="Previous page"
+                  >
+                    <ChevronLeft className="w-4 h-4" />
+                  </button>
+                  <span className="text-xs text-zinc-400 font-medium">
+                    {currentPage} / {totalPages}
+                  </span>
+                  <button
+                    type="button"
+                    disabled={currentPage >= totalPages}
+                    onClick={() => setPickerPage((p) => Math.min(totalPages, p + 1))}
+                    className="p-1 rounded-lg border border-white/5 bg-zinc-800 text-zinc-300 hover:text-white disabled:opacity-40 disabled:cursor-not-allowed"
+                    title="Next page"
+                  >
+                    <ChevronRight className="w-4 h-4" />
+                  </button>
+                </div>
+              )}
+
+              <button
+                type="button"
+                onClick={() => setShowAnimePicker(false)}
+                className="px-4 py-1.5 rounded-xl bg-zinc-800 hover:bg-zinc-700 text-zinc-200 text-xs font-semibold border border-white/10 transition-colors"
+              >
+                Close
+              </button>
+            </div>
+          </div>
+        </div>
+      )}
     </div>
   );
 };

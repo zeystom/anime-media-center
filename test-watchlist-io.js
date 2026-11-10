@@ -648,8 +648,7 @@ await runTest('7.3 readBackup returns null for missing, corrupt or foreign files
 })
 
 await runTest('7.4 getBackupFilePath creates <dir>/AnimeCenter and returns the right shape', () => {
-  const base = 'C:\\tmp\\whatever'
-  const tmpExisted = fs.existsSync('C:\\tmp')
+  const base = path.join(tmpRoot, 'whatever')
   const filePath = getBackupFilePath(base)
   try {
     assert.strictEqual(path.basename(filePath), 'user_library_backup.json')
@@ -658,11 +657,6 @@ await runTest('7.4 getBackupFilePath creates <dir>/AnimeCenter and returns the r
     assert.ok(fs.existsSync(path.join(base, 'AnimeCenter')), 'AnimeCenter directory must be created (mkdir -p)')
   } finally {
     fs.rmSync(base, { recursive: true, force: true })
-    if (!tmpExisted) {
-      try {
-        fs.rmSync('C:\\tmp', { recursive: true, force: true })
-      } catch {}
-    }
   }
 })
 

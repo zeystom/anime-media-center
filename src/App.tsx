@@ -1373,6 +1373,7 @@ export const App: React.FC = () => {
                 settings={settings}
                 onSaveSettings={handleSaveSettings}
                 isActiveTab={currentTab === 'whisper'}
+                folders={visibleFolders}
               />
             </Suspense>
           </div>
