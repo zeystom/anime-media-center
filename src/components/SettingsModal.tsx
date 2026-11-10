@@ -120,6 +120,7 @@ export const SettingsModal: React.FC<SettingsModalProps> = ({
     modelExists?: boolean;
     isDefaultModelInstalled?: boolean;
     modelName?: string;
+    installedModels?: string[];
     detectedCustomModels?: string[];
     customModelDetectedName?: string | null;
   }>({
@@ -128,6 +129,7 @@ export const SettingsModal: React.FC<SettingsModalProps> = ({
     modelExists: false,
     isDefaultModelInstalled: false,
     modelName: 'large-v3-turbo',
+    installedModels: [],
     detectedCustomModels: [],
   });
 
@@ -426,30 +428,33 @@ export const SettingsModal: React.FC<SettingsModalProps> = ({
     });
   };
 
-  const handleDownloadModel = async () => {
+  const handleDownloadModel = async (targetModel: string = 'large-v3-turbo') => {
     if (!window.electronAPI?.downloadWhisperModel) return;
     if (!binaryStatus.whisperExists) {
       showGlobalToast('Faster-Whisper executable is required to download models', 'error');
       return;
     }
-    setDownloadingModel('large-v3-turbo');
+    setDownloadingModel(targetModel);
     setDownloadProgress({ percent: 0, text: 'Connecting to Hugging Face...' });
     try {
-      const res = await window.electronAPI.downloadWhisperModel('large-v3-turbo');
+      const res = await window.electronAPI.downloadWhisperModel(targetModel);
       if (res.success) {
-        showGlobalToast('Model large-v3-turbo downloaded successfully and ready!', 'success');
+        showGlobalToast(`Model ${targetModel} downloaded successfully and ready!`, 'success');
+        setWhisperModel(targetModel);
+        setCustomModelPath('');
+        await onSave({ whisperModel: targetModel, customModelPath: '' });
         const status = await window.electronAPI.checkBinaries({
           ffmpegPath,
           whisperPath,
-          modelName: 'large-v3-turbo',
-          customModelPath,
+          modelName: targetModel,
+          customModelPath: '',
         });
         setBinaryStatus(status);
       } else {
-        showGlobalToast(res.error || 'Failed to download model', 'error');
+        showGlobalToast(res.error || `Failed to download ${targetModel}`, 'error');
       }
     } catch (err: any) {
-      showGlobalToast(err?.message || 'Failed to download model', 'error');
+      showGlobalToast(err?.message || `Failed to download ${targetModel}`, 'error');
     } finally {
       setDownloadingModel(null);
       setDownloadProgress({ percent: null, text: '' });
@@ -1264,64 +1269,148 @@ export const SettingsModal: React.FC<SettingsModalProps> = ({
                 <span>AI Subtitle Model</span>
               </label>
 
-              {/* Default Model (large-v3-turbo) Card */}
-              <div className="p-3 rounded-xl bg-zinc-900/60 border border-white/5 flex items-center justify-between">
-                <div className="flex items-center space-x-2">
-                  <span className="text-xs font-mono font-bold text-white">large-v3-turbo</span>
-                  <span className="px-2 py-0.5 rounded text-[10px] font-semibold bg-indigo-500/20 text-indigo-300 border border-indigo-500/30">
-                    Default (~1.5 GB)
-                  </span>
-                </div>
+              {/* Recommended Preset Models */}
+              <div className="space-y-2">
+                {[
+                  {
+                    id: 'large-v3-turbo',
+                    name: 'large-v3-turbo',
+                    badge: 'Default • Recommended • ~1.5 GB • 4–6 GB+ VRAM',
+                  },
+                  {
+                    id: 'medium',
+                    name: 'medium',
+                    badge: 'Mid-Range GPU • ~1.5 GB • 4 GB VRAM',
+                  },
+                  {
+                    id: 'small',
+                    name: 'small',
+                    badge: 'CPU / Low VRAM • ~480 MB • 2 GB VRAM / Any CPU',
+                  },
+                ].map((model) => {
+                  const isInstalled =
+                    model.id === 'large-v3-turbo'
+                      ? binaryStatus.isDefaultModelInstalled ||
+                        Boolean(binaryStatus.installedModels?.some((m) => m.toLowerCase().includes('large-v3-turbo')))
+                      : Boolean(binaryStatus.installedModels?.some((m) => m.toLowerCase().includes(model.id.toLowerCase())));
+                  const isCurrentActive = !customModelPath && whisperModel === model.id;
+                  const isThisDownloading = downloadingModel === model.id;
 
-                <div className="shrink-0 flex items-center space-x-2">
-                  {downloadingModel === 'large-v3-turbo' ? (
-                    <div className="flex items-center space-x-2">
-                      <span className="text-xs font-mono text-indigo-300 font-semibold animate-pulse">
-                        {downloadProgress.percent !== null ? `${downloadProgress.percent}%` : 'Downloading...'}
-                      </span>
-                      <button
-                        type="button"
-                        onClick={handleCancelDownloadModel}
-                        className="px-2.5 py-1 rounded-lg text-xs bg-red-500/20 hover:bg-red-500/30 text-red-300 border border-red-500/30 transition-colors"
-                      >
-                        Cancel
-                      </button>
-                    </div>
-                  ) : binaryStatus.isDefaultModelInstalled || binaryStatus.modelExists ? (
-                    <span className="inline-flex items-center space-x-1.5 px-3 py-1.5 rounded-lg bg-emerald-500/10 border border-emerald-500/20 text-emerald-400 text-xs font-semibold">
-                      <CheckCircle2 className="w-3.5 h-3.5 text-emerald-400" />
-                      <span>Installed</span>
-                    </span>
-                  ) : (
-                    <button
-                      type="button"
-                      disabled={!binaryStatus.whisperExists || Boolean(downloadingModel)}
-                      onClick={handleDownloadModel}
-                      className="inline-flex items-center space-x-1.5 px-3.5 py-1.5 rounded-lg bg-indigo-600 hover:bg-indigo-500 disabled:opacity-50 text-white font-medium text-xs shadow transition-colors"
-                    >
-                      <Download className="w-3.5 h-3.5" />
-                      <span>Download Model</span>
-                    </button>
-                  )}
-                </div>
-              </div>
-
-              {/* Progress bar during download */}
-              {downloadingModel === 'large-v3-turbo' && (
-                <div className="space-y-1.5 animate-in fade-in">
-                  <div className="w-full bg-zinc-800 rounded-full h-1.5 overflow-hidden">
+                  return (
                     <div
-                      className="bg-indigo-500 h-full transition-[width] duration-150 ease-out"
-                      style={{ width: `${downloadProgress.percent || 5}%` }}
-                    />
-                  </div>
-                  {downloadProgress.text && (
-                    <p className="text-[10px] font-mono text-zinc-400 truncate">
-                      {downloadProgress.text}
-                    </p>
-                  )}
-                </div>
-              )}
+                      key={model.id}
+                      className={`p-3 rounded-xl border transition-all ${
+                        isCurrentActive
+                          ? 'bg-indigo-950/30 border-indigo-500/70 shadow-sm ring-1 ring-indigo-500/40'
+                          : 'bg-zinc-900/60 border-white/5 hover:border-zinc-700'
+                      }`}
+                    >
+                      <div className="flex items-center justify-between gap-3">
+                        <div
+                          onClick={() => {
+                            if (isInstalled && !isCurrentActive) {
+                              setWhisperModel(model.id);
+                              setCustomModelPath('');
+                              onSave({ whisperModel: model.id, customModelPath: '' });
+                            }
+                          }}
+                          className={`flex items-center space-x-2.5 min-w-0 ${
+                            isInstalled ? 'cursor-pointer' : ''
+                          }`}
+                        >
+                          <div className="flex items-center justify-center shrink-0">
+                            {isCurrentActive ? (
+                              <div className="w-3.5 h-3.5 rounded-full bg-indigo-500 flex items-center justify-center">
+                                <div className="w-1.5 h-1.5 rounded-full bg-white" />
+                              </div>
+                            ) : isInstalled ? (
+                              <div className="w-3.5 h-3.5 rounded-full border border-zinc-600 hover:border-zinc-400" />
+                            ) : null}
+                          </div>
+                          <div className="space-y-0.5 min-w-0">
+                            <div className="flex items-center space-x-2 flex-wrap">
+                              <span className="text-xs font-mono font-bold text-white">
+                                {model.name}
+                              </span>
+                              {isCurrentActive && (
+                                <span className="px-1.5 py-0.2 rounded text-[10px] font-semibold bg-emerald-500/20 text-emerald-300 border border-emerald-500/30">
+                                  Active
+                                </span>
+                              )}
+                            </div>
+                            <p className="text-[10px] text-zinc-400 truncate">
+                              {model.badge}
+                            </p>
+                          </div>
+                        </div>
+
+                        <div className="shrink-0 flex items-center space-x-2">
+                          {isThisDownloading ? (
+                            <div className="flex items-center space-x-2">
+                              <span className="text-xs font-mono text-indigo-300 font-semibold animate-pulse">
+                                {downloadProgress.percent !== null ? `${downloadProgress.percent}%` : 'Downloading...'}
+                              </span>
+                              <button
+                                type="button"
+                                onClick={handleCancelDownloadModel}
+                                className="px-2.5 py-1 rounded-lg text-xs bg-red-500/20 hover:bg-red-500/30 text-red-300 border border-red-500/30 transition-colors"
+                              >
+                                Cancel
+                              </button>
+                            </div>
+                          ) : isInstalled ? (
+                            <button
+                              type="button"
+                              onClick={() => {
+                                if (!isCurrentActive) {
+                                  setWhisperModel(model.id);
+                                  setCustomModelPath('');
+                                  onSave({ whisperModel: model.id, customModelPath: '' });
+                                }
+                              }}
+                              className={`inline-flex items-center space-x-1.5 px-3 py-1.5 rounded-lg text-xs font-semibold transition-colors ${
+                                isCurrentActive
+                                  ? 'bg-emerald-500/10 border border-emerald-500/20 text-emerald-400 cursor-default'
+                                  : 'bg-zinc-800 hover:bg-zinc-700 border border-white/10 text-zinc-300 hover:text-white cursor-pointer'
+                              }`}
+                            >
+                              <CheckCircle2 className="w-3.5 h-3.5 text-emerald-400" />
+                              <span>{isCurrentActive ? 'Active' : 'Select'}</span>
+                            </button>
+                          ) : (
+                            <button
+                              type="button"
+                              disabled={!binaryStatus.whisperExists || Boolean(downloadingModel)}
+                              onClick={() => handleDownloadModel(model.id)}
+                              className="inline-flex items-center space-x-1.5 px-3 py-1.5 rounded-lg bg-indigo-600 hover:bg-indigo-500 disabled:opacity-50 text-white font-medium text-xs shadow transition-colors"
+                            >
+                              <Download className="w-3.5 h-3.5" />
+                              <span>Download</span>
+                            </button>
+                          )}
+                        </div>
+                      </div>
+
+                      {/* Progress bar during download of this specific model */}
+                      {isThisDownloading && (
+                        <div className="mt-2.5 space-y-1.5 animate-in fade-in">
+                          <div className="w-full bg-zinc-800 rounded-full h-1.5 overflow-hidden">
+                            <div
+                              className="bg-indigo-500 h-full transition-[width] duration-150 ease-out"
+                              style={{ width: `${downloadProgress.percent || 5}%` }}
+                            />
+                          </div>
+                          {downloadProgress.text && (
+                            <p className="text-[10px] font-mono text-zinc-400 truncate">
+                              {downloadProgress.text}
+                            </p>
+                          )}
+                        </div>
+                      )}
+                    </div>
+                  );
+                })}
+              </div>
 
               {/* Custom Model Folder (Optional) */}
               <div className="space-y-1.5 pt-1">

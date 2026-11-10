@@ -1045,7 +1045,19 @@ function setupIpcHandlers() {
       if (byId && byId.characters.length > 0) return byId;
     }
     if (title && title.trim()) {
-      return await queryAnimeCharacters(title.trim());
+      const byTitle = await queryAnimeCharacters(title.trim());
+      if (byTitle && byTitle.characters.length > 0) return byTitle;
+
+      // Fallback: strip season indicators like "(Season 2)" or "2nd Season" and search base series title
+      const baseTitle = title
+        .replace(/\s*\([^)]*season[^)]*\)/i, '')
+        .replace(/\s+\d+(st|nd|rd|th)?\s+season/i, '')
+        .replace(/\s+s\d+/i, '')
+        .trim();
+      if (baseTitle && baseTitle.toLowerCase() !== title.trim().toLowerCase()) {
+        const byBase = await queryAnimeCharacters(baseTitle);
+        if (byBase && byBase.characters.length > 0) return byBase;
+      }
     }
     return null;
   });
