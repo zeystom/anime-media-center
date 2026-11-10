@@ -99,8 +99,44 @@ export function autoDetectFfmpegPath(knownWhisperPath?: string, forceFresh = fal
 
   let result = '';
 
-  // 1. Next to whisper executable if present
-  if (knownWhisperPath && fs.existsSync(knownWhisperPath)) {
+  // 1. Packaged application resources (bundled in NSIS installer: resources/bin/ffmpeg.exe)
+  try {
+    if (process.resourcesPath) {
+      const bundled = path.join(process.resourcesPath, 'bin', 'ffmpeg.exe');
+      if (fs.existsSync(bundled)) {
+        result = bundled;
+      }
+    }
+  } catch {}
+
+  // 2. Project local or portable bin folder
+  if (!result) {
+    const localBin = path.join(process.cwd(), 'bin', 'ffmpeg.exe');
+    if (fs.existsSync(localBin)) {
+      result = localBin;
+    }
+  }
+
+  // 3. Executable sibling directory (app.getPath('exe') / process.execPath)
+  if (!result) {
+    try {
+      const execDir = path.dirname(process.execPath);
+      const candidates = [
+        path.join(execDir, 'bin', 'ffmpeg.exe'),
+        path.join(execDir, 'resources', 'bin', 'ffmpeg.exe'),
+        path.join(execDir, 'ffmpeg.exe'),
+      ];
+      for (const c of candidates) {
+        if (fs.existsSync(c)) {
+          result = c;
+          break;
+        }
+      }
+    } catch {}
+  }
+
+  // 4. Next to whisper executable if present
+  if (!result && knownWhisperPath && fs.existsSync(knownWhisperPath)) {
     const siblingFfmpeg = path.join(path.dirname(knownWhisperPath), 'ffmpeg.exe');
     if (fs.existsSync(siblingFfmpeg)) {
       result = siblingFfmpeg;
@@ -108,7 +144,7 @@ export function autoDetectFfmpegPath(knownWhisperPath?: string, forceFresh = fal
   }
 
   if (!result) {
-    // 2. Subtitle Edit AppData
+    // 5. Subtitle Edit AppData
     const appData = process.env.APPDATA || '';
     const seFfmpeg = path.join(appData, 'Subtitle Edit', 'SpeechToText', 'Purfview-Faster-Whisper-XXL', 'ffmpeg.exe');
     if (fs.existsSync(seFfmpeg)) {
@@ -312,9 +348,19 @@ export class StorageService {
         if (!whisperPath) {
           whisperPath = autoDetectWhisperPath();
         }
-        if (!ffmpegPath) {
+        if (!ffmpegPath || !fs.existsSync(ffmpegPath)) {
           ffmpegPath = autoDetectFfmpegPath(whisperPath);
         }
+
+        const whisperModel =
+          typeof parsed.whisperModel === 'string' && parsed.whisperModel.trim()
+            ? parsed.whisperModel.trim()
+            : 'large-v3-turbo';
+
+        const customModelPath =
+          typeof parsed.customModelPath === 'string'
+            ? parsed.customModelPath.trim()
+            : undefined;
 
         // Start from everything persisted on disk, then normalize the known
         // fields below. The P2P block (enableP2P, p2pConsentAcceptedAt,
@@ -333,6 +379,8 @@ export class StorageService {
           ...persisted,
           ffmpegPath,
           whisperPath,
+          whisperModel,
+          ...(customModelPath ? { customModelPath } : {}),
           defaultLibraryRoot,
           libraryFolders,
           autoPlayNext: parsed.autoPlayNext ?? true,
@@ -366,6 +414,8 @@ export class StorageService {
     const defaults: AppSettings = {
       ffmpegPath: ffmpeg,
       whisperPath: whisper,
+      whisperModel: 'large-v3-turbo',
+      customModelPath: '',
       defaultLibraryRoot: roots[0] || '',
       libraryFolders: roots,
       autoPlayNext: true,

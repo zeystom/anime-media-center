@@ -1235,42 +1235,6 @@ export const App: React.FC = () => {
               return { enabled: true, status: 'Idle', icon: 'ShieldCheck', bgColor: 'bg-zinc-700', textColor: 'text-zinc-300' }
             })()}
           />
-
-          {/* Missing Binary Warning Banner */}
-          {(!binaryStatus.ffmpegExists || !binaryStatus.whisperExists) &&
-            !bannerDismissed &&
-            currentTab !== 'whisper' && (
-              <div className="bg-amber-500/10 border-b border-amber-500/20 px-6 py-2.5 flex items-center justify-between text-xs text-amber-300">
-                <div className="flex items-center space-x-2">
-                  <AlertCircle className="w-4 h-4 text-amber-400 shrink-0" />
-                  <span>
-                    {!binaryStatus.ffmpegExists && !binaryStatus.whisperExists
-                      ? 'FFmpeg and Whisper binaries not found. Configure tool paths in Settings to enable video playback and AI subtitles.'
-                      : !binaryStatus.ffmpegExists
-                      ? 'FFmpeg binary not found. Video transcoding and playback will not function.'
-                      : 'Faster-Whisper binary not found. AI subtitle generation will not function.'}
-                  </span>
-                </div>
-                <div className="flex items-center space-x-2">
-                  <button
-                    onClick={() => setSettingsOpen(true)}
-                    className="px-3 py-1 rounded-lg bg-amber-500/20 hover:bg-amber-500/30 text-amber-200 border border-amber-500/30 font-semibold transition-colors"
-                  >
-                    Open Settings
-                  </button>
-                  <button
-                    onClick={() => {
-                      setBannerDismissed(true);
-                      try { window.localStorage.setItem('kaiko:missing-tools-notice-dismissed', 'true'); } catch { /* storage may be unavailable */ }
-                    }}
-                    className="p-1 rounded-lg text-amber-400/80 hover:text-amber-200 hover:bg-amber-500/20 transition-colors"
-                    title="Dismiss warning"
-                  >
-                    <X className="w-4 h-4" />
-                  </button>
-                </div>
-              </div>
-            )}
         </>
       )}
 

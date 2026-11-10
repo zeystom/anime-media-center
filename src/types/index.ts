@@ -47,12 +47,18 @@ export interface ElectronAPI {
   updateSettings: (settings: Partial<import('../../electron/types').AppSettings>) => Promise<import('../../electron/types').AppSettings>;
   browseFolder: (defaultPath?: string) => Promise<string | null>;
   browseFile: (options?: { title?: string; defaultPath?: string; extensions?: string[] }) => Promise<string | null>;
-  checkBinaries: (paths?: { ffmpegPath?: string; whisperPath?: string }) => Promise<{
+  checkBinaries: (paths?: { ffmpegPath?: string; whisperPath?: string; modelName?: string; customModelPath?: string }) => Promise<{
     ffmpegExists: boolean;
     whisperExists: boolean;
     modelExists: boolean;
     modelName: string;
+    installedModels?: string[];
+    detectedCustomModels?: string[];
+    customModelPath?: string;
   }>;
+  downloadWhisperModel?: (modelName: string) => Promise<{ success: boolean; modelName?: string; error?: string }>;
+  cancelWhisperModelDownload?: () => Promise<boolean>;
+  onModelDownloadProgress?: (callback: (data: { modelName: string; percent: number | null; text: string }) => void) => () => void;
   autoDetectBinaries: () => Promise<{ ffmpegPath: string; whisperPath: string }>;
   openExternalUrl: (url: string) => Promise<boolean>;
   getLibraryCache: (rootPath?: string | string[]) => Promise<import('../../electron/types').AnimeFolder[] | null>;

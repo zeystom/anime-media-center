@@ -89,6 +89,9 @@ export const SettingsModal: React.FC<SettingsModalProps> = ({
 }) => {
   const [ffmpegPath, setFfmpegPath] = useState(settings.ffmpegPath);
   const [whisperPath, setWhisperPath] = useState(settings.whisperPath);
+  const [whisperModel, setWhisperModel] = useState<string>(settings.whisperModel || 'large-v3-turbo');
+  const [customModelPath, setCustomModelPath] = useState<string>(settings.customModelPath || '');
+  const [showCustomModelSection, setShowCustomModelSection] = useState(Boolean(settings.customModelPath));
   const [libraryFolders, setLibraryFolders] = useState<string[]>(
     Array.isArray(settings.libraryFolders) && settings.libraryFolders.length > 0
       ? settings.libraryFolders
@@ -112,9 +115,22 @@ export const SettingsModal: React.FC<SettingsModalProps> = ({
   const [binaryStatus, setBinaryStatus] = useState<{
     ffmpegExists: boolean;
     whisperExists: boolean;
+    modelExists?: boolean;
+    modelName?: string;
+    detectedCustomModels?: string[];
+    customModelDetectedName?: string | null;
   }>({
     ffmpegExists: false,
     whisperExists: false,
+    modelExists: false,
+    modelName: 'large-v3-turbo',
+    detectedCustomModels: [],
+  });
+
+  const [downloadingModel, setDownloadingModel] = useState<string | null>(null);
+  const [downloadProgress, setDownloadProgress] = useState<{ percent: number | null; text: string }>({
+    percent: null,
+    text: '',
   });
 
   const [isDetecting, setIsDetecting] = useState(false);
@@ -161,6 +177,9 @@ export const SettingsModal: React.FC<SettingsModalProps> = ({
     if (isOpen) {
       setFfmpegPath(settings.ffmpegPath);
       setWhisperPath(settings.whisperPath);
+      setWhisperModel(settings.whisperModel || 'large-v3-turbo');
+      setCustomModelPath(settings.customModelPath || '');
+      setShowCustomModelSection(Boolean(settings.customModelPath));
       setCheckForUpdatesOnStartup(settings.checkForUpdatesOnStartup ?? true);
       setAutoUpdate(settings.autoUpdate ?? true);
       setLibraryFolders(
@@ -174,9 +193,14 @@ export const SettingsModal: React.FC<SettingsModalProps> = ({
       setPreferredAudioLanguages((settings.preferredTorrentAudioLanguages ?? ['en']) as TorrentLanguageCode[]);
       setPreferredSubtitleLanguages((settings.preferredTorrentSubtitleLanguages ?? ['en']) as TorrentLanguageCode[]);
 
-      // Check existence of external binaries
+      // Check existence of external binaries and models
       window.electronAPI
-        .checkBinaries({ ffmpegPath: settings.ffmpegPath, whisperPath: settings.whisperPath })
+        .checkBinaries({
+          ffmpegPath: settings.ffmpegPath,
+          whisperPath: settings.whisperPath,
+          modelName: settings.whisperModel || 'large-v3-turbo',
+          customModelPath: settings.customModelPath,
+        })
         .then((status) => {
           setBinaryStatus(status);
         })
@@ -184,17 +208,31 @@ export const SettingsModal: React.FC<SettingsModalProps> = ({
     }
   }, [isOpen, settings]);
 
-  // Live status check when user edits paths
+  // Live status check when user edits paths or model
   useEffect(() => {
     if (isOpen) {
       window.electronAPI
-        .checkBinaries({ ffmpegPath, whisperPath })
+        .checkBinaries({ ffmpegPath, whisperPath, modelName: whisperModel, customModelPath })
         .then((status) => {
           setBinaryStatus(status);
         })
         .catch(() => {});
     }
-  }, [isOpen, ffmpegPath, whisperPath]);
+  }, [isOpen, ffmpegPath, whisperPath, whisperModel, customModelPath]);
+
+  // Listen for Whisper model download progress
+  useEffect(() => {
+    if (!isOpen) return;
+    const api = window.electronAPI;
+    if (!api?.onModelDownloadProgress) return;
+    const unsub = api.onModelDownloadProgress((data) => {
+      setDownloadProgress({
+        percent: data.percent,
+        text: data.text,
+      });
+    });
+    return unsub;
+  }, [isOpen]);
 
   // Data & Backup: load backup status + restore availability when opened
   useEffect(() => {
@@ -317,12 +355,19 @@ export const SettingsModal: React.FC<SettingsModalProps> = ({
     }
   };
 
-  // Save any pending uncommitted path changes before closing
+  // Save any pending uncommitted path or model changes before closing
   const handleClose = () => {
-    if (ffmpegPath !== settings.ffmpegPath || whisperPath !== settings.whisperPath) {
+    if (
+      ffmpegPath !== settings.ffmpegPath ||
+      whisperPath !== settings.whisperPath ||
+      whisperModel !== settings.whisperModel ||
+      customModelPath !== settings.customModelPath
+    ) {
       onSave({
         ...(ffmpegPath !== settings.ffmpegPath ? { ffmpegPath } : {}),
         ...(whisperPath !== settings.whisperPath ? { whisperPath } : {}),
+        ...(whisperModel !== settings.whisperModel ? { whisperModel } : {}),
+        ...(customModelPath !== settings.customModelPath ? { customModelPath } : {}),
       });
     }
     onClose();
@@ -369,16 +414,67 @@ export const SettingsModal: React.FC<SettingsModalProps> = ({
     });
   };
 
-  const handleBrowseFfmpeg = async () => {
-    const file = await window.electronAPI.browseFile({
-      title: 'Select FFmpeg Executable (ffmpeg.exe)',
-      defaultPath: ffmpegPath || undefined,
-      extensions: ['exe'],
-    });
-    if (file) {
-      setFfmpegPath(file);
-      onSave({ ffmpegPath: file });
+  const handleDownloadModel = async () => {
+    if (!window.electronAPI?.downloadWhisperModel) return;
+    if (!binaryStatus.whisperExists) {
+      showGlobalToast('Faster-Whisper executable is required to download models', 'error');
+      return;
     }
+    setDownloadingModel('large-v3-turbo');
+    setDownloadProgress({ percent: 0, text: 'Connecting to Hugging Face...' });
+    try {
+      const res = await window.electronAPI.downloadWhisperModel('large-v3-turbo');
+      if (res.success) {
+        showGlobalToast('Model large-v3-turbo downloaded successfully and ready!', 'success');
+        const status = await window.electronAPI.checkBinaries({
+          ffmpegPath,
+          whisperPath,
+          modelName: 'large-v3-turbo',
+          customModelPath,
+        });
+        setBinaryStatus(status);
+      } else {
+        showGlobalToast(res.error || 'Failed to download model', 'error');
+      }
+    } catch (err: any) {
+      showGlobalToast(err?.message || 'Failed to download model', 'error');
+    } finally {
+      setDownloadingModel(null);
+      setDownloadProgress({ percent: null, text: '' });
+    }
+  };
+
+  const handleCancelDownloadModel = async () => {
+    if (window.electronAPI?.cancelWhisperModelDownload) {
+      await window.electronAPI.cancelWhisperModelDownload();
+      setDownloadingModel(null);
+      setDownloadProgress({ percent: null, text: '' });
+      showGlobalToast('Model download cancelled', 'info');
+    }
+  };
+
+  const handleBrowseCustomModel = async () => {
+    const folder = await window.electronAPI.browseFolder(customModelPath || undefined);
+    if (folder) {
+      const detectedName = folder.replace(/^.*[\\/]/, '').replace(/^faster-whisper-/, '');
+      setCustomModelPath(folder);
+      setWhisperModel(detectedName);
+      onSave({ customModelPath: folder, whisperModel: detectedName });
+      showGlobalToast(`Custom model selected: ${detectedName}`, 'success');
+    }
+  };
+
+  const handleResetToDefaultModel = () => {
+    setCustomModelPath('');
+    setWhisperModel('large-v3-turbo');
+    onSave({ customModelPath: '', whisperModel: 'large-v3-turbo' });
+    showGlobalToast('Reset to default model (large-v3-turbo)', 'info');
+  };
+
+  const handleSelectDetectedModel = (modelName: string) => {
+    setWhisperModel(modelName);
+    onSave({ whisperModel: modelName });
+    showGlobalToast(`Active model set to ${modelName}`, 'success');
   };
 
   const handleBrowseWhisper = async () => {
@@ -390,22 +486,6 @@ export const SettingsModal: React.FC<SettingsModalProps> = ({
     if (file) {
       setWhisperPath(file);
       onSave({ whisperPath: file });
-    }
-  };
-
-  const handleFfmpegChange = (val: string) => {
-    setFfmpegPath(val);
-  };
-
-  const handleFfmpegBlur = () => {
-    if (ffmpegPath !== settings.ffmpegPath) {
-      onSave({ ffmpegPath });
-    }
-  };
-
-  const handleFfmpegKeyDown = (e: React.KeyboardEvent<HTMLInputElement>) => {
-    if (e.key === 'Enter') {
-      (e.target as HTMLInputElement).blur();
     }
   };
 
@@ -440,6 +520,8 @@ export const SettingsModal: React.FC<SettingsModalProps> = ({
       const status = await window.electronAPI.checkBinaries({
         ffmpegPath: detected.ffmpegPath,
         whisperPath: detected.whisperPath,
+        modelName: whisperModel,
+        customModelPath,
       });
       setBinaryStatus(status);
     } catch {
@@ -991,16 +1073,16 @@ export const SettingsModal: React.FC<SettingsModalProps> = ({
             </div>
           </div>
 
-          {/* Section: External Tools & AI Engine */}
+          {/* Section: Faster-Whisper AI Subtitles Engine */}
           <div className="space-y-3 pt-3 border-t border-white/10">
             <div className="flex items-center justify-between">
               <div>
                 <label className="text-xs font-semibold text-zinc-200 uppercase tracking-wider flex items-center space-x-2">
                   <Cpu className="w-3.5 h-3.5 text-zinc-400" />
-                  <span>External Tools & AI Engine</span>
+                  <span>Faster-Whisper AI Subtitles Engine</span>
                 </label>
                 <p className="text-[11px] text-zinc-400">
-                  Required for video transcoding, keyframe seeking, and AI dubtitle transcription.
+                  Faster-Whisper powers high-speed AI speech-to-text subtitle generation in Whisper Studio.
                 </p>
               </div>
 
@@ -1031,7 +1113,7 @@ export const SettingsModal: React.FC<SettingsModalProps> = ({
             {showSetupGuide && (
               <div className="p-3.5 rounded-xl bg-zinc-900/90 border border-white/10 space-y-2.5 animate-in fade-in duration-150">
                 <div className="flex items-center justify-between">
-                  <span className="text-xs font-bold text-zinc-200">How to set up Faster-Whisper & FFmpeg</span>
+                  <span className="text-xs font-bold text-zinc-200">How to set up Faster-Whisper</span>
                   <button
                     type="button"
                     onClick={() => setShowSetupGuide(false)}
@@ -1064,7 +1146,7 @@ export const SettingsModal: React.FC<SettingsModalProps> = ({
                       <span>2. Standalone Release</span>
                     </div>
                     <p className="text-zinc-400 text-[10px] leading-relaxed">
-                      Download the Windows .7z archive from the Faster-Whisper-XXL release, extract anywhere, and click <strong>Browse</strong>. If FFmpeg is not bundled, configure ffmpeg.exe separately.
+                      Download the standalone Windows archive from the Faster-Whisper-XXL release, extract anywhere, and click <strong>Browse</strong>.
                     </p>
                     <button
                       type="button"
@@ -1080,54 +1162,16 @@ export const SettingsModal: React.FC<SettingsModalProps> = ({
                 </div>
 
                 <div className="text-[10px] text-zinc-400 pt-0.5">
-                  <span className="text-zinc-300 font-medium">Model notice:</span> The <code>large-v3-turbo</code> model (~1.5 GB) downloads automatically on the first transcription.
+                  <span className="text-zinc-300 font-medium">Model notice:</span> The default <code>large-v3-turbo</code> model can be downloaded below in 1-click or will download automatically on first transcription.
                 </div>
               </div>
             )}
 
-            {/* FFmpeg Binary Path */}
+            {/* Faster-Whisper Binary Path & Setup */}
             <div className="space-y-1.5">
-              <label className="text-xs font-medium text-zinc-300">FFmpeg Executable (ffmpeg.exe)</label>
-              <div className="flex items-center space-x-2">
-                <div className="relative flex-1">
-                  <input
-                    type="text"
-                    placeholder="Auto-detected or specify path to ffmpeg.exe"
-                    value={ffmpegPath}
-                    onChange={(e) => handleFfmpegChange(e.target.value)}
-                    onBlur={handleFfmpegBlur}
-                    onKeyDown={handleFfmpegKeyDown}
-                    className="w-full pl-3 pr-24 py-2 rounded-lg bg-zinc-900 border border-white/10 text-xs font-mono text-zinc-200 focus:outline-none focus:border-zinc-500"
-                  />
-                  <div className="absolute right-2.5 top-1/2 -translate-y-1/2 flex items-center space-x-1 pointer-events-none select-none">
-                    {binaryStatus.ffmpegExists ? (
-                      <>
-                        <CheckCircle2 className="w-3.5 h-3.5 text-emerald-400" />
-                        <span className="text-[11px] font-medium text-emerald-400">Ready</span>
-                      </>
-                    ) : (
-                      <>
-                        <AlertCircle className="w-3.5 h-3.5 text-amber-400" />
-                        <span className="text-[11px] font-medium text-amber-400">Not found</span>
-                      </>
-                    )}
-                  </div>
-                </div>
-                <button
-                  type="button"
-                  onClick={handleBrowseFfmpeg}
-                  className="flex items-center space-x-1.5 px-3 py-2 rounded-lg bg-zinc-800 hover:bg-zinc-700 text-zinc-200 border border-white/10 text-xs font-medium transition-colors shrink-0"
-                >
-                  <FolderOpen className="w-3.5 h-3.5 text-zinc-400" />
-                  <span>Browse</span>
-                </button>
-              </div>
-            </div>
-
-            {/* Faster-Whisper Binary Path */}
-            <div className="space-y-1.5">
-              <label className="text-xs font-medium text-zinc-300">
-                Faster-Whisper-XXL Executable (faster-whisper-xxl.exe)
+              <label className="text-xs font-medium text-zinc-300 flex items-center justify-between">
+                <span>Faster-Whisper-XXL Executable (faster-whisper-xxl.exe)</span>
+                <span className="text-[10px] text-zinc-500 font-normal">Required for Whisper Studio</span>
               </label>
               <div className="flex items-center space-x-2">
                 <div className="relative flex-1">
@@ -1162,6 +1206,198 @@ export const SettingsModal: React.FC<SettingsModalProps> = ({
                   <FolderOpen className="w-3.5 h-3.5 text-zinc-400" />
                   <span>Browse</span>
                 </button>
+              </div>
+
+              {/* If Whisper engine is not found, show direct download link button */}
+              {!binaryStatus.whisperExists && (
+                <div className="flex items-center justify-between p-2.5 rounded-xl bg-amber-500/10 border border-amber-500/20 text-xs text-amber-300">
+                  <div className="flex items-center space-x-2">
+                    <AlertCircle className="w-4 h-4 text-amber-400 shrink-0" />
+                    <span>Faster-Whisper-XXL engine is not configured yet.</span>
+                  </div>
+                  <button
+                    type="button"
+                    onClick={() => window.electronAPI.openExternalUrl('https://github.com/Purfview/whisper-standalone-win/releases')}
+                    className="inline-flex items-center space-x-1.5 px-3 py-1 rounded-lg bg-amber-500/20 hover:bg-amber-500/30 text-amber-200 border border-amber-500/40 text-[11px] font-semibold transition-colors shrink-0"
+                  >
+                    <span>Download Engine</span>
+                    <ExternalLink className="w-3 h-3 text-amber-300" />
+                  </button>
+                </div>
+              )}
+            </div>
+
+            {/* AI Subtitle Model Section */}
+            <div className="space-y-2.5 pt-2 border-t border-white/5">
+              <div className="flex items-center justify-between">
+                <div>
+                  <span className="text-xs font-medium text-zinc-300 block">AI Subtitle Model</span>
+                  <span className="text-[11px] text-zinc-500">
+                    Default model for Japanese audio speech-to-text and subtitle generation
+                  </span>
+                </div>
+                <div>
+                  {customModelPath ? (
+                    <span className="inline-flex items-center space-x-1 px-2 py-0.5 rounded-md bg-purple-500/15 border border-purple-500/30 text-purple-300 text-[11px] font-medium font-mono">
+                      Custom Active
+                    </span>
+                  ) : binaryStatus.modelExists ? (
+                    <span className="inline-flex items-center space-x-1 px-2 py-0.5 rounded-md bg-emerald-500/15 border border-emerald-500/30 text-emerald-400 text-[11px] font-medium">
+                      <CheckCircle2 className="w-3 h-3" />
+                      <span>Ready</span>
+                    </span>
+                  ) : (
+                    <span className="inline-flex items-center space-x-1 px-2 py-0.5 rounded-md bg-zinc-800 text-zinc-400 border border-white/5 text-[11px]">
+                      Not downloaded
+                    </span>
+                  )}
+                </div>
+              </div>
+
+              {/* Default Model Card (large-v3-turbo) */}
+              <div className={`p-3.5 rounded-xl border transition-all ${
+                !customModelPath
+                  ? 'bg-zinc-900/80 border-indigo-500/30 shadow-sm'
+                  : 'bg-zinc-900/40 border-white/5 opacity-70'
+              }`}>
+                <div className="flex flex-col sm:flex-row items-start sm:items-center justify-between gap-3">
+                  <div className="space-y-1">
+                    <div className="flex items-center space-x-2">
+                      <span className="text-xs font-mono font-bold text-white">large-v3-turbo</span>
+                      <span className="px-2 py-0.5 rounded text-[10px] font-semibold bg-indigo-500/20 text-indigo-300 border border-indigo-500/30">
+                        Default • Recommended
+                      </span>
+                    </div>
+                    <p className="text-[11px] text-zinc-400">
+                      State-of-the-art accuracy with 8x faster inference speed (~1.5 GB).
+                    </p>
+                  </div>
+
+                  <div className="shrink-0 flex items-center space-x-2 self-end sm:self-center">
+                    {downloadingModel === 'large-v3-turbo' ? (
+                      <div className="flex items-center space-x-2">
+                        <span className="text-xs font-mono text-indigo-300 font-semibold animate-pulse">
+                          {downloadProgress.percent !== null ? `${downloadProgress.percent}%` : 'Downloading...'}
+                        </span>
+                        <button
+                          type="button"
+                          onClick={handleCancelDownloadModel}
+                          className="px-2.5 py-1 rounded-lg text-xs bg-red-500/20 hover:bg-red-500/30 text-red-300 border border-red-500/30 transition-colors"
+                        >
+                          Cancel
+                        </button>
+                      </div>
+                    ) : binaryStatus.modelExists ? (
+                      <span className="inline-flex items-center space-x-1.5 px-3 py-1.5 rounded-lg bg-emerald-500/10 border border-emerald-500/20 text-emerald-400 text-xs font-semibold">
+                        <CheckCircle2 className="w-3.5 h-3.5 text-emerald-400" />
+                        <span>Installed</span>
+                      </span>
+                    ) : (
+                      <button
+                        type="button"
+                        disabled={!binaryStatus.whisperExists || Boolean(downloadingModel)}
+                        onClick={handleDownloadModel}
+                        className="inline-flex items-center space-x-1.5 px-3.5 py-1.5 rounded-lg bg-indigo-600 hover:bg-indigo-500 disabled:opacity-50 text-white font-medium text-xs shadow transition-colors"
+                      >
+                        <Download className="w-3.5 h-3.5" />
+                        <span>Download large-v3-turbo</span>
+                      </button>
+                    )}
+                  </div>
+                </div>
+
+                {/* Progress bar during download */}
+                {downloadingModel === 'large-v3-turbo' && (
+                  <div className="mt-3 pt-2.5 border-t border-white/5 space-y-1.5 animate-in fade-in">
+                    <div className="w-full bg-zinc-800 rounded-full h-1.5 overflow-hidden">
+                      <div
+                        className="bg-indigo-500 h-full transition-all duration-300"
+                        style={{ width: `${downloadProgress.percent || 5}%` }}
+                      />
+                    </div>
+                    {downloadProgress.text && (
+                      <p className="text-[10px] font-mono text-zinc-400 truncate">
+                        {downloadProgress.text}
+                      </p>
+                    )}
+                  </div>
+                )}
+              </div>
+
+              {/* Custom Model / Auto-Detect Section */}
+              <div className="pt-1 space-y-2">
+                <div className="flex items-center justify-between">
+                  <button
+                    type="button"
+                    onClick={() => setShowCustomModelSection(!showCustomModelSection)}
+                    className="text-[11px] text-zinc-400 hover:text-zinc-200 underline font-medium transition-colors"
+                  >
+                    {showCustomModelSection ? 'Hide Custom Model Settings' : 'Use Custom Model / Path (Optional)'}
+                  </button>
+
+                  {customModelPath && (
+                    <button
+                      type="button"
+                      onClick={handleResetToDefaultModel}
+                      className="text-[11px] text-indigo-400 hover:text-indigo-300 font-medium underline transition-colors"
+                    >
+                      Reset to Default (large-v3-turbo)
+                    </button>
+                  )}
+                </div>
+
+                {showCustomModelSection && (
+                  <div className="p-3 rounded-xl bg-zinc-900/60 border border-white/5 space-y-2.5 animate-in fade-in duration-150">
+                    <p className="text-[11px] text-zinc-400 leading-relaxed">
+                      If you downloaded another model separately, select its folder on disk. Kaiko will auto-detect the model name and configure it for Whisper Studio.
+                    </p>
+
+                    <div className="flex items-center space-x-2">
+                      <div className="relative flex-1">
+                        <input
+                          type="text"
+                          readOnly
+                          placeholder="Select custom model directory..."
+                          value={customModelPath}
+                          className="w-full px-3 py-1.5 rounded-lg bg-zinc-950 border border-white/10 text-xs font-mono text-zinc-200 truncate focus:outline-none"
+                        />
+                      </div>
+                      <button
+                        type="button"
+                        onClick={handleBrowseCustomModel}
+                        className="flex items-center space-x-1.5 px-3 py-1.5 rounded-lg bg-zinc-800 hover:bg-zinc-700 text-zinc-200 border border-white/10 text-xs font-medium transition-colors shrink-0"
+                      >
+                        <FolderOpen className="w-3.5 h-3.5 text-zinc-400" />
+                        <span>Browse Model</span>
+                      </button>
+                    </div>
+
+                    {/* Auto-detected other models in _models directory */}
+                    {binaryStatus.detectedCustomModels && binaryStatus.detectedCustomModels.length > 0 && (
+                      <div className="pt-1.5 border-t border-white/5 space-y-1">
+                        <span className="text-[10px] text-zinc-500 block">
+                          Other models detected in your _models folder:
+                        </span>
+                        <div className="flex flex-wrap gap-1.5">
+                          {binaryStatus.detectedCustomModels.map((m) => (
+                            <button
+                              key={m}
+                              type="button"
+                              onClick={() => handleSelectDetectedModel(m)}
+                              className={`px-2 py-0.5 rounded text-[10px] font-mono border transition-colors ${
+                                whisperModel === m && !customModelPath
+                                  ? 'bg-indigo-600/30 text-indigo-200 border-indigo-500/50'
+                                  : 'bg-zinc-800 text-zinc-400 border-white/5 hover:text-white'
+                              }`}
+                            >
+                              {m}
+                            </button>
+                          ))}
+                        </div>
+                      </div>
+                    )}
+                  </div>
+                )}
               </div>
             </div>
           </div>

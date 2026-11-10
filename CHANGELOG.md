@@ -1,5 +1,21 @@
 # Changelog
 
+## 1.0.7 — Built-in FFmpeg, streamlined Whisper onboarding & default large-v3-turbo model downloader
+
+- **Built-in FFmpeg Media Engine:**
+  - FFmpeg is now automatically fetched and bundled directly into the installer/application package (`bin/ffmpeg.exe`), enabling out-of-the-box support for 10-bit HEVC, MKV audio/subtitle extraction, and audio transcoding without requiring manual user downloads or external tools.
+  - Eliminated redundant FFmpeg setup clutter from Settings; auto-detection seamlessly locates the bundled binary across installed, portable, or project paths.
+- **Streamlined Whisper Studio & Onboarding:**
+  - Removed startup binary warning banner in general library navigation so users can enjoy playback immediately without unnecessary notifications.
+  - Setup guidance is surfaced contextualized within the Whisper Studio tab only when subtitle generation is needed.
+  - Added clean, direct links to Faster-Whisper-XXL releases and Subtitle Edit for zero-friction engine setup.
+- **Focused Model Selection with Default large-v3-turbo:**
+  - Standardized on the state-of-the-art `large-v3-turbo` model by default (delivering near large-v3 accuracy at up to 8x faster inference speed).
+  - Replaced confusing multi-model selection grids with a focused default card featuring a 1-click in-app downloader with real-time download progress tracking and cancellation.
+  - Added seamless custom model support: users can select custom model folders from disk with auto-detection of model names and instant fallback to default.
+- **UI & Localization Polish:**
+  - Verified 100% English UI consistency across all settings, buttons, dialogs, badges, and notifications.
+
 ## 1.0.6 — Intelligent P2P release ranking, quality-first filtering & UI polish
 
 - **Intelligent P2P Quality-First Filtering:**

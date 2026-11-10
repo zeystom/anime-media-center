@@ -12,5 +12,6 @@ whisper_tmp
 .test_*
 test_tmp
 scratch-*.cjs
-
-
+bin/
+ffmpeg-temp.zip
+temp-ffmpeg-extract/

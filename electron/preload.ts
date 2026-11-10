@@ -16,8 +16,15 @@ contextBridge.exposeInMainWorld('electronAPI', {
   browseFolder: (defaultPath?: string) => ipcRenderer.invoke('browse-folder', defaultPath),
   browseFile: (options?: { title?: string; defaultPath?: string; extensions?: string[] }) =>
     ipcRenderer.invoke('browse-file', options),
-  checkBinaries: (paths?: { ffmpegPath?: string; whisperPath?: string }) =>
+  checkBinaries: (paths?: { ffmpegPath?: string; whisperPath?: string; modelName?: string; customModelPath?: string }) =>
     ipcRenderer.invoke('check-binaries', paths),
+  downloadWhisperModel: (modelName: string) => ipcRenderer.invoke('download-whisper-model', modelName),
+  cancelWhisperModelDownload: () => ipcRenderer.invoke('cancel-whisper-model-download'),
+  onModelDownloadProgress: (callback: (data: { modelName: string; percent: number | null; text: string }) => void) => {
+    const handler = (_event: Electron.IpcRendererEvent, data: { modelName: string; percent: number | null; text: string }) => callback(data);
+    ipcRenderer.on('whisper:model-download-progress', handler);
+    return () => ipcRenderer.removeListener('whisper:model-download-progress', handler);
+  },
   autoDetectBinaries: () => ipcRenderer.invoke('auto-detect-binaries'),
   openExternalUrl: (url: string) => ipcRenderer.invoke('open-external-url', url),
   getLibraryCache: (rootPath?: string | string[]) => ipcRenderer.invoke('get-library-cache', rootPath),

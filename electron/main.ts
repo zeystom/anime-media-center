@@ -1,6 +1,7 @@
 import { app, BrowserWindow, ipcMain, dialog, shell, Menu } from 'electron';
 import path from 'path';
 import fs from 'fs';
+import { spawn, ChildProcess } from 'child_process';
 import { fileURLToPath } from 'url';
 import { storage, autoDetectFfmpegPath, autoDetectWhisperPath } from './storage';
 import { resolveUserDataPath } from './userDataPath';
@@ -483,26 +484,58 @@ function setupIpcHandlers() {
     return null;
   });
 
-  ipcMain.handle('check-binaries', async (_event, paths?: { ffmpegPath?: string; whisperPath?: string }) => {
+  let activeModelDownloadProcess: ChildProcess | null = null;
+
+  ipcMain.handle('check-binaries', async (_event, paths?: { ffmpegPath?: string; whisperPath?: string; modelName?: string; customModelPath?: string }) => {
     const settings = storage.getSettings();
-    const ffmpegPath = paths?.ffmpegPath !== undefined ? paths.ffmpegPath : settings.ffmpegPath;
-    const whisperPath = paths?.whisperPath !== undefined ? paths.whisperPath : settings.whisperPath;
+    let ffmpegPath = paths?.ffmpegPath !== undefined ? paths.ffmpegPath : settings.ffmpegPath;
+    let whisperPath = paths?.whisperPath !== undefined ? paths.whisperPath : settings.whisperPath;
+
+    // Auto-fallback to bundled / detected ffmpeg if unconfigured or missing
+    if (!ffmpegPath || !fs.existsSync(ffmpegPath)) {
+      const detected = autoDetectFfmpegPath(whisperPath);
+      if (detected) ffmpegPath = detected;
+    }
 
     const ffmpegExists = Boolean(ffmpegPath && fs.existsSync(ffmpegPath));
     const whisperExists = Boolean(whisperPath && fs.existsSync(whisperPath));
 
+    const modelName = paths?.modelName || settings.whisperModel || 'large-v3-turbo';
+    const customModelPath = paths?.customModelPath !== undefined ? paths.customModelPath : settings.customModelPath;
+
     let modelExists = false;
-    const modelName = 'large-v3-turbo';
+    const detectedCustomModels: string[] = [];
+
     if (whisperExists) {
-      const modelsDir = path.join(path.dirname(whisperPath), '_models');
-      if (fs.existsSync(modelsDir)) {
-        try {
-          const files = fs.readdirSync(modelsDir);
-          modelExists = files.some(
-            (m) => m.toLowerCase().includes('large-v3-turbo')
-          );
-        } catch {}
+      const candidateDirs = [
+        path.join(path.dirname(whisperPath), '_models'),
+        path.join(process.env.USERPROFILE || '', '.cache', 'huggingface', 'hub'),
+      ];
+
+      for (const dir of candidateDirs) {
+        if (fs.existsSync(dir)) {
+          try {
+            const files = fs.readdirSync(dir);
+            // Check default model
+            if (files.some((f) => f.toLowerCase().includes(modelName.toLowerCase()))) {
+              modelExists = true;
+            }
+            // Scan for any other model folders in _models
+            for (const f of files) {
+              const cleaned = f.replace(/^faster-whisper-/, '').replace(/^models--.*?--/, '');
+              if (cleaned && !cleaned.toLowerCase().includes('large-v3-turbo') && !detectedCustomModels.includes(cleaned)) {
+                detectedCustomModels.push(cleaned);
+              }
+            }
+          } catch {}
+        }
       }
+    }
+
+    // Check custom model path if specified
+    let customModelDetectedName: string | null = null;
+    if (customModelPath && fs.existsSync(customModelPath)) {
+      customModelDetectedName = path.basename(customModelPath).replace(/^faster-whisper-/, '');
     }
 
     return {
@@ -510,7 +543,100 @@ function setupIpcHandlers() {
       whisperExists,
       modelExists,
       modelName,
+      detectedCustomModels,
+      customModelPath,
+      customModelDetectedName,
     };
+  });
+
+  ipcMain.handle('download-whisper-model', async (event, modelName?: string) => {
+    const targetModel = modelName || 'large-v3-turbo';
+    const settings = storage.getSettings();
+    const whisperPath = settings.whisperPath || autoDetectWhisperPath();
+    if (!whisperPath || !fs.existsSync(whisperPath)) {
+      return { success: false, error: 'Faster-Whisper executable not found or not configured.' };
+    }
+
+    if (activeModelDownloadProcess) {
+      return { success: false, error: 'A model download is already in progress.' };
+    }
+
+    const tempDir = app.getPath('temp');
+    const dummyWavPath = path.join(tempDir, `kaiko_download_dummy_${Date.now()}.wav`);
+
+    // Create a 0.1s mono 16kHz silence WAV file
+    const sampleRate = 16000;
+    const numChannels = 1;
+    const bytesPerSample = 2;
+    const numSamples = 1600;
+    const dataSize = numSamples * numChannels * bytesPerSample;
+    const buf = Buffer.alloc(44 + dataSize);
+    buf.write('RIFF', 0);
+    buf.writeUInt32LE(36 + dataSize, 4);
+    buf.write('WAVE', 8);
+    buf.write('fmt ', 12);
+    buf.writeUInt32LE(16, 16);
+    buf.writeUInt16LE(1, 20); // PCM
+    buf.writeUInt16LE(numChannels, 22);
+    buf.writeUInt32LE(sampleRate, 24);
+    buf.writeUInt32LE(sampleRate * numChannels * bytesPerSample, 28);
+    buf.writeUInt16LE(numChannels * bytesPerSample, 32);
+    buf.writeUInt16LE(bytesPerSample * 8, 34);
+    buf.write('data', 36);
+    buf.writeUInt32LE(dataSize, 40);
+    fs.writeFileSync(dummyWavPath, buf);
+
+    return new Promise((resolve) => {
+      const args = [dummyWavPath, '--model', targetModel, '--output_dir', tempDir];
+      const child = spawn(whisperPath, args, { windowsHide: true });
+      activeModelDownloadProcess = child;
+
+      const cleanup = () => {
+        activeModelDownloadProcess = null;
+        try { if (fs.existsSync(dummyWavPath)) fs.unlinkSync(dummyWavPath); } catch {}
+        const dummySrt = dummyWavPath.replace(/\.wav$/, '.srt');
+        try { if (fs.existsSync(dummySrt)) fs.unlinkSync(dummySrt); } catch {}
+      };
+
+      const parseOutput = (data: Buffer) => {
+        const text = data.toString('utf-8');
+        const pctMatch = text.match(/(\d{1,3})%/);
+        const percent = pctMatch ? parseInt(pctMatch[1], 10) : null;
+        event.sender.send('whisper:model-download-progress', {
+          modelName: targetModel,
+          percent,
+          text: text.slice(0, 150).trim(),
+        });
+      };
+
+      child.stdout.on('data', parseOutput);
+      child.stderr.on('data', parseOutput);
+
+      child.on('close', (code) => {
+        cleanup();
+        if (code === 0) {
+          resolve({ success: true, modelName: targetModel });
+        } else {
+          resolve({ success: false, error: `Download process exited with code ${code}` });
+        }
+      });
+
+      child.on('error', (err) => {
+        cleanup();
+        resolve({ success: false, error: err.message });
+      });
+    });
+  });
+
+  ipcMain.handle('cancel-whisper-model-download', async () => {
+    if (activeModelDownloadProcess) {
+      try {
+        activeModelDownloadProcess.kill();
+      } catch {}
+      activeModelDownloadProcess = null;
+      return true;
+    }
+    return false;
   });
 
   ipcMain.handle('auto-detect-binaries', async () => {

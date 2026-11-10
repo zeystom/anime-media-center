@@ -12,6 +12,7 @@ import {
   CheckSquare,
   Square,
   Users,
+  ExternalLink,
 } from 'lucide-react';
 import {
   AnimeFolder,
@@ -72,6 +73,14 @@ export const WhisperStudio: React.FC<WhisperStudioProps> = ({
   const [isDetectingCharacters, setIsDetectingCharacters] = useState<boolean>(false);
   const [detectedAnimeTitle, setDetectedAnimeTitle] = useState<string>('');
   const [userPromptOverride, setUserPromptOverride] = useState<string | null>(null);
+  const [activeModel, setActiveModel] = useState<string>('large-v3-turbo');
+
+  // Load configured Whisper model from application settings
+  useEffect(() => {
+    window.electronAPI?.getSettings?.().then((s) => {
+      if (s?.whisperModel) setActiveModel(s.whisperModel);
+    }).catch(() => {});
+  }, []);
 
   // Quality & Tuning State (Human Friendly)
   // 'anime' = Normal dialogue, 'bgm' = Loud music / action, 'fast' = Quiet & fast, 'custom' = Custom
@@ -343,7 +352,7 @@ export const WhisperStudio: React.FC<WhisperStudioProps> = ({
   const buildWhisperOptions = (selectivePaths?: string[]): WhisperOptions => {
     return {
       preset: qualityOption,
-      model: 'large-v3-turbo',
+      model: activeModel || 'large-v3-turbo',
       language,
       task,
       vadThreshold: vadSensitivity === 'high' ? 0.28 : vadSensitivity === 'balanced' ? 0.35 : 0.45,
@@ -549,21 +558,39 @@ export const WhisperStudio: React.FC<WhisperStudioProps> = ({
         </div>
       </div>
 
-      {/* Missing Whisper Binary Alert */}
+      {/* Missing Whisper Binary Alert & Setup Guidance */}
       {!whisperExists && (
-        <div className="p-3.5 rounded-2xl bg-amber-500/10 border border-amber-500/30 flex items-center justify-between text-xs text-amber-300 shadow-sm shrink-0">
-          <div className="flex items-center space-x-2.5">
-            <AlertCircle className="w-4 h-4 text-amber-400 shrink-0" />
-            <span>Faster-Whisper executable is not configured. Configure the tool path in Settings to transcribe subtitles.</span>
+        <div className="p-4 rounded-2xl bg-gradient-to-r from-amber-500/15 via-zinc-900 to-indigo-500/10 border border-amber-500/30 flex flex-col sm:flex-row items-start sm:items-center justify-between gap-3 text-xs text-amber-200 shadow-md shrink-0">
+          <div className="flex items-start space-x-3">
+            <AlertCircle className="w-5 h-5 text-amber-400 shrink-0 mt-0.5" />
+            <div className="space-y-1">
+              <div className="font-semibold text-white text-sm">
+                Faster-Whisper Engine Not Configured
+              </div>
+              <p className="text-[11px] text-zinc-300 leading-relaxed">
+                Faster-Whisper-XXL is required to generate AI speech-to-text subtitles. Video playback works out-of-the-box with built-in FFmpeg. Download the standalone release from GitHub or Subtitle Edit, and select its location in Settings.
+              </p>
+            </div>
           </div>
-          {onOpenSettings && (
+          <div className="flex items-center space-x-2 shrink-0 self-end sm:self-center">
             <button
-              onClick={onOpenSettings}
-              className="px-3 py-1 rounded-lg bg-amber-500/20 hover:bg-amber-500/30 text-amber-200 border border-amber-500/30 font-semibold transition-colors shrink-0"
+              type="button"
+              onClick={() => window.electronAPI?.openExternalUrl?.('https://github.com/Purfview/whisper-standalone-win/releases')}
+              className="px-3 py-1.5 rounded-xl bg-zinc-800 hover:bg-zinc-700 text-zinc-200 border border-white/10 font-medium transition-colors text-xs flex items-center space-x-1.5"
             >
-              Open Settings
+              <span>GitHub Releases</span>
+              <ExternalLink className="w-3 h-3 text-zinc-400" />
             </button>
-          )}
+            {onOpenSettings && (
+              <button
+                type="button"
+                onClick={onOpenSettings}
+                className="px-3.5 py-1.5 rounded-xl bg-amber-500/20 hover:bg-amber-500/30 text-amber-200 border border-amber-500/40 font-semibold transition-colors text-xs shadow-sm"
+              >
+                Open Settings
+              </button>
+            )}
+          </div>
         </div>
       )}
 
@@ -800,6 +827,14 @@ export const WhisperStudio: React.FC<WhisperStudioProps> = ({
                 ? 'High-speed recognition for quiet conversational episodes without loud background music.'
                 : 'Recommended for most anime. Protects fast speech, high voices, and stuttering.'}
             </p>
+
+            {/* Active AI Model indicator */}
+            <div className="pt-2 border-t border-zinc-800/60 flex items-center justify-between text-xs">
+              <span className="font-semibold text-zinc-300">AI Subtitle Model</span>
+              <span className="text-[11px] text-indigo-300 font-mono font-medium px-2 py-0.5 rounded bg-indigo-500/10 border border-indigo-500/20">
+                {activeModel}
+              </span>
+            </div>
 
             {/* Character Names (AniList Auto-Search) */}
             <div className="pt-2 border-t border-zinc-800/60 space-y-2">

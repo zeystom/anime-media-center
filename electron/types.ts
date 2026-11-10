@@ -156,6 +156,8 @@ export interface DiscoverCatalogParams {
 export interface AppSettings {
   ffmpegPath: string;
   whisperPath: string;
+  whisperModel?: string;
+  customModelPath?: string;
   defaultLibraryRoot: string;
   libraryFolders?: string[];
   autoPlayNext: boolean;
