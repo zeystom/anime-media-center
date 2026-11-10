@@ -64,7 +64,7 @@ export interface ElectronAPI {
     isDownloadingEngine?: boolean;
     engineDownloadProgress?: WhisperEngineDownloadProgress | null;
   }>;
-  downloadWhisperModel?: (modelName: string) => Promise<{ success: boolean; modelName?: string; error?: string }>;
+  downloadWhisperModel?: (modelName: string) => Promise<{ success: boolean; modelName?: string; error?: string; cancelled?: boolean }>;
   cancelWhisperModelDownload?: () => Promise<boolean>;
   downloadWhisperEngine?: () => Promise<{ success: boolean; whisperPath?: string; error?: string }>;
   cancelWhisperEngineDownload?: () => Promise<boolean>;

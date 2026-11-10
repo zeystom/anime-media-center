@@ -12,6 +12,7 @@ interface UpdatePromptModalProps {
   updateInfo: UpdateInfoPayload;
   appVersion: string;
   onUpdateSettings?: (settings: Partial<import('../types').AppSettings>) => void | Promise<void>;
+  hideDontShowAgain?: boolean;
 }
 
 export const UpdatePromptModal: React.FC<UpdatePromptModalProps> = ({
@@ -20,6 +21,7 @@ export const UpdatePromptModal: React.FC<UpdatePromptModalProps> = ({
   updateInfo,
   appVersion,
   onUpdateSettings,
+  hideDontShowAgain = false,
 }) => {
   const [dontShowAgain, setDontShowAgain] = useState(false);
   const [isDownloading, setIsDownloading] = useState(false);
@@ -88,7 +90,7 @@ export const UpdatePromptModal: React.FC<UpdatePromptModalProps> = ({
   if (!isOpen) return null;
 
   const handleDismiss = async () => {
-    if (dontShowAgain) {
+    if (!hideDontShowAgain && dontShowAgain) {
       try {
         const updaterPayload = {
           checkForUpdatesOnStartup: false,
@@ -249,17 +251,19 @@ export const UpdatePromptModal: React.FC<UpdatePromptModalProps> = ({
               )}
 
               {/* Checkbox: "Don't show again and disable auto-updates" */}
-              <label className="flex items-center space-x-2.5 pt-2 cursor-pointer select-none group">
-                <input
-                  type="checkbox"
-                  checked={dontShowAgain}
-                  onChange={(e) => setDontShowAgain(e.target.checked)}
-                  className="w-4 h-4 rounded border-zinc-700 bg-zinc-800 text-purple-600 focus:ring-0 focus:ring-offset-0 cursor-pointer"
-                />
-                <span className="text-xs text-zinc-300 group-hover:text-white transition-colors">
-                  Don't show again and disable auto-updates
-                </span>
-              </label>
+              {!hideDontShowAgain && (
+                <label className="flex items-center space-x-2.5 pt-2 cursor-pointer select-none group">
+                  <input
+                    type="checkbox"
+                    checked={dontShowAgain}
+                    onChange={(e) => setDontShowAgain(e.target.checked)}
+                    className="w-4 h-4 rounded border-zinc-700 bg-zinc-800 text-purple-600 focus:ring-0 focus:ring-offset-0 cursor-pointer"
+                  />
+                  <span className="text-xs text-zinc-300 group-hover:text-white transition-colors">
+                    Don't show again and disable auto-updates
+                  </span>
+                </label>
+              )}
             </>
           )}
         </div>

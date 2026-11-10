@@ -40,19 +40,21 @@ if (!token) {
 
 const RELEASE_BODY = `## What's new in v${VERSION}
 
-### 🗜️ Bundled 7-Zip Engine & Zero-Dependency Archive Decompression
-- **Decompression Fix for Windows 10 & 11:** Fixed decompression failure (exit code 1) on Windows 10 and systems where Windows \`tar.exe\` lacked native \`.7z\` / \`libarchive\` format support.
-- **Bundled 7-Zip Binaries:** Included lightweight, standalone 7-Zip binaries (\`bin/7z.exe\` and \`bin/7z.dll\`) directly within Kaiko's application resources (\`resources/bin/\`), guaranteeing 100% extraction reliability on all Windows versions with zero external tools or dependencies required.
-- **Extractor Cascade:** Added smart extraction tool resolution that prioritizes the bundled 7-Zip engine with fallbacks to system 7-Zip and Windows \`tar.exe\`.
-- **Live Extraction Progress:** Streamed real-time unpacking percentage (\`-bsp1\`) directly to the UI during Faster-Whisper-XXL engine installation, along with detailed stdout and stderr diagnostics.
+### ⚡ Model Download Polish & Output Sanitization
+- **Clean Progress Display:** Sanitized Faster-Whisper terminal output, removing raw ANSI escape codes, carriage returns, and terminal blocks. Shows clean status with file name, megabytes transferred, speed (MB/s), and estimated time remaining.
+- **Graceful Cancellation:** Eliminates \`null\` error messages when cancelling model downloads in Settings.
+- **Model Integrity Validation:** Performs deep file validation (\`model.bin\` / \`model.safetensors\` > 50 MB) before marking models as installed, preventing cancelled partial folders from falsely appearing as installed or active.
+- **Fixed Active Model Badge:** Uninstalled models will never display as "Active".
 
-### ⚡ Faster-Whisper-XXL In-App Downloader
-- **1-Click Engine Installation:** Direct streaming download of the standalone \`Faster-Whisper-XXL\` speech-to-text engine within Kaiko without manual archive extraction.
-- **Real-Time Speed & Progress:** Live MB/s speed, downloaded/total megabytes, percentage, and cancellation support.
+### 🎙️ Whisper Studio Auto-Selection
+- **Always Pre-Selects Episodes Needing AI Subs:** Episodes without AI dubtitles (\`.whisper.srt\`) are now automatically selected, even if they contain regular Japanese translation subtitles (embedded or external). Only episodes that already have AI dubtitles are excluded from selection.
+- **Informative Live Model Download Status:** When Faster-Whisper downloads models on-the-fly during generation, the header and Live Dialogue stream show clear \`Downloading AI Model...\` badges and explanations.
 
-### 🎨 Rich Release Notes Formatting in Updater
-- **GitHub & Markdown Rendering:** The update notification modal parses and renders formatted HTML / Markdown release notes directly from GitHub releases with dark theme styling.
-- **Safe DOM Sanitization & External Links:** Comprehensive sanitization prevents script injection, and release note links safely launch in your default system browser.
+### 🔔 Manual Update Prompt in Settings
+- **Rich Release Modal on Manual Check:** Clicking "Check for Updates" in Settings now opens the formatted Update Available dialog with release highlights when a new version is found (with the "Don't show again" checkbox hidden for on-demand checks).
+
+### 🗜️ Zero-Dependency 7-Zip Decompression
+- Bundled standalone 7-Zip engine (\`7z.exe\` + \`7z.dll\`) guarantees 100% extraction reliability on all Windows versions (Windows 10 & 11) for Faster-Whisper-XXL engine installation.
 
 ---
 ### Assets included:

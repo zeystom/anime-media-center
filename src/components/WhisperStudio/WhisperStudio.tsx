@@ -374,15 +374,13 @@ export const WhisperStudio: React.FC<WhisperStudioProps> = ({
         if (!isMounted) return;
         setEpisodes(eps);
 
-        // Subtitle status check (whisper, dubtitles, external, or embedded subtitles)
-        const missingSubs = eps.filter(
-          (e) => !e.hasWhisperSrt && !e.hasEmbeddedDubtitles && !e.hasExternalSrt && !e.hasEmbeddedSubtitles
-        );
-        if (missingSubs.length > 0) {
-          setSelectedEpisodePaths(new Set(missingSubs.map((e) => e.filePath)));
-          setEpisodeFilter('missing');
+        // Pre-select all episodes that do not have AI-generated subtitles (.whisper.srt) yet
+        const episodesNeedingAiSubs = eps.filter((e) => !e.hasWhisperSrt);
+        if (episodesNeedingAiSubs.length > 0) {
+          setSelectedEpisodePaths(new Set(episodesNeedingAiSubs.map((e) => e.filePath)));
+          setEpisodeFilter('all');
         } else {
-          // All episodes already have subtitles: show all episodes and avoid pre-selecting
+          // All episodes already have AI subtitles: keep selection empty
           setSelectedEpisodePaths(new Set());
           setEpisodeFilter('all');
         }
@@ -771,7 +769,7 @@ export const WhisperStudio: React.FC<WhisperStudioProps> = ({
 
   const filteredEpisodes =
     episodeFilter === 'missing'
-      ? episodes.filter((e) => (existingWhisperCount > 0 ? !e.hasWhisperSrt : !hasSubtitles(e)))
+      ? episodes.filter((e) => !e.hasWhisperSrt)
       : episodes;
 
   const engTrackIndex = sampleAudioTracks.findIndex(
@@ -1445,12 +1443,20 @@ export const WhisperStudio: React.FC<WhisperStudioProps> = ({
                   </span>
                 </div>
                 <div className="flex items-center space-x-2 shrink-0">
-                  {currentSpeed && (
-                    <span className="font-mono text-zinc-400 text-xs">{currentSpeed}</span>
+                  {currentSpeed?.includes('Downloading model') ? (
+                    <span className="inline-flex items-center space-x-1.5 px-2.5 py-0.5 rounded text-xs font-semibold bg-amber-500/20 text-amber-300 border border-amber-500/30 animate-pulse">
+                      <span>Downloading AI Model...</span>
+                    </span>
+                  ) : (
+                    <>
+                      {currentSpeed && (
+                        <span className="font-mono text-zinc-400 text-xs">{currentSpeed}</span>
+                      )}
+                      <span className="font-mono font-bold text-indigo-400 text-sm">
+                        {overallProgress}%
+                      </span>
+                    </>
                   )}
-                  <span className="font-mono font-bold text-indigo-400 text-sm">
-                    {overallProgress}%
-                  </span>
                 </div>
               </div>
               <div className="w-full h-2 rounded-full bg-zinc-800 overflow-hidden">
@@ -1507,9 +1513,7 @@ export const WhisperStudio: React.FC<WhisperStudioProps> = ({
                       : 'text-zinc-400 hover:text-zinc-200'
                   }`}
                 >
-                  {existingWhisperCount > 0
-                    ? `Without AI subtitles (${missingWhisperCount})`
-                    : `Without subtitles (${missingAnySubCount})`}
+                  Needs AI Subtitles ({missingWhisperCount})
                 </button>
                 <button
                   type="button"
@@ -1590,10 +1594,16 @@ export const WhisperStudio: React.FC<WhisperStudioProps> = ({
                       {/* Status Badges & Quick Action */}
                       <div className="flex items-center space-x-2 shrink-0">
                         {isCurrent ? (
-                          <span className="text-indigo-400 font-bold text-[11px] font-mono animate-pulse flex items-center space-x-1">
-                            <span>{overallProgress}%</span>
-                            {currentSpeed && <span className="text-[10px] text-zinc-400">({currentSpeed})</span>}
-                          </span>
+                          currentSpeed?.includes('Downloading model') ? (
+                            <span className="text-amber-400 font-bold text-[11px] font-mono animate-pulse">
+                              Downloading Model...
+                            </span>
+                          ) : (
+                            <span className="text-indigo-400 font-bold text-[11px] font-mono animate-pulse flex items-center space-x-1">
+                              <span>{overallProgress}%</span>
+                              {currentSpeed && <span className="text-[10px] text-zinc-400">({currentSpeed})</span>}
+                            </span>
+                          )
                         ) : isProcessing && queueMatch ? (
                           queueMatch.status === 'completed' ? (
                             <span className="flex items-center space-x-1 text-emerald-400 text-[11px] font-semibold bg-emerald-500/10 px-2 py-0.5 rounded border border-emerald-500/20">

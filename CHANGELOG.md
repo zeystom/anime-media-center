@@ -1,5 +1,21 @@
 # Changelog
 
+## 1.0.10 — Model Download Polish, Robust Cancellation, Whisper Auto-Select & Manual Update Prompt
+
+- **Model Download Progress & TQDM Output Sanitization:**
+  - Sanitized Faster-Whisper download terminal output, stripping ANSI escape sequences, carriage returns, and raw block characters.
+  - Replaced scrambled terminal text with clean, human-readable status: file name, transferred/total size (`MB/GB`), transfer speed (`MB/s`), and estimated time remaining.
+- **Graceful Cancellation & Model Integrity Validation:**
+  - Fixed false `exit code null` error toast when cancelling model downloads in Settings.
+  - Implemented deep file integrity check (`model.bin` / `model.safetensors` > 50 MB) before detecting models as installed, preventing cancelled partial folders from falsely showing as installed or active.
+  - Fixed active badge logic so uninstalled models never display as "Active".
+- **Whisper Studio Auto-Selection for All Episodes Without AI Subs:**
+  - Auto-selects all episodes that lack AI-generated subtitles (`.whisper.srt`), even if they contain regular Japanese translation subtitles (embedded or external SRTs).
+  - Episodes are now only excluded from auto-selection if AI dubtitles have already been created for them.
+  - Improved progress feedback when Faster-Whisper downloads models on-the-fly, displaying clear `Downloading AI Model...` badges and status explanations in both the header and Live Dialogue stream.
+- **Manual Update Prompt in Settings:**
+  - Clicking "Check for Updates" in Settings now opens the rich, formatted Update Prompt modal with release highlights when a new version is found, with the "Don't show again" checkbox cleanly hidden for on-demand checks.
+
 ## 1.0.9 — Bundled 7-Zip Engine & Zero-Dependency Archive Decompression
 
 - **Bundled 7-Zip Decompression Engine (`7z.exe` + `7z.dll`):**

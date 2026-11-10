@@ -493,6 +493,69 @@ function setupIpcHandlers() {
 
   let activeModelDownloadProcess: ChildProcess | null = null;
   let activeModelDownloadName: string | null = null;
+  let activeModelDownloadCancelled = false;
+
+  function isModelDirectoryComplete(dirPath: string): boolean {
+    if (!dirPath || !fs.existsSync(dirPath)) return false;
+    try {
+      // 1. Direct model file in folder (e.g. _models/faster-whisper-small/model.bin)
+      const directBin = path.join(dirPath, 'model.bin');
+      if (fs.existsSync(directBin) && fs.statSync(directBin).size > 50 * 1024 * 1024) return true;
+      const directSafe = path.join(dirPath, 'model.safetensors');
+      if (fs.existsSync(directSafe) && fs.statSync(directSafe).size > 50 * 1024 * 1024) return true;
+
+      // 2. HuggingFace cache snapshots (e.g. hub/models--Systran--faster-whisper-small/snapshots/<hash>/model.bin)
+      const snapshotsDir = path.join(dirPath, 'snapshots');
+      if (fs.existsSync(snapshotsDir)) {
+        const hashes = fs.readdirSync(snapshotsDir);
+        for (const h of hashes) {
+          const snap = path.join(snapshotsDir, h);
+          const snapBin = path.join(snap, 'model.bin');
+          if (fs.existsSync(snapBin) && fs.statSync(snapBin).size > 50 * 1024 * 1024) return true;
+          const snapSafe = path.join(snap, 'model.safetensors');
+          if (fs.existsSync(snapSafe) && fs.statSync(snapSafe).size > 50 * 1024 * 1024) return true;
+        }
+      }
+    } catch {}
+    return false;
+  }
+
+  function parseModelDownloadOutput(raw: string): { percent: number | null; text: string } {
+    // Strip ANSI escape codes and normalize whitespace
+    const clean = raw
+      .replace(/\x1b\[[0-9;]*[a-zA-Z]/g, '')
+      .replace(/[\r\n]+/g, ' ')
+      .trim();
+
+    // 1. Percentage
+    const pctMatch = clean.match(/(\d{1,3})%/);
+    const percent = pctMatch ? Math.min(100, Math.max(0, parseInt(pctMatch[1], 10))) : null;
+
+    // 2. Transferred / Total (e.g. 57.0M/1.42G)
+    const sizeMatch = clean.match(/(\d+(?:\.\d+)?\s*[KMGT]i?B?)\s*\/\s*(\d+(?:\.\d+)?\s*[KMGT]i?B?)/i);
+
+    // 3. Download Speed (e.g. 2.60MB/s)
+    const speedMatch = clean.match(/(\d+(?:\.\d+)?\s*[KMGT]i?B?\/s)/i);
+
+    // 4. ETA (e.g. [00:32<08:45])
+    const etaMatch = clean.match(/\[(?:[\d:]+)<([\d:]+)/);
+
+    // 5. Model file name (e.g. model.bin, model.safetensors, tokenizer.json)
+    const fileMatch = clean.match(/([a-zA-Z0-9_.-]+\.(?:bin|safetensors|json|txt))/i);
+
+    const parts: string[] = [];
+    if (fileMatch) parts.push(fileMatch[1]);
+    if (sizeMatch) parts.push(`${sizeMatch[1]} / ${sizeMatch[2]}`);
+    if (speedMatch) parts.push(speedMatch[1]);
+    if (etaMatch) parts.push(`${etaMatch[1]} remaining`);
+
+    const formattedText = parts.length > 0 ? parts.join(' • ') : '';
+
+    return {
+      percent,
+      text: formattedText || (percent !== null ? `Downloading (${percent}%)...` : 'Downloading model files...'),
+    };
+  }
 
   ipcMain.handle('check-binaries', async (_event, paths?: { ffmpegPath?: string; whisperPath?: string; modelName?: string; customModelPath?: string }) => {
     const settings = storage.getSettings();
@@ -527,6 +590,10 @@ function setupIpcHandlers() {
           try {
             const files = fs.readdirSync(dir);
             for (const f of files) {
+              const fullModelPath = path.join(dir, f);
+              if (!isModelDirectoryComplete(fullModelPath)) {
+                continue;
+              }
               const cleaned = f.replace(/^faster-whisper-/, '').replace(/^models--.*?--/, '');
               if (cleaned) {
                 if (!installedModels.includes(cleaned)) {
@@ -617,6 +684,7 @@ function setupIpcHandlers() {
 
     return new Promise((resolve) => {
       activeModelDownloadName = targetModel;
+      activeModelDownloadCancelled = false;
       if (mainWindow && !mainWindow.isDestroyed()) {
         mainWindow.webContents.send('whisper:model-download-status', { isDownloading: true, modelName: targetModel });
       }
@@ -639,12 +707,11 @@ function setupIpcHandlers() {
 
       const parseOutput = (data: Buffer) => {
         const text = data.toString('utf-8');
-        const pctMatch = text.match(/(\d{1,3})%/);
-        const percent = pctMatch ? parseInt(pctMatch[1], 10) : null;
+        const parsed = parseModelDownloadOutput(text);
         event.sender.send('whisper:model-download-progress', {
           modelName: targetModel,
-          percent,
-          text: text.slice(0, 150).trim(),
+          percent: parsed.percent,
+          text: parsed.text,
         });
       };
 
@@ -652,7 +719,15 @@ function setupIpcHandlers() {
       child.stderr.on('data', parseOutput);
 
       child.on('close', (code) => {
+        const wasCancelled = activeModelDownloadCancelled;
         cleanup();
+        activeModelDownloadCancelled = false;
+
+        if (wasCancelled) {
+          resolve({ success: false, cancelled: true, error: 'Download cancelled by user' });
+          return;
+        }
+
         if (code === 0) {
           if (mainWindow && !mainWindow.isDestroyed()) {
             mainWindow.webContents.send('whisper:model-download-complete', { modelName: targetModel, success: true });
@@ -673,13 +748,21 @@ function setupIpcHandlers() {
       });
 
       child.on('error', (err) => {
+        const wasCancelled = activeModelDownloadCancelled;
         cleanup();
-        resolve({ success: false, error: err.message });
+        activeModelDownloadCancelled = false;
+
+        if (wasCancelled) {
+          resolve({ success: false, cancelled: true, error: 'Download cancelled by user' });
+        } else {
+          resolve({ success: false, error: err.message });
+        }
       });
     });
   });
 
   ipcMain.handle('cancel-whisper-model-download', async () => {
+    activeModelDownloadCancelled = true;
     if (activeModelDownloadProcess) {
       try {
         activeModelDownloadProcess.kill();

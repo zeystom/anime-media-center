@@ -47,10 +47,17 @@ export const LiveDialogueStream: React.FC<LiveDialogueStreamProps> = ({
                 Live Dialogue Stream
               </span>
               {isProcessing && (
-                <span className="inline-flex items-center space-x-1 px-2 py-0.5 rounded-full text-[10px] font-bold bg-emerald-500/20 text-emerald-300 border border-emerald-500/30">
-                  <span className="w-1.5 h-1.5 rounded-full bg-emerald-400 animate-ping" />
-                  <span>DECODING</span>
-                </span>
+                speed?.includes('Downloading model') ? (
+                  <span className="inline-flex items-center space-x-1 px-2 py-0.5 rounded-full text-[10px] font-bold bg-amber-500/20 text-amber-300 border border-amber-500/30">
+                    <span className="w-1.5 h-1.5 rounded-full bg-amber-400 animate-ping" />
+                    <span>DOWNLOADING MODEL</span>
+                  </span>
+                ) : (
+                  <span className="inline-flex items-center space-x-1 px-2 py-0.5 rounded-full text-[10px] font-bold bg-emerald-500/20 text-emerald-300 border border-emerald-500/30">
+                    <span className="w-1.5 h-1.5 rounded-full bg-emerald-400 animate-ping" />
+                    <span>DECODING</span>
+                  </span>
+                )
               )}
             </div>
             {parsedCurrent && isProcessing ? (
@@ -122,12 +129,16 @@ export const LiveDialogueStream: React.FC<LiveDialogueStreamProps> = ({
             <div>
               <p className="text-xs font-medium text-zinc-300">
                 {isProcessing
-                  ? 'Listening for speech segments...'
+                  ? speed?.includes('Downloading model')
+                    ? 'Downloading speech model from Hugging Face...'
+                    : 'Listening for speech segments...'
                   : 'Awaiting Whisper transcription run'}
               </p>
               <p className="text-[11px] text-zinc-500 max-w-sm mt-0.5">
                 {isProcessing
-                  ? 'Dialogue subtitles will appear here live with synchronized timestamps.'
+                  ? speed?.includes('Downloading model')
+                    ? 'Faster-Whisper is downloading and caching the selected AI model. Subtitle recognition will start as soon as it finishes.'
+                    : 'Dialogue subtitles will appear here live with synchronized timestamps.'
                   : 'Select target anime episodes and click Generate Subtitles to begin live recognition.'}
               </p>
             </div>

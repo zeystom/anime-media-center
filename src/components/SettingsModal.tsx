@@ -28,9 +28,10 @@ import {
   ChevronUp,
 } from 'lucide-react';
 import { AppSettings } from '../types';
-import type { P2pState, RssProvider, UpdaterState } from '../types';
+import type { P2pState, RssProvider, UpdaterState, UpdateInfoPayload } from '../types';
 import { showGlobalToast } from './Toast';
 import { P2pConsentModal } from './P2P/P2pConsentModal';
+import { UpdatePromptModal } from './UpdatePromptModal';
 import { formatFileSize } from '../utils/format';
 import { TORRENT_LANGUAGES, type TorrentLanguageCode } from '../lib/releaseParser/releaseClassification';
 
@@ -172,7 +173,7 @@ export const SettingsModal: React.FC<SettingsModalProps> = ({
   const providerImportRef = useRef<HTMLInputElement>(null);
 
   // Application update state
-  const [appVersion, setAppVersion] = useState<string>('1.0.9');
+  const [appVersion, setAppVersion] = useState<string>('1.0.10');
   const [checkForUpdatesOnStartup, setCheckForUpdatesOnStartup] = useState<boolean>(
     settings.checkForUpdatesOnStartup ?? true
   );
@@ -181,12 +182,14 @@ export const SettingsModal: React.FC<SettingsModalProps> = ({
   );
   const [updaterState, setUpdaterState] = useState<UpdaterState>({
     status: 'idle',
-    currentVersion: '1.0.9',
+    currentVersion: '1.0.10',
     updateInfo: null,
     downloadProgress: null,
     error: null,
   });
   const [updaterDisplayPercent, setUpdaterDisplayPercent] = useState<number>(0);
+  const [manualUpdateModalOpen, setManualUpdateModalOpen] = useState<boolean>(false);
+  const [manualUpdateInfo, setManualUpdateInfo] = useState<UpdateInfoPayload | null>(null);
 
   useEffect(() => {
     if (updaterState.downloadProgress && typeof updaterState.downloadProgress.percent === 'number') {
@@ -386,7 +389,10 @@ export const SettingsModal: React.FC<SettingsModalProps> = ({
         const state = await window.electronAPI.checkForUpdates();
         if (state) {
           setUpdaterState(state);
-          if (state.status === 'not-available') {
+          if (state.status === 'available' && state.updateInfo) {
+            setManualUpdateInfo(state.updateInfo);
+            setManualUpdateModalOpen(true);
+          } else if (state.status === 'not-available') {
             showGlobalToast(`You are running the latest version (${appVersion})`, 'info');
           }
         }
@@ -442,7 +448,7 @@ export const SettingsModal: React.FC<SettingsModalProps> = ({
         e.preventDefault();
         e.stopPropagation();
         e.stopImmediatePropagation();
-        if (showP2pConsent) return;
+        if (showP2pConsent || manualUpdateModalOpen) return;
         handleClose();
       }
     };
@@ -485,6 +491,10 @@ export const SettingsModal: React.FC<SettingsModalProps> = ({
     setDownloadProgress({ percent: 0, text: 'Connecting to Hugging Face...' });
     try {
       const res = await window.electronAPI.downloadWhisperModel(targetModel);
+      if (res?.cancelled || res?.error?.toLowerCase().includes('cancelled')) {
+        // User cancelled the download, skip error toast
+        return;
+      }
       if (res.success) {
         showGlobalToast(`Model ${targetModel} downloaded successfully and ready!`, 'success');
         setWhisperModel(targetModel);
@@ -501,7 +511,9 @@ export const SettingsModal: React.FC<SettingsModalProps> = ({
         showGlobalToast(res.error || `Failed to download ${targetModel}`, 'error');
       }
     } catch (err: any) {
-      showGlobalToast(err?.message || `Failed to download ${targetModel}`, 'error');
+      if (!err?.message?.toLowerCase().includes('cancelled')) {
+        showGlobalToast(err?.message || `Failed to download ${targetModel}`, 'error');
+      }
     } finally {
       setDownloadingModel(null);
       setDownloadProgress({ percent: null, text: '' });
@@ -1422,7 +1434,7 @@ export const SettingsModal: React.FC<SettingsModalProps> = ({
                       ? binaryStatus.isDefaultModelInstalled ||
                         Boolean(binaryStatus.installedModels?.some((m) => m.toLowerCase().includes('large-v3-turbo')))
                       : Boolean(binaryStatus.installedModels?.some((m) => m.toLowerCase().includes(model.id.toLowerCase())));
-                  const isCurrentActive = !customModelPath && whisperModel === model.id;
+                  const isCurrentActive = isInstalled && !customModelPath && whisperModel === model.id;
                   const isThisDownloading = downloadingModel === model.id;
 
                   return (
@@ -2224,6 +2236,18 @@ export const SettingsModal: React.FC<SettingsModalProps> = ({
           <P2pConsentModal
             onAccept={handleP2pConsentAccept}
             onCancel={() => setShowP2pConsent(false)}
+          />
+        )}
+
+        {/* Manual Update Check Prompt Modal (shown without "Don't show again" checkbox) */}
+        {manualUpdateModalOpen && manualUpdateInfo && (
+          <UpdatePromptModal
+            isOpen={manualUpdateModalOpen}
+            onClose={() => setManualUpdateModalOpen(false)}
+            updateInfo={manualUpdateInfo}
+            appVersion={appVersion}
+            hideDontShowAgain={true}
+            onUpdateSettings={onSave}
           />
         )}
       </div>
