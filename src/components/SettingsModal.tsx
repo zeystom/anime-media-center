@@ -143,6 +143,9 @@ export const SettingsModal: React.FC<SettingsModalProps> = ({
     text: '',
   });
 
+  const [isDownloadingEngine, setIsDownloadingEngine] = useState(false);
+  const [engineDownloadProgress, setEngineDownloadProgress] = useState<import('../types').WhisperEngineDownloadProgress | null>(null);
+
   const [isDetecting, setIsDetecting] = useState(false);
   const [showSetupGuide, setShowSetupGuide] = useState(false);
   const [isWhisperSectionExpanded, setIsWhisperSectionExpanded] = useState(true);
@@ -169,7 +172,7 @@ export const SettingsModal: React.FC<SettingsModalProps> = ({
   const providerImportRef = useRef<HTMLInputElement>(null);
 
   // Application update state
-  const [appVersion, setAppVersion] = useState<string>('1.0.7');
+  const [appVersion, setAppVersion] = useState<string>('1.0.8');
   const [checkForUpdatesOnStartup, setCheckForUpdatesOnStartup] = useState<boolean>(
     settings.checkForUpdatesOnStartup ?? true
   );
@@ -178,7 +181,7 @@ export const SettingsModal: React.FC<SettingsModalProps> = ({
   );
   const [updaterState, setUpdaterState] = useState<UpdaterState>({
     status: 'idle',
-    currentVersion: '1.0.7',
+    currentVersion: '1.0.8',
     updateInfo: null,
     downloadProgress: null,
     error: null,
@@ -235,6 +238,10 @@ export const SettingsModal: React.FC<SettingsModalProps> = ({
           if (status.isDownloadingModel && status.downloadingModelName) {
             setDownloadingModel(status.downloadingModelName);
           }
+          if (status.isDownloadingEngine && status.engineDownloadProgress) {
+            setIsDownloadingEngine(true);
+            setEngineDownloadProgress(status.engineDownloadProgress);
+          }
         })
         .catch(() => {});
     }
@@ -267,6 +274,25 @@ export const SettingsModal: React.FC<SettingsModalProps> = ({
     });
     return unsub;
   }, [isOpen]);
+
+  // Listen for Whisper engine download progress and status
+  useEffect(() => {
+    if (!isOpen) return;
+    const api = window.electronAPI;
+    if (!api?.onWhisperEngineDownloadProgress) return;
+    const unsub = api.onWhisperEngineDownloadProgress((data) => {
+      setEngineDownloadProgress(data);
+      setIsDownloadingEngine(data.isDownloading);
+      if (data.phase === 'completed' && data.whisperPath) {
+        setWhisperPath(data.whisperPath);
+        onSave({ whisperPath: data.whisperPath });
+        showGlobalToast('Faster-Whisper-XXL engine installed and configured!', 'success');
+      } else if (data.phase === 'error' && data.error) {
+        showGlobalToast(data.error, 'error');
+      }
+    });
+    return unsub;
+  }, [isOpen, onSave]);
 
   // Data & Backup: load backup status + restore availability when opened
   useEffect(() => {
@@ -488,6 +514,31 @@ export const SettingsModal: React.FC<SettingsModalProps> = ({
       setDownloadingModel(null);
       setDownloadProgress({ percent: null, text: '' });
       showGlobalToast('Model download cancelled', 'info');
+    }
+  };
+
+  const handleDownloadWhisperEngine = async () => {
+    if (!window.electronAPI?.downloadWhisperEngine) return;
+    setIsDownloadingEngine(true);
+    try {
+      const res = await window.electronAPI.downloadWhisperEngine();
+      if (!res.success && res.error) {
+        showGlobalToast(res.error, 'error');
+      }
+    } catch (err: any) {
+      showGlobalToast(err?.message || 'Failed to start engine download', 'error');
+    }
+  };
+
+  const handleCancelWhisperEngineDownload = async () => {
+    if (!window.electronAPI?.cancelWhisperEngineDownload) return;
+    try {
+      await window.electronAPI.cancelWhisperEngineDownload();
+      setIsDownloadingEngine(false);
+      setEngineDownloadProgress(null);
+      showGlobalToast('Engine download cancelled', 'info');
+    } catch (err: any) {
+      console.error(err);
     }
   };
 
@@ -1264,21 +1315,78 @@ export const SettingsModal: React.FC<SettingsModalProps> = ({
                 </button>
               </div>
 
-              {/* If Whisper engine is not found, show direct download link button */}
-              {!binaryStatus.whisperExists && (
-                <div className="flex items-center justify-between p-2.5 rounded-xl bg-amber-500/10 border border-amber-500/20 text-xs text-amber-300">
-                  <div className="flex items-center space-x-2">
-                    <AlertCircle className="w-4 h-4 text-amber-400 shrink-0" />
-                    <span>Faster-Whisper-XXL engine is not configured yet.</span>
+              {/* In-app engine downloader / setup */}
+              {isDownloadingEngine ? (
+                <div className="space-y-2 p-3.5 rounded-xl bg-purple-950/30 border border-purple-500/30 text-xs text-zinc-200">
+                  <div className="flex items-center justify-between">
+                    <div className="flex items-center space-x-2 min-w-0 pr-2">
+                      <Download className="w-4 h-4 text-purple-400 shrink-0 animate-bounce" />
+                      <span className="font-semibold text-white truncate">
+                        {engineDownloadProgress?.phase === 'extracting'
+                          ? 'Extracting Faster-Whisper-XXL Engine...'
+                          : `Downloading Faster-Whisper-XXL (${engineDownloadProgress?.percent ?? 0}%)`}
+                      </span>
+                    </div>
+                    <button
+                      type="button"
+                      onClick={handleCancelWhisperEngineDownload}
+                      className="px-2.5 py-1 rounded-lg bg-zinc-800 hover:bg-zinc-700 text-zinc-300 hover:text-white border border-white/10 text-[11px] font-medium transition-colors shrink-0"
+                    >
+                      Cancel
+                    </button>
                   </div>
-                  <button
-                    type="button"
-                    onClick={() => window.electronAPI.openExternalUrl('https://github.com/Purfview/whisper-standalone-win/releases')}
-                    className="inline-flex items-center space-x-1.5 px-3 py-1 rounded-lg bg-amber-500/20 hover:bg-amber-500/30 text-amber-200 border border-amber-500/40 text-[11px] font-semibold transition-colors shrink-0"
-                  >
-                    <span>Download Engine</span>
-                    <ExternalLink className="w-3 h-3 text-amber-300" />
-                  </button>
+
+                  <div className="w-full h-2 rounded-full bg-zinc-800 overflow-hidden">
+                    {engineDownloadProgress?.phase === 'extracting' ? (
+                      <div className="h-full w-full bg-gradient-to-r from-purple-500 via-indigo-500 to-purple-500 animate-pulse" />
+                    ) : (
+                      <div
+                        className="h-full bg-gradient-to-r from-purple-500 to-indigo-500 transition-[width] duration-150 ease-out"
+                        style={{ width: `${Math.max(2, Math.min(100, engineDownloadProgress?.percent ?? 0))}%` }}
+                      />
+                    )}
+                  </div>
+
+                  <div className="flex items-center justify-between text-[11px] text-zinc-400 font-mono">
+                    <span>
+                      {engineDownloadProgress?.phase === 'extracting'
+                        ? 'Unpacking standalone archive into app storage (this may take a minute)...'
+                        : `${formatFileSize(engineDownloadProgress?.transferred ?? 0)} / ${formatFileSize(engineDownloadProgress?.total ?? 0)}`}
+                    </span>
+                    {engineDownloadProgress?.phase !== 'extracting' && (
+                      <span>{formatFileSize(engineDownloadProgress?.bytesPerSecond ?? 0)}/s</span>
+                    )}
+                  </div>
+                </div>
+              ) : !binaryStatus.whisperExists && (
+                <div className="flex flex-col sm:flex-row items-start sm:items-center justify-between gap-3 p-3.5 rounded-xl bg-purple-950/25 border border-purple-500/25 text-xs text-zinc-300">
+                  <div className="space-y-0.5 min-w-0">
+                    <div className="flex items-center space-x-1.5 font-semibold text-white text-xs">
+                      <Sparkles className="w-3.5 h-3.5 text-purple-400 shrink-0" />
+                      <span>In-App Engine Download</span>
+                    </div>
+                    <p className="text-[11px] text-zinc-400 leading-relaxed">
+                      Download and configure the complete Faster-Whisper-XXL standalone engine automatically with zero manual file extraction.
+                    </p>
+                  </div>
+                  <div className="flex items-center space-x-2 shrink-0 self-end sm:self-center">
+                    <button
+                      type="button"
+                      onClick={handleDownloadWhisperEngine}
+                      className="flex items-center space-x-1.5 px-3.5 py-1.5 rounded-lg bg-purple-600 hover:bg-purple-500 text-white text-xs font-semibold shadow-md shadow-purple-600/20 transition-all shrink-0"
+                    >
+                      <Download className="w-3.5 h-3.5" />
+                      <span>Download Engine</span>
+                    </button>
+                    <button
+                      type="button"
+                      onClick={() => window.electronAPI.openExternalUrl('https://github.com/Purfview/whisper-standalone-win/releases')}
+                      title="Open GitHub Releases page"
+                      className="p-1.5 rounded-lg bg-zinc-800 hover:bg-zinc-700 text-zinc-400 hover:text-zinc-200 border border-white/10 transition-colors"
+                    >
+                      <ExternalLink className="w-3.5 h-3.5" />
+                    </button>
+                  </div>
                 </div>
               )}
             </div>

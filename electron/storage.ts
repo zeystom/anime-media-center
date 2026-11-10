@@ -38,6 +38,23 @@ export function findExecutableInPath(exeName: string): string | null {
   return result;
 }
 
+export function findExecutableInDir(dir: string, exeName: string, depth = 3): string | null {
+  if (!dir || !fs.existsSync(dir) || depth < 0) return null;
+  const direct = path.join(dir, exeName);
+  if (fs.existsSync(direct)) return direct;
+  try {
+    const entries = fs.readdirSync(dir, { withFileTypes: true });
+    for (const entry of entries) {
+      if (entry.isDirectory()) {
+        const sub = path.join(dir, entry.name);
+        const found = findExecutableInDir(sub, exeName, depth - 1);
+        if (found) return found;
+      }
+    }
+  } catch {}
+  return null;
+}
+
 let cachedAutoWhisper: { path: string; time: number } | null = null;
 
 export function autoDetectWhisperPath(forceFresh = false): string {
@@ -47,36 +64,49 @@ export function autoDetectWhisperPath(forceFresh = false): string {
 
   let result = '';
 
-  // 1. Subtitle Edit standard AppData location
   const appData = process.env.APPDATA || '';
-  const seWhisper = path.join(appData, 'Subtitle Edit', 'SpeechToText', 'Purfview-Faster-Whisper-XXL', 'faster-whisper-xxl.exe');
-  if (fs.existsSync(seWhisper)) {
-    result = seWhisper;
-  } else {
-    // 2. Relative bin directory
-    const localBin = path.join(process.cwd(), 'bin', 'faster-whisper-xxl.exe');
-    if (fs.existsSync(localBin)) {
-      result = localBin;
-    } else {
-      // 3. User profile and root directory candidates
-      const userProfile = process.env.USERPROFILE || '';
-      const commonDirs = [
-        path.join(userProfile, 'Faster-Whisper-XXL', 'faster-whisper-xxl.exe'),
-        path.join(userProfile, 'Downloads', 'Faster-Whisper-XXL', 'faster-whisper-xxl.exe'),
-        'C:\\Faster-Whisper-XXL\\faster-whisper-xxl.exe',
-        'C:\\Program Files\\Faster-Whisper-XXL\\faster-whisper-xxl.exe',
-      ];
-      for (const p of commonDirs) {
-        if (fs.existsSync(p)) {
-          result = p;
-          break;
-        }
-      }
 
-      // 4. PATH lookup
-      if (!result) {
-        const fromPath = findExecutableInPath('faster-whisper-xxl.exe');
-        if (fromPath) result = fromPath;
+  // 0. Kaiko internal bin directory in userData
+  try {
+    const userData = app ? resolveUserDataPath() : path.join(appData, 'Kaiko');
+    const kaikoDir = path.join(userData, 'bin', 'faster-whisper-xxl');
+    if (fs.existsSync(kaikoDir)) {
+      const candidate = findExecutableInDir(kaikoDir, 'faster-whisper-xxl.exe');
+      if (candidate) result = candidate;
+    }
+  } catch {}
+
+  // 1. Subtitle Edit standard AppData location
+  if (!result) {
+    const seWhisper = path.join(appData, 'Subtitle Edit', 'SpeechToText', 'Purfview-Faster-Whisper-XXL', 'faster-whisper-xxl.exe');
+    if (fs.existsSync(seWhisper)) {
+      result = seWhisper;
+    } else {
+      // 2. Relative bin directory
+      const localBin = path.join(process.cwd(), 'bin', 'faster-whisper-xxl.exe');
+      if (fs.existsSync(localBin)) {
+        result = localBin;
+      } else {
+        // 3. User profile and root directory candidates
+        const userProfile = process.env.USERPROFILE || '';
+        const commonDirs = [
+          path.join(userProfile, 'Faster-Whisper-XXL', 'faster-whisper-xxl.exe'),
+          path.join(userProfile, 'Downloads', 'Faster-Whisper-XXL', 'faster-whisper-xxl.exe'),
+          'C:\\Faster-Whisper-XXL\\faster-whisper-xxl.exe',
+          'C:\\Program Files\\Faster-Whisper-XXL\\faster-whisper-xxl.exe',
+        ];
+        for (const p of commonDirs) {
+          if (fs.existsSync(p)) {
+            result = p;
+            break;
+          }
+        }
+
+        // 4. PATH lookup
+        if (!result) {
+          const fromPath = findExecutableInPath('faster-whisper-xxl.exe');
+          if (fromPath) result = fromPath;
+        }
       }
     }
   }

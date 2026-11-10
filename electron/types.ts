@@ -391,3 +391,15 @@ export interface UpdaterState {
   downloadProgress?: UpdateProgressPayload | null;
   error?: string | null;
 }
+
+export interface WhisperEngineDownloadProgress {
+  isDownloading: boolean;
+  phase: 'idle' | 'downloading' | 'extracting' | 'completed' | 'error';
+  percent: number;
+  transferred: number;
+  total: number;
+  bytesPerSecond: number;
+  error?: string | null;
+  whisperPath?: string | null;
+  message?: string;
+}

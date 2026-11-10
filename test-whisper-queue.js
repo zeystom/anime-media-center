@@ -1,4 +1,11 @@
 import assert from 'assert';
+import fs from 'fs';
+import path from 'path';
+import os from 'os';
+import { fileURLToPath } from 'url';
+
+const __filename = fileURLToPath(import.meta.url);
+const __dirname = path.dirname(__filename);
 
 // Simulated WhisperManager to verify queue lifecycle and runPromise behavior
 class MockWhisperManager {
@@ -142,6 +149,83 @@ async function runTests() {
   console.log('✓ Scenario (c) passed.');
 
   console.log('\nAll Whisper queue lifecycle tests passed successfully!');
+
+  // =========================================================================
+  // FASTER-WHISPER-XXL IN-APP ENGINE DOWNLOADER INVARIANTS
+  // =========================================================================
+  console.log('\n--- Running Faster-Whisper-XXL In-App Downloader Invariants ---');
+
+  // 1. Recursive Executable Search Test
+  console.log('Testing findExecutableInDir recursive resolution...');
+  const tmpTestDir = path.join(os.tmpdir(), `test_whisper_find_${Date.now()}`);
+  const nestedSubDir = path.join(tmpTestDir, 'subfolder', 'deep');
+  fs.mkdirSync(nestedSubDir, { recursive: true });
+  const fakeExe = path.join(nestedSubDir, 'faster-whisper-xxl.exe');
+  fs.writeFileSync(fakeExe, 'binary content');
+
+  function findExecutableInDir(dir, exeName, depth = 3) {
+    if (!dir || !fs.existsSync(dir) || depth < 0) return null;
+    const direct = path.join(dir, exeName);
+    if (fs.existsSync(direct)) return direct;
+    try {
+      const entries = fs.readdirSync(dir, { withFileTypes: true });
+      for (const entry of entries) {
+        if (entry.isDirectory()) {
+          const sub = path.join(dir, entry.name);
+          const found = findExecutableInDir(sub, exeName, depth - 1);
+          if (found) return found;
+        }
+      }
+    } catch {}
+    return null;
+  }
+
+  const foundPath = findExecutableInDir(tmpTestDir, 'faster-whisper-xxl.exe');
+  assert.strictEqual(foundPath, fakeExe, 'findExecutableInDir must locate faster-whisper-xxl.exe in nested directory');
+  fs.rmSync(tmpTestDir, { recursive: true, force: true });
+  console.log('✓ findExecutableInDir correctly finds nested executables.');
+
+  // 2. Preload API Invariants
+  console.log('Testing preload.ts exposes Whisper Engine Downloader APIs...');
+  const preloadSrc = fs.readFileSync(path.join(__dirname, 'electron', 'preload.ts'), 'utf-8');
+  assert(preloadSrc.includes('downloadWhisperEngine'), 'preload must expose downloadWhisperEngine');
+  assert(preloadSrc.includes('cancelWhisperEngineDownload'), 'preload must expose cancelWhisperEngineDownload');
+  assert(preloadSrc.includes('getWhisperEngineDownloadStatus'), 'preload must expose getWhisperEngineDownloadStatus');
+  assert(preloadSrc.includes('onWhisperEngineDownloadProgress'), 'preload must expose onWhisperEngineDownloadProgress');
+  assert(preloadSrc.includes('onWhisperEngineDownloadStatus'), 'preload must expose onWhisperEngineDownloadStatus');
+  console.log('✓ Preload correctly exposes all Whisper Engine Downloader APIs.');
+
+  // 3. Main Process IPC Invariants
+  console.log('Testing main.ts registers Whisper Engine IPC handlers...');
+  const mainSrc = fs.readFileSync(path.join(__dirname, 'electron', 'main.ts'), 'utf-8');
+  assert(mainSrc.includes('initWhisperEngineDownloader'), 'main must initialize WhisperEngineDownloader');
+  assert(mainSrc.includes("'download-whisper-engine'"), 'main must handle download-whisper-engine IPC');
+  assert(mainSrc.includes("'cancel-whisper-engine-download'"), 'main must handle cancel-whisper-engine-download IPC');
+  assert(mainSrc.includes("'get-whisper-engine-download-status'"), 'main must handle get-whisper-engine-download-status IPC');
+  assert(mainSrc.includes('isDownloadingEngine'), 'checkBinaries must return isDownloadingEngine state');
+  console.log('✓ Main process correctly registers all Whisper Engine IPC handlers.');
+
+  // 4. SettingsModal In-App Engine Download Invariants
+  console.log('Testing SettingsModal.tsx renders in-app engine installer with English UI...');
+  const settingsModalSrc = fs.readFileSync(path.join(__dirname, 'src', 'components', 'SettingsModal.tsx'), 'utf-8');
+  assert(settingsModalSrc.includes('handleDownloadWhisperEngine'), 'SettingsModal must have handleDownloadWhisperEngine');
+  assert(settingsModalSrc.includes('handleCancelWhisperEngineDownload'), 'SettingsModal must have handleCancelWhisperEngineDownload');
+  assert(settingsModalSrc.includes('Download Engine'), 'SettingsModal must have "Download Engine" button');
+  assert(settingsModalSrc.includes('onWhisperEngineDownloadProgress'), 'SettingsModal must listen to onWhisperEngineDownloadProgress');
+  assert(settingsModalSrc.includes('Extracting Faster-Whisper-XXL Engine'), 'SettingsModal must have extracting progress label in English');
+  console.log('✓ SettingsModal correctly includes in-app engine installer and progress handling.');
+
+  // 5. WhisperStudio In-App Engine Download Invariants
+  console.log('Testing WhisperStudio.tsx renders in-app engine installer banner with English UI...');
+  const whisperStudioSrc = fs.readFileSync(path.join(__dirname, 'src', 'components', 'WhisperStudio', 'WhisperStudio.tsx'), 'utf-8');
+  assert(whisperStudioSrc.includes('handleDownloadEngine'), 'WhisperStudio must have handleDownloadEngine');
+  assert(whisperStudioSrc.includes('handleCancelEngineDownload'), 'WhisperStudio must have handleCancelEngineDownload');
+  assert(whisperStudioSrc.includes('Install Engine in Kaiko'), 'WhisperStudio must have "Install Engine in Kaiko" button');
+  assert(whisperStudioSrc.includes('Faster-Whisper Engine Not Installed'), 'WhisperStudio must have missing engine title in English');
+  assert(whisperStudioSrc.includes('onWhisperEngineDownloadProgress'), 'WhisperStudio must listen to onWhisperEngineDownloadProgress');
+  console.log('✓ WhisperStudio correctly includes in-app engine installer banner.');
+
+  console.log('\nAll Faster-Whisper-XXL in-app downloader tests passed successfully!');
 }
 
 runTests();

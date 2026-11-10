@@ -35,6 +35,19 @@ contextBridge.exposeInMainWorld('electronAPI', {
     ipcRenderer.on('whisper:model-download-complete', handler);
     return () => ipcRenderer.removeListener('whisper:model-download-complete', handler);
   },
+  downloadWhisperEngine: () => ipcRenderer.invoke('download-whisper-engine'),
+  cancelWhisperEngineDownload: () => ipcRenderer.invoke('cancel-whisper-engine-download'),
+  getWhisperEngineDownloadStatus: () => ipcRenderer.invoke('get-whisper-engine-download-status'),
+  onWhisperEngineDownloadProgress: (callback: (data: any) => void) => {
+    const handler = (_event: Electron.IpcRendererEvent, data: any) => callback(data);
+    ipcRenderer.on('whisper:engine-download-progress', handler);
+    return () => ipcRenderer.removeListener('whisper:engine-download-progress', handler);
+  },
+  onWhisperEngineDownloadStatus: (callback: (data: any) => void) => {
+    const handler = (_event: Electron.IpcRendererEvent, data: any) => callback(data);
+    ipcRenderer.on('whisper:engine-download-status', handler);
+    return () => ipcRenderer.removeListener('whisper:engine-download-status', handler);
+  },
   autoDetectBinaries: () => ipcRenderer.invoke('auto-detect-binaries'),
   openExternalUrl: (url: string) => ipcRenderer.invoke('open-external-url', url),
   getLibraryCache: (rootPath?: string | string[]) => ipcRenderer.invoke('get-library-cache', rootPath),

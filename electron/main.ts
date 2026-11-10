@@ -26,6 +26,12 @@ import { exportWatchlist, importWatchlist, MAL_ONLY_ANILIST_ID_BASE } from './wa
 import { initTorrentEngine, engineSetEnabled, engineAddDownload, enginePause, engineResume, engineCancel, engineGetState, engineShutdown } from './torrentEngine';
 import { searchProviders, rankReleasesForEpisode, isExplicitEpisodeMismatch, explicitReleasePart, isExplicitPartMismatch, isExplicitSeasonMismatch, getEpisodeReleaseSizeWarning, sanitizeSearchQuery, extractInfoHash, fetchReleaseDescription, inspectReleaseResults, computeTitleRelevance } from './indexers';
 import { initUpdater, checkForUpdates, downloadUpdate, installUpdate, getUpdaterState, getAppVersion, getStartupUpdateInfo } from './updater';
+import {
+  initWhisperEngineDownloader,
+  downloadWhisperEngine,
+  cancelWhisperEngineDownload,
+  getWhisperEngineState,
+} from './whisperEngineDownloader';
 
 const __filename = fileURLToPath(import.meta.url);
 const __dirname = path.dirname(__filename);
@@ -346,6 +352,7 @@ async function createWindow() {
     // Setup IPC Handlers (Guarded against duplicate registration)
     setupIpcHandlers();
     initUpdater(() => mainWindow);
+    initWhisperEngineDownloader(() => mainWindow);
 
     // Background 60-day cleanup of old thumbnails & subtitles
     setTimeout(() => {
@@ -551,6 +558,8 @@ function setupIpcHandlers() {
       customModelDetectedName = path.basename(customModelPath).replace(/^faster-whisper-/, '');
     }
 
+    const engineState = getWhisperEngineState();
+
     return {
       ffmpegExists,
       whisperExists,
@@ -564,6 +573,8 @@ function setupIpcHandlers() {
       customModelDetectedName,
       isDownloadingModel: Boolean(activeModelDownloadProcess),
       downloadingModelName: activeModelDownloadName,
+      isDownloadingEngine: engineState.isDownloading,
+      engineDownloadProgress: engineState,
     };
   });
 
@@ -681,6 +692,18 @@ function setupIpcHandlers() {
       return true;
     }
     return false;
+  });
+
+  ipcMain.handle('download-whisper-engine', async () => {
+    return downloadWhisperEngine();
+  });
+
+  ipcMain.handle('cancel-whisper-engine-download', async () => {
+    return cancelWhisperEngineDownload();
+  });
+
+  ipcMain.handle('get-whisper-engine-download-status', async () => {
+    return getWhisperEngineState();
   });
 
   ipcMain.handle('auto-detect-binaries', async () => {

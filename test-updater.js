@@ -35,6 +35,7 @@ const bundle = await esbuild.build({
     contents: `
       export { isNewerVersion, getAppVersion } from './electron/updater.ts';
       export { StorageService } from './electron/storage.ts';
+      export { formatReleaseNotesHtml, convertMarkdownToHtml, sanitizeReleaseNotesHtml } from './src/utils/releaseNotes.ts';
     `,
     resolveDir: process.cwd(),
     sourcefile: 'test-updater-entry.ts',
@@ -70,12 +71,15 @@ const bundle = await esbuild.build({
 const tmpBundlePath = path.join(process.cwd(), '.test_updater_bundle.mjs');
 fs.writeFileSync(tmpBundlePath, bundle.outputFiles[0].text);
 
-let isNewerVersion, getAppVersion, StorageService;
+let isNewerVersion, getAppVersion, StorageService, formatReleaseNotesHtml, convertMarkdownToHtml, sanitizeReleaseNotesHtml;
 try {
   const mod = await import(pathToFileURL(tmpBundlePath).href);
   isNewerVersion = mod.isNewerVersion;
   getAppVersion = mod.getAppVersion;
   StorageService = mod.StorageService;
+  formatReleaseNotesHtml = mod.formatReleaseNotesHtml;
+  convertMarkdownToHtml = mod.convertMarkdownToHtml;
+  sanitizeReleaseNotesHtml = mod.sanitizeReleaseNotesHtml;
 } finally {
   try { fs.unlinkSync(tmpBundlePath); } catch {}
 }
@@ -236,6 +240,13 @@ runTest('4.3 UpdatePromptModal includes modal accessibility attributes', () => {
   assert(updatePromptModalSrc.includes('role="dialog"'), 'Must have role="dialog"');
   assert(updatePromptModalSrc.includes('aria-modal="true"'), 'Must have aria-modal="true"');
   assert(updatePromptModalSrc.includes('data-modal="true"'), 'Must have data-modal="true"');
+});
+
+runTest('4.4 UpdatePromptModal renders release notes with rich HTML / Markdown formatting and safe link handling', () => {
+  assert(updatePromptModalSrc.includes('formatReleaseNotesHtml'), 'Must use formatReleaseNotesHtml');
+  assert(updatePromptModalSrc.includes('release-notes-content'), 'Must style with release-notes-content class');
+  assert(updatePromptModalSrc.includes('dangerouslySetInnerHTML'), 'Must render rich HTML');
+  assert(updatePromptModalSrc.includes('openExternalUrl'), 'Must open links externally via electronAPI');
 });
 
 // 5. Static Analysis of App.tsx
@@ -403,6 +414,61 @@ runTest('9.3 Simulation: pressing Escape with SettingsModal open over AnimeDetai
 
   assert.strictEqual(settingsClosed, true, 'SettingsModal must have closed');
   assert.strictEqual(detailClosed, false, 'AnimeDetailView must NOT have closed');
+});
+
+// 10. Release Notes Formatting & Sanitization
+console.log('\n--- TEST SUITE 10: Release Notes HTML / Markdown Formatting & Sanitization ---');
+
+runTest('10.1 Structured HTML from GitHub / electron-updater is preserved and cleaned', () => {
+  const htmlInput = `<h2>What's new in v1.0.7</h2>
+<h3>👾 Built-in FFmpeg Media Engine</h3>
+<ul>
+<li><strong>Zero-Setup Playback:</strong> FFmpeg is now automatically bundled directly into Kaiko (<code>bin/ffmpeg.exe</code>).</li>
+<li><strong>Clean Settings:</strong> Removed clutter and confusing external configuration.</li>
+</ul>`;
+  const result = formatReleaseNotesHtml(htmlInput);
+  assert(result.includes('<h2>What\'s new in v1.0.7</h2>'), 'Must preserve h2 tag');
+  assert(result.includes('<h3>👾 Built-in FFmpeg Media Engine</h3>'), 'Must preserve h3 tag with emoji');
+  assert(result.includes('<ul>'), 'Must preserve ul tag');
+  assert(result.includes('<li><strong>Zero-Setup Playback:</strong>'), 'Must preserve strong inside li');
+  assert(result.includes('<code>bin/ffmpeg.exe</code>'), 'Must preserve code tag');
+});
+
+runTest('10.2 Raw Markdown is converted into valid HTML', () => {
+  const mdInput = `## What's new in v1.0.7
+### 👾 Built-in FFmpeg Media Engine
+* **Zero-Setup Playback:** Bundled \`bin/ffmpeg.exe\`
+* **Clean Settings:** Removed clutter
+For info see [Repo](https://github.com/zeystom/anime-media-center)`;
+  const result = formatReleaseNotesHtml(mdInput);
+  assert(result.includes('<h2>What\'s new in v1.0.7</h2>'), 'Markdown h2 must become HTML h2');
+  assert(result.includes('<h3>👾 Built-in FFmpeg Media Engine</h3>'), 'Markdown h3 must become HTML h3');
+  assert(result.includes('<ul>'), 'Markdown list must become ul');
+  assert(result.includes('<strong>Zero-Setup Playback:</strong>'), 'Markdown bold must become strong');
+  assert(result.includes('<code>bin/ffmpeg.exe</code>'), 'Markdown backticks must become code');
+  assert(result.includes('<a href="https://github.com/zeystom/anime-media-center"'), 'Markdown link must become a tag');
+  assert(result.includes('target="_blank"'), 'Links must have target="_blank"');
+});
+
+runTest('10.3 Sanitization removes dangerous scripts, event handlers and unsafe links', () => {
+  const maliciousInput = `<h2>Normal</h2>
+<script>alert('xss')</script>
+<p onclick="alert('hack')">Text</p>
+<a href="javascript:alert(1)">Click</a>
+<a href="https://example.com" onmouseover="evil()">Safe Link</a>`;
+  const result = formatReleaseNotesHtml(maliciousInput);
+  assert(!result.includes('<script>'), 'Must strip script tags');
+  assert(!result.includes('onclick'), 'Must strip onclick attributes');
+  assert(!result.includes('onmouseover'), 'Must strip onmouseover attributes');
+  assert(!result.includes('javascript:alert'), 'Must strip javascript: URLs');
+  assert(result.includes('<h2>Normal</h2>'), 'Must keep safe tags');
+  assert(result.includes('href="https://example.com"'), 'Must keep safe https URLs');
+});
+
+runTest('10.4 Empty, null, or undefined release notes handled gracefully without error', () => {
+  assert.strictEqual(formatReleaseNotesHtml(''), '');
+  assert.strictEqual(formatReleaseNotesHtml(null), '');
+  assert.strictEqual(formatReleaseNotesHtml(undefined), '');
 });
 
 console.log('\n================================================================');

@@ -121,7 +121,7 @@ export const App: React.FC = () => {
   const [whisperMounted, setWhisperMounted] = useState(false);
   const [settingsMounted, setSettingsMounted] = useState(false);
   const [startupUpdate, setStartupUpdate] = useState<UpdateInfoPayload | null>(null);
-  const [appVersion, setAppVersion] = useState<string>('1.0.7');
+  const [appVersion, setAppVersion] = useState<string>('1.0.8');
 
   useEffect(() => {
     const api = window.electronAPI;
@@ -678,11 +678,27 @@ export const App: React.FC = () => {
       });
     });
 
+    const unsubEngineProgress = window.electronAPI?.onWhisperEngineDownloadProgress?.((data) => {
+      if (data.phase === 'completed') {
+        window.electronAPI.getSettings().then((updated) => {
+          setSettings(updated);
+          checkBinariesStatus(updated);
+        });
+        addNotification({
+          kind: 'whisper',
+          title: 'Faster-Whisper Ready',
+          message: 'Faster-Whisper-XXL engine has been downloaded and configured successfully.',
+          tone: 'green',
+        });
+      }
+    });
+
     return () => {
       unsubProgress();
       unsubDone();
       if (unsubEpisodeDone) unsubEpisodeDone();
       if (unsubModelComplete) unsubModelComplete();
+      if (unsubEngineProgress) unsubEngineProgress();
     };
   }, [loadInitialData, addNotification]);
 

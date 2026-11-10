@@ -1,9 +1,10 @@
-import React, { useState, useEffect } from 'react';
+import React, { useState, useEffect, useMemo } from 'react';
 import { createPortal } from 'react-dom';
 import { Sparkles, Download, RefreshCw, X, ArrowUpCircle } from 'lucide-react';
 import { UpdateInfoPayload, UpdateProgressPayload, UpdaterState } from '../types';
 import { showGlobalToast } from './Toast';
 import { formatFileSize } from '../utils/format';
+import { formatReleaseNotesHtml } from '../utils/releaseNotes';
 
 interface UpdatePromptModalProps {
   isOpen: boolean;
@@ -26,6 +27,21 @@ export const UpdatePromptModal: React.FC<UpdatePromptModalProps> = ({
   const [progress, setProgress] = useState<UpdateProgressPayload | null>(null);
   const [displayPercent, setDisplayPercent] = useState<number>(0);
   const [error, setError] = useState<string | null>(null);
+
+  const formattedReleaseNotes = useMemo(() => {
+    return updateInfo.releaseNotes ? formatReleaseNotesHtml(updateInfo.releaseNotes) : '';
+  }, [updateInfo.releaseNotes]);
+
+  const handleReleaseNotesClick = (e: React.MouseEvent<HTMLDivElement>) => {
+    const anchor = (e.target as HTMLElement).closest('a');
+    if (anchor && anchor.href) {
+      e.preventDefault();
+      e.stopPropagation();
+      if (window.electronAPI?.openExternalUrl) {
+        window.electronAPI.openExternalUrl(anchor.href);
+      }
+    }
+  };
 
   useEffect(() => {
     if (progress?.percent !== undefined && progress.percent !== null) {
@@ -214,13 +230,15 @@ export const UpdatePromptModal: React.FC<UpdatePromptModalProps> = ({
               </p>
 
               {updateInfo.releaseNotes && (
-                <div className="space-y-1">
+                <div className="space-y-1.5">
                   <span className="text-[11px] font-semibold text-zinc-400 uppercase tracking-wider">
                     What's New:
                   </span>
-                  <div className="p-3 rounded-xl bg-zinc-900/60 border border-white/5 max-h-36 overflow-y-auto text-xs text-zinc-300 whitespace-pre-wrap font-sans">
-                    {updateInfo.releaseNotes}
-                  </div>
+                  <div
+                    className="release-notes-content p-3.5 rounded-xl bg-zinc-900/60 border border-white/5 max-h-56 overflow-y-auto text-xs text-zinc-300 font-sans"
+                    dangerouslySetInnerHTML={{ __html: formattedReleaseNotes }}
+                    onClick={handleReleaseNotesClick}
+                  />
                 </div>
               )}
 

@@ -19,6 +19,8 @@ import {
   ChevronRight,
   X,
   Check,
+  Download,
+  Sparkles,
 } from 'lucide-react';
 import {
   AnimeFolder,
@@ -29,8 +31,9 @@ import {
   WhisperLiveCue,
   WhisperOptions,
   WhisperPreset,
+  WhisperEngineDownloadProgress,
 } from '../../types';
-import { cleanSeriesTitle, cleanEpisodeTitle } from '../../utils/format';
+import { cleanSeriesTitle, cleanEpisodeTitle, formatFileSize } from '../../utils/format';
 import { TerminalLog } from './TerminalLog';
 import { LiveDialogueStream } from './LiveDialogueStream';
 import { showGlobalToast } from '../Toast';
@@ -225,6 +228,8 @@ export const WhisperStudio: React.FC<WhisperStudioProps> = ({
   const [availableModels, setAvailableModels] = useState<string[]>(['large-v3-turbo']);
   const [downloadingModelName, setDownloadingModelName] = useState<string | null>(null);
   const [downloadingModelPercent, setDownloadingModelPercent] = useState<number | null>(null);
+  const [isDownloadingEngine, setIsDownloadingEngine] = useState<boolean>(false);
+  const [engineDownloadProgress, setEngineDownloadProgress] = useState<WhisperEngineDownloadProgress | null>(null);
 
   // Load configured Whisper model and scan available models from application settings & binary check
   const refreshModels = React.useCallback(async () => {
@@ -235,6 +240,10 @@ export const WhisperStudio: React.FC<WhisperStudioProps> = ({
         setDownloadingModelName(status.downloadingModelName);
       } else if (status && !status.isDownloadingModel) {
         setDownloadingModelName(null);
+      }
+      if (status?.isDownloadingEngine && status?.engineDownloadProgress) {
+        setIsDownloadingEngine(true);
+        setEngineDownloadProgress(status.engineDownloadProgress);
       }
       let currentModel = settings?.whisperModel || s?.whisperModel || 'large-v3-turbo';
       const customPath = settings?.customModelPath !== undefined ? settings.customModelPath : s?.customModelPath;
@@ -493,14 +502,52 @@ export const WhisperStudio: React.FC<WhisperStudioProps> = ({
       setDownloadingModelPercent(data.percent);
     });
 
+    const unsubEngineStatus = window.electronAPI?.onWhisperEngineDownloadProgress?.((data) => {
+      setEngineDownloadProgress(data);
+      setIsDownloadingEngine(data.isDownloading);
+      if (data.phase === 'completed') {
+        refreshModels();
+        onRefreshLibrary();
+        showGlobalToast('Faster-Whisper-XXL engine installed and configured!', 'success');
+      } else if (data.phase === 'error' && data.error) {
+        showGlobalToast(data.error, 'error');
+      }
+    });
+
     return () => {
       unsubLog();
       unsubProgress();
       unsubDone();
       if (unsubModelStatus) unsubModelStatus();
       if (unsubModelProg) unsubModelProg();
+      if (unsubEngineStatus) unsubEngineStatus();
     };
   }, [onRefreshLibrary, refreshModels]);
+
+  const handleDownloadEngine = async () => {
+    if (!window.electronAPI?.downloadWhisperEngine) return;
+    setIsDownloadingEngine(true);
+    try {
+      const res = await window.electronAPI.downloadWhisperEngine();
+      if (!res.success && res.error) {
+        showGlobalToast(res.error, 'error');
+      }
+    } catch (err: any) {
+      showGlobalToast(err?.message || 'Failed to start engine download', 'error');
+    }
+  };
+
+  const handleCancelEngineDownload = async () => {
+    if (!window.electronAPI?.cancelWhisperEngineDownload) return;
+    try {
+      await window.electronAPI.cancelWhisperEngineDownload();
+      setIsDownloadingEngine(false);
+      setEngineDownloadProgress(null);
+      showGlobalToast('Engine download cancelled', 'info');
+    } catch (err) {
+      console.error(err);
+    }
+  };
 
   const handleBrowseFolder = async () => {
     if (isProcessing) return;
@@ -780,36 +827,81 @@ export const WhisperStudio: React.FC<WhisperStudioProps> = ({
         </div>
       </div>
 
-      {/* Missing Whisper Binary Alert & Setup Guidance */}
+      {/* Missing Whisper Binary Alert & In-App Setup */}
       {!whisperExists && (
-        <div className="p-4 rounded-2xl bg-gradient-to-r from-amber-500/15 via-zinc-900 to-indigo-500/10 border border-amber-500/30 flex flex-col sm:flex-row items-start sm:items-center justify-between gap-3 text-xs text-amber-200 shadow-md shrink-0">
-          <div className="flex items-start space-x-3">
-            <AlertCircle className="w-5 h-5 text-amber-400 shrink-0 mt-0.5" />
-            <div className="space-y-1">
+        <div className="p-4 rounded-2xl bg-gradient-to-r from-purple-950/40 via-zinc-900 to-indigo-950/30 border border-purple-500/30 flex flex-col sm:flex-row items-start sm:items-center justify-between gap-3 text-xs text-zinc-200 shadow-md shrink-0">
+          <div className="flex items-start space-x-3 min-w-0 flex-1">
+            <AlertCircle className="w-5 h-5 text-purple-400 shrink-0 mt-0.5" />
+            <div className="space-y-1 min-w-0 flex-1">
               <div className="font-semibold text-white text-sm">
-                Faster-Whisper Engine Not Configured
+                Faster-Whisper Engine Not Installed
               </div>
-              <p className="text-[11px] text-zinc-300 leading-relaxed">
-                Faster-Whisper-XXL is required to generate AI speech-to-text subtitles. Video playback works out-of-the-box with built-in FFmpeg. Download the standalone release from GitHub or Subtitle Edit, and select its location in Settings.
-              </p>
+              {isDownloadingEngine ? (
+                <div className="space-y-1.5 pt-1 max-w-xl">
+                  <div className="flex items-center justify-between text-xs text-zinc-300">
+                    <span className="flex items-center space-x-1.5">
+                      <Download className="w-3.5 h-3.5 text-purple-400 animate-bounce" />
+                      <span className="font-medium text-white">
+                        {engineDownloadProgress?.phase === 'extracting'
+                          ? 'Extracting Faster-Whisper-XXL engine files...'
+                          : `Downloading engine: ${engineDownloadProgress?.percent ?? 0}%`}
+                      </span>
+                    </span>
+                    <span className="font-mono text-purple-300 text-[11px]">
+                      {engineDownloadProgress?.phase === 'extracting'
+                        ? 'Please wait...'
+                        : `${formatFileSize(engineDownloadProgress?.transferred ?? 0)} / ${formatFileSize(engineDownloadProgress?.total ?? 0)}`}
+                    </span>
+                  </div>
+                  <div className="w-full h-1.5 rounded-full bg-zinc-800 overflow-hidden">
+                    {engineDownloadProgress?.phase === 'extracting' ? (
+                      <div className="h-full w-full bg-gradient-to-r from-purple-500 via-indigo-500 to-purple-500 animate-pulse" />
+                    ) : (
+                      <div
+                        className="h-full bg-gradient-to-r from-purple-500 to-indigo-500 transition-[width] duration-150"
+                        style={{ width: `${Math.max(2, Math.min(100, engineDownloadProgress?.percent ?? 0))}%` }}
+                      />
+                    )}
+                  </div>
+                  {engineDownloadProgress?.phase !== 'extracting' && engineDownloadProgress?.bytesPerSecond ? (
+                    <div className="text-[10px] text-zinc-400 font-mono">
+                      Speed: {formatFileSize(engineDownloadProgress.bytesPerSecond)}/s
+                    </div>
+                  ) : null}
+                </div>
+              ) : (
+                <p className="text-[11px] text-zinc-300 leading-relaxed">
+                  Faster-Whisper-XXL is required to generate AI speech-to-text subtitles. You can download and install it in one click directly inside Kaiko.
+                </p>
+              )}
             </div>
           </div>
           <div className="flex items-center space-x-2 shrink-0 self-end sm:self-center">
-            <button
-              type="button"
-              onClick={() => window.electronAPI?.openExternalUrl?.('https://github.com/Purfview/whisper-standalone-win/releases')}
-              className="px-3 py-1.5 rounded-xl bg-zinc-800 hover:bg-zinc-700 text-zinc-200 border border-white/10 font-medium transition-colors text-xs flex items-center space-x-1.5"
-            >
-              <span>GitHub Releases</span>
-              <ExternalLink className="w-3 h-3 text-zinc-400" />
-            </button>
+            {isDownloadingEngine ? (
+              <button
+                type="button"
+                onClick={handleCancelEngineDownload}
+                className="px-3 py-1.5 rounded-xl bg-zinc-800 hover:bg-zinc-700 text-zinc-200 border border-white/10 font-medium transition-colors text-xs"
+              >
+                Cancel
+              </button>
+            ) : (
+              <button
+                type="button"
+                onClick={handleDownloadEngine}
+                className="px-3.5 py-1.5 rounded-xl bg-purple-600 hover:bg-purple-500 text-white font-semibold transition-all text-xs shadow-md shadow-purple-600/20 flex items-center space-x-1.5"
+              >
+                <Download className="w-3.5 h-3.5" />
+                <span>Install Engine in Kaiko</span>
+              </button>
+            )}
             {onOpenSettings && (
               <button
                 type="button"
                 onClick={onOpenSettings}
-                className="px-3.5 py-1.5 rounded-xl bg-amber-500/20 hover:bg-amber-500/30 text-amber-200 border border-amber-500/40 font-semibold transition-colors text-xs shadow-sm"
+                className="px-3 py-1.5 rounded-xl bg-zinc-800/80 hover:bg-zinc-700 text-zinc-300 border border-white/10 font-medium transition-colors text-xs"
               >
-                Open Settings
+                Settings
               </button>
             )}
           </div>

@@ -1,5 +1,20 @@
 # Changelog
 
+## 1.0.8 — In-App Faster-Whisper-XXL Engine Downloader & Rich Release Notes Formatting
+
+- **In-App Faster-Whisper-XXL Engine Downloader & Auto-Setup:**
+  - Integrated 1-click in-app downloading and extraction of the standalone `Faster-Whisper-XXL` speech-to-text engine directly within Kaiko.
+  - Completely eliminates the need to visit GitHub or manually download and extract `.7z` archives using external tools.
+  - Built-in streaming download engine with real-time transfer progress, speed, percentage, and cancellation support.
+  - Native archive extraction powered by Windows `tar.exe` / `libarchive` directly into persistent application storage (`AppData/Roaming/Kaiko/bin/faster-whisper-xxl`).
+  - Accessible from both **Settings → Whisper** and the **Whisper Studio** setup banner with immediate auto-configuration upon completion.
+- **Rich Release Notes Formatting & Sanitization in Updater:**
+  - The Update Available dialog now parses and renders formatted HTML / Markdown release notes from GitHub / `electron-builder` instead of displaying unrendered raw markup tags.
+  - Polished GitHub-style dark theme styling for headings, bulleted lists, bold text, inline monospace code badges, and code blocks.
+  - Secure DOM sanitization preventing XSS or malicious script injection.
+  - Intercepts external links to safely open in the user's default web browser instead of navigating the app window.
+  - Expanded container height with smooth scrolling for enhanced readability.
+
 ## 1.0.7 — Built-in FFmpeg, Visual Whisper Studio, Model Presets & Notification Center Integration
 
 - **Built-in FFmpeg Media Engine:**

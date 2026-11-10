@@ -1,4 +1,5 @@
 export * from '../../electron/types';
+import type { WhisperEngineDownloadProgress } from '../../electron/types';
 
 export type {
   CatalogItem,
@@ -60,9 +61,16 @@ export interface ElectronAPI {
     customModelDetectedName?: string | null;
     isDownloadingModel?: boolean;
     downloadingModelName?: string | null;
+    isDownloadingEngine?: boolean;
+    engineDownloadProgress?: WhisperEngineDownloadProgress | null;
   }>;
   downloadWhisperModel?: (modelName: string) => Promise<{ success: boolean; modelName?: string; error?: string }>;
   cancelWhisperModelDownload?: () => Promise<boolean>;
+  downloadWhisperEngine?: () => Promise<{ success: boolean; whisperPath?: string; error?: string }>;
+  cancelWhisperEngineDownload?: () => Promise<boolean>;
+  getWhisperEngineDownloadStatus?: () => Promise<WhisperEngineDownloadProgress>;
+  onWhisperEngineDownloadProgress?: (callback: (data: WhisperEngineDownloadProgress) => void) => () => void;
+  onWhisperEngineDownloadStatus?: (callback: (data: { isDownloading: boolean; phase?: string; error?: string | null }) => void) => () => void;
   onModelDownloadProgress?: (callback: (data: { modelName: string; percent: number | null; text: string }) => void) => () => void;
   onWhisperModelDownloadStatus?: (callback: (data: { isDownloading: boolean; modelName: string | null }) => void) => () => void;
   onWhisperModelDownloadComplete?: (callback: (data: { modelName: string; success: boolean }) => void) => () => void;
