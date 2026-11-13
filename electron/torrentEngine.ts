@@ -100,6 +100,10 @@ interface InternalJob {
   requestedSeason?: number | null
   requestedFormat?: string | null
   requestedAliases?: string[]
+  /** Episode count of the requested title: >1 marks a multi-episode OVA
+   *  series (Hellsing Ultimate), where the OVA download selects every
+   *  matching file instead of exactly one. */
+  requestedEpisodeCount?: number | null
   /** AniList PREQUEL/SEQUEL season names used to isolate punctuation-only seasons (e.g. K-On! / K-On!!). */
   franchiseSeasons?: Array<{ season: number; titles: string[] }>
   /** Track if we've already attempted file selection */
@@ -454,6 +458,10 @@ interface PersistedDownload {
   mediaFormat?: string | null
   mediaAliases?: string[]
   franchiseSeasons?: Array<{ season: number; titles: string[] }>
+  /** Episode count of the requested title — distinguishes a single-episode
+   *  OVA (engine picks ONE file) from a multi-episode OVA series (Hellsing
+   *  Ultimate, Railgun OVAs — the whole series is the download). */
+  episodeCount?: number | null
   addedAt: number
   reportedSeeders?: number | null
   providerName?: string
@@ -485,6 +493,7 @@ function writePersistFileNow(): void {
           season: job.requestedSeason ?? null,
           mediaFormat: job.requestedFormat ?? null,
           mediaAliases: job.requestedAliases,
+          episodeCount: job.requestedEpisodeCount ?? null,
           franchiseSeasons: job.franchiseSeasons,
           addedAt: job.addedAt,
           reportedSeeders: job.reportedSeeders ?? null,
@@ -855,6 +864,16 @@ function startTicker(): void {
           restartStalledJob(job)
           continue
         }
+        if (isDeadSwarm({
+          status: job.status,
+          noProgressSeconds,
+          stallRecoveryCount: job.stallRecoveryCount,
+          availableMissingPieces: job.availableMissingPieces,
+          peers: job.torrent?.numPeers ?? 0,
+        })) {
+          failJob(job, 'The swarm for this release appears dead: no connected peers and no progress even after peer-discovery restarts. Pick a different release (check its seeders in the manual picker).')
+          continue
+        }
         emitState()
       }
     }
@@ -1044,6 +1063,7 @@ function resumePersistedJobs(): number {
       episode: typeof entry.episode === 'number' ? entry.episode : null,
       requestedSeason: typeof entry.season === 'number' ? entry.season : null,
       requestedFormat: typeof entry.mediaFormat === 'string' ? entry.mediaFormat : null,
+      requestedEpisodeCount: typeof entry.episodeCount === 'number' && entry.episodeCount > 0 ? Math.trunc(entry.episodeCount) : null,
       requestedAliases: Array.isArray(entry.mediaAliases) ? entry.mediaAliases : undefined,
       franchiseSeasons: Array.isArray(entry.franchiseSeasons) ? entry.franchiseSeasons : undefined,
       targetFolder: animeFolder,
@@ -1243,6 +1263,21 @@ function getSelectedPieceAvailability(
   return { missing: missingPieces.size, available, missingIndices: [...missingPieces] }
 }
 
+/** Dead-swarm detector: the job is still 'downloading' well after BOTH stall
+ *  recovery attempts, with zero connected peers and zero available pieces —
+ *  the seeders the indexer reported never materialized. Pure so tests can
+ *  exercise it without waiting on the monitor timer. */
+export function isDeadSwarm(
+  state: { status: string; noProgressSeconds: number; stallRecoveryCount?: number; availableMissingPieces?: number; peers: number },
+  thresholdSeconds = 75
+): boolean {
+  return state.status === 'downloading'
+    && state.noProgressSeconds >= thresholdSeconds
+    && (state.stallRecoveryCount ?? 0) >= 2
+    && (state.availableMissingPieces ?? 0) === 0
+    && state.peers === 0
+}
+
 /** Restart peer discovery after a long stall without deleting the partial chunk store. */
 function restartStalledJob(job: InternalJob): void {
   const torrent = job.torrent
@@ -1338,17 +1373,53 @@ function isSpecialOrExtraVideo(filePath: string): boolean {
   return childDirs.some((part) => specialsDirRe.test(part.trim())) || specialsNameRe.test(name);
 }
 
-/** Find only the requested OVA within a mixed season/bonus torrent. If the
- * filename does not label OVA/OAD, require a distinctive title token. */
-function isRequestedOvaFile(filePath: string, title: string, aliases: string[] = []): boolean {
+/** Distinctive title tokens (≥4 chars, release-kind words removed) shared by
+ *  the OVA file matcher and its multi-candidate tie-break. */
+function ovaTitleTokens(title: string, aliases: string[] = []): string[] {
+  const tokens = [title, ...aliases].flatMap((value) => value.toLowerCase().match(/[a-z0-9]{4,}/g) || [])
+  const ignored = new Set(['season', 'episode', 'special', 'movie', 'complete', 'series'])
+  return tokens.filter((token) => !ignored.has(token))
+}
+
+/** True when a file (or one of its parent folders) explicitly labels itself
+ *  OVA/OAD — singular or plural ("OVAs" folders are common).
+ *  NOTE: the boundary class escapes the closing bracket (`\]-`) — an unescaped
+ *  `]` would close the class early and turn the trailing `-]` into literals,
+ *  which silently killed every " ova " basename match. */
+export function hasOvaMarker(filePath: string): boolean {
   const normalized = filePath.replace(/\\/g, '/').toLowerCase()
   const segments = normalized.split('/')
   const basename = segments[segments.length - 1] || ''
-  const ovaMarker = /(?:^|[ ._()[\\]-])(?:ova|oad)(?:$|[ ._()[\\]-])/i
-  if (ovaMarker.test(basename) || segments.slice(1, -1).some((part) => /^(?:ova|oad)$/i.test(part.trim()))) return true
-  const tokens = [title, ...aliases].flatMap((value) => value.toLowerCase().match(/[a-z0-9]{4,}/g) || [])
-  const ignored = new Set(['season', 'episode', 'special', 'movie', 'complete', 'series'])
-  return tokens.some((token) => !ignored.has(token) && basename.includes(token))
+  const ovaMarker = /(?:^|[\s._()[\]-])(?:ova|oad)s?(?:$|[\s._()[\]-])/i
+  return ovaMarker.test(basename) || segments.slice(1, -1).some((part) => /^(?:ova|oad)s?$/i.test(part.trim()))
+}
+
+/** Find only the requested OVA within a mixed season/bonus torrent. If the
+ * filename does not label OVA/OAD, require a distinctive title token. */
+export function isRequestedOvaFile(filePath: string, title: string, aliases: string[] = []): boolean {
+  if (hasOvaMarker(filePath)) return true
+  const normalized = filePath.replace(/\\/g, '/').toLowerCase()
+  const basename = normalized.split('/')[normalized.split('/').length - 1] || ''
+  return ovaTitleTokens(title, aliases).some((token) => basename.includes(token))
+}
+
+const ROMAN_VALUES: Record<string, number> = {
+  i: 1, ii: 2, iii: 3, iv: 4, v: 5, vi: 6, vii: 7, viii: 8, ix: 9, x: 10,
+  xi: 11, xii: 12, xiii: 13, xiv: 14, xv: 15,
+}
+
+/** Episode number carried by an OVA-series file name: decimal ("DxD OVA 01"),
+ *  or a roman-numeral token ("HELLSING OVA III" → 3). Returns null when the
+ *  name carries no episode marker — the file still belongs to the series, it
+ *  just cannot be narrowed by number. */
+function ovaFileEpisodeNumber(filePath: string): number | null {
+  const stem = filePath.replace(/\\/g, '/').split('/').pop() || ''
+  const base = stem.replace(/\.[a-z0-9]{2,4}$/i, '')
+  const decimal = /(?:^|[ ._()[\]-])0*(\d{1,3})(?:\s*[([].*)?$/.exec(base)
+  if (decimal) return Number(decimal[1])
+  const roman = /(?:^|[ ._()[\]-])([ivx]{1,6})(?:\s*[([].*)?$/i.exec(base)
+  if (roman) return ROMAN_VALUES[roman[1].toLowerCase()] ?? null
+  return null
 }
 
 function getSeasonNumberFromLabel(label: string): number | null {
@@ -1439,11 +1510,59 @@ function selectFilesForJob(job: InternalJob, torrent: TorrentLike): TorrentFileL
 
   // Select every explicitly queued episode from the same batch torrent.
   if (job.requestedFormat?.toUpperCase() === 'OVA') {
-    const candidates = videoFiles.filter((file) => isRequestedOvaFile(file.path || file.name, job.title, job.requestedAliases))
-    if (candidates.length !== 1) {
-      failJob(job, candidates.length === 0
-        ? 'Could not identify the requested OVA file in this release. Choose a release that labels the OVA/OAD or includes its title in the filename.'
-        : 'This release contains multiple possible OVA files. Choose a release with an unambiguous OVA filename.')
+    let candidates = videoFiles.filter((file) => isRequestedOvaFile(file.path || file.name, job.title, job.requestedAliases))
+    // A franchise bundle can carry several OVA-matching files. Files that
+    // carry the OVA/OAD marker beat token-only matches FIRST: episode
+    // "25 Extra Planning Discussion!" contains the token "plan" just like
+    // "K-ON!! OVA Plan!.mkv" does, but only the latter is the OVA.
+    if (candidates.length > 1) {
+      const markerMatched = candidates.filter((file) => hasOvaMarker(file.path || file.name))
+      if (markerMatched.length >= 1) candidates = markerMatched
+    }
+    // Still ambiguous (several OVA-labeled files — S1's and S2's OVA in one
+    // bundle)? Narrow with the title's distinctive tokens ("Live House").
+    if (candidates.length > 1) {
+      const tokens = ovaTitleTokens(job.title, job.requestedAliases)
+      const tokenMatches = tokens.length
+        ? candidates.filter((file) => tokens.some((token) => (file.path || file.name).toLowerCase().includes(token)))
+        : []
+      if (tokenMatches.length >= 1) candidates = tokenMatches
+    }
+    // Season isolation: a franchise mega-bundle carries EVERY season's OVAs
+    // ("High School DxD S1/S2/S3 - OVA.mkv") — a season-1 OVA entry must not
+    // download seasons 2 and 3 (observed live 2026-11-13). Explicit
+    // other-season files are dropped; seasonless files survive when no
+    // explicit match exists.
+    if (job.requestedSeason != null && candidates.length > 1) {
+      const seasonOf = (file: TorrentFileLike) => getFileSeasonNumber(file.path || file.name, job.franchiseSeasons)
+      const matched = candidates.filter((file) => seasonOf(file) === job.requestedSeason)
+      const seasonless = candidates.filter((file) => seasonOf(file) == null)
+      if (matched.length >= 1) candidates = matched
+      else if (seasonless.length >= 1) candidates = seasonless
+    }
+    // Variant preference: when a bundle carries censored AND uncensored
+    // copies of the same OVA, the uncensored ones win (user preference).
+    if (candidates.length > 1) {
+      const uncensored = candidates.filter((file) => /uncensored/i.test(file.path || file.name))
+      if (uncensored.length >= 1 && uncensored.length < candidates.length) candidates = uncensored
+    }
+    // A multi-episode OVA SERIES (Hellsing Ultimate — 10 OVA "episodes",
+    // High School DxD OVA — 2) is downloaded as a whole: every matching file
+    // belongs to the requested title. For a single-episode card request on
+    // such a series, isolate the requested episode (decimal or roman names:
+    // "DxD OVA 01.mkv", "HELLSING OVA III.mkv").
+    const ovaSeries = (job.requestedEpisodeCount ?? 1) > 1
+    if (ovaSeries && job.requestedEpisodes != null && job.requestedEpisodes.length === 1 && candidates.length > 1) {
+      const wanted = job.requestedEpisodes[0]
+      const byEpisode = candidates.filter((file) => ovaFileEpisodeNumber(file.path || file.name) === wanted)
+      if (byEpisode.length >= 1) candidates = byEpisode
+    }
+    if (candidates.length === 0) {
+      failJob(job, 'Could not identify the requested OVA file in this release. Choose a release that labels the OVA/OAD or includes its title in the filename.')
+      return []
+    }
+    if (candidates.length > 1 && !(ovaSeries && job.requestedEpisodes == null)) {
+      failJob(job, 'This release contains multiple possible OVA files. Choose a release with an unambiguous OVA filename.')
       return []
     }
     chosen = candidates
@@ -1651,7 +1770,7 @@ function onTorrentDone(job: InternalJob, torrent: TorrentLike): void {
   job.seedingDeadline = Date.now() + seedMinutes * 60_000
 }
 
-export async function engineAddDownload(params: { item: ReleaseSearchResult; title: string; anilistId?: number | null; episode?: number | null; season?: number | null; mediaFormat?: string | null; mediaAliases?: string[]; franchiseSeasons?: Array<{ season: number; titles: string[] }>; targetFolder?: string; downloadRoot?: string }): Promise<{ success: boolean; error?: string; infoHash?: string }> {
+export async function engineAddDownload(params: { item: ReleaseSearchResult; title: string; anilistId?: number | null; episode?: number | null; season?: number | null; mediaFormat?: string | null; episodeCount?: number | null; mediaAliases?: string[]; franchiseSeasons?: Array<{ season: number; titles: string[] }>; targetFolder?: string; downloadRoot?: string }): Promise<{ success: boolean; error?: string; infoHash?: string }> {
   if (!deps) return { success: false, error: 'Torrent engine is not initialized' }
   const s = getSettings()
   if (!isEngineAllowed(s)) {
@@ -1849,6 +1968,7 @@ export async function engineAddDownload(params: { item: ReleaseSearchResult; tit
     requestedEpisodes: typeof params?.episode === 'number' && Number.isInteger(params.episode) && params.episode > 0 ? [params.episode] : null,
     requestedSeason: typeof params?.season === 'number' ? params.season : null,
     requestedFormat: typeof params?.mediaFormat === 'string' ? params.mediaFormat : null,
+    requestedEpisodeCount: typeof params?.episodeCount === 'number' && params.episodeCount > 0 ? Math.trunc(params.episodeCount) : null,
     requestedAliases: Array.isArray(params?.mediaAliases) ? params.mediaAliases : undefined,
     franchiseSeasons: Array.isArray(params?.franchiseSeasons) ? params.franchiseSeasons : undefined,
     fileSelectionDone: false,

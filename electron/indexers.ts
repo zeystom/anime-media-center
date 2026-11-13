@@ -344,7 +344,11 @@ export function rankReleasesForEpisode(
 }
 
 /** Reject a release from a single-episode search when its title clearly names another episode. */
-export function isExplicitEpisodeMismatch(result: ReleaseSearchResult, episode: number): boolean {
+export function isExplicitEpisodeMismatch(
+  result: ReleaseSearchResult,
+  episode: number,
+  mediaFormat?: string | null
+): boolean {
   if (!Number.isFinite(episode) || episode <= 0) return false
   const title = typeof result?.title === 'string' ? result.title : ''
   const hasExplicitEpisode =
@@ -353,6 +357,13 @@ export function isExplicitEpisodeMismatch(result: ReleaseSearchResult, episode: 
     /\b(?:EP|Episode|E)[ ._-]*0*\d{1,4}(?:\.5)?\b/i.test(title) ||
     /\s-\s0*\d{1,4}(?:\.5)?(?:\s*[-–~]\s*0*\d{1,4})?(?=\s|[([{]|$)/i.test(title)
   if (!hasExplicitEpisode) return false
+  // An OVA-format title counts its own episodes 1..N, but trackers commonly
+  // publish the OVA under the PARENT season's numbering ("K-ON! - 14 (OVA)"
+  // is Live House!). When the searched title is an OVA and the release is
+  // explicitly OVA/OAD-labeled, the number is parent-season numbering, not a
+  // wrong episode of this OVA. The marker matters: a bare "Show - 14" found
+  // while searching an OVA may just be the parent's regular episode 14.
+  if (String(mediaFormat ?? '').toUpperCase() === 'OVA' && /\b(?:ova|oad)s?\b/i.test(title)) return false
   const parsed = parseReleaseSync(title)
   const numbers = parsed.episodeNumbers || []
   const containsEpisode = numbers.includes(episode) || (
@@ -450,7 +461,10 @@ export function isFranchiseSeasonTitleMismatch(
   if (!Number.isInteger(target) || target <= 0) return false;
   if (!Array.isArray(franchiseSeasons) || franchiseSeasons.length === 0) return false;
   const rawReleaseTitle = (typeof result?.title === 'string' ? result.title : '').toLowerCase();
-  if (isWholeFranchiseBundleTitle(rawReleaseTitle, franchiseSeasons.length)) return false;
+  // A release that explicitly lists multiple seasons ("Season 01 + Season 02",
+  // "S01+02+OVA+Movie") is not a mismatch for any member season; the torrent
+  // engine will select only the requested files after metadata arrives.
+  if (isMultiSeasonCollection(rawReleaseTitle)) return false;
   // Prefer the longest exact franchise title written in the raw release name
   // before consulting the release parser. The parser may mistake a title
   // suffix (`2nd Season`, `Season 2`) or numeric show title (`100`) for a
@@ -467,8 +481,17 @@ export function isFranchiseSeasonTitleMismatch(
   if (rawTitleHits.length) {
     const longest = Math.max(...rawTitleHits.map((hit) => hit.title.length));
     const matchedSeasons = new Set(rawTitleHits.filter((hit) => hit.title.length === longest).map((hit) => hit.season));
+    // A release whose raw title names exactly ONE chain season stays only for
+    // THAT season — even when release-kind decorations ("+OVA Complete",
+    // "1-13") would otherwise read as a whole-franchise bundle: "K-ON! 1-13+OVA
+    // Complete" is season 1's pack and must not satisfy a season-2 OVA search
+    // (observed live 2026-11-13). Titles listing several seasons already
+    // escaped above.
     if (matchedSeasons.size === 1) return !matchedSeasons.has(target);
   }
+  // Ambiguous whole-franchise shapes ("Complete ... OVA ... 1-NN" without a
+  // parseable season marker) stay for any season.
+  if (isWholeFranchiseBundleTitle(rawReleaseTitle, franchiseSeasons.length)) return false;
   const showNameRaw = franchiseShowNameRaw(typeof result?.title === 'string' ? result.title : '');
   if (!showNameRaw) return false;
   const showNameNorm = normalizeMatch(showNameRaw);
@@ -941,6 +964,9 @@ function scoreRelease(
   if (ref?.episode === null || ref?.episode === undefined) {
     if (BATCH_TITLE_RE.test(result.title) || parsed.episodeNumbers.length > 1) score += 20;
   }
+  // User preference: an explicitly UNCENSORED release always outranks its
+  // censored twin when both exist (tie-break-level bonus, not a qualifier).
+  if (/\buncensored\b/i.test(result.title)) score += 8;
   return score;
 }
 
@@ -996,8 +1022,14 @@ function releaseShowName(resultTitle: string): string {
 /** The tail a release appends to the show name must be season/part/year/batch
  *  shaped — free-form words ("Monster Hunter", "Monster Musume") make it a
  *  different show, which must never count as a title prefix match. */
-const SEASONISH_TOKEN_RE = /^(?:s\d{1,3}|season|part|cour|final|batch|complete|pack|(?:19|20)\d{2}|\d{1,4})$/i;
+const SEASONISH_TOKEN_RE = /^(?:s\d{1,3}|season|seasons|all|part|cour|final|batch|complete|pack|(?:19|20)\d{2}|\d{1,4})$/i;
 const ORDINAL_TOKEN_RE = /^\d{1,4}(?:st|nd|rd|th)$/i;
+/** Content-type words a release appends to the show name ("K-ON! -
+ *  S01+02+OVA+Movie", "K-On! S1 S2 Movie OVAs Specials"): they describe WHAT
+ *  is bundled, not a different show, so they must keep a prefix match
+ *  ('related' is refused by automatic selection). These only ever affect the
+ *  tail after the matched show name, never the show-name token itself. */
+const CONTENT_TYPE_TOKEN_RE = /^(?:(?:ova|oad)s?|movies?|specials?|extras?|bonus)$/i;
 const TECHNICAL_TOKEN_RE = /^(?:s\d{1,3}|season|part|cour|final|batch|complete|pack|(?:19|20)\d{2}|\d{1,4}|\d{3,4}p|nf|cr|amzn|at-?x|tv|web|dl|web-?dl|webrip|bluray|bdrip|hdtv|dvd|remux|hevc|avc|x264|x265|h264|h265|10bit|8bit|hdr|hdr10|hdr10plus|dv|dovi|ddp|ddp\d(?:\.\d)?|aac|flac|eac3|ac3|dts|truehd|atmos|dual|multi|audio|subs?|subtitles?|eng|dub|ita|ger|fra|spa|rus|jpn|raws?|repack\d?|v\d)$/i;
 
 function seasonishTail(tail: string): boolean {
@@ -1006,6 +1038,7 @@ function seasonishTail(tail: string): boolean {
   return tokens.every((token, index) =>
     SEASONISH_TOKEN_RE.test(token) ||
     ORDINAL_TOKEN_RE.test(token) ||
+    CONTENT_TYPE_TOKEN_RE.test(token) ||
     TECHNICAL_TOKEN_RE.test(token) ||
     (index === tokens.length - 1 && /^[a-z0-9]{2,8}$/i.test(token) && /-[a-zA-Z0-9]{2,8}/.test(tail))
   );

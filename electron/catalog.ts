@@ -701,25 +701,39 @@ async function walkFranchiseRelation(startId: number, relationType: string): Pro
  * plus the titles of every chain member. Powers season-aware torrent search:
  * without it a season is only detectable from title markers ("Season 2",
  * "S2", "II"), which titles like K-On!! never carry.
+ *
+ * For OVA/special entries the chain is the PARENT TV season's chain: the OVA
+ * has no season number of its own, but trackers publish it inside its
+ * parent's bundles ("K-ON!! 1-26+OVA Complete" = season 2's OVA), and the
+ * season-title mismatch filter needs the chain to reject the WRONG parent
+ * season's bundle ("K-ON! 1-13+OVA" while searching season 2's OVA).
  */
 export async function getCatalogFranchiseSeasons(anilistId: number): Promise<FranchiseSeasonInfo> {
   const id = Math.trunc(Number(anilistId));
   const empty: FranchiseSeasonInfo = { ownSeason: null, chain: [] };
   if (!Number.isFinite(id) || id <= 0) return empty;
-  return cachedServiceCall(`franchise_season_v2_${id}`, TTL_FRANCHISE_SEASON_MS, async () => {
-    const root = await queryFranchise(id);
-    // Season numbering is for the TV broadcast chain. OVAs, movies and
-    // specials can link to a season but must not consume a season number.
-    if (!['TV', 'TV_SHORT'].includes(String(root?.format || '').toUpperCase())) return empty;
-    const prequelIds = await walkFranchiseRelation(id, 'PREQUEL');
+  return cachedServiceCall(`franchise_season_v3_${id}`, TTL_FRANCHISE_SEASON_MS, async () => {
+    // Season numbering is for the TV broadcast chain. OVAs and specials do
+    // not consume a season number — they belong to their PARENT TV season.
+    let rootId = id;
+    const root = await queryFranchise(rootId);
+    if (!['TV', 'TV_SHORT'].includes(String(root?.format || '').toUpperCase())) {
+      const parentEdges = await franchiseAnimeRelations(rootId);
+      const parentId = parentEdges.find((edge) => edge.relationType === 'PARENT')?.nodeId ?? null;
+      if (parentId == null) return empty;
+      const parentRoot = await queryFranchise(parentId);
+      if (!['TV', 'TV_SHORT'].includes(String(parentRoot?.format || '').toUpperCase())) return empty;
+      rootId = parentId;
+    }
+    const prequelIds = await walkFranchiseRelation(rootId, 'PREQUEL');
     if (prequelIds == null) return empty;
     // prequelIds[0] is the direct prequel (ownSeason - 1), prequelIds[1] one
     // season earlier, ... — reverse into ascending season order.
     const earlier = prequelIds.slice().reverse();
     const ownSeason = earlier.length + 1;
-    const sequelIds = await walkFranchiseRelation(id, 'SEQUEL');
+    const sequelIds = await walkFranchiseRelation(rootId, 'SEQUEL');
     if (sequelIds == null) return empty;
-    const chainIds = [...earlier, id, ...sequelIds];
+    const chainIds = [...earlier, rootId, ...sequelIds];
     const media = await queryFranchiseMedia(chainIds);
     const titlesById = new Map<number, string[]>();
     for (const item of media) {
@@ -729,7 +743,7 @@ export async function getCatalogFranchiseSeasons(anilistId: number): Promise<Fra
     }
     const chain: FranchiseSeasonEntry[] = [
       ...earlier.map((chainId, index) => ({ season: index + 1, anilistId: chainId, titles: titlesById.get(chainId) || [] })),
-      { season: ownSeason, anilistId: id, titles: titlesById.get(id) || [] },
+      { season: ownSeason, anilistId: rootId, titles: titlesById.get(rootId) || [] },
       ...sequelIds.map((chainId, index) => ({ season: ownSeason + 1 + index, anilistId: chainId, titles: titlesById.get(chainId) || [] })),
     ];
     return { ownSeason, chain } satisfies FranchiseSeasonInfo;

@@ -1606,17 +1606,26 @@ function setupIpcHandlers() {
     const cacheKey = queries.join(' || ');
     let cached = searchResultCache.get(cacheKey);
     if (!cached || Date.now() - cached.fetchedAt > SEARCH_CACHE_TTL_MS) {
-      // Search every query across all enabled providers, merging and deduping by infoHash.
+      // Search every query across all enabled providers in PARALLEL — the
+      // queries are independent and indexers like Nyaa routinely serve 504s on
+      // broad ones, so sequential fetching stacks full 12 s timeouts and the
+      // automatic picker would wait for every slow query before returning.
+      // searchProviders never rejects (per-provider failures become reports),
+      // but allSettled keeps one unexpected rejection from losing everything.
+      // Merging stays in query order so dedupe priority (earlier query wins)
+      // is identical to the sequential version.
+      const settledQueries = await Promise.allSettled(queries.map((query) => searchProviders(providers, {
+        query,
+        season: params?.season ?? null,
+        part: requestedPart,
+        episode: params?.episode ?? null,
+      })));
       const allResults: ReleaseSearchResult[] = [];
       const attemptReports: ProviderReport[] = [];
       const seen = new Set<string>();
-      for (const query of queries) {
-        const { results, reports } = await searchProviders(providers, {
-          query,
-          season: params?.season ?? null,
-          part: requestedPart,
-          episode: params?.episode ?? null,
-        });
+      for (const settled of settledQueries) {
+        if (settled.status !== 'fulfilled') continue;
+        const { results, reports } = settled.value;
         for (const result of results) {
           const key = extractInfoHash(result.downloadUrl) || `${result.title.toLowerCase()}|${result.sizeBytes ?? ''}`;
           if (seen.has(key)) continue;
@@ -1664,8 +1673,8 @@ function setupIpcHandlers() {
       !isExplicitSeasonMismatch(release, params?.season, title, params?.franchiseSeasons) &&
       // Manual query overrides are the user's explicit intent — the franchise
       // title filter only guards the automatic title/alias searches.
-      (!override.trim() || !isFranchiseSeasonTitleMismatch(release, params?.season, params?.franchiseSeasons)) &&
-      (params?.episode == null || !isExplicitEpisodeMismatch(release, params.episode))
+      (!!override.trim() || !isFranchiseSeasonTitleMismatch(release, params?.season, params?.franchiseSeasons)) &&
+      (params?.episode == null || !isExplicitEpisodeMismatch(release, params.episode, params?.mediaFormat))
     );
     console.log(`[P2P] search "${queries.join('" / "')}" -> ${compatible.length} compatible results (${ranked.length - compatible.length} wrong-part/episode result(s) skipped)`);
     const annotated = compatible.map((release) => ({

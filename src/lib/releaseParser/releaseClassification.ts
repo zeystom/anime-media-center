@@ -155,10 +155,16 @@ function detectKind(title: string, parsed: ReturnType<typeof parseReleaseCore>):
   return { kind: 'unknown', kindLabel: null }
 }
 
-/** True for collections that explicitly bundle more than one numbered season. */
+/** True for collections that explicitly bundle more than one numbered season:
+ *  spelled-out forms ("Season 01 + Season 02") and short ones ("S01+02",
+ *  "S1 S2"). The plus-number shape only counts numbers directly attached to a
+ *  `+` separator, so "1-13+OVA" stays a single-season range. */
 export function isMultiSeasonCollection(title: string | null | undefined): boolean {
   if (typeof title !== 'string' || !title) return false
-  const seasons = Array.from(htmlToText(title).matchAll(/\bseasons?\s*0*(\d{1,2})\b/gi), (match) => Number(match[1]))
+  const text = htmlToText(title)
+  const seasons = Array.from(text.matchAll(/\bseasons?\s*0*(\d{1,2})\b/gi), (match) => Number(match[1]))
+    .concat(Array.from(text.matchAll(/\bs\s*0*(\d{1,2})\b/gi), (match) => Number(match[1])))
+    .concat(Array.from(text.matchAll(/\+\s*0*(\d{1,2})\b/g), (match) => Number(match[1])))
   return new Set(seasons).size > 1
 }
 

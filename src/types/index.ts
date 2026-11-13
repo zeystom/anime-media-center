@@ -184,7 +184,7 @@ export interface ElectronAPI {
   searchReleases: (params: { title: string; aliases?: string[]; anilistId?: number | null; season?: number | null; part?: number | null; episode?: number | null; episodeCount?: number | null; episodeDurationMinutes?: number | null; mediaFormat?: string | null; queryOverride?: string; franchiseSeasons?: FranchiseSeasonEntry[] | null }) => Promise<ReleaseSearchResponse>;
   getCatalogFranchiseSeasons?: (anilistId: number) => Promise<{ ownSeason: number | null; chain: FranchiseSeasonEntry[] } | null>;
   fetchReleaseDescription: (params: { providerId: string; url: string }) => Promise<string>;
-  addDownload: (params: { item: ReleaseSearchResult; title: string; anilistId?: number | null; episode?: number | null; season?: number | null; mediaFormat?: string | null; mediaAliases?: string[]; franchiseSeasons?: FranchiseSeasonEntry[]; targetFolder?: string; downloadRoot?: string }) => Promise<{ success: boolean; infoHash?: string; error?: string }>;
+  addDownload: (params: { item: ReleaseSearchResult; title: string; anilistId?: number | null; episode?: number | null; season?: number | null; mediaFormat?: string | null; episodeCount?: number | null; mediaAliases?: string[]; franchiseSeasons?: FranchiseSeasonEntry[]; targetFolder?: string; downloadRoot?: string }) => Promise<{ success: boolean; infoHash?: string; error?: string }>;
   pauseDownload: (infoHash: string) => Promise<{ success: boolean }>;
   resumeDownload: (infoHash: string) => Promise<{ success: boolean }>;
   cancelDownload: (infoHash: string, removeFiles?: boolean) => Promise<{ success: boolean; error?: string }>;

@@ -42,6 +42,7 @@ import {
   sanitizeSearchQuery,
   extractInfoHash,
   computeTitleRelevance,
+  isExplicitEpisodeMismatch,
   isExplicitSeasonMismatch,
   isFranchiseSeasonTitleMismatch,
 } from './electron/indexers.ts';
@@ -761,6 +762,60 @@ async function main() {
     assert.strictEqual(computeTitleRelevance('[Group] Monster - 01 [1080p]', refs), 'exact');
   });
 
+  runTest('4.1d content-type tails keep prefix relevance ("Show - S01+02+OVA+Movie" is the show)', () => {
+    // Franchise bundles append content-type words ("+OVA", "+Movie",
+    // "Specials") after the show name; observed live on Nyaa while searching
+    // "K-On! Live House!". They describe WHAT is bundled, not a different
+    // show, so they must not downgrade prefix → related (which the automatic
+    // picker refuses).
+    const refs = ['K-On!'];
+    assert.strictEqual(computeTitleRelevance('[Trix] K-ON! - S01+02+OVA+Movie [Dual Audio] (BD 1080p AV1)', refs), 'prefix');
+    assert.strictEqual(computeTitleRelevance('K-On! S1 S2 Movie OVAs Specials [Dual Audio] [HEVC] [BDRip]', refs), 'prefix');
+    assert.strictEqual(computeTitleRelevance('[Group] K-On! OVA', refs), 'exact',
+      'the parser strips the OVA marker from the show name → exact, never related');
+    assert.strictEqual(computeTitleRelevance('[Group] K-On! Movie + Specials + Extras', refs), 'prefix');
+    assert.strictEqual(computeTitleRelevance('K-ON all seasons + specials + OVA + MOVIE', refs), 'prefix');
+    // Free-form tail words still downgrade (4.1b), including after a content word.
+    assert.strictEqual(computeTitleRelevance('[Group] K-On! OVA Apocalypse', refs), 'related',
+      'a free-form word after the content marker is still a different-show tail');
+    // The whitelisted words only count in the TAIL, never inside the show name.
+    assert.strictEqual(computeTitleRelevance('[Group] Monster Movie Night - 01 [1080p]', ['Monster']), 'related');
+  });
+
+  runTest('4.1e an OVA published under the parent season numbering is not an episode mismatch', () => {
+    // Trackers commonly publish an OVA as "K-ON! - 14 (OVA)" — the number is
+    // the PARENT season's episode slot, so from an OVA title page (its own
+    // episodes are numbered 1..N) that release must stay auto-pickable.
+    const e14 = { title: '[CoalGuys] K-ON! - 14 (OVA) [72A0FDDB].mkv' };
+    assert.strictEqual(isExplicitEpisodeMismatch(e14, 1, 'OVA'), false,
+      'OVA format + "(OVA)" marker: parent-season numbering is not a wrong episode');
+    assert.strictEqual(isExplicitEpisodeMismatch(e14, 14, 'TV'), false);
+    assert.strictEqual(isExplicitEpisodeMismatch(e14, 1, 'TV'), true,
+      'on a TV page the same release is still episode 14, not episode 1');
+    // Without an OVA/OAD marker on the release the escape must not fire: a
+    // bare "K-ON! - 14" found while searching an OVA may be the parent's
+    // regular episode 14.
+    assert.strictEqual(isExplicitEpisodeMismatch({ title: '[Group] K-ON! - 14' }, 1, 'OVA'), true);
+    assert.strictEqual(isExplicitEpisodeMismatch({ title: '[Group] K-ON! S01E14 (OVA)' }, 1, 'OVA'), false,
+      'SxxExx + OVA marker escapes too');
+  });
+
+  runTest('4.1f a Nyaa "English Subtitles (PGS)" description classifies as English subs', () => {
+    // anime4live-style K-ON! bundle description (observed live 2026-11-13):
+    // signs/songs alone must not count, but the full "English Subtitles" track does.
+    const title = '[anime4life.] K-ON! 1-13+OVA Complete (BD1080p AC3 10bit) [x265_HEVC] Dual Audio';
+    const desc = 'Subtitles\nTrack 1: English Signs/Songs (PGS)\nTrack 2: English Subtitles (PGS)\nPlease Seed!';
+    const cls = classifyRelease(title, desc);
+    assert.deepStrictEqual(cls.audioLanguageCodes, ['en', 'ja'], 'Dual Audio in the title gives en+ja audio');
+    assert.deepStrictEqual(cls.subtitleLanguageCodes, ['en'], '"English Subtitles (PGS)" must yield the en subtitle code');
+    assert.strictEqual(cls.languageGroup, 'eng-dub-subs');
+    assert.strictEqual(cls.kind, 'season-pack');
+    // Signs/songs only: no English dialogue subs → no en subtitle code.
+    const signsOnly = classifyRelease(title, 'Subtitles\nTrack 1: English Signs/Songs (PGS)');
+    assert.strictEqual(signsOnly.subtitleLanguageCodes.includes('en'), false,
+      '"English Signs/Songs" alone is not English subtitles');
+  });
+
   runTest('4.1c a seasonless release sinks below a season-marked one for season>1 requests', () => {
     const ref = { animeTitle: 'Show', season: 2, episode: 5 };
     const marked = makeResult('[Group] Show S2 - 05 [1080p]', 5);     // exact 60 +15 +25 = 100
@@ -931,7 +986,13 @@ async function main() {
             && !franchise.names[0].startsWith('K-On')
             && franchise.names[0].replace(/[^a-z0-9]/gi, '').toLowerCase() === franchise.names[1].replace(/[^a-z0-9]/gi, '').toLowerCase();
           const isCrossSeasonBundle = releaseShapes.indexOf(buildTitle) === 7;
-          assert.strictEqual(rejected, !ambiguousBase && !isCrossSeasonBundle, `wrong result for season ${targetSeason}: ${title}`);
+          // Range+OVA+Complete bundles that name the FOREIGN season's title
+          // ("K-On! 1-26+OVA Complete" while requesting season 2) are now
+          // rejected too: the raw title names one season and that season is
+          // not the requested one (observed live — the auto-pick downloaded
+          // season 1's bundle for season 2's OVA). Genuine multi-season
+          // listings escape via isMultiSeasonCollection instead.
+          assert.strictEqual(rejected, !ambiguousBase, `wrong result for season ${targetSeason}: ${title}`);
           checked++;
         }
       }
@@ -950,7 +1011,58 @@ async function main() {
     const chain = [{ season: 1, titles: ['K-On!'] }, { season: 2, titles: ['K-On!!'] }];
     assert.strictEqual(isExplicitSeasonMismatch({ title: allSeasons }, 2, undefined, chain), false, 'a whole-series bundle is compatible with a selected constituent season');
     assert.strictEqual(isFranchiseSeasonTitleMismatch({ title: allSeasons }, 2, chain), false);
-    assert.strictEqual(isFranchiseSeasonTitleMismatch({ title: packedSeason }, 1, chain), false);
+    assert.strictEqual(isFranchiseSeasonTitleMismatch({ title: packedSeason }, 1, chain), true,
+      '"K-ON!! 1-26+OVA Complete" names season 2 — season 1\'s search must not use it');
+    assert.strictEqual(isFranchiseSeasonTitleMismatch({ title: packedSeason }, 2, chain), false);
+  });
+
+  runTest('4.14 an OVA page must not take the WRONG parent season\'s bundle (K-ON! Season 2: Plan! case)', () => {
+    // Live failure 2026-11-13: searching "K-ON! Season 2: Plan!" (season 2's
+    // OVA) auto-picked "[anime4life.] K-ON! 1-13+OVA Complete" — season 1's
+    // bundle carrying Live House! — because the OVA page had no franchise
+    // chain and both bundles scored 'exact'. The OVA page's chain now comes
+    // from the PARENT TV season, so the raw-title hits decide.
+    const chain = [
+      { season: 1, titles: ['K-On!', 'K-ON!', 'けいおん!', 'K-On! Season 1'] },
+      { season: 2, titles: ['K-On!!', 'K-ON!!', 'けいおん!!', 'K-On!! Season 2'] },
+    ];
+    const s1Bundle = '[anime4life.] K-ON! 1-13+OVA Complete (BD1080p AC3 10bit) [x265_HEVC] Dual Audio';
+    const s2Bundle = '[anime4life.] K-ON!! 1-26+OVA Complete (BD1080p AC3 10bit) [x265_HEVC] Dual Audio';
+    const wholeSeries = '[Anime Time] K-On! [Complete Series] (Season 01 + Season 02 + Movie + OVA + Specials) [BD][Dual Audio][1080p][HEVC 10bit x265][AAC][Eng Sub]';
+    const numericShort = '[Trix] K-ON! - S01+02+OVA+Movie [Dual Audio] (BD 1080p AV1)';
+    assert.strictEqual(isFranchiseSeasonTitleMismatch({ title: s1Bundle }, 2, chain), true, 'season 1\'s bundle is a mismatch for the season 2 OVA');
+    assert.strictEqual(isFranchiseSeasonTitleMismatch({ title: s1Bundle }, 1, chain), false, 'season 1\'s bundle stays for season 1');
+    assert.strictEqual(isFranchiseSeasonTitleMismatch({ title: s2Bundle }, 2, chain), false, 'season 2\'s bundle stays for the season 2 OVA');
+    assert.strictEqual(isFranchiseSeasonTitleMismatch({ title: wholeSeries }, 2, chain), false, 'a genuine multi-season listing stays for any member season');
+    assert.strictEqual(isFranchiseSeasonTitleMismatch({ title: numericShort }, 2, chain), false, 'an "S01+02" numeric multi-season listing stays');
+  });
+
+  runTest('4.15 wrong-season OVA bundles rejected across DxD / KonoSuba / Haikyuu franchises', () => {
+    // Real AniList chains (checked 2026-11-13); bundles are live Nyaa shapes.
+    const dxdChain = [
+      { season: 1, titles: ['High School DxD', 'ハイスクールD×D'] },
+      { season: 2, titles: ['High School DxD NEW', 'ハイスクールD×D NEW'] },
+      { season: 3, titles: ['High School DxD BorN', 'ハイスクールD×D BorN'] },
+      { season: 4, titles: ['High School DxD HERO', 'ハイスクールD×D HERO'] },
+    ];
+    assert.strictEqual(isFranchiseSeasonTitleMismatch({ title: '[anime4life.] High School DxD BorN 01-12+OVA Complete (BD1080p) Dual Audio' }, 2, dxdChain), true,
+      'the BorN (S3) bundle must not satisfy the NEW (S2) OVA page');
+    assert.strictEqual(isFranchiseSeasonTitleMismatch({ title: '[anime4life.] High School DxD NEW 01-13+OVA Complete (BD1080p) Dual Audio' }, 2, dxdChain), false);
+    const konosubaChain = [
+      { season: 1, titles: ['Kono Subarashii Sekai ni Shukufuku wo!', 'この素晴らしい世界に祝福を!'] },
+      { season: 2, titles: ['Kono Subarashii Sekai ni Shukufuku wo! 2', 'この素晴らしい世界に祝福を!2'] },
+      { season: 3, titles: ['Kono Subarashii Sekai ni Shukufuku wo! 3', 'この素晴らしい世界に祝福を!3'] },
+    ];
+    assert.strictEqual(isFranchiseSeasonTitleMismatch({ title: '[Konosuba] Kono Subarashii Sekai ni Shukufuku wo! 01-10+OVA Complete [BD]' }, 2, konosubaChain), true,
+      'the S1 bundle must not satisfy the S2 OVA page');
+    assert.strictEqual(isFranchiseSeasonTitleMismatch({ title: 'Kono Subarashii Sekai ni Shukufuku wo! 2 01-10+OVA Complete [BD 1080p]' }, 2, konosubaChain), false);
+    const haikyuuChain = [
+      { season: 1, titles: ['Haikyuu!!', 'ハイキュー!!'] },
+      { season: 2, titles: ['Haikyuu!! 2nd Season', 'ハイキュー!! セカンドシーズン'] },
+    ];
+    assert.strictEqual(isFranchiseSeasonTitleMismatch({ title: '[Group] Haikyuu!! 2nd Season 01-25+OVA Complete [BD 1080p]' }, 1, haikyuuChain), true,
+      'the 2nd Season bundle must not satisfy the S1 "Lev Kenzan!" OVA page');
+    assert.strictEqual(isFranchiseSeasonTitleMismatch({ title: '[Group] Haikyuu!! 01-25+OVA Complete [BD 1080p]' }, 1, haikyuuChain), false);
   });
 
   await runAsyncTest('4.11 detail page inspection enriches search results and stays on the configured source origin', async () => {

@@ -1,4 +1,4 @@
-import React, { useMemo, useState } from 'react';
+import React, { useEffect, useMemo, useRef, useState } from 'react';
 import { RefreshCw, Film, Search, Star, X, ArrowDownToLine, CheckCircle2, FolderOpen, ArrowUpDown, Heart, Bell } from 'lucide-react';
 import { AnimeFolder, PlaybackProgress, UserLibraryEntry, UserListStatus } from '../../types';
 import type { FavouriteAnime, FollowedAnime } from '../../types/notifications';
@@ -153,6 +153,37 @@ export const FolderBrowser: React.FC<FolderBrowserProps> = ({
     }
     return [...folders, ...savedOnly.values()];
   }, [folders, favouriteAnime, followedAnime, userEntries]);
+
+  // Collection-only cards (watching/planning/... with no on-disk folder) show
+  // a placeholder when their list entry was saved without a poster. Fetch the
+  // official AniList poster via catalog details — cached 24 h on the main
+  // side. One fetch per unique anilistId (same pattern as the queue covers).
+  const [collectionPosters, setCollectionPosters] = useState<Map<number, string>>(new Map());
+  const collectionPosterFetchedRef = useRef<Set<number>>(new Set());
+  useEffect(() => {
+    const wanted = [...new Set(libraryFolders
+      .filter((folder) => folder.collectionOnly && folder.anilistId != null
+        && !folder.posterUrl && !collectionPosterFetchedRef.current.has(folder.anilistId))
+      .map((folder) => folder.anilistId as number))];
+    if (wanted.length === 0) return;
+    for (const id of wanted) collectionPosterFetchedRef.current.add(id);
+    void (async () => {
+      const api = window.electronAPI;
+      if (!api?.getCatalogDetails) return;
+      for (const anilistId of wanted) {
+        try {
+          const details = await api.getCatalogDetails(anilistId);
+          if (details?.posterUrl) {
+            setCollectionPosters((prev) => {
+              const next = new Map(prev);
+              next.set(anilistId, details.posterUrl as string);
+              return next;
+            });
+          }
+        } catch {}
+      }
+    })();
+  }, [libraryFolders]);
 
   const getUserEntry = (folder: AnimeFolder): UserLibraryEntry | undefined => {
     if (!userEntries) return undefined;
@@ -394,9 +425,13 @@ export const FolderBrowser: React.FC<FolderBrowserProps> = ({
                 const displayTitle = folder.canonicalTitle || cleanSeriesTitle(folder.folderName) || folder.folderName;
                 const userEntry = getUserEntry(folder);
 
-                // Primary: Official AniList 2:3 vertical poster!
+                // Primary: Official AniList 2:3 vertical poster (fetched on
+                // demand for poster-less collection entries)!
                 // Fallback: First episode's thumbnail/still capture!
-                const posterSrc = folder.posterUrl || folder.episodes[0]?.kitsuThumbnail || folder.episodes[0]?.thumbnailUrl;
+                const posterSrc = folder.posterUrl
+                  || (folder.anilistId != null ? collectionPosters.get(folder.anilistId) || null : null)
+                  || folder.episodes[0]?.kitsuThumbnail
+                  || folder.episodes[0]?.thumbnailUrl;
 
                 return (
                   <div

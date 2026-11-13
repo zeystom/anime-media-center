@@ -30,7 +30,7 @@ import { useUserLibrary } from '../../hooks/useUserLibrary'
 import { StatusBadges } from '../common/StatusBadges'
 import { DownloadActionButton } from '../common/DownloadActionButton'
 import { ReleasePickerModal } from '../P2P/ReleasePickerModal'
-import { classifyRelease, detectSeasonFromTitle, type TorrentLanguageCode } from '../../lib/releaseParser/releaseClassification.ts'
+import { classifyRelease, detectSeasonFromTitle, isMultiSeasonCollection, type TorrentLanguageCode } from '../../lib/releaseParser/releaseClassification.ts'
 import { EpisodeRow } from './EpisodeRow'
 import { resolveAnimeTitle } from '../../utils/title'
 // CRITICAL: import the wasm-free regex engine directly — never from
@@ -583,9 +583,14 @@ export const AnimeDetailView: React.FC<AnimeDetailViewProps> = ({
     const seen = new Set<string>([displayKey])
     const aliases: string[] = []
     const isOva = details.format?.toUpperCase() === 'OVA'
+    // An OVA's parent TV show arrives via AniList's PARENT relation (seasons
+    // link through PREQUEL/SEQUEL). Without the parent's titles the OVA page
+    // can only search its own name ("K-ON! Live House") — the season bundles
+    // that actually contain the OVA ("K-ON! 1-13+OVA Complete") then surface
+    // neither in the queries nor above the 'related' relevance cut.
     const parentTitles = isOva
       ? relatedTitles
-        .filter((item) => item.format?.toUpperCase() === 'TV' && ['PREQUEL', 'SEQUEL'].includes(String(item.relationType || '').toUpperCase()))
+        .filter((item) => item.format?.toUpperCase() === 'TV' && ['PREQUEL', 'SEQUEL', 'PARENT'].includes(String(item.relationType || '').toUpperCase()))
         .sort((a, b) => (a.relationType === 'PREQUEL' ? -1 : 0) - (b.relationType === 'PREQUEL' ? -1 : 0))
         .flatMap((item) => [item.title.english, item.title.romaji].filter((value): value is string => !!value))
       : []
@@ -1021,20 +1026,52 @@ export const AnimeDetailView: React.FC<AnimeDetailViewProps> = ({
     if (!api?.searchReleases || !api.addDownload) return
     setQueueing(true)
     try {
-      const response = await api.searchReleases({ title: hero.title, aliases: searchAliases, anilistId, season: seasonHint, part: partHint, episode: null, episodeCount: details?.episodesCount ?? null, episodeDurationMinutes: details?.durationMinutes ?? null, mediaFormat: details?.format ?? null, franchiseSeasons: franchiseSeasonTitles })
+      const response = await api.searchReleases({ title: hero.title, aliases: searchAliases, anilistId, season: seasonHint, part: partHint, episode: null, episodeCount: details?.episodesCount ?? null, episodeDurationMinutes: details?.durationMinutes ?? null, mediaFormat: details?.format ?? hero.format ?? null, franchiseSeasons: franchiseSeasonTitles })
       // Automatic selection requires the release to actually name this show:
       // 'related' (a whole-word mention, e.g. "Re:Monster" for "Monster") and
       // 'none' are refused — only exact/prefix titles may auto-download.
-      const validSeasonRelease = (release: ReleaseSearchResult) => !release.sizeWarning
-        && (release.titleRelevance == null || release.titleRelevance === 'exact' || release.titleRelevance === 'prefix')
-        && ['season-pack', 'episode-range'].includes(classifyRelease(release.title, release.description).kind)
+      // OVA/OAD titles also accept their dedicated release kinds ('ova', and
+      // 'unknown' for an unlabeled single-video release) — the engine cuts
+      // just the OVA file out of either shape (marker/token matching), so
+      // release SHAPE is not a selection criterion. Language preference is:
+      // full audio+subtitle matches beat the English-dub fallback, and within
+      // one tier the backend ranking (relevance, quality, seeders) decides —
+      // with a seeded-first preference, because a release nobody is seeding
+      // can never finish (a 0-seeder dedicated raw must not beat a seeded
+      // bundle that carries the same OVA).
+      const isOvaTitle = (details?.format ?? hero.format ?? "").toUpperCase() === "OVA"
       const audioPreferences = settings.preferredTorrentAudioLanguages ?? ['en']
       const subtitlePreferences = settings.preferredTorrentSubtitleLanguages ?? ['en']
       const seasonReleases = response?.results ?? []
-      const best = seasonReleases.find((release) => validSeasonRelease(release)
-        && matchesPreferredReleaseLanguages(release, audioPreferences, subtitlePreferences))
-        ?? seasonReleases.find((release) => validSeasonRelease(release)
-          && isEnglishDubFallback(release, audioPreferences, subtitlePreferences))
+      const ovaKinds = ['ova', 'unknown', 'season-pack', 'episode-range']
+      const bundleKinds = ['season-pack', 'episode-range']
+      const validReleases = seasonReleases.filter((release) => !release.sizeWarning
+        && (release.titleRelevance == null || release.titleRelevance === 'exact' || release.titleRelevance === 'prefix')
+        && (isOvaTitle ? ovaKinds : bundleKinds).includes(classifyRelease(release.title, release.description).kind))
+      const preferSeeded = (releases: ReleaseSearchResult[]) => {
+        const seeded = releases.filter((release) => (release.seeders ?? 0) > 0)
+        return seeded.length > 0 ? seeded : releases
+      }
+      // For OVA titles the release SHAPE matters as a last tie-break: a
+      // whole-franchise mega-bundle ("Seasons 1-4 + OVAs + Specials") carries
+      // EVERY season's OVAs, so a 2-episode OVA entry would download all of
+      // them — dedicated releases, then single-season bundles, then
+      // multi-season bundles. Stable sort keeps the seeded-first ranking
+      // inside each group. TV seasons cut their season from any shape, so
+      // they keep the plain seeded ranking.
+      const ovaShapeGroup = (release: ReleaseSearchResult) => {
+        const kind = classifyRelease(release.title, release.description).kind
+        if (kind === 'ova' || kind === 'unknown') return 0
+        if (!isMultiSeasonCollection(release.title)) return 1
+        return 2
+      }
+      const pickByTier = (list: ReleaseSearchResult[]) => {
+        const ranked = preferSeeded(list)
+        if (!isOvaTitle) return ranked[0]
+        return [...ranked].sort((a, b) => ovaShapeGroup(a) - ovaShapeGroup(b))[0]
+      }
+      const best = pickByTier(validReleases.filter((release) => matchesPreferredReleaseLanguages(release, audioPreferences, subtitlePreferences)))
+        ?? pickByTier(validReleases.filter((release) => isEnglishDubFallback(release, audioPreferences, subtitlePreferences)))
       const usedEnglishDubFallback = !!best
         && !matchesPreferredReleaseLanguages(best, audioPreferences, subtitlePreferences)
       if (!best) {
@@ -1047,7 +1084,7 @@ export const AnimeDetailView: React.FC<AnimeDetailViewProps> = ({
         showGlobalToast(providerError ? `No release found: ${providerError}` : 'No matching season release found. Check your indexers in Settings.', 'error')
         return
       }
-      const result = await api.addDownload({ item: best, title: hero.title, anilistId, episode: null, season: seasonHint, mediaFormat: details?.format ?? null, mediaAliases: contentTitleAliases, franchiseSeasons: franchiseSeasonTitles, ...downloadLocation() })
+      const result = await api.addDownload({ item: best, title: hero.title, anilistId, episode: null, season: seasonHint, mediaFormat: details?.format ?? hero.format ?? null, episodeCount: details?.episodesCount ?? hero.episodesCount ?? null, mediaAliases: contentTitleAliases, franchiseSeasons: franchiseSeasonTitles, ...downloadLocation() })
       if (result?.success && usedEnglishDubFallback) showGlobalToast(`Season download queued with English dub: ${best.title}. No release with both English dub and English subtitles was found. You can create subtitles in Whisper Studio.`, 'warning')
       else if (result?.success) showGlobalToast(`Season download queued: ${best.title}`, 'success')
       else showGlobalToast(result?.error || 'Failed to queue the season download', 'error')
@@ -1082,7 +1119,7 @@ export const AnimeDetailView: React.FC<AnimeDetailViewProps> = ({
     void (async () => {
       let holdForManualPick = false
       try {
-        const response = await api.searchReleases({ title: hero.title, aliases: searchAliases, anilistId, season: seasonHint, part: partHint, episode, episodeCount: details?.episodesCount ?? null, episodeDurationMinutes: details?.durationMinutes ?? null, mediaFormat: details?.format ?? null, franchiseSeasons: franchiseSeasonTitles })
+        const response = await api.searchReleases({ title: hero.title, aliases: searchAliases, anilistId, season: seasonHint, part: partHint, episode, episodeCount: details?.episodesCount ?? null, episodeDurationMinutes: details?.durationMinutes ?? null, mediaFormat: details?.format ?? hero.format ?? null, franchiseSeasons: franchiseSeasonTitles })
         // Same title-relevance gate as the season auto-pick: only exact/prefix
         // releases may auto-download; 'related' ("Re:Monster", spin-offs) and
         // 'none' ("Pocket Monsters") are refused.
@@ -1090,8 +1127,15 @@ export const AnimeDetailView: React.FC<AnimeDetailViewProps> = ({
           && (release.titleRelevance == null || release.titleRelevance === 'exact' || release.titleRelevance === 'prefix'))
         const audioPreferences = settings.preferredTorrentAudioLanguages ?? ['en']
         const subtitlePreferences = settings.preferredTorrentSubtitleLanguages ?? ['en']
-        const best = automaticCandidates.find((release) => matchesPreferredReleaseLanguages(release, audioPreferences, subtitlePreferences))
-          ?? automaticCandidates.find((release) => isEnglishDubFallback(release, audioPreferences, subtitlePreferences))
+        // Same seeded-first preference as the season pick: a release nobody
+        // seeds can never finish, so known-seeder candidates outrank 0-seeder
+        // ones inside each language tier (ranked order otherwise preserved).
+        const preferSeeded = (releases: ReleaseSearchResult[]) => {
+          const seeded = releases.filter((release) => (release.seeders ?? 0) > 0)
+          return seeded.length > 0 ? seeded : releases
+        }
+        const best = preferSeeded(automaticCandidates.filter((release) => matchesPreferredReleaseLanguages(release, audioPreferences, subtitlePreferences)))[0]
+          ?? preferSeeded(automaticCandidates.filter((release) => isEnglishDubFallback(release, audioPreferences, subtitlePreferences)))[0]
         const usedEnglishDubFallback = !!best
           && !matchesPreferredReleaseLanguages(best, audioPreferences, subtitlePreferences)
         if (!best && response?.results?.length) {
@@ -1106,7 +1150,7 @@ export const AnimeDetailView: React.FC<AnimeDetailViewProps> = ({
           showGlobalToast(skipped > 0 ? `No release for episode ${episode} was found; ${skipped} mismatched result(s) were skipped.` : providerError ? `No release found: ${providerError}` : `No release found for episode ${episode}.`, 'error')
           return
         }
-        const result = await api.addDownload({ item: best, title: hero.title, anilistId, episode, season: seasonHint, mediaFormat: details?.format ?? null, mediaAliases: contentTitleAliases, franchiseSeasons: franchiseSeasonTitles, ...downloadLocation() })
+        const result = await api.addDownload({ item: best, title: hero.title, anilistId, episode, season: seasonHint, mediaFormat: details?.format ?? hero.format ?? null, episodeCount: details?.episodesCount ?? hero.episodesCount ?? null, mediaAliases: contentTitleAliases, franchiseSeasons: franchiseSeasonTitles, ...downloadLocation() })
         if (result?.success && usedEnglishDubFallback) showGlobalToast(`Episode ${episode} queued with English dub: ${best.title}. No release with both English dub and English subtitles was found. You can create subtitles in Whisper Studio.`, 'warning')
         else if (result?.success) showGlobalToast(`Episode ${episode} queued: ${best.title}`, 'success')
         else showGlobalToast(result?.error || `Failed to queue episode ${episode}`, 'error')
@@ -1146,7 +1190,7 @@ export const AnimeDetailView: React.FC<AnimeDetailViewProps> = ({
     const { episode } = pickerState
     setQueueing(true)
     try {
-      const res = await api.addDownload({ item: result, title: hero.title, anilistId, episode, season: seasonHint, mediaFormat: details?.format ?? null, mediaAliases: contentTitleAliases, franchiseSeasons: franchiseSeasonTitles, ...downloadLocation() })
+      const res = await api.addDownload({ item: result, title: hero.title, anilistId, episode, season: seasonHint, mediaFormat: details?.format ?? hero.format ?? null, episodeCount: details?.episodesCount ?? hero.episodesCount ?? null, mediaAliases: contentTitleAliases, franchiseSeasons: franchiseSeasonTitles, ...downloadLocation() })
       if (res?.success) {
         showGlobalToast('Download queued — see the Downloads tab', 'success')
       } else {
@@ -2069,7 +2113,7 @@ export const AnimeDetailView: React.FC<AnimeDetailViewProps> = ({
         open={pickerState !== null}
         title={hero.title}
         anilistId={anilistId}
-        mediaFormat={details?.format ?? null}
+        mediaFormat={details?.format ?? hero.format ?? null}
         season={seasonHint}
         part={partHint}
         episode={pickerState?.episode ?? null}

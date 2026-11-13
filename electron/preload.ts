@@ -182,7 +182,7 @@ contextBridge.exposeInMainWorld('electronAPI', {
     ipcRenderer.invoke('p2p:search', params),
   fetchReleaseDescription: (params: { providerId: string; url: string }) =>
     ipcRenderer.invoke('p2p:release-description', params) as Promise<string>,
-  addDownload: (params: { item: import('./types').ReleaseSearchResult; title: string; anilistId?: number | null; episode?: number | null; season?: number | null; mediaFormat?: string | null; mediaAliases?: string[]; franchiseSeasons?: Array<{ season: number; titles: string[] }>; targetFolder?: string; downloadRoot?: string }) =>
+  addDownload: (params: { item: import('./types').ReleaseSearchResult; title: string; anilistId?: number | null; episode?: number | null; season?: number | null; mediaFormat?: string | null; episodeCount?: number | null; mediaAliases?: string[]; franchiseSeasons?: Array<{ season: number; titles: string[] }>; targetFolder?: string; downloadRoot?: string }) =>
     ipcRenderer.invoke('p2p:add-download', params),
   pauseDownload: (infoHash: string) => ipcRenderer.invoke('p2p:pause', infoHash),
   resumeDownload: (infoHash: string) => ipcRenderer.invoke('p2p:resume', infoHash),

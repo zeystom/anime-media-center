@@ -118,6 +118,23 @@ export const DownloadsView: React.FC<DownloadsViewProps> = ({ onRefreshLibrary, 
     }
   }, [])
 
+  // A download that finishes while this tab is open must surface in the
+  // storage overview: its folder only becomes a "release folder" once the
+  // files leave the staging directory, so the snapshot taken at mount is
+  // stale from then on. Reload whenever the set of active jobs changes
+  // (job added, finished and removed, cancelled).
+  const activeJobsKeyRef = useRef<string>('')
+  useEffect(() => {
+    const key = (p2pState?.jobs ?? [])
+      .filter((job) => STATUS_ACTIVE[job.status])
+      .map((job) => job.infoHash)
+      .sort()
+      .join(',')
+    const previous = activeJobsKeyRef.current
+    activeJobsKeyRef.current = key
+    if (previous !== '' && key !== previous) loadOverview()
+  }, [p2pState, loadOverview])
+
   const handlePauseResume = async (job: TorrentJob) => {
     const api = window.electronAPI
     if (!api?.pauseDownload || !api?.resumeDownload) return

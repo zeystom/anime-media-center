@@ -18,6 +18,7 @@ import crypto from 'crypto'
 const originalFetch = globalThis.fetch
 
 const {
+  isDeadSwarm,
   initTorrentEngine,
   engineSetEnabled,
   engineAddDownload,
@@ -39,6 +40,14 @@ const HASH_D = 'd'.repeat(40)
 const HASH_E = 'e'.repeat(40)
 const HASH_F = 'f'.repeat(40)
 const HASH_G = '1'.repeat(40)
+const HASH_H = '2'.repeat(40)
+const HASH_I = '3'.repeat(40)
+const HASH_J = '4'.repeat(40)
+const HASH_K = '5'.repeat(40)
+const HASH_L = '6'.repeat(40)
+const HASH_M = '7'.repeat(40)
+const HASH_N = '8'.repeat(40)
+const HASH_O = '9'.repeat(40)
 
 // ---- helpers ---------------------------------------------------------------
 
@@ -391,6 +400,227 @@ await expectCase('(3a.0) OVA download selects its titled file only from a season
   assert.deepStrictEqual(selected, ['K-On Complete Series Season 01 + Season 02 + OVA/Season 2/K-On!! Keikaku!.mkv'])
   engineShutdown()
 })
+
+await expectCase('(3a.0a) OVA inside a plural "OVAs" folder is identified by the folder marker', async () => {
+  engineShutdown()
+  const { fake } = setupEngine()
+  fake.registry.set(HASH_H, {
+    files: [
+      { name: 'K-On! S01E01.mkv', path: 'K-On Complete (Season 1 + OVAs)/K-On! S01E01.mkv' },
+      { name: 'K-On! Live House!.mkv', path: 'K-On Complete (Season 1 + OVAs)/OVAs/K-On! Live House!.mkv' },
+    ],
+  })
+  const result = await engineAddDownload({
+    item: magnetItem(HASH_H, { title: '[Group] K-On Complete (Season 1 + OVAs)' }),
+    title: 'K-ON! Live House!',
+    mediaFormat: 'OVA',
+    mediaAliases: ['K-On! Live House!'],
+  })
+  assert.strictEqual(result.success, true)
+  await until(() => ['downloading', 'error'].includes(statusOf(HASH_H)), 'OVA file selection resolves')
+  const selected = latestTorrentOf(fake, HASH_H).files.filter((file) => file.selected).map((file) => file.path)
+  assert.deepStrictEqual(selected, ['K-On Complete (Season 1 + OVAs)/OVAs/K-On! Live House!.mkv'])
+  engineShutdown()
+})
+
+await expectCase('(3a.0b) two OVA-labeled files in one bundle are tie-broken by the title tokens', async () => {
+  engineShutdown()
+  const { fake } = setupEngine()
+  // A franchise bundle carrying both seasons' OVAs: the S1 OVA matches the
+  // bare "(OVA)" marker and the Live House file matches via the plural
+  // "OVAs" folder + its title tokens. Before the token tie-break this failed
+  // as "multiple possible OVA files".
+  fake.registry.set(HASH_I, {
+    files: [
+      { name: 'K-On! - 14 (OVA).mkv', path: 'K-On Franchise Bundle/Season 1/K-On! - 14 (OVA).mkv' },
+      { name: 'K-On!! Keikaku! (OVA).mkv', path: 'K-On Franchise Bundle/Season 2/K-On!! Keikaku! (OVA).mkv' },
+      { name: 'K-On! Live House!.mkv', path: 'K-On Franchise Bundle/OVAs/K-On! Live House!.mkv' },
+    ],
+  })
+  const result = await engineAddDownload({
+    item: magnetItem(HASH_I, { title: 'K-On Franchise Bundle' }),
+    title: 'K-ON! Live House!',
+    mediaFormat: 'OVA',
+    mediaAliases: ['K-On! Live House!'],
+  })
+  assert.strictEqual(result.success, true)
+  await until(() => ['downloading', 'error'].includes(statusOf(HASH_I)), 'OVA file selection resolves')
+  const selected = latestTorrentOf(fake, HASH_I).files.filter((file) => file.selected).map((file) => file.path)
+  assert.deepStrictEqual(selected, ['K-On Franchise Bundle/OVAs/K-On! Live House!.mkv'])
+  engineShutdown()
+})
+
+
+await expectCase('(3a.0c) real anime4life K-ON! bundle: only the OVA file is selected', async () => {
+  engineShutdown()
+  const { fake } = setupEngine()
+  // Live file list of "[anime4life.] K-ON! 1-13+OVA Complete (BD1080p AC3
+  // 10bit) [x265_HEVC] Dual Audio" (observed on Nyaa 2026-11-13): flat
+  // top-level files, the OVA carries both the "OVA" marker and the title
+  // tokens, the 13 episodes carry neither.
+  fake.registry.set(HASH_J, {
+    files: [
+      { name: 'K-ON! 01 Disband the Club! (BD1080p AC3 10bit).mkv', path: '[anime4life.] K-ON! 1-13+OVA Complete (BD1080p AC3 10bit) [x265_HEVC] Dual Audio/K-ON! 01 Disband the Club! (BD1080p AC3 10bit).mkv' },
+      { name: 'K-ON! 05 Advisor! (BD1080p AC3 10bit).mkv', path: '[anime4life.] K-ON! 1-13+OVA Complete (BD1080p AC3 10bit) [x265_HEVC] Dual Audio/K-ON! 05 Advisor! (BD1080p AC3 10bit).mkv' },
+      { name: 'K-ON! 13 Extra Winter Days! (BD1080p AC3 10bit).mkv', path: '[anime4life.] K-ON! 1-13+OVA Complete (BD1080p AC3 10bit) [x265_HEVC] Dual Audio/K-ON! 13 Extra Winter Days! (BD1080p AC3 10bit).mkv' },
+      { name: 'K-ON! OVA Live House! (BD1080p AC3 10bit).mkv', path: '[anime4life.] K-ON! 1-13+OVA Complete (BD1080p AC3 10bit) [x265_HEVC] Dual Audio/K-ON! OVA Live House! (BD1080p AC3 10bit).mkv' },
+    ],
+  })
+  const result = await engineAddDownload({
+    item: magnetItem(HASH_J, { title: '[anime4life.] K-ON! 1-13+OVA Complete (BD1080p AC3 10bit) [x265_HEVC] Dual Audio' }),
+    title: 'K-ON!: Live House!',
+    mediaFormat: 'OVA',
+    mediaAliases: ['K-On!: Live House!'],
+  })
+  assert.strictEqual(result.success, true)
+  await until(() => ['downloading', 'error'].includes(statusOf(HASH_J)), 'OVA file selection resolves')
+  const selected = latestTorrentOf(fake, HASH_J).files.filter((file) => file.selected).map((file) => file.path)
+  assert.deepStrictEqual(selected, ['[anime4life.] K-ON! 1-13+OVA Complete (BD1080p AC3 10bit) [x265_HEVC] Dual Audio/K-ON! OVA Live House! (BD1080p AC3 10bit).mkv'])
+  engineShutdown()
+})
+
+await expectCase('(3a.0d) "Planning Discussion" token collision: the OVA-marked file wins', async () => {
+  engineShutdown()
+  const { fake } = setupEngine()
+  // Live file list of "[anime4life.] K-ON!! 1-26+OVA Complete" (observed
+  // 2026-11-13): the requested title token "plan" also appears in episode
+  // 25's name, but only the OVA file carries the OVA marker — the marker
+  // tier must beat token-only matches.
+  fake.registry.set(HASH_K, {
+    files: [
+      { name: 'K-ON!! 05 Staying Behind! (BD1080p AC3 10bit).mkv', path: '[anime4life.] K-ON!! 1-26+OVA Complete (BD1080p AC3 10bit) [x265_HEVC] Dual Audio/K-ON!! 05 Staying Behind! (BD1080p AC3 10bit).mkv' },
+      { name: 'K-ON!! 25 Extra Planning Discussion! (BD1080p AC3 10bit).mkv', path: '[anime4life.] K-ON!! 1-26+OVA Complete (BD1080p AC3 10bit) [x265_HEVC] Dual Audio/K-ON!! 25 Extra Planning Discussion! (BD1080p AC3 10bit).mkv' },
+      { name: 'K-ON!! OVA Plan! (BD1080p AC3 10bit).mkv', path: '[anime4life.] K-ON!! 1-26+OVA Complete (BD1080p AC3 10bit) [x265_HEVC] Dual Audio/K-ON!! OVA Plan! (BD1080p AC3 10bit).mkv' },
+    ],
+  })
+  const result = await engineAddDownload({
+    item: magnetItem(HASH_K, { title: '[anime4life.] K-ON!! 1-26+OVA Complete (BD1080p AC3 10bit) [x265_HEVC] Dual Audio' }),
+    title: 'K-ON! Season 2: Plan!',
+    mediaFormat: 'OVA',
+    mediaAliases: ['K-ON!!: Keikaku!', 'Keion 2 Special', 'K-On!! 2nd Season Special'],
+  })
+  assert.strictEqual(result.success, true)
+  await until(() => ['downloading', 'error'].includes(statusOf(HASH_K)), 'OVA file selection resolves')
+  const selected = latestTorrentOf(fake, HASH_K).files.filter((file) => file.selected).map((file) => file.path)
+  assert.deepStrictEqual(selected, ['[anime4life.] K-ON!! 1-26+OVA Complete (BD1080p AC3 10bit) [x265_HEVC] Dual Audio/K-ON!! OVA Plan! (BD1080p AC3 10bit).mkv'])
+  engineShutdown()
+})
+
+await expectCase('(3a.0e) multi-episode OVA series downloads every matching file (Hellsing, roman names)', async () => {
+  engineShutdown()
+  const { fake } = setupEngine()
+  fake.registry.set(HASH_L, {
+    files: Array.from({ length: 10 }, (_, i) => ({
+      name: 'HELLSING OVA ' + ['I','II','III','IV','V','VI','VII','VIII','IX','X'][i] + ' [BDRip 1080p].mkv',
+      path: 'HELLSING OVA ' + ['I','II','III','IV','V','VI','VII','VIII','IX','X'][i] + ' [BDRip 1080p].mkv',
+    })),
+  })
+  const result = await engineAddDownload({
+    item: magnetItem(HASH_L, { title: 'HELLSING OVA I-X [BDRip]' }),
+    title: 'Hellsing Ultimate',
+    mediaFormat: 'OVA',
+    episodeCount: 10,
+    mediaAliases: ['Hellsing Ultimate OVA'],
+  })
+  assert.strictEqual(result.success, true)
+  await until(() => ['downloading', 'error'].includes(statusOf(HASH_L)), 'OVA series selection resolves')
+  const selected = latestTorrentOf(fake, HASH_L).files.filter((file) => file.selected).map((file) => file.name)
+  assert.strictEqual(selected.length, 10, 'every OVA-series file is selected')
+  engineShutdown()
+})
+
+await expectCase('(3a.0f) episode card on a multi-episode OVA series isolates one file', async () => {
+  engineShutdown()
+  const { fake } = setupEngine()
+  fake.registry.set(HASH_M, {
+    files: [
+      { name: '[Group] High School DxD OVA 01.mkv', path: '[Group] High School DxD OVA 01.mkv' },
+      { name: '[Group] High School DxD OVA 02.mkv', path: '[Group] High School DxD OVA 02.mkv' },
+    ],
+  })
+  const result = await engineAddDownload({
+    item: magnetItem(HASH_M, { title: 'High School DxD OVA 01-02' }),
+    title: 'High School DxD OVA',
+    episode: 1,
+    mediaFormat: 'OVA',
+    episodeCount: 2,
+    mediaAliases: ['High School DxD OVA'],
+  })
+  assert.strictEqual(result.success, true)
+  await until(() => ['downloading', 'error'].includes(statusOf(HASH_M)), 'OVA episode selection resolves')
+  const selected = latestTorrentOf(fake, HASH_M).files.filter((file) => file.selected).map((file) => file.name)
+  assert.deepStrictEqual(selected, ['[Group] High School DxD OVA 01.mkv'])
+  engineShutdown()
+})
+
+await expectCase('(3a.0g) franchise mega-bundle: season isolation keeps only the parent season OVA files', async () => {
+  engineShutdown()
+  const { fake } = setupEngine()
+  // Live selection from the Judas "Seasons 1-4 + OVAs + Specials" bundle on
+  // the High School DxD OVA page: S2's and S3's OVAs must not ride along.
+  fake.registry.set(HASH_N, {
+    files: [
+      { name: 'High School DxD S1 - OVA 1.mkv', path: 'High School DxD (Seasons 1-4 + OVAs + Specials)/High School DxD - S1/High School DxD S1 - OVA 1.mkv' },
+      { name: 'High School DxD S1 - OVA 2.mkv', path: 'High School DxD (Seasons 1-4 + OVAs + Specials)/High School DxD - S1/High School DxD S1 - OVA 2.mkv' },
+      { name: 'High School DxD S2 - OVA.mkv', path: 'High School DxD (Seasons 1-4 + OVAs + Specials)/High School DxD - S2/High School DxD S2 - OVA.mkv' },
+      { name: 'High School DxD S3 - OVA.mkv', path: 'High School DxD (Seasons 1-4 + OVAs + Specials)/High School DxD - S3/High School DxD S3 - OVA.mkv' },
+    ],
+  })
+  const result = await engineAddDownload({
+    item: magnetItem(HASH_N, { title: 'High School DxD (Seasons 1-4 + OVAs + Specials)' }),
+    title: 'High School DxD Episodes 13, 14 and 15',
+    mediaFormat: 'OVA',
+    episodeCount: 2,
+    season: 1,
+    franchiseSeasons: [
+      { season: 1, titles: ['High School DxD'] },
+      { season: 2, titles: ['High School DxD NEW'] },
+      { season: 3, titles: ['High School DxD BorN'] },
+    ],
+    mediaAliases: ['High School DxD OVA'],
+  })
+  assert.strictEqual(result.success, true)
+  await until(() => ['downloading', 'error'].includes(statusOf(HASH_N)), 'OVA selection resolves')
+  const selected = latestTorrentOf(fake, HASH_N).files.filter((file) => file.selected).map((file) => file.name)
+  assert.deepStrictEqual(selected, ['High School DxD S1 - OVA 1.mkv', 'High School DxD S1 - OVA 2.mkv'])
+  engineShutdown()
+})
+
+await expectCase('(3a.0h) censored + uncensored variants: uncensored wins', async () => {
+  engineShutdown()
+  const { fake } = setupEngine()
+  fake.registry.set(HASH_O, {
+    files: [
+      { name: 'DxD OVA 01 [Censored].mkv', path: 'DxD OVA 01 [Censored].mkv' },
+      { name: 'DxD OVA 01 [UNCENSORED].mkv', path: 'DxD OVA 01 [UNCENSORED].mkv' },
+    ],
+  })
+  const result = await engineAddDownload({
+    item: magnetItem(HASH_O, { title: 'High School DxD OVA 01-02' }),
+    title: 'High School DxD OVA',
+    mediaFormat: 'OVA',
+    episodeCount: 2,
+    mediaAliases: ['High School DxD OVA'],
+  })
+  assert.strictEqual(result.success, true)
+  await until(() => ['downloading', 'error'].includes(statusOf(HASH_O)), 'OVA selection resolves')
+  const selected = latestTorrentOf(fake, HASH_O).files.filter((file) => file.selected).map((file) => file.name)
+  assert.deepStrictEqual(selected, ['DxD OVA 01 [UNCENSORED].mkv'])
+  engineShutdown()
+})
+
+await expectCase('(3a.0i) isDeadSwarm: only a fully-stalled post-recovery download with no peers counts', async () => {
+  const base = { status: 'downloading', noProgressSeconds: 80, stallRecoveryCount: 2, availableMissingPieces: 0, peers: 0 };
+  assert.strictEqual(isDeadSwarm(base), true, 'all conditions met → dead swarm');
+  assert.strictEqual(isDeadSwarm({ ...base, noProgressSeconds: 40 }), false, 'still inside the 75 s window');
+  assert.strictEqual(isDeadSwarm({ ...base, stallRecoveryCount: 1 }), false, 'recovery attempts remain');
+  assert.strictEqual(isDeadSwarm({ ...base, availableMissingPieces: 12 }), false, 'a peer HAS the missing pieces — keep trying');
+  assert.strictEqual(isDeadSwarm({ ...base, peers: 2 }), false, 'peers connected — the wire may start serving');
+  assert.strictEqual(isDeadSwarm({ ...base, status: 'connecting' }), false, 'only applies while downloading');
+  assert.strictEqual(isDeadSwarm({ ...base, status: 'completed' }), false);
+  assert.strictEqual(isDeadSwarm({ status: 'downloading', noProgressSeconds: 200, stallRecoveryCount: 0, availableMissingPieces: 0, peers: 0 }), false,
+    'no stall recovery yet (e.g. fresh job still connecting) → not declared dead');
+});
 
 await expectCase('(3a.1) requests for multiple episodes merge into one batch torrent job', async () => {
   engineShutdown()
