@@ -263,6 +263,55 @@ function anilistHandler(url, init) {
   });
 }
 
+{
+  const catalog = await freshCatalog();
+  resetDiskCache();
+  const relations = {
+    7001: [{ relationType: 'SEQUEL', id: 7002 }],
+    7002: [{ relationType: 'PREQUEL', id: 7001 }, { relationType: 'SEQUEL', id: 7003 }],
+    7003: [{ relationType: 'PREQUEL', id: 7002 }],
+    7004: [{ relationType: 'PREQUEL', id: 7002 }],
+  };
+  const formats = { 7001: 'TV', 7002: 'TV', 7003: 'TV', 7004: 'OVA' };
+  const titles = {
+    7001: { romaji: 'K-On!', english: "K-On!", native: 'けいおん！' },
+    7002: { romaji: 'K-On!!', english: 'K-On!!', native: 'けいおん！！' },
+    7003: { romaji: 'K-On!!!', english: 'K-On!!!', native: 'けいおん！！！' },
+  };
+  fetchHandler = async (_url, init) => {
+    const body = JSON.parse(init.body || '{}');
+    const query = body.query || '';
+    const id = body.variables?.id;
+    if (query.includes('relations') && query.includes('Media(id: $id')) {
+      const edges = (relations[id] || []).map((edge) => ({
+        relationType: edge.relationType,
+        node: { id: edge.id, type: 'ANIME', format: formats[edge.id] || 'TV' },
+      }));
+      return jsonResponse(200, { data: { Media: { id, format: formats[id] || 'TV', relations: { edges } } } });
+    }
+    if (query.includes('id_in: $ids')) {
+      return jsonResponse(200, { data: { Page: { media: (body.variables?.ids || []).map((mediaId) => rawMedia(mediaId, {
+        title: titles[mediaId],
+        synonyms: [],
+      })) } } });
+    }
+    return jsonResponse(400, { errors: [{ message: 'unexpected franchise season test query' }] });
+  };
+  await runTest('getCatalogFranchiseSeasons walks AniList PREQUEL/SEQUEL links and numbers K-On!! as season 2', async () => {
+    resetFetchCalls();
+    const info = await catalog.getCatalogFranchiseSeasons(7002);
+    assert.strictEqual(info.ownSeason, 2);
+    assert.deepStrictEqual(info.chain.map((entry) => [entry.season, entry.anilistId]), [[1, 7001], [2, 7002], [3, 7003]]);
+    assert.deepStrictEqual(info.chain[0].titles, ['K-On!', 'けいおん！']);
+    assert.ok(info.chain[1].titles.includes('K-On!!'));
+    assert.strictEqual(anilistCalls().length, 5, 'checks the requested TV format, walks the three graph nodes, then fetches chain titles once');
+  });
+  await runTest('getCatalogFranchiseSeasons does not number an OVA as a TV season', async () => {
+    const info = await catalog.getCatalogFranchiseSeasons(7004);
+    assert.deepStrictEqual(info, { ownSeason: null, chain: [] });
+  });
+}
+
 // ---------------------------------------------------------------------------
 console.log('================================================================');
 console.log('   CATALOG BACKEND TEST BATTERY (offline, mocked fetch)         ');
@@ -683,6 +732,18 @@ const FRIEREN_PAYLOAD = {
     }));
     assert.strictEqual(aniZip.dropInterleavedShortRows(noRuntime).dropped, 0);
   });
+
+  await runTest('dropInterleavedShortRows removes runtime-less Ura-On sketch compilations from K-On!!', async () => {
+    const rows = [
+      { number: 10, title: 'Teacher!', thumbnailUrl: null, airDate: null, runtime: null },
+      { number: 11, title: 'Childhood Memories: Yui’s Dream / Nodoka, Ritsu, Mio, Tsumugi / Sawako’s Dream', thumbnailUrl: null, airDate: null, runtime: null },
+      { number: 12, title: 'Summer Festival!', thumbnailUrl: null, airDate: null, runtime: null },
+      { number: 16, title: 'To the Rescue! Yui-chanman: Sticker / Sweet Bean Paste / Pain No More / Extra: Light Music Club Rap', thumbnailUrl: null, airDate: null, runtime: null },
+    ];
+    const { kept, dropped } = aniZip.dropInterleavedShortRows(rows);
+    assert.strictEqual(dropped, 2);
+    assert.deepStrictEqual(kept.map((episode) => episode.number), [10, 12]);
+  });
 }
 
 {
@@ -736,6 +797,61 @@ const FRIEREN_PAYLOAD = {
     const cached = JSON.parse(fs.readFileSync(diskCacheFile('anizip_206814.json'), 'utf-8'));
     assert.strictEqual(String(cached.kitsuId), '50497');
     assert.strictEqual(cached.episodes.length, 2);
+  });
+}
+
+{
+  const aniZip = await freshAniZip();
+  fetchHandler = (url) => {
+    if (url.startsWith('https://api.ani.zip/mappings?anilist_id=210001')) {
+      return jsonResponse(200, {
+        titles: { en: 'Phantom Cap Test' },
+        episodeCount: 3,
+        episodes: {
+          '1': { episode: '1', title: 'Slot One', airDate: '2026-01-03', runtime: 24, image: 'https://img/p1.jpg' },
+          '2': { episode: '2', title: 'Slot Two', airDate: '2026-01-10', runtime: 24, image: 'https://img/p2.jpg' },
+          // Franchise extra numbered beyond the season (ani.zip crosswalks
+          // list OVAs this way — observed live: K-On!'s OVA arrived as ep 19).
+          '5': { episode: '5', title: 'Franchise OVA Extra', airDate: '2026-03-01', runtime: 25, image: 'https://img/p5.jpg' },
+        },
+      });
+    }
+    // The live AniList query must never fire while the persisted context
+    // stands — anilistCalls().length is asserted to stay at 0.
+    return jsonResponse(404, {});
+  };
+  resetFetchCalls();
+  resetDiskCache();
+  // Pre-persist the airing context (as a previous view-open of this title
+  // would have written it): identityEpisodeCount is the persisted official
+  // episode count that must cap every source when the live context query is
+  // skipped (context still stands).
+  fs.mkdirSync(METADATA_CACHE_DIR, { recursive: true });
+  fs.writeFileSync(diskCacheFile('anicontext_210001.json'), JSON.stringify({
+    airedThrough: null,
+    nextAiringAt: null,
+    seasonStartAt: null,
+    bannerUrl: null,
+    posterUrl: null,
+    identityTitles: ['Phantom Cap Test'],
+    identitySeason: null,
+    identityEpisodeCount: 2,
+    streamEpisodes: [],
+    schedule: [],
+    fetchedAt: Date.now(),
+  }, null, 2), 'utf-8');
+
+  await runTest('persisted identityEpisodeCount caps franchise extras when the context query is skipped', async () => {
+    const { episodes } = await aniZip.fetchRemoteEpisodes(210001);
+    assert.deepStrictEqual(episodes.map((episode) => episode.number), [1, 2], 'phantom rows beyond the persisted count must not leak into the grid');
+    assert.strictEqual(episodes[0].title, 'Slot One');
+    assert.strictEqual(episodes[1].title, 'Slot Two');
+    assert.strictEqual(anilistCalls().length, 0, 'served-from-cache context must skip the live AniList query');
+    // The rewritten context must carry the persisted count forward.
+    const rewritten = JSON.parse(fs.readFileSync(diskCacheFile('anicontext_210001.json'), 'utf-8'));
+    assert.strictEqual(rewritten.identityEpisodeCount, 2);
+    const anizipCache = JSON.parse(fs.readFileSync(diskCacheFile('anizip_210001.json'), 'utf-8'));
+    assert.deepStrictEqual(anizipCache.episodes.map((e) => e.number), [1, 2], 'the disk cache must only hold in-range rows');
   });
 }
 

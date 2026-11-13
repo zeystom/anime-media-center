@@ -98,6 +98,10 @@ interface InternalJob {
   /** Requested episode set; null means select the whole season pack. */
   requestedEpisodes: number[] | null
   requestedSeason?: number | null
+  requestedFormat?: string | null
+  requestedAliases?: string[]
+  /** AniList PREQUEL/SEQUEL season names used to isolate punctuation-only seasons (e.g. K-On! / K-On!!). */
+  franchiseSeasons?: Array<{ season: number; titles: string[] }>
   /** Track if we've already attempted file selection */
   fileSelectionDone: boolean
   /** Per-file progress for UI */
@@ -135,7 +139,7 @@ interface InternalJob {
 
 const DOWNLOADS_FILE = 'downloads.json'
 
-let deps: { getSettings: () => AppSettings; onState: (state: any) => void; persistDir: string; createClient?: () => TorrentClientLike } | null = null
+let deps: { getSettings: () => AppSettings; onState: (state: any) => void; persistDir: string; appVersion?: string; createClient?: () => TorrentClientLike } | null = null
 let client: TorrentClientLike | null = null
 let enabled = false
 const jobs = new Map<string, InternalJob>()
@@ -170,6 +174,19 @@ function errMsg(err: unknown): string {
 
 function normHash(infoHash: unknown): string {
   return typeof infoHash === 'string' ? infoHash.trim().toLowerCase() : ''
+}
+
+/** Destroy matching torrents through WebTorrent's own lifecycle. Calling
+ * client.remove() after destroy is both redundant and async in WebTorrent 3;
+ * duplicate fire-and-forget calls reject when the torrent is already gone. */
+function destroyClientTorrents(clientLike: TorrentClientLike | null, infoHash: string, opts?: { destroyStore?: boolean }): void {
+  const torrents = (clientLike as any)?.torrents
+  if (!Array.isArray(torrents)) return
+  const key = normHash(infoHash)
+  for (const torrent of [...torrents]) {
+    if (normHash(torrent?.infoHash) !== key || torrent?.destroyed) continue
+    try { torrent.destroy?.(opts, () => {}) } catch {}
+  }
 }
 
 function getCachedTorrentPath(infoHash: unknown): string | null {
@@ -434,6 +451,9 @@ interface PersistedDownload {
   episode: number | null
   episodes?: number[]
   season?: number | null
+  mediaFormat?: string | null
+  mediaAliases?: string[]
+  franchiseSeasons?: Array<{ season: number; titles: string[] }>
   addedAt: number
   reportedSeeders?: number | null
   providerName?: string
@@ -463,6 +483,9 @@ function writePersistFileNow(): void {
           episode: job.episode,
           episodes: job.requestedEpisodes ?? undefined,
           season: job.requestedSeason ?? null,
+          mediaFormat: job.requestedFormat ?? null,
+          mediaAliases: job.requestedAliases,
+          franchiseSeasons: job.franchiseSeasons,
           addedAt: job.addedAt,
           reportedSeeders: job.reportedSeeders ?? null,
           providerName: job.providerName,
@@ -482,7 +505,7 @@ function writePersistFileNow(): void {
   }
 }
 
-export async function initTorrentEngine(incoming: { getSettings: () => AppSettings; onState: (state: any) => void; persistDir: string; createClient?: () => TorrentClientLike }): Promise<void> {
+export async function initTorrentEngine(incoming: { getSettings: () => AppSettings; onState: (state: any) => void; persistDir: string; appVersion?: string; createClient?: () => TorrentClientLike }): Promise<void> {
   if (!incoming || typeof incoming.getSettings !== 'function' || typeof incoming.onState !== 'function') {
     throw new Error('initTorrentEngine: getSettings and onState deps are required')
   }
@@ -589,7 +612,7 @@ export function engineGetJobDiagnostics(infoHash: string): string {
   lines.push('KAIKO TORRENT FULL DIAGNOSTIC REPORT')
   lines.push('================================================================================')
   lines.push(`Generated: ${now}`)
-  lines.push(`App Version: 1.0.15 (Platform: ${process.platform}, Arch: ${process.arch}, Node: ${process.version})`)
+  lines.push(`App Version: ${deps?.appVersion || 'unknown'} (Platform: ${process.platform}, Arch: ${process.arch}, Node: ${process.version})`)
   lines.push('')
   lines.push('--- [1] JOB OVERVIEW ---')
   lines.push(`Title: ${job.title}`)
@@ -1020,6 +1043,9 @@ function resumePersistedJobs(): number {
       anilistId: typeof entry.anilistId === 'number' ? entry.anilistId : null,
       episode: typeof entry.episode === 'number' ? entry.episode : null,
       requestedSeason: typeof entry.season === 'number' ? entry.season : null,
+      requestedFormat: typeof entry.mediaFormat === 'string' ? entry.mediaFormat : null,
+      requestedAliases: Array.isArray(entry.mediaAliases) ? entry.mediaAliases : undefined,
+      franchiseSeasons: Array.isArray(entry.franchiseSeasons) ? entry.franchiseSeasons : undefined,
       targetFolder: animeFolder,
       animeFolder,
       downloadDir: path.join(animeFolder, '.anime-center-staging', infoHash),
@@ -1081,6 +1107,7 @@ function runScheduler(): void {
       }
       jobs.delete(job.infoHash)
       writePersistFileNow()
+      emitState()
     }
   }
 }
@@ -1130,27 +1157,9 @@ async function activateJob(job: InternalJob): Promise<void> {
     if (typeof s.uploadSpeedLimitMBps === 'number' && s.uploadSpeedLimitMBps > 0) {
       opts.uploadLimit = Math.floor(s.uploadSpeedLimitMBps * 1024 * 1024)
     }
-    // Purge any lingering torrent in WebTorrent client before adding, eliminating "Cannot add duplicate torrent"
-    if (c) {
-      try {
-        if (typeof (c as any).remove === 'function' && Array.isArray((c as any).torrents)) {
-          const norm = (job.infoHash || '').toLowerCase().trim()
-          for (let i = (c as any).torrents.length - 1; i >= 0; i--) {
-            const t = (c as any).torrents[i]
-            const tHash = (t?.infoHash || '').toLowerCase().trim()
-            if (tHash === norm || t === job.torrent || t === job.connectingTorrent) {
-              try { t.destroy?.(undefined, () => {}) } catch {}
-              try { (c as any).torrents.splice(i, 1) } catch {}
-            }
-          }
-        }
-        const existing = (c as any).get?.(job.infoHash)
-        if (existing) {
-          try { existing.destroy(undefined, () => {}) } catch {}
-          try { (c as any).remove?.(job.infoHash, undefined, () => {}) } catch {}
-        }
-      } catch {}
-    }
+    // Destroy any stale matching torrent before adding. destroy() removes it
+    // from the WebTorrent client itself; do not also call async client.remove().
+    destroyClientTorrents(c, job.infoHash)
 
     const connectingTorrent = c.add(torrentInput, opts, undefined) as TorrentLike | undefined
     if (connectingTorrent && typeof connectingTorrent.on === 'function') {
@@ -1172,7 +1181,12 @@ function getClient(): TorrentClientLike | null {
 function updateFilesProgress(job: InternalJob): void {
   const t = job.torrent
   if (!t || !t.files) return
-  job.filesProgress = t.files
+  // Once selection is complete, the UI only needs progress for files that
+  // belong to this job. Whole-series torrents can contain hundreds of other
+  // episodes and extras; serializing all of them every second needlessly
+  // blocks the main process and causes renderer updates.
+  const progressFiles = job.fileSelectionDone ? (job.selectedFiles || []) : t.files
+  job.filesProgress = progressFiles
     .filter((f) => f.length && f.length > 0)
     .map((f) => ({
       // Keep the torrent-relative path so UI consumers can disambiguate
@@ -1316,10 +1330,25 @@ function isSpecialOrExtraVideo(filePath: string): boolean {
   const normalized = filePath.replace(/\\/g, '/')
   const segments = normalized.split('/')
   const name = segments[segments.length - 1] || ''
-  const parentDirs = segments.slice(0, -1).join(' / ')
-  const specialsDirRe = /(?:^|[\/ ])(?:movies?|extras?|specials?|ovas?|oads?|menus?|creditless)(?:$|[\/ ])/i;
-  const specialsNameRe = /(?:^|[\\/ ._()[\]-])(?:m\d{1,3}|movies?|ova|oad|ncop|nced|creditless|sp\d{1,3}|special|pv|menu|preview|trailer)(?:$|[\\/ ._()[\]-])/i;
-  return specialsDirRe.test(parentDirs) || specialsNameRe.test(name);
+  // The torrent's top-level directory is often its release title, which may
+  // mention movies/OVAs even when the contained file is a regular episode.
+  const childDirs = segments.slice(1, -1)
+  const specialsDirRe = /^(?:movies?|extras?|specials?|ovas?|oads?|menus?|creditless)$/i
+  const specialsNameRe = /(?:^|[\\/ ._()[\]-])(?:m\d{1,3}|movies?|ovas?|oads?|ncop|nced|creditless|sp\d{1,3}|specials?|pv|menu|preview|trailer)(?:$|[\\/ ._()[\]-])/i;
+  return childDirs.some((part) => specialsDirRe.test(part.trim())) || specialsNameRe.test(name);
+}
+
+/** Find only the requested OVA within a mixed season/bonus torrent. If the
+ * filename does not label OVA/OAD, require a distinctive title token. */
+function isRequestedOvaFile(filePath: string, title: string, aliases: string[] = []): boolean {
+  const normalized = filePath.replace(/\\/g, '/').toLowerCase()
+  const segments = normalized.split('/')
+  const basename = segments[segments.length - 1] || ''
+  const ovaMarker = /(?:^|[ ._()[\\]-])(?:ova|oad)(?:$|[ ._()[\\]-])/i
+  if (ovaMarker.test(basename) || segments.slice(1, -1).some((part) => /^(?:ova|oad)$/i.test(part.trim()))) return true
+  const tokens = [title, ...aliases].flatMap((value) => value.toLowerCase().match(/[a-z0-9]{4,}/g) || [])
+  const ignored = new Set(['season', 'episode', 'special', 'movie', 'complete', 'series'])
+  return tokens.some((token) => !ignored.has(token) && basename.includes(token))
 }
 
 function getSeasonNumberFromLabel(label: string): number | null {
@@ -1333,15 +1362,33 @@ function getSeasonNumberFromLabel(label: string): number | null {
   return shortSeason ? Number(shortSeason[1]) : null
 }
 
-function getFileSeasonNumber(filePath: string): number | null {
+function getFranchiseSeasonFromText(value: string, franchiseSeasons?: Array<{ season: number; titles: string[] }>): number | null {
+  if (!Array.isArray(franchiseSeasons) || franchiseSeasons.length < 2) return null
+  const text = value.toLowerCase().replace(/\\/g, '/')
+  const matches = franchiseSeasons.flatMap((entry) => (Array.isArray(entry.titles) ? entry.titles : [])
+    .filter((title) => typeof title === 'string' && title.trim().length >= 4 && text.includes(title.toLowerCase().trim()))
+    .map((title) => ({ season: entry.season, length: title.trim().length })))
+  if (!matches.length) return null
+  const longest = Math.max(...matches.map((match) => match.length))
+  const seasons = new Set(matches.filter((match) => match.length === longest).map((match) => match.season))
+  return seasons.size === 1 ? [...seasons][0] : null
+}
+
+function getFileSeasonNumber(filePath: string, franchiseSeasons?: Array<{ season: number; titles: string[] }>): number | null {
   const normalized = filePath.replace(/\\/g, '/')
   const seasonFromName = getSeasonNumberFromLabel(path.posix.basename(normalized))
   if (seasonFromName != null) return seasonFromName
-  for (const part of normalized.split('/').slice(0, -1).reverse()) {
+  const parts = normalized.split('/')
+  for (const part of parts.slice(0, -1).reverse()) {
     const match = /^(?:season|s)[ ._-]*0*(\d{1,2})$/i.exec(part.trim())
     if (match) return Number(match[1])
   }
-  return null
+  // Ignore the torrent's top-level folder: a whole-series release may be
+  // named after just one season, which says nothing about each child file.
+  const basename = parts[parts.length - 1] || ''
+  return getFranchiseSeasonFromText(basename, franchiseSeasons)
+    ?? parts.slice(1, -1).reverse().map((part) => getFranchiseSeasonFromText(part, franchiseSeasons)).find((season) => season != null)
+    ?? null
 }
 
 function collectAnimeFiles(folder: string): Array<{ name: string; episodeNumbers: number[] }> {
@@ -1391,7 +1438,16 @@ function selectFilesForJob(job: InternalJob, torrent: TorrentLike): TorrentFileL
   let chosen: TorrentFileLike[]
 
   // Select every explicitly queued episode from the same batch torrent.
-  if (job.requestedEpisodes != null) {
+  if (job.requestedFormat?.toUpperCase() === 'OVA') {
+    const candidates = videoFiles.filter((file) => isRequestedOvaFile(file.path || file.name, job.title, job.requestedAliases))
+    if (candidates.length !== 1) {
+      failJob(job, candidates.length === 0
+        ? 'Could not identify the requested OVA file in this release. Choose a release that labels the OVA/OAD or includes its title in the filename.'
+        : 'This release contains multiple possible OVA files. Choose a release with an unambiguous OVA filename.')
+      return []
+    }
+    chosen = candidates
+  } else if (job.requestedEpisodes != null) {
     chosen = []
     for (const epNum of job.requestedEpisodes) {
       if (existingEpisodes.has(epNum)) {
@@ -1405,7 +1461,7 @@ function selectFilesForJob(job: InternalJob, torrent: TorrentLike): TorrentFileL
           if (isNonEpisodeVideo(filePath) || isSpecialOrExtraVideo(filePath)) return []
           const episodeNumbers = getFileEpisodeNumbers(filePath)
           return episodeNumbers.includes(epNum)
-            ? [{ file, count: episodeNumbers.length, season: getFileSeasonNumber(filePath) }]
+            ? [{ file, count: episodeNumbers.length, season: getFileSeasonNumber(filePath, job.franchiseSeasons) }]
             : []
         } catch { return [] }
       }).sort((a, b) => a.count - b.count)
@@ -1451,9 +1507,17 @@ function selectFilesForJob(job: InternalJob, torrent: TorrentLike): TorrentFileL
       return []
     }
   } else {
-    const eligibleVideos = videoFiles.filter((file) => !isNonEpisodeVideo(file.path || file.name))
-    const fileSeasons = new Set(eligibleVideos
-      .map((file) => getFileSeasonNumber(file.path || file.name))
+    const eligibleVideos = videoFiles.filter((file) => {
+      const filePath = file.path || file.name
+      return !isNonEpisodeVideo(filePath) && !isSpecialOrExtraVideo(filePath)
+    })
+    // Season parsing examines release titles and franchise aliases. Do it once
+    // per file; the previous filtering path parsed every file repeatedly.
+    const seasonByFile = new Map<TorrentFileLike, number | null>(eligibleVideos.map((file) => [
+      file,
+      getFileSeasonNumber(file.path || file.name, job.franchiseSeasons),
+    ]))
+    const fileSeasons = new Set([...seasonByFile.values()]
       .filter((season): season is number => season != null))
     const releaseSeason = getSeasonNumberFromLabel(job.releaseTitle || torrent.name || '')
     if (job.requestedSeason != null && fileSeasons.size > 0 && !fileSeasons.has(job.requestedSeason)) {
@@ -1461,12 +1525,15 @@ function selectFilesForJob(job: InternalJob, torrent: TorrentLike): TorrentFileL
       return []
     }
     if (job.requestedSeason != null && fileSeasons.size > 0) {
-      const matchingSeasonFiles = eligibleVideos.filter((file) => getFileSeasonNumber(file.path || file.name) === job.requestedSeason)
+      const matchingSeasonFiles = eligibleVideos.filter((file) => seasonByFile.get(file) === job.requestedSeason)
       chosen = matchingSeasonFiles
     } else if (job.requestedSeason != null && releaseSeason === job.requestedSeason) {
       // File names in season-specific packs often contain only E01/E02; the
       // release title itself identifies their season.
       chosen = eligibleVideos
+    } else if (job.requestedSeason != null && (job.franchiseSeasons?.length || 0) > 1) {
+      failJob(job, `This release has multiple franchise seasons, but its files do not identify season ${job.requestedSeason}. Choose a season-labeled release.`)
+      return []
     } else if (job.requestedSeason != null && fileSeasons.size > 1) {
       failJob(job, `This release contains multiple seasons (${[...fileSeasons].sort((a, b) => a - b).join(', ')}), but the selected season could not be isolated.`)
       return []
@@ -1570,7 +1637,10 @@ function onTorrentDone(job: InternalJob, torrent: TorrentLike): void {
       engineGetJobDiagnostics(job.infoHash) // snapshot for recentDiagnostics cache
       torrent.destroy(undefined, () => {
         cleanupStage(job)
-        if (jobs.get(job.infoHash) === job) jobs.delete(job.infoHash)
+        if (jobs.get(job.infoHash) === job) {
+          jobs.delete(job.infoHash)
+          emitState()
+        }
         writePersistFileNow()
         runScheduler()
       })
@@ -1581,7 +1651,7 @@ function onTorrentDone(job: InternalJob, torrent: TorrentLike): void {
   job.seedingDeadline = Date.now() + seedMinutes * 60_000
 }
 
-export async function engineAddDownload(params: { item: ReleaseSearchResult; title: string; anilistId?: number | null; episode?: number | null; season?: number | null; targetFolder?: string; downloadRoot?: string }): Promise<{ success: boolean; error?: string; infoHash?: string }> {
+export async function engineAddDownload(params: { item: ReleaseSearchResult; title: string; anilistId?: number | null; episode?: number | null; season?: number | null; mediaFormat?: string | null; mediaAliases?: string[]; franchiseSeasons?: Array<{ season: number; titles: string[] }>; targetFolder?: string; downloadRoot?: string }): Promise<{ success: boolean; error?: string; infoHash?: string }> {
   if (!deps) return { success: false, error: 'Torrent engine is not initialized' }
   const s = getSettings()
   if (!isEngineAllowed(s)) {
@@ -1663,24 +1733,10 @@ export async function engineAddDownload(params: { item: ReleaseSearchResult; tit
       const oldTorrent = existingJob.torrent || existingJob.connectingTorrent
       existingJob.torrent = null
       existingJob.connectingTorrent = null
-      if (oldTorrent) {
+      if (oldTorrent && !((oldTorrent as any).destroyed)) {
         try { oldTorrent.destroy(null, () => {}) } catch {}
       }
-      if (client) {
-        if (typeof (client as any).remove === 'function' && Array.isArray((client as any).torrents)) {
-          const norm = infoHash.toLowerCase().trim()
-          for (let i = (client as any).torrents.length - 1; i >= 0; i--) {
-            const t = (client as any).torrents[i]
-            const tHash = (t?.infoHash || '').toLowerCase().trim()
-            if (tHash === norm || t === oldTorrent) {
-              try { t.destroy?.(undefined, () => {}) } catch {}
-              try { (client as any).torrents.splice(i, 1) } catch {}
-            }
-          }
-        }
-        try { (client as any).get?.(infoHash)?.destroy?.(undefined, () => {}) } catch {}
-        try { (client as any).remove?.(infoHash, undefined, () => {}) } catch {}
-      }
+      destroyClientTorrents(client, infoHash)
       existingJob.status = 'queued'
       existingJob.error = undefined
       existingJob.connectingSince = undefined
@@ -1792,6 +1848,9 @@ export async function engineAddDownload(params: { item: ReleaseSearchResult; tit
     requestedEpisode: typeof params?.episode === 'number' ? params.episode : null,
     requestedEpisodes: typeof params?.episode === 'number' && Number.isInteger(params.episode) && params.episode > 0 ? [params.episode] : null,
     requestedSeason: typeof params?.season === 'number' ? params.season : null,
+    requestedFormat: typeof params?.mediaFormat === 'string' ? params.mediaFormat : null,
+    requestedAliases: Array.isArray(params?.mediaAliases) ? params.mediaAliases : undefined,
+    franchiseSeasons: Array.isArray(params?.franchiseSeasons) ? params.franchiseSeasons : undefined,
     fileSelectionDone: false,
     filesProgress: [],
     selectedFiles: null,
@@ -1898,23 +1957,16 @@ export async function engineCancel(infoHash: string, removeFiles = false): Promi
   const key = normHash(infoHash)
   const job = jobs.get(key)
   if (!job) {
-    if (client) {
-      if (typeof (client as any).remove === 'function' && Array.isArray((client as any).torrents)) {
-        for (let i = (client as any).torrents.length - 1; i >= 0; i--) {
-          const t = (client as any).torrents[i]
-          const tHash = (t?.infoHash || '').toLowerCase().trim()
-          if (tHash === key || tHash === normHash(infoHash)) {
-            try { t.destroy?.(removeFiles ? { destroyStore: true } : undefined, () => {}) } catch {}
-            try { (client as any).torrents.splice(i, 1) } catch {}
-          }
-        }
-      }
-      try { (client as any).get?.(infoHash)?.destroy?.(removeFiles ? { destroyStore: true } : undefined, () => {}) } catch {}
-      try { (client as any).get?.(key)?.destroy?.(removeFiles ? { destroyStore: true } : undefined, () => {}) } catch {}
-      try { (client as any).remove?.(infoHash, removeFiles ? { destroyStore: true } : undefined, () => {}) } catch {}
-      try { (client as any).remove?.(key, removeFiles ? { destroyStore: true } : undefined, () => {}) } catch {}
-    }
-    return { success: false, error: 'Unknown download' }
+    const hadTorrent = Array.isArray((client as any)?.torrents)
+      && (client as any).torrents.some((torrent: any) => normHash(torrent?.infoHash) === key)
+    destroyClientTorrents(client, key, removeFiles ? { destroyStore: true } : undefined)
+    // Completion clears the in-memory job asynchronously. The renderer may
+    // still have its last completed row when the user clicks X; treat that
+    // already-removed row as a successful idempotent removal.
+    if (!hadTorrent && !recentDiagnostics.has(key)) return { success: false, error: 'Unknown download' }
+    writePersistFileNow()
+    emitState()
+    return { success: true }
   }
   addJobLog(job, `Job cancelled by user (removeFiles=${removeFiles})`)
   engineGetJobDiagnostics(key)
@@ -1922,7 +1974,7 @@ export async function engineCancel(infoHash: string, removeFiles = false): Promi
   const torrent = job.torrent || job.connectingTorrent
   job.torrent = null
   job.connectingTorrent = null
-  if (torrent) {
+  if (torrent && !(torrent as any).destroyed) {
     await new Promise<void>((resolve) => {
       let settled = false
       const finish = () => {
@@ -1938,23 +1990,9 @@ export async function engineCancel(infoHash: string, removeFiles = false): Promi
       }
     })
   }
-  // Guarantee removal from WebTorrent client so it never throws "Cannot add duplicate torrent"
-  if (client) {
-    if (typeof (client as any).remove === 'function' && Array.isArray((client as any).torrents)) {
-      for (let i = (client as any).torrents.length - 1; i >= 0; i--) {
-        const t = (client as any).torrents[i]
-        const tHash = (t?.infoHash || '').toLowerCase().trim()
-        if (tHash === key || tHash === normHash(infoHash) || t === torrent) {
-          try { t.destroy?.(removeFiles ? { destroyStore: true } : undefined, () => {}) } catch {}
-          try { (client as any).torrents.splice(i, 1) } catch {}
-        }
-      }
-    }
-    try { (client as any).get?.(infoHash)?.destroy?.(removeFiles ? { destroyStore: true } : undefined, () => {}) } catch {}
-    try { (client as any).get?.(key)?.destroy?.(removeFiles ? { destroyStore: true } : undefined, () => {}) } catch {}
-    try { (client as any).remove?.(infoHash, removeFiles ? { destroyStore: true } : undefined, () => {}) } catch {}
-    try { (client as any).remove?.(key, removeFiles ? { destroyStore: true } : undefined, () => {}) } catch {}
-  }
+  // destroy() removes a WebTorrent torrent from its client synchronously;
+  // clean up any duplicate stale entries without calling async client.remove.
+  destroyClientTorrents(client, key, removeFiles ? { destroyStore: true } : undefined)
   if (removeFiles) {
     cleanupStage(job)
     const cachedTorrent = getCachedTorrentPath(key)

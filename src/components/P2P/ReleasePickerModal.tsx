@@ -23,7 +23,7 @@ import {
   Search,
   X,
 } from 'lucide-react'
-import type { ProviderReport, ReleaseSearchResult } from '../../types'
+import type { FranchiseSeasonEntry, ProviderReport, ReleaseSearchResult } from '../../types'
 import type { ParsedRelease } from '../../lib/releaseParser/types.ts'
 import { formatEpisodeNumberPart, parseReleaseCore } from '../../lib/releaseParser/regexEngine.ts'
 import { classifyRelease, detectSeasonFromTitle, qualityRank, TORRENT_LANGUAGES, type ReleaseClassification, type ReleaseKind, type TorrentLanguageCode } from '../../lib/releaseParser/releaseClassification.ts'
@@ -34,6 +34,7 @@ interface ReleasePickerModalProps {
   /** Display title of the anime to search for. */
   title: string
   anilistId: number | null
+  mediaFormat?: string | null
   season?: number | null
   part?: number | null
   /** null = whole season / pack. */
@@ -43,6 +44,7 @@ interface ReleasePickerModalProps {
   episodeDurationMinutes?: number | null
   /** Alternative titles (romaji/english) tried alongside the main query. */
   aliases?: string[]
+  franchiseSeasons?: FranchiseSeasonEntry[]
   onCancel: () => void
   onPicked: (result: ReleaseSearchResult) => void
 }
@@ -105,12 +107,14 @@ export const ReleasePickerModal: React.FC<ReleasePickerModalProps> = ({
   open,
   title,
   anilistId,
+  mediaFormat,
   season,
   part,
   episode,
   episodeCount,
   episodeDurationMinutes,
   aliases,
+  franchiseSeasons,
   onCancel,
   onPicked,
 }) => {
@@ -166,11 +170,13 @@ export const ReleasePickerModal: React.FC<ReleasePickerModalProps> = ({
           title,
           aliases: aliases ?? [],
           anilistId,
+          mediaFormat: mediaFormat ?? null,
           season: season ?? null,
           part: part ?? null,
           episode: episode ?? null,
           episodeCount: episodeCount ?? null,
           episodeDurationMinutes: episodeDurationMinutes ?? null,
+          franchiseSeasons: franchiseSeasons ?? [],
           queryOverride,
         })
         .then((res) => {
@@ -198,7 +204,7 @@ export const ReleasePickerModal: React.FC<ReleasePickerModalProps> = ({
           setLoading(false)
         })
     },
-    [title, aliases, anilistId, season, part, episode, episodeCount, episodeDurationMinutes],
+    [title, aliases, anilistId, mediaFormat, season, part, episode, episodeCount, episodeDurationMinutes, franchiseSeasons],
   )
 
   // Reset the client-side filter each time the picker opens.
@@ -318,7 +324,7 @@ export const ReleasePickerModal: React.FC<ReleasePickerModalProps> = ({
   if (!open) return null
 
   const scopeLabel =
-    episode != null ? `Episode ${episode}` : effectiveSeason != null ? `Season ${effectiveSeason}` : 'Season pack'
+    episode != null ? `Episode ${episode}` : mediaFormat?.toUpperCase() === 'OVA' ? `OVA${effectiveSeason != null ? ` · Season ${effectiveSeason}` : ''}` : effectiveSeason != null ? `Season ${effectiveSeason}` : 'Season pack'
 
   // Results-area state machine (see file header): loading -> fatal / all
   // providers failed -> no indexers -> some ok but zero results -> results.

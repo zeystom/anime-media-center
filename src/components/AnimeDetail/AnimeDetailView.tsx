@@ -14,6 +14,7 @@ import type {
   AppSettings,
   CatalogItem,
   CatalogRelatedTitle,
+  FranchiseSeasonInfo,
   Episode,
   P2pState,
   PlaybackProgress,
@@ -225,6 +226,7 @@ export const AnimeDetailView: React.FC<AnimeDetailViewProps> = ({
   const [descriptionClamped, setDescriptionClamped] = useState(false)
   const [descriptionReaderOpen, setDescriptionReaderOpen] = useState(false)
   const [relatedTitles, setRelatedTitles] = useState<CatalogRelatedTitle[]>([])
+  const [franchiseSeasonInfo, setFranchiseSeasonInfo] = useState<FranchiseSeasonInfo | null>(null)
   const [relatedLoading, setRelatedLoading] = useState(false)
   const [remoteEpisodes, setRemoteEpisodes] = useState<RemoteEpisodeInfo[]>([])
   // Airing pointer shipped with the episodes payload (computed at fetch time,
@@ -359,6 +361,7 @@ export const AnimeDetailView: React.FC<AnimeDetailViewProps> = ({
     if (anilistId == null) {
       setDetails(null)
       setRelatedTitles([])
+      setFranchiseSeasonInfo(null)
       setRemoteEpisodes([])
       setRemoteAiredThrough(null)
       setRemoteArtwork({ bannerUrl: null, posterUrl: null })
@@ -371,6 +374,7 @@ export const AnimeDetailView: React.FC<AnimeDetailViewProps> = ({
     let unsubscribeUpdates: (() => void) | undefined
     setDetails(null)
     setRelatedTitles([])
+    setFranchiseSeasonInfo(null)
     setRemoteEpisodes([])
     setRemoteAiredThrough(null)
     setRemoteArtwork({ bannerUrl: null, posterUrl: null })
@@ -423,6 +427,12 @@ export const AnimeDetailView: React.FC<AnimeDetailViewProps> = ({
         if (!cancelled) setRelatedTitles([])
       }).finally(() => {
         if (!cancelled) setRelatedLoading(false)
+      })
+      void api.getCatalogFranchiseSeasons?.(anilistId).then((result) => {
+        if (!cancelled) setFranchiseSeasonInfo(result ?? null)
+      }).catch((error) => {
+        console.warn('[Anime overview] Franchise season chain failed:', error)
+        if (!cancelled) setFranchiseSeasonInfo(null)
       })
     }
     void load()
@@ -552,8 +562,10 @@ export const AnimeDetailView: React.FC<AnimeDetailViewProps> = ({
   }, [hero.description]);
 
   const seasonHint = useMemo(() => {
-    return detectSeasonFromTitle(hero.title) ?? parsedSeason
-  }, [parsedSeason, hero.title])
+    return franchiseSeasonInfo?.ownSeason ?? detectSeasonFromTitle(hero.title) ?? parsedSeason
+  }, [parsedSeason, hero.title, franchiseSeasonInfo?.ownSeason])
+
+  const franchiseSeasonTitles = useMemo(() => franchiseSeasonInfo?.chain ?? [], [franchiseSeasonInfo])
 
   const partHint = useMemo(() => {
     const match = /\b(?:part|cour)\s*0*(\d{1,2})\b/i.exec(hero.title)
@@ -570,7 +582,17 @@ export const AnimeDetailView: React.FC<AnimeDetailViewProps> = ({
     const displayKey = hero.title.trim().toLowerCase()
     const seen = new Set<string>([displayKey])
     const aliases: string[] = []
-    for (const t of [details.title.romaji, details.title.english]) {
+    const isOva = details.format?.toUpperCase() === 'OVA'
+    const parentTitles = isOva
+      ? relatedTitles
+        .filter((item) => item.format?.toUpperCase() === 'TV' && ['PREQUEL', 'SEQUEL'].includes(String(item.relationType || '').toUpperCase()))
+        .sort((a, b) => (a.relationType === 'PREQUEL' ? -1 : 0) - (b.relationType === 'PREQUEL' ? -1 : 0))
+        .flatMap((item) => [item.title.english, item.title.romaji].filter((value): value is string => !!value))
+      : []
+    const ovaSearchAliases = isOva
+      ? [...parentTitles.map((value) => `${value} OVA`), ...parentTitles]
+      : []
+    for (const t of [...ovaSearchAliases, details.title.romaji, details.title.english]) {
       if (!t) continue
       const key = t.trim().toLowerCase()
       if (!key || seen.has(key)) continue
@@ -578,7 +600,13 @@ export const AnimeDetailView: React.FC<AnimeDetailViewProps> = ({
       aliases.push(t)
     }
     return aliases
-  }, [details, hero.title])
+  }, [details, hero.title, relatedTitles])
+
+  const contentTitleAliases = useMemo(() => {
+    if (!details) return []
+    return Array.from(new Set([details.title.english, details.title.romaji, ...(details.synonyms || [])]
+      .filter((value): value is string => typeof value === 'string' && value.trim().length > 0)))
+  }, [details])
 
   useEffect(() => {
     setBgFailed(false)
@@ -993,7 +1021,7 @@ export const AnimeDetailView: React.FC<AnimeDetailViewProps> = ({
     if (!api?.searchReleases || !api.addDownload) return
     setQueueing(true)
     try {
-      const response = await api.searchReleases({ title: hero.title, aliases: searchAliases, anilistId, season: seasonHint, part: partHint, episode: null, episodeCount: details?.episodesCount ?? null, episodeDurationMinutes: details?.durationMinutes ?? null })
+      const response = await api.searchReleases({ title: hero.title, aliases: searchAliases, anilistId, season: seasonHint, part: partHint, episode: null, episodeCount: details?.episodesCount ?? null, episodeDurationMinutes: details?.durationMinutes ?? null, mediaFormat: details?.format ?? null, franchiseSeasons: franchiseSeasonTitles })
       // Automatic selection requires the release to actually name this show:
       // 'related' (a whole-word mention, e.g. "Re:Monster" for "Monster") and
       // 'none' are refused — only exact/prefix titles may auto-download.
@@ -1019,7 +1047,7 @@ export const AnimeDetailView: React.FC<AnimeDetailViewProps> = ({
         showGlobalToast(providerError ? `No release found: ${providerError}` : 'No matching season release found. Check your indexers in Settings.', 'error')
         return
       }
-      const result = await api.addDownload({ item: best, title: hero.title, anilistId, episode: null, season: seasonHint, ...downloadLocation() })
+      const result = await api.addDownload({ item: best, title: hero.title, anilistId, episode: null, season: seasonHint, mediaFormat: details?.format ?? null, mediaAliases: contentTitleAliases, franchiseSeasons: franchiseSeasonTitles, ...downloadLocation() })
       if (result?.success && usedEnglishDubFallback) showGlobalToast(`Season download queued with English dub: ${best.title}. No release with both English dub and English subtitles was found. You can create subtitles in Whisper Studio.`, 'warning')
       else if (result?.success) showGlobalToast(`Season download queued: ${best.title}`, 'success')
       else showGlobalToast(result?.error || 'Failed to queue the season download', 'error')
@@ -1054,7 +1082,7 @@ export const AnimeDetailView: React.FC<AnimeDetailViewProps> = ({
     void (async () => {
       let holdForManualPick = false
       try {
-        const response = await api.searchReleases({ title: hero.title, aliases: searchAliases, anilistId, season: seasonHint, part: partHint, episode, episodeCount: details?.episodesCount ?? null, episodeDurationMinutes: details?.durationMinutes ?? null })
+        const response = await api.searchReleases({ title: hero.title, aliases: searchAliases, anilistId, season: seasonHint, part: partHint, episode, episodeCount: details?.episodesCount ?? null, episodeDurationMinutes: details?.durationMinutes ?? null, mediaFormat: details?.format ?? null, franchiseSeasons: franchiseSeasonTitles })
         // Same title-relevance gate as the season auto-pick: only exact/prefix
         // releases may auto-download; 'related' ("Re:Monster", spin-offs) and
         // 'none' ("Pocket Monsters") are refused.
@@ -1078,7 +1106,7 @@ export const AnimeDetailView: React.FC<AnimeDetailViewProps> = ({
           showGlobalToast(skipped > 0 ? `No release for episode ${episode} was found; ${skipped} mismatched result(s) were skipped.` : providerError ? `No release found: ${providerError}` : `No release found for episode ${episode}.`, 'error')
           return
         }
-        const result = await api.addDownload({ item: best, title: hero.title, anilistId, episode, season: seasonHint, ...downloadLocation() })
+        const result = await api.addDownload({ item: best, title: hero.title, anilistId, episode, season: seasonHint, mediaFormat: details?.format ?? null, mediaAliases: contentTitleAliases, franchiseSeasons: franchiseSeasonTitles, ...downloadLocation() })
         if (result?.success && usedEnglishDubFallback) showGlobalToast(`Episode ${episode} queued with English dub: ${best.title}. No release with both English dub and English subtitles was found. You can create subtitles in Whisper Studio.`, 'warning')
         else if (result?.success) showGlobalToast(`Episode ${episode} queued: ${best.title}`, 'success')
         else showGlobalToast(result?.error || `Failed to queue episode ${episode}`, 'error')
@@ -1095,7 +1123,7 @@ export const AnimeDetailView: React.FC<AnimeDetailViewProps> = ({
         onLibraryChanged?.()
       }
     })()
-  }, [canDownload, episodeDownloadQueue, queueing, pickerState, activeQueuedEpisode, settings.releaseSelectionMode, settings.preferredTorrentAudioLanguages, settings.preferredTorrentSubtitleLanguages, hero.title, searchAliases, anilistId, seasonHint, details?.episodesCount, details?.durationMinutes, onLibraryChanged])
+  }, [canDownload, episodeDownloadQueue, queueing, pickerState, activeQueuedEpisode, settings.releaseSelectionMode, settings.preferredTorrentAudioLanguages, settings.preferredTorrentSubtitleLanguages, hero.title, searchAliases, anilistId, seasonHint, franchiseSeasonTitles, details?.episodesCount, details?.durationMinutes, onLibraryChanged])
 
   useEffect(() => {
     if (initialDownloadEpisode == null) {
@@ -1118,7 +1146,7 @@ export const AnimeDetailView: React.FC<AnimeDetailViewProps> = ({
     const { episode } = pickerState
     setQueueing(true)
     try {
-      const res = await api.addDownload({ item: result, title: hero.title, anilistId, episode, season: seasonHint, ...downloadLocation() })
+      const res = await api.addDownload({ item: result, title: hero.title, anilistId, episode, season: seasonHint, mediaFormat: details?.format ?? null, mediaAliases: contentTitleAliases, franchiseSeasons: franchiseSeasonTitles, ...downloadLocation() })
       if (res?.success) {
         showGlobalToast('Download queued — see the Downloads tab', 'success')
       } else {
@@ -2041,12 +2069,14 @@ export const AnimeDetailView: React.FC<AnimeDetailViewProps> = ({
         open={pickerState !== null}
         title={hero.title}
         anilistId={anilistId}
+        mediaFormat={details?.format ?? null}
         season={seasonHint}
         part={partHint}
         episode={pickerState?.episode ?? null}
         episodeCount={details?.episodesCount ?? null}
         episodeDurationMinutes={details?.durationMinutes ?? null}
         aliases={searchAliases}
+        franchiseSeasons={franchiseSeasonTitles}
         onCancel={handleCancelReleasePicker}
         onPicked={handlePickRelease}
       />

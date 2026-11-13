@@ -14,7 +14,7 @@ import { getKitsuMetadata, fetchAniSkipTimes } from './kitsu';
 import { extractEpisodeNumber } from './episodes';
 import { parseReleaseCore } from '../src/lib/releaseParser/regexEngine.ts';
 import { checkEpisodeDownloading, isFolderDownloading } from './torrents';
-import { getTrending, getPopularSeason, getAllTimePopular, getAiringSchedule, getRecommendations, getGenrePicks, getDiscoverCatalog, searchCatalog, getCatalogDetails, getCatalogFranchise } from './catalog';
+import { getTrending, getPopularSeason, getAllTimePopular, getAiringSchedule, getRecommendations, getGenrePicks, getDiscoverCatalog, searchCatalog, getCatalogDetails, getCatalogFranchise, getCatalogFranchiseSeasons } from './catalog';
 import { queryAnimeCharacters } from './anilist';
 import { fetchRemoteEpisodes, isAniZipCacheFresh, setRemoteEpisodesUpdateListener } from './aniZip';
 import { warmFribbIndex } from './fribb';
@@ -24,7 +24,7 @@ import { computeDiskUsage, computeStorageOverview, deleteAnime, deleteEpisodes }
 import { syncBackupNow, getBackupStatus, detectRestoreState, restoreFromBackup, scheduleBackupSync } from './userDataBackup';
 import { exportWatchlist, importWatchlist, MAL_ONLY_ANILIST_ID_BASE } from './watchlistIO';
 import { initTorrentEngine, engineSetEnabled, engineAddDownload, enginePause, engineResume, engineCancel, engineGetState, engineShutdown, engineGetJobDiagnostics } from './torrentEngine';
-import { searchProviders, rankReleasesForEpisode, isExplicitEpisodeMismatch, explicitReleasePart, isExplicitPartMismatch, isExplicitSeasonMismatch, getEpisodeReleaseSizeWarning, sanitizeSearchQuery, extractInfoHash, fetchReleaseDescription, inspectReleaseResults, computeTitleRelevance } from './indexers';
+import { searchProviders, rankReleasesForEpisode, isExplicitEpisodeMismatch, explicitReleasePart, isExplicitPartMismatch, isExplicitSeasonMismatch, isFranchiseSeasonTitleMismatch, getEpisodeReleaseSizeWarning, sanitizeSearchQuery, extractInfoHash, fetchReleaseDescription, inspectReleaseResults, computeTitleRelevance } from './indexers';
 import {
   initUpdater,
   checkForUpdates,
@@ -447,6 +447,7 @@ function setupIpcHandlers() {
   // Torrent engine (BYOC): only ever starts when the user enabled P2P and accepted the consent modal.
   initTorrentEngine({
     getSettings: () => storage.getSettings(),
+    appVersion: app.getVersion(),
     onState: (state) => {
       if (mainWindow && !mainWindow.isDestroyed()) {
         mainWindow.webContents.send('p2p-state-changed', state);
@@ -1406,6 +1407,10 @@ function setupIpcHandlers() {
     return getCatalogFranchise(anilistId);
   });
 
+  ipcMain.handle('catalog:franchise-season', async (_event, anilistId: number) => {
+    return getCatalogFranchiseSeasons(anilistId);
+  });
+
   ipcMain.handle('metadata:remote-episodes', async (_event, anilistId: number) => {
     return fetchRemoteEpisodes(anilistId);
   });
@@ -1554,7 +1559,13 @@ function setupIpcHandlers() {
     episode?: number | null
     episodeCount?: number | null
     episodeDurationMinutes?: number | null
+    mediaFormat?: string | null
     queryOverride?: string
+    /** Titles of every season in the title's PREQUEL/SEQUEL chain (AniList
+     *  franchise graph). Lets the search reject releases that name another
+     *  season by its exact title ("K-On!!" while searching "K-On!") — such
+     *  titles carry no parseable season marker. */
+    franchiseSeasons?: { season: number; titles: string[] }[] | null
   }) => {
     const settings = storage.getSettings();
     const providers = (Array.isArray(settings.rssProviders) ? settings.rssProviders : []).filter((p) => p.enabled);
@@ -1650,7 +1661,10 @@ function setupIpcHandlers() {
     }));
     const compatible = ranked.filter((release) =>
       !isExplicitPartMismatch(release, requestedPart) &&
-      !isExplicitSeasonMismatch(release, params?.season, title) &&
+      !isExplicitSeasonMismatch(release, params?.season, title, params?.franchiseSeasons) &&
+      // Manual query overrides are the user's explicit intent — the franchise
+      // title filter only guards the automatic title/alias searches.
+      (!override.trim() || !isFranchiseSeasonTitleMismatch(release, params?.season, params?.franchiseSeasons)) &&
       (params?.episode == null || !isExplicitEpisodeMismatch(release, params.episode))
     );
     console.log(`[P2P] search "${queries.join('" / "')}" -> ${compatible.length} compatible results (${ranked.length - compatible.length} wrong-part/episode result(s) skipped)`);

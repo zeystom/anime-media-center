@@ -633,3 +633,105 @@ export async function getCatalogFranchise(anilistId: number): Promise<CatalogRel
     });
   }, { emptyValue: [] });
 }
+
+// --- Franchise season chain --------------------------------------------------
+
+export interface FranchiseSeasonEntry {
+  season: number;
+  anilistId: number;
+  titles: string[];
+}
+
+export interface FranchiseSeasonInfo {
+  /** The requested entry's season number inside its PREQUEL/SEQUEL chain
+   *  (AniList's relation graph is the source of truth — titles like K-On!,
+   *  K-On!! carry no parseable season marker). null when the chain cannot be
+   *  established (network failure, unknown id). */
+  ownSeason: number | null;
+  /** Every season entry of the chain with its titles, ascending by season. */
+  chain: FranchiseSeasonEntry[];
+}
+
+/** Franchise structure is immutable for an existing entry, but sequels get
+ *  annexed over time — a month is a safe refresh window. */
+const TTL_FRANCHISE_SEASON_MS = 30 * 24 * 60 * 60 * 1000;
+/** Bounded walks: one AniList query per hop, results cached on disk. */
+const MAX_FRANCHISE_CHAIN_HOPS = 12;
+
+/** Per-process relations cache so a single walk never re-queries a node. */
+const franchiseRelationsCache = new Map<number, { relationType: string; nodeId: number }[]>();
+
+async function franchiseAnimeRelations(id: number): Promise<{ relationType: string; nodeId: number }[]> {
+  const cached = franchiseRelationsCache.get(id);
+  if (cached) return cached;
+  const root = await queryFranchise(id);
+  const edges = (root?.relations?.edges || [])
+    .filter((edge) => edge.node?.type === 'ANIME' && ['TV', 'TV_SHORT'].includes(String(edge.node?.format || '').toUpperCase()) && typeof edge.node?.id === 'number' && edge.relationType)
+    .map((edge) => ({ relationType: String(edge.relationType), nodeId: Number(edge.node!.id) }));
+  franchiseRelationsCache.set(id, edges);
+  return edges;
+}
+
+/** Follows one relation type from `startId` (PREQUEL walks to earlier
+ *  seasons, SEQUEL to later ones), returning the visited ids in walk order.
+ *  AniList cannot express recursive graphs, so each hop is its own query —
+ *  bounded and cached by the relations map above. */
+async function walkFranchiseRelation(startId: number, relationType: string): Promise<number[] | null> {
+  const visited: number[] = [];
+  const seen = new Set<number>([startId]);
+  let current = startId;
+  for (let hop = 0; hop < MAX_FRANCHISE_CHAIN_HOPS; hop += 1) {
+    let next: number | null = null;
+    try {
+      const edges = await franchiseAnimeRelations(current);
+      next = edges.find((edge) => edge.relationType === relationType && !seen.has(edge.nodeId))?.nodeId ?? null;
+    } catch {
+      return null;
+    }
+    if (next == null) break;
+    visited.push(next);
+    seen.add(next);
+    current = next;
+  }
+  return visited;
+}
+
+/**
+ * Resolves the requested entry's position in its PREQUEL/SEQUEL season chain
+ * plus the titles of every chain member. Powers season-aware torrent search:
+ * without it a season is only detectable from title markers ("Season 2",
+ * "S2", "II"), which titles like K-On!! never carry.
+ */
+export async function getCatalogFranchiseSeasons(anilistId: number): Promise<FranchiseSeasonInfo> {
+  const id = Math.trunc(Number(anilistId));
+  const empty: FranchiseSeasonInfo = { ownSeason: null, chain: [] };
+  if (!Number.isFinite(id) || id <= 0) return empty;
+  return cachedServiceCall(`franchise_season_v2_${id}`, TTL_FRANCHISE_SEASON_MS, async () => {
+    const root = await queryFranchise(id);
+    // Season numbering is for the TV broadcast chain. OVAs, movies and
+    // specials can link to a season but must not consume a season number.
+    if (!['TV', 'TV_SHORT'].includes(String(root?.format || '').toUpperCase())) return empty;
+    const prequelIds = await walkFranchiseRelation(id, 'PREQUEL');
+    if (prequelIds == null) return empty;
+    // prequelIds[0] is the direct prequel (ownSeason - 1), prequelIds[1] one
+    // season earlier, ... — reverse into ascending season order.
+    const earlier = prequelIds.slice().reverse();
+    const ownSeason = earlier.length + 1;
+    const sequelIds = await walkFranchiseRelation(id, 'SEQUEL');
+    if (sequelIds == null) return empty;
+    const chainIds = [...earlier, id, ...sequelIds];
+    const media = await queryFranchiseMedia(chainIds);
+    const titlesById = new Map<number, string[]>();
+    for (const item of media) {
+      const titles = [item.title?.romaji, item.title?.english, item.title?.native, ...(item.synonyms || [])]
+        .filter((value): value is string => typeof value === 'string' && !!value.trim());
+      titlesById.set(item.id, Array.from(new Set(titles)));
+    }
+    const chain: FranchiseSeasonEntry[] = [
+      ...earlier.map((chainId, index) => ({ season: index + 1, anilistId: chainId, titles: titlesById.get(chainId) || [] })),
+      { season: ownSeason, anilistId: id, titles: titlesById.get(id) || [] },
+      ...sequelIds.map((chainId, index) => ({ season: ownSeason + 1 + index, anilistId: chainId, titles: titlesById.get(chainId) || [] })),
+    ];
+    return { ownSeason, chain } satisfies FranchiseSeasonInfo;
+  }, { emptyValue: empty });
+}

@@ -22,7 +22,7 @@ import { storage } from './storage.ts';
 import { runAniListQuery } from './anilist.ts';
 import { getFribbIndex, lookupFribbIds } from './fribb.ts';
 
-const ANI_ZIP_CACHE_NORMALIZER_VERSION = 2;
+const ANI_ZIP_CACHE_NORMALIZER_VERSION = 3;
 
 export interface RemoteEpisodeInfo {
   number: number;
@@ -255,11 +255,24 @@ export function dropInterleavedShortRows(rows: RemoteEpisodeInfo[]): { kept: Rem
   // Median of the season. Only long-form seasons (>= 12 min typical) can have
   // interleaved shorts; below that the series itself is shorts-shaped.
   const typicalRuntime = runtimes.length >= 3 ? runtimes[Math.floor(runtimes.length / 2)] : null;
-  const isShort = typicalRuntime != null && typicalRuntime >= 12
-    ? (episode: RemoteEpisodeInfo) => episode.runtime != null && episode.runtime < typicalRuntime / 2
-    : () => false;
+  const isShort = (episode: RemoteEpisodeInfo) => {
+    if (typicalRuntime != null && typicalRuntime >= 12 && episode.runtime != null && episode.runtime < typicalRuntime / 2) return true
+    // AniDB/TVDB sometimes attaches anthology shorts to the numbered TV
+    // crosswalk without a runtime. K-On!!'s Ura-On!! sketches are one example:
+    // their distinctive titles were incorrectly shown as regular episodes 11
+    // and 16. Keep this title fallback narrow; ordinary long episode titles
+    // may also contain slashes.
+    return isAnthologyShortTitle(episode.title)
+  }
   const kept = rows.filter((episode) => !isShort(episode));
   return { kept, dropped: rows.length - kept.length };
+}
+
+function isAnthologyShortTitle(title: string | null | undefined): boolean {
+  if (typeof title !== 'string') return false
+  const normalized = title.toLowerCase().replace(/[’‘]/g, "'")
+  if (/yui[- ]?chanman|sweet bean paste|pain no more|light music club rap|keionbu rap/.test(normalized)) return true
+  return /^childhood memories:/.test(normalized) && title.split(/\s*[\/／]\s*/).length >= 3
 }
 
 /** Marks how the last fetchAniZipMappings call for an id obtained its rows. */
@@ -313,6 +326,12 @@ interface AiringContextSnapshot {
    *  served-from-cache context can still validate a Kitsu mapping. */
   identityTitles: string[];
   identitySeason: number | null;
+  /** Official episode count from the AniList entry. The trustworthy cap for
+   *  every episode source: when the live context query is skipped (context
+   *  still stands) or fails, ani.zip franchise extras numbered beyond the
+   *  season (its crosswalk lists K-On!'s OVA as ep 19) would otherwise leak
+   *  into the grid as phantom slots. */
+  identityEpisodeCount: number | null;
   /** AniList episode titles/thumbnails are independent of the airing schedule.
    *  Persist them too, so a fresh schedule cache never suppresses the query
    *  that supplies episode artwork. `null` means this has not been fetched. */
@@ -338,6 +357,7 @@ function readAiringContext(anilistId: number): (AiringContextSnapshot & { fetche
       posterUrl: typeof parsed.posterUrl === 'string' && parsed.posterUrl ? parsed.posterUrl : null,
       identityTitles: Array.isArray(parsed.identityTitles) ? parsed.identityTitles.filter((t: unknown): t is string => typeof t === 'string' && !!t) : [],
       identitySeason: Number.isInteger(parsed.identitySeason) ? Number(parsed.identitySeason) : null,
+      identityEpisodeCount: Number.isInteger(parsed.identityEpisodeCount) && parsed.identityEpisodeCount > 0 ? Number(parsed.identityEpisodeCount) : null,
       streamEpisodes: Array.isArray(parsed.streamEpisodes)
         ? parsed.streamEpisodes
           .filter((episode: any) => Number.isInteger(episode?.number) && episode.number > 0)
@@ -768,7 +788,15 @@ async function runRemoteEpisodesPipeline(anilistId: number, notify: (payload: Re
     // Titles/season let the Kitsu identity check work on served-from-cache
     // runs (hedge page 1 and the fallback) without a live context query.
     if (identity.titles.length === 0 && cachedContext && cachedContext.identityTitles.length > 0) {
-      identity = { titles: cachedContext.identityTitles, episodeCount: null, season: cachedContext.identitySeason };
+      identity = { titles: cachedContext.identityTitles, episodeCount: cachedContext.identityEpisodeCount, season: cachedContext.identitySeason };
+    }
+    // The official episode count travels with the context: when the live
+    // AniList query is skipped (context still stands) or fails, the persisted
+    // count is the only trustworthy cap. Without it, ani.zip franchise extras
+    // numbered beyond the season (its crosswalk lists K-On!'s OVA as ep 19)
+    // leak into the grid as phantom slots.
+    if (aniListCount == null && cachedContext?.identityEpisodeCount != null) {
+      aniListCount = cachedContext.identityEpisodeCount;
     }
   }
 
@@ -896,7 +924,8 @@ async function runRemoteEpisodesPipeline(anilistId: number, notify: (payload: Re
       const stream = streamEpisodes.get(number);
       const slotTime = scheduleByNumber.get(number);
       const slotIso = slotTime != null ? new Date(slotTime).toISOString() : null;
-      const title = row?.title || alternate?.title || stream?.title || null;
+      const title = [row?.title, alternate?.title, stream?.title]
+        .find((candidate) => candidate && !isAnthologyShortTitle(candidate)) || null;
       // Nothing at all for this slot (ani.zip/Kitsu/streaming/schedule).
       if (!row && !alternate && !stream && !slotIso) continue;
       // Platform-only rows (streaming list without an ani.zip/Kitsu row) are
@@ -1073,6 +1102,7 @@ async function runRemoteEpisodesPipeline(anilistId: number, notify: (payload: Re
     posterUrl: final.posterUrl,
     identityTitles: identity.titles,
     identitySeason: identity.season,
+    identityEpisodeCount: identity.episodeCount,
     streamEpisodes: contextFailed
       ? cachedContext?.streamEpisodes ?? null
       : [...streamEpisodes].map(([number, episode]) => ({ number, ...episode })),

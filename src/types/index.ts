@@ -4,6 +4,8 @@ import type { WhisperEngineDownloadProgress } from '../../electron/types';
 export type {
   CatalogItem,
   CatalogRelatedTitle,
+  FranchiseSeasonEntry,
+  FranchiseSeasonInfo,
   AiringEntry,
   CatalogNextAiringEpisode,
   GenrePickRail,
@@ -28,7 +30,7 @@ export interface StorageOverview {
   freeBytes: number | null;
 }
 
-import type { CatalogItem, CatalogRelatedTitle, AiringEntry, DiscoverCatalogPage, GenrePickRail } from '../../electron/catalog';
+import type { CatalogItem, CatalogRelatedTitle, AiringEntry, DiscoverCatalogPage, GenrePickRail, FranchiseSeasonEntry } from '../../electron/catalog';
 import type { RemoteEpisodeInfo, RemoteEpisodesResult } from '../../electron/aniZip';
 import type { UserLibraryEntry, UserListStatus } from '../../electron/userLibrary';
 import type { P2pState, VpnStatus, ReleaseSearchResult, RssProvider, AppSettings, ReleaseSearchResponse } from '../../electron/types';
@@ -179,9 +181,10 @@ export interface ElectronAPI {
   enableP2p: () => Promise<{ success: boolean; error?: string }>;
   disableP2p: () => Promise<{ success: boolean }>;
   getVpnStatus: () => Promise<VpnStatus>;
-  searchReleases: (params: { title: string; aliases?: string[]; anilistId?: number | null; season?: number | null; part?: number | null; episode?: number | null; episodeCount?: number | null; episodeDurationMinutes?: number | null; queryOverride?: string }) => Promise<ReleaseSearchResponse>;
+  searchReleases: (params: { title: string; aliases?: string[]; anilistId?: number | null; season?: number | null; part?: number | null; episode?: number | null; episodeCount?: number | null; episodeDurationMinutes?: number | null; mediaFormat?: string | null; queryOverride?: string; franchiseSeasons?: FranchiseSeasonEntry[] | null }) => Promise<ReleaseSearchResponse>;
+  getCatalogFranchiseSeasons?: (anilistId: number) => Promise<{ ownSeason: number | null; chain: FranchiseSeasonEntry[] } | null>;
   fetchReleaseDescription: (params: { providerId: string; url: string }) => Promise<string>;
-  addDownload: (params: { item: ReleaseSearchResult; title: string; anilistId?: number | null; episode?: number | null; season?: number | null; targetFolder?: string; downloadRoot?: string }) => Promise<{ success: boolean; infoHash?: string; error?: string }>;
+  addDownload: (params: { item: ReleaseSearchResult; title: string; anilistId?: number | null; episode?: number | null; season?: number | null; mediaFormat?: string | null; mediaAliases?: string[]; franchiseSeasons?: FranchiseSeasonEntry[]; targetFolder?: string; downloadRoot?: string }) => Promise<{ success: boolean; infoHash?: string; error?: string }>;
   pauseDownload: (infoHash: string) => Promise<{ success: boolean }>;
   resumeDownload: (infoHash: string) => Promise<{ success: boolean }>;
   cancelDownload: (infoHash: string, removeFiles?: boolean) => Promise<{ success: boolean; error?: string }>;

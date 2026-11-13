@@ -43,8 +43,9 @@ import {
   extractInfoHash,
   computeTitleRelevance,
   isExplicitSeasonMismatch,
+  isFranchiseSeasonTitleMismatch,
 } from './electron/indexers.ts';
-import { classifyRelease, detectSeasonFromTitle, qualityRank } from './src/lib/releaseParser/releaseClassification.ts';
+import { classifyRelease, detectSeasonFromTitle, isMultiSeasonCollection, qualityRank } from './src/lib/releaseParser/releaseClassification.ts';
 import { detectVpnStatus, clearVpnCache } from './electron/vpnGuard.ts';
 
 let passed = 0;
@@ -894,6 +895,64 @@ async function main() {
     assert.strictEqual(classifyRelease('Show OVA [English Dub]').kind, 'ova');
   });
 
+  runTest('4.12 adversarial season matrix rejects 96 wrong-season release title variants', () => {
+    const franchises = [
+      { seasons: [{ season: 1, titles: ['K-On!'] }, { season: 2, titles: ['K-On!!'] }], names: ['K-On!', 'K-On!!'] },
+      { seasons: [{ season: 1, titles: ['Jujutsu Kaisen'] }, { season: 2, titles: ['Jujutsu Kaisen Season 2'] }], names: ['Jujutsu Kaisen', 'Jujutsu Kaisen Season 2'] },
+      { seasons: [{ season: 1, titles: ['Mob Psycho 100'] }, { season: 2, titles: ['Mob Psycho 100 II'] }], names: ['Mob Psycho 100', 'Mob Psycho 100 II'] },
+      { seasons: [{ season: 1, titles: ['DanMachi'] }, { season: 2, titles: ['DanMachi II'] }], names: ['DanMachi', 'DanMachi II'] },
+      { seasons: [{ season: 1, titles: ['Re:Zero'] }, { season: 2, titles: ['Re:Zero 2nd Season'] }], names: ['Re:Zero', 'Re:Zero 2nd Season'] },
+      { seasons: [{ season: 1, titles: ['Attack on Titan'] }, { season: 2, titles: ['Attack on Titan Season 2'] }], names: ['Attack on Titan', 'Attack on Titan Season 2'] },
+    ];
+    const releaseShapes = [
+      (name, season) => `[Group] ${name} - 01 [1080p]`,
+      (name, season) => `[SubsPlease] ${name} S0${season}E01 [1080p]`,
+      (name, season) => `[Group] ${name} (Season ${season}) [Batch] [BD]`,
+      (name, season) => `[Fansub] ${name} Episode 01 [Dual Audio]`,
+      (name, season) => `[Anime Time] ${name} [Complete Series] [Dual Audio]`,
+      (name, season) => `[Group] ${name} 01-12 Complete [BD 1080p]`,
+      (name, season) => `[Group] ${name} - 01 [English Dub][Multi-Subs]`,
+      (name, season) => `[Group] ${name} 1-26+OVA Complete (BD1080p AC3)`,
+    ];
+    let checked = 0;
+    for (const franchise of franchises) {
+      for (const targetSeason of [1, 2]) {
+        const foreignSeason = targetSeason === 1 ? 2 : 1;
+        for (const buildTitle of releaseShapes) {
+          const title = buildTitle(franchise.names[foreignSeason - 1], foreignSeason);
+          const result = makeResult(title, 10);
+          const rejected = isExplicitSeasonMismatch(result, targetSeason, undefined, franchise.seasons)
+            || isFranchiseSeasonTitleMismatch(result, targetSeason, franchise.seasons);
+          // A title-less Season 1 release can be genuinely ambiguous when
+          // AniList lists the same root title for both seasons. Numbered
+          // season markers and distinct franchise titles must still reject.
+          const ambiguousBase = targetSeason === 2 && foreignSeason === 1
+            && [0, 3, 4, 5, 6, 7].includes(releaseShapes.indexOf(buildTitle))
+            && !franchise.names[0].startsWith('K-On')
+            && franchise.names[0].replace(/[^a-z0-9]/gi, '').toLowerCase() === franchise.names[1].replace(/[^a-z0-9]/gi, '').toLowerCase();
+          const isCrossSeasonBundle = releaseShapes.indexOf(buildTitle) === 7;
+          assert.strictEqual(rejected, !ambiguousBase && !isCrossSeasonBundle, `wrong result for season ${targetSeason}: ${title}`);
+          checked++;
+        }
+      }
+    }
+    assert.strictEqual(checked, 96);
+  });
+
+  runTest('4.13 season bundle fixtures classify correctly and explicit multi-season packs are marked', () => {
+    const allSeasons = '[Anime Time] K-On! [Complete Series] (Season 01 + Season 02 + Movie + OVA + Specials) [BD][Dual Audio][1080p]';
+    const packedSeason = '[anime4life.] K-ON!! 1-26+OVA Complete (BD1080p AC3 10bit) [x265_HEVC] Dual Audio';
+    assert.strictEqual(classifyRelease(allSeasons).kind, 'season-pack');
+    assert.strictEqual(classifyRelease(allSeasons).kindLabel, 'Complete series pack');
+    assert.strictEqual(isMultiSeasonCollection(allSeasons), true);
+    assert.strictEqual(classifyRelease(packedSeason).kind, 'season-pack');
+    assert.strictEqual(isMultiSeasonCollection(packedSeason), false);
+    const chain = [{ season: 1, titles: ['K-On!'] }, { season: 2, titles: ['K-On!!'] }];
+    assert.strictEqual(isExplicitSeasonMismatch({ title: allSeasons }, 2, undefined, chain), false, 'a whole-series bundle is compatible with a selected constituent season');
+    assert.strictEqual(isFranchiseSeasonTitleMismatch({ title: allSeasons }, 2, chain), false);
+    assert.strictEqual(isFranchiseSeasonTitleMismatch({ title: packedSeason }, 1, chain), false);
+  });
+
   await runAsyncTest('4.11 detail page inspection enriches search results and stays on the configured source origin', async () => {
     const original = globalThis.fetch;
     let request = null;
@@ -1064,6 +1123,20 @@ async function main() {
     assert.strictEqual(sanitizeSearchQuery('鬼滅の刃 Second Season'), '鬼滅の刃 Second Season', 'unicode word characters survive');
     assert.strictEqual(sanitizeSearchQuery('!!!'), '', 'punctuation-only input sanitizes to empty');
     assert.strictEqual(sanitizeSearchQuery(''), '');
+  });
+
+  runTest('7.1a sanitizeSearchQuery keeps intra-word hyphens, drops separator hyphens', () => {
+    // Nyaa fulltext treats "K-ON" and "K ON" as different queries; every
+    // release name carries the hyphen, so stripping it starved the search
+    // (observed live: "K ON" found nothing on Nyaa while "K-ON" does).
+    assert.strictEqual(sanitizeSearchQuery('K-ON!'), 'K-ON');
+    assert.strictEqual(sanitizeSearchQuery('K-ON!! Season 2'), 'K-ON Season 2');
+    assert.strictEqual(sanitizeSearchQuery('erai-raws [1080p]'), 'erai-raws 1080p', 'group names keep their hyphen');
+    assert.strictEqual(sanitizeSearchQuery('10-bit hevc'), '10-bit hevc');
+    assert.strictEqual(sanitizeSearchQuery('Re:Zero - Starting Life'), 'Re Zero Starting Life', 'a spaced hyphen is a separator');
+    assert.strictEqual(sanitizeSearchQuery('Title -5'), 'Title 5', 'hyphen adjacent to a space is a separator');
+    assert.strictEqual(sanitizeSearchQuery('K - ON'), 'K ON', 'spaced hyphen never becomes intra-word');
+    assert.strictEqual(sanitizeSearchQuery('-Leading and Trailing-'), 'Leading and Trailing');
   });
 
   runTest('7.2 sanitizeSearchQuery handles non-string input defensively', () => {

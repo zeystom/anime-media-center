@@ -140,6 +140,7 @@ contextBridge.exposeInMainWorld('electronAPI', {
     return () => ipcRenderer.removeListener('age-ratings:updated', listener);
   },
   getCatalogFranchise: (anilistId: number) => ipcRenderer.invoke('catalog:franchise', anilistId),
+  getCatalogFranchiseSeasons: (anilistId: number) => ipcRenderer.invoke('catalog:franchise-season', anilistId),
   getRemoteEpisodes: (anilistId: number) => ipcRenderer.invoke('metadata:remote-episodes', anilistId),
   // User Library
   getUserLibrary: () => ipcRenderer.invoke('user-library:get-all'),
@@ -177,11 +178,11 @@ contextBridge.exposeInMainWorld('electronAPI', {
   acceptP2pConsent: () => ipcRenderer.invoke('p2p:accept-consent'),
   enableP2p: () => ipcRenderer.invoke('p2p:enable'),
   disableP2p: () => ipcRenderer.invoke('p2p:disable'),
-  searchReleases: (params: { title: string; aliases?: string[]; anilistId?: number | null; season?: number | null; part?: number | null; episode?: number | null; episodeCount?: number | null; queryOverride?: string }) =>
+  searchReleases: (params: { title: string; aliases?: string[]; anilistId?: number | null; season?: number | null; part?: number | null; episode?: number | null; episodeCount?: number | null; episodeDurationMinutes?: number | null; mediaFormat?: string | null; queryOverride?: string; franchiseSeasons?: Array<{ season: number; titles: string[] }> | null }) =>
     ipcRenderer.invoke('p2p:search', params),
   fetchReleaseDescription: (params: { providerId: string; url: string }) =>
     ipcRenderer.invoke('p2p:release-description', params) as Promise<string>,
-  addDownload: (params: { item: import('./types').ReleaseSearchResult; title: string; anilistId?: number | null; episode?: number | null; season?: number | null; targetFolder?: string; downloadRoot?: string }) =>
+  addDownload: (params: { item: import('./types').ReleaseSearchResult; title: string; anilistId?: number | null; episode?: number | null; season?: number | null; mediaFormat?: string | null; mediaAliases?: string[]; franchiseSeasons?: Array<{ season: number; titles: string[] }>; targetFolder?: string; downloadRoot?: string }) =>
     ipcRenderer.invoke('p2p:add-download', params),
   pauseDownload: (infoHash: string) => ipcRenderer.invoke('p2p:pause', infoHash),
   resumeDownload: (infoHash: string) => ipcRenderer.invoke('p2p:resume', infoHash),

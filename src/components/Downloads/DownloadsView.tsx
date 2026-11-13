@@ -371,7 +371,7 @@ export const DownloadsView: React.FC<DownloadsViewProps> = ({ onRefreshLibrary, 
                     {displayTitle}
                   </p>
                   <p className="mt-0.5 text-[11px] text-zinc-500">
-                    {title.episodeCount} eps · {formatFileSize(title.totalBytes)}
+                    {title.episodeCount} video files · {formatFileSize(title.totalBytes)}
                   </p>
                 </div>
 

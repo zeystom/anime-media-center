@@ -23,7 +23,7 @@
 import { XMLParser, XMLValidator } from 'fast-xml-parser';
 import type { RssProvider, ReleaseSearchResult, ProviderReport } from './types.ts';
 import { parseReleaseSync } from '../src/lib/releaseParser/index.ts';
-import { classifyRelease, detectSeasonFromTitle, qualityRank } from '../src/lib/releaseParser/releaseClassification.ts';
+import { classifyRelease, detectSeasonFromTitle, isMultiSeasonCollection, qualityRank } from '../src/lib/releaseParser/releaseClassification.ts';
 import { releaseDescriptionToText } from '../src/lib/releaseParser/releaseClassification.ts';
 
 /** Per-request timeout for indexer feeds. */
@@ -58,19 +58,38 @@ export interface ProviderSearchParams {
  * Punctuation that release names use as separators (`:` in "Cyberpunk:
  * Edgerunners", `-` in "Re:Zero - Starting Life", underscores, brackets, …).
  * Sending these raw to an indexer's `q=` param degrades matching, so
- * sanitizeSearchQuery swaps them for spaces.
+ * sanitizeSearchQuery swaps them for spaces. The plain hyphen is NOT in this
+ * class: intra-word hyphens are meaningful to trackers (see below).
  */
-const QUERY_PUNCTUATION_RE = /[:/\\!?()[\]{}<>"'`,;._\-–—*|&+]/g;
+const QUERY_PUNCTUATION_RE = /[:/\\!?()[\]{}<>"'`,;._–—*|&+]/g;
+
+/** Letter or digit (unicode-aware): the two halves of a joined hyphen. */
+const QUERY_WORD_CHAR_RE = /[\p{L}\p{N}]/u;
+
+/**
+ * Hyphens joining two word characters ("K-ON!", "erai-raws", "10-bit") are
+ * part of the title, not separators: Nyaa's fulltext search treats "K-ON" and
+ * "K ON" as different queries and the latter finds nothing (observed live —
+ * every release name carries the hyphen). Such hyphens survive sanitization;
+ * separator hyphens ("Re:Zero - Starting Life", "Title- 5") still become
+ * spaces.
+ */
+const sanitizeHyphens = (text: string): string =>
+  text.replace(/-/g, (_match, offset: number) => {
+    const before = offset > 0 ? text[offset - 1] : '';
+    const after = offset + 1 < text.length ? text[offset + 1] : '';
+    return QUERY_WORD_CHAR_RE.test(before) && QUERY_WORD_CHAR_RE.test(after) ? '-' : ' ';
+  });
 
 /**
  * Normalize a raw search string into an indexer-friendly query: punctuation is
  * replaced with spaces, whitespace collapsed, result trimmed. Word characters
- * (including unicode titles like 鬼滅の刃) survive untouched. A punctuation-only
- * input sanitizes to ''.
+ * (including unicode titles like 鬼滅の刃) survive untouched, as do intra-word
+ * hyphens ("K-ON"). A punctuation-only input sanitizes to ''.
  */
 export function sanitizeSearchQuery(raw: string): string {
   const text = typeof raw === 'string' ? raw : '';
-  return text.replace(QUERY_PUNCTUATION_RE, ' ').replace(/\s+/g, ' ').trim();
+  return sanitizeHyphens(text).replace(QUERY_PUNCTUATION_RE, ' ').replace(/\s+/g, ' ').trim();
 }
 
 /** A BitTorrent info hash is 40 hex chars (v1) or 32 base32 chars (v2). */
@@ -347,7 +366,8 @@ export function isExplicitEpisodeMismatch(result: ReleaseSearchResult, episode: 
 export function isExplicitSeasonMismatch(
   result: ReleaseSearchResult,
   requestedSeason: number | null | undefined,
-  titleHint?: string | null
+  titleHint?: string | null,
+  franchiseSeasons?: FranchiseSeasonTitles[] | null
 ): boolean {
   const target = (Number.isInteger(requestedSeason) && Number(requestedSeason) > 0)
     ? Number(requestedSeason)
@@ -355,9 +375,134 @@ export function isExplicitSeasonMismatch(
   if (!Number.isInteger(target) || Number(target) <= 0) return false;
 
   const title = typeof result?.title === 'string' ? result.title : '';
+  // A release that explicitly contains multiple numbered seasons is not a
+  // mismatch for any single requested season; the torrent engine will select
+  // only the requested files after metadata arrives.
+  if (isWholeFranchiseBundleTitle(title, franchiseSeasons?.length || 0)) return false;
   const parsed = parseReleaseSync(title);
   const relSeason = parsed.season ?? rawTitleSeason(title) ?? detectSeasonFromTitle(title);
   return relSeason != null && relSeason !== Number(target);
+}
+
+/** A season chain entry's titles (from the AniList franchise graph), used to
+ *  catch wrong-season releases whose titles carry no parseable season marker. */
+export interface FranchiseSeasonTitles {
+  season: number;
+  titles: string[];
+}
+
+function isWholeFranchiseBundleTitle(title: string, franchiseSeasonCount: number): boolean {
+  if (franchiseSeasonCount < 2) return false;
+  const raw = title.toLowerCase();
+  return isMultiSeasonCollection(raw)
+    || (/\bcomplete\b/i.test(raw) && /\b(?:ova|oad|specials?)\b/i.test(raw) && /(?:^|\s)0*1\s*[-–~]\s*0*\d{2}\b/i.test(raw));
+}
+
+/** Show name a release advertises, punctuation preserved (lowercased,
+ *  whitespace collapsed): "K-On!" and "K-On!!" are DIFFERENT seasons of the
+ *  same franchise but normalize to the identical "k on" once punctuation is
+ *  stripped, so this rawer form is what makes them distinguishable. */
+function franchiseShowNameRaw(resultTitle: string): string {
+  const raw = typeof resultTitle === 'string' ? resultTitle : '';
+  const parsed = parseReleaseSync(raw);
+  let showName = (parsed.animeTitle ?? '').toLowerCase().replace(/\s+/g, ' ').trim();
+  // Some release formats write a season batch as `Title 01-12 Complete`.
+  // The episode parser can consume only the ending number and leave `01` on
+  // animeTitle (`Title 01`), which prevents exact season-title comparison.
+  // Drop that leaked range start only when the parsed episode matches the
+  // range's end, preserving legitimate numeric titles such as "86".
+  const range = /(?:^|\s)(0*\d{1,3})\s*[-–~]\s*0*(\d{1,3})(?=\s|$|[([{])/i.exec(raw);
+  if (range && Number(range[1]) === 1 && parsed.episodeNumber === Number(range[2])) {
+    const leakedRangeStart = new RegExp(`\\s+0*${Number(range[1])}$`);
+    showName = showName.replace(leakedRangeStart, '');
+  }
+  // A title ending in a number can be mistaken for an episode in bare batch
+  // names: e.g. `Mob Psycho 100 [Complete Series]` parses as animeTitle
+  // `Mob Psycho`, episode 100. Restore it only when the number is visibly
+  // adjacent to the parsed title and the release itself is marked as a batch.
+  if (parsed.releaseType === 'Batch' && parsed.episodeNumber != null && parsed.animeTitle) {
+    const escapedTitle = parsed.animeTitle.replace(/[.*+?^${}()|[\]\\]/g, '\\$&');
+    const leakedTitleNumber = new RegExp(`\\b${escapedTitle}\\s+0*${parsed.episodeNumber}(?=\\s|$|[[(])`, 'i');
+    if (leakedTitleNumber.test(raw)) showName = `${showName} ${parsed.episodeNumber}`;
+  }
+  return showName;
+}
+
+const normalizeFranchiseTitle = (value: unknown): string =>
+  typeof value === 'string' ? normalizeMatch(value) : '';
+
+/**
+ * Reject a release whose show name matches ANOTHER season of the franchise
+ * (by its AniList chain titles) but not the requested one. This is the only
+ * line of defense for franchises that mark seasons with punctuation instead
+ * of numbers — searching "K-On!" (S1) must not surface "K-On!!" releases:
+ * normalizeMatch erases the "!" and makes both titles identical. A release
+ * matching the requested season's titles (raw or normalized), or matching
+ * none of the chain, is kept. When the match is ambiguous (normalized form
+ * equals both the requested and another season), the release is kept.
+ */
+export function isFranchiseSeasonTitleMismatch(
+  result: Pick<ReleaseSearchResult, 'title'> | null | undefined,
+  requestedSeason: number | null | undefined,
+  franchiseSeasons?: FranchiseSeasonTitles[] | null
+): boolean {
+  const target = Number(requestedSeason);
+  if (!Number.isInteger(target) || target <= 0) return false;
+  if (!Array.isArray(franchiseSeasons) || franchiseSeasons.length === 0) return false;
+  const rawReleaseTitle = (typeof result?.title === 'string' ? result.title : '').toLowerCase();
+  if (isWholeFranchiseBundleTitle(rawReleaseTitle, franchiseSeasons.length)) return false;
+  // Prefer the longest exact franchise title written in the raw release name
+  // before consulting the release parser. The parser may mistake a title
+  // suffix (`2nd Season`, `Season 2`) or numeric show title (`100`) for a
+  // batch episode/range and truncate animeTitle. Longest match prevents a
+  // base title such as `Attack on Titan` from masking `Attack on Titan Season 2`.
+  const rawTitleHits = franchiseSeasons.flatMap((entry) =>
+    Array.isArray(entry?.titles)
+      ? entry.titles
+        .filter((value): value is string => typeof value === 'string' && !!value.trim())
+        .map((value) => ({ season: entry.season, title: value.toLowerCase().replace(/\s+/g, ' ').trim() }))
+        .filter((hit) => hit.title.length >= 4 && rawReleaseTitle.includes(hit.title))
+      : []
+  );
+  if (rawTitleHits.length) {
+    const longest = Math.max(...rawTitleHits.map((hit) => hit.title.length));
+    const matchedSeasons = new Set(rawTitleHits.filter((hit) => hit.title.length === longest).map((hit) => hit.season));
+    if (matchedSeasons.size === 1) return !matchedSeasons.has(target);
+  }
+  const showNameRaw = franchiseShowNameRaw(typeof result?.title === 'string' ? result.title : '');
+  if (!showNameRaw) return false;
+  const showNameNorm = normalizeMatch(showNameRaw);
+  const stripped = stripTrailingDecorations(showNameNorm);
+  const candidates = Array.from(new Set([showNameRaw, showNameNorm, stripped].filter(Boolean)));
+
+  const ownRaw: string[] = [];
+  const ownNorm: string[] = [];
+  const otherRaw: string[] = [];
+  const otherNorm: string[] = [];
+  for (const entry of franchiseSeasons) {
+    if (!entry || !Array.isArray(entry.titles)) continue;
+    const rawTitles = entry.titles
+      .map((value) => (typeof value === 'string' ? value.toLowerCase().replace(/\s+/g, ' ').trim() : ''))
+      .filter(Boolean);
+    const normTitles = rawTitles.map(normalizeFranchiseTitle).filter(Boolean);
+    const rawBucket = entry.season === target ? ownRaw : otherRaw;
+    const normBucket = entry.season === target ? ownNorm : otherNorm;
+    rawBucket.push(...rawTitles);
+    normBucket.push(...normTitles);
+  }
+  const hitRaw = (bucket: string[]) => bucket.includes(showNameRaw);
+  const hitNorm = (bucket: string[]) => candidates.some((candidate) => bucket.includes(candidate));
+
+  // Own-season titles always win, but only over ambiguous normalized forms:
+  // the punctuation-stripped "k on" equals for both K-On! and K-On!!, so a
+  // raw other-season match must be checked before any normalized rescue.
+  if (hitRaw(ownRaw)) return false;
+  if (hitRaw(otherRaw)) return true;
+  // Normalized matches only count when they are unambiguous: a candidate that
+  // hits both buckets (or neither) stays.
+  const ownNormHit = hitNorm(ownNorm);
+  const otherNormHit = hitNorm(otherNorm);
+  return otherNormHit && !ownNormHit;
 }
 
 /** Returns the explicit cour/part marker in a title, if present. */

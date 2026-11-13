@@ -63,6 +63,7 @@ export interface AniListDate {
 export interface AniListFranchiseNode {
   id: number;
   type?: string;
+  format?: string | null;
   relations?: { edges: { relationType: string; node: AniListFranchiseNode | null }[] } | null;
 }
 
@@ -266,8 +267,9 @@ const DETAILS_QUERY = `
 const FRANCHISE_GRAPH_QUERY = `
   query ($id: Int) {
     Media(id: $id, type: ANIME) {
+      format
       relations {
-        edges { relationType node { id type relations { edges { relationType node { id type } } } } }
+        edges { relationType node { id type format relations { edges { relationType node { id type format } } } } }
       }
     }
   }

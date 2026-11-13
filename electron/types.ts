@@ -279,6 +279,7 @@ export interface TorrentJob {
   /** All selectively requested episodes when a batch torrent serves several cards. */
   episodes?: number[];
   season?: number | null;
+  mediaFormat?: string | null;
   error?: string;
   addedAt: number;
   completedAt?: number | null;

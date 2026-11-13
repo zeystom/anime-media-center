@@ -38,6 +38,7 @@ const HASH_C = 'c'.repeat(40)
 const HASH_D = 'd'.repeat(40)
 const HASH_E = 'e'.repeat(40)
 const HASH_F = 'f'.repeat(40)
+const HASH_G = '1'.repeat(40)
 
 // ---- helpers ---------------------------------------------------------------
 
@@ -367,6 +368,30 @@ await expectCase('(3a) single-episode selection ignores NCED bonus videos and re
   engineShutdown()
 })
 
+await expectCase('(3a.0) OVA download selects its titled file only from a season bundle', async () => {
+  engineShutdown()
+  const { fake } = setupEngine()
+  fake.registry.set(HASH_G, {
+    files: [
+      { name: 'K-On!! S02E01.mkv', path: 'K-On Complete Series Season 01 + Season 02 + OVA/K-On!! S02E01.mkv' },
+      { name: 'K-On!! Keikaku!.mkv', path: 'K-On Complete Series Season 01 + Season 02 + OVA/Season 2/K-On!! Keikaku!.mkv' },
+    ],
+  })
+  const result = await engineAddDownload({
+    item: magnetItem(HASH_G, { title: '[Anime Time] K-On Complete Series Season 01 + Season 02 + OVA' }),
+    title: 'K-ON! Season 2: Plan!',
+    episode: 1,
+    season: 2,
+    mediaFormat: 'OVA',
+    mediaAliases: ['K-On!!: Keikaku!'],
+  })
+  assert.strictEqual(result.success, true)
+  await until(() => ['downloading', 'error'].includes(statusOf(HASH_G)), 'OVA file selection resolves')
+  const selected = latestTorrentOf(fake, HASH_G).files.filter((file) => file.selected).map((file) => file.path)
+  assert.deepStrictEqual(selected, ['K-On Complete Series Season 01 + Season 02 + OVA/Season 2/K-On!! Keikaku!.mkv'])
+  engineShutdown()
+})
+
 await expectCase('(3a.1) requests for multiple episodes merge into one batch torrent job', async () => {
   engineShutdown()
   const { fake, persistDir } = setupEngine()
@@ -430,6 +455,10 @@ await expectCase('(3c) season download selects only the requested season and dro
       { name: 'Jujutsu Kaisen S02E01.mkv', path: 'Season 2/Jujutsu Kaisen S02E01.mkv' },
       { name: 'Jujutsu Kaisen - NCED 1.mkv', path: 'NC/Jujutsu Kaisen - NCED 1.mkv' },
       { name: 'Jujutsu Kaisen S02E02.mkv', path: 'Season 2/Jujutsu Kaisen S02E02.mkv' },
+      { name: 'Jujutsu Kaisen The Movie.mkv', path: 'Jujutsu Kaisen Complete (Season 1 + Movie)/Movies/Jujutsu Kaisen The Movie.mkv' },
+      { name: 'Special Episode.mkv', path: 'Jujutsu Kaisen Complete (Season 1 + Movie)/Specials/Special Episode.mkv' },
+      { name: '[Anime Time] K-ON! Specials - 01.mkv', path: '[Anime Time] K-On! Complete/[Anime Time] K-ON! Specials - 01.mkv' },
+      { name: '[Anime Time] K-On! - OVA.mkv', path: '[Anime Time] K-On! Complete/[Anime Time] K-On! - OVA.mkv' },
     ],
   })
   const res = await engineAddDownload({
@@ -442,6 +471,58 @@ await expectCase('(3c) season download selects only the requested season and dro
   await until(() => ['downloading', 'error'].includes(statusOf(HASH_E)), 'season selection resolves')
   const selected = latestTorrentOf(fake, HASH_E).files.filter((file) => file.selected).map((file) => file.path)
   assert.deepStrictEqual(selected, ['Season 2/Jujutsu Kaisen S02E01.mkv', 'Season 2/Jujutsu Kaisen S02E02.mkv'])
+  engineShutdown()
+})
+
+await expectCase('(3d) franchise-title season packs select K-On!! files only when season markers are absent', async () => {
+  engineShutdown()
+  const { fake } = setupEngine()
+  fake.registry.set(HASH_F, {
+    files: [
+      { name: 'K-On! - 01.mkv', path: 'K-On! Complete/K-On! - 01.mkv' },
+      { name: 'K-On! - 02.mkv', path: 'K-On! Complete/K-On! - 02.mkv' },
+      { name: 'K-On!! - 01.mkv', path: 'K-On! Complete/K-On!! - 01.mkv' },
+      { name: 'K-On!! - 02.mkv', path: 'K-On! Complete/K-On!! - 02.mkv' },
+      { name: 'K-On!! - NCED.mkv', path: 'K-On! Complete/K-On!! - NCED.mkv' },
+    ],
+  })
+  const franchiseSeasons = [
+    { season: 1, titles: ['K-On!'] },
+    { season: 2, titles: ['K-On!!'] },
+  ]
+  const res = await engineAddDownload({
+    item: magnetItem(HASH_F, { title: 'K-On! Complete Series (Season 1 + Season 2)' }),
+    title: 'K-On!!',
+    episode: null,
+    season: 2,
+    franchiseSeasons,
+  })
+  assert.strictEqual(res.success, true)
+  await until(() => ['downloading', 'error'].includes(statusOf(HASH_F)), 'franchise-season file selection resolves')
+  assert.strictEqual(statusOf(HASH_F), 'downloading')
+  const selected = latestTorrentOf(fake, HASH_F).files.filter((file) => file.selected).map((file) => file.path)
+  assert.deepStrictEqual(selected, ['K-On! Complete/K-On!! - 01.mkv', 'K-On! Complete/K-On!! - 02.mkv'])
+  engineShutdown()
+})
+
+await expectCase('(3e) never selects every file from an unlabelled multi-season franchise pack', async () => {
+  engineShutdown()
+  const { fake } = setupEngine()
+  fake.registry.set(HASH_D, { files: ['01.mkv', '02.mkv'] })
+  const res = await engineAddDownload({
+    item: magnetItem(HASH_D, { title: 'K-On! Complete Series (Season 1 + Season 2)' }),
+    title: 'K-On!!',
+    episode: null,
+    season: 2,
+    franchiseSeasons: [
+      { season: 1, titles: ['K-On!'] },
+      { season: 2, titles: ['K-On!!'] },
+    ],
+  })
+  assert.strictEqual(res.success, true)
+  await until(() => statusOf(HASH_D) === 'error', 'ambiguous franchise-season files are rejected')
+  assert.strictEqual(latestTorrentOf(fake, HASH_D).files.some((file) => file.selected), false)
+  assert.match(engineGetState().jobs.find((entry) => entry.infoHash === HASH_D).error, /do not identify season 2/)
   engineShutdown()
 })
 
@@ -554,6 +635,7 @@ await expectCase('(7a) seeding auto-stops immediately when seedMinutesAfterCompl
   await until(() => statusOf(HASH_A) === undefined, 'job removed after done')
   assert.ok(torrent.destroyArgs.length > 0, 'torrent destroyed on done')
   assert.ok(!torrent.destroyArgs.some((a) => a && a.destroyStore), 'auto-stop keeps files (no destroyStore)')
+  assert.strictEqual((await engineCancel(HASH_A)).success, true, 'clearing a stale completed queue row is idempotent')
   engineShutdown()
 })
 

@@ -116,6 +116,25 @@ function detectSubtitle(text: string): 'Dubtitles' | 'English Subs' | 'Multi-Sub
 
 function detectKind(title: string, parsed: ReturnType<typeof parseReleaseCore>): Pick<ReleaseClassification, 'kind' | 'kindLabel'> {
   const text = htmlToText(title)
+  const explicitSeasons = Array.from(text.matchAll(/\bseasons?\s*0*(\d{1,2})\b/gi), (match) => Number(match[1]))
+  // Multi-content collections ("(Season 01 + Season 02 + Movie + OVA +
+  // Specials)", "1-26+OVA Complete") must classify as a season pack, not as
+  // the Movie/OVA mentioned inside the contents list. A collection marker or
+  // two distinct content kinds in one title means the release is a batch.
+  const contentTokenTests = [
+    /\bseasons?\s*0*\d{1,2}\b/i,
+    /\b(?:movie|film|gekijouban|gekijōban)\b/i,
+    /\b(?:ova|oad)\b/i,
+    /\b(?:specials?)\b/i,
+  ]
+  const contentTokenCount = contentTokenTests.filter((re) => re.test(text)).length
+  const isCollection = contentTokenCount >= 2
+    || /\b(?:batch|season\s*pack|complete(?:d)?(?:\s+(?:series|season|collection))?|full\s+season|complete\s+series|collection)\b/i.test(text)
+  if (isCollection) {
+    const isMultiSeason = new Set(explicitSeasons).size > 1
+    const isWholeSeries = isMultiSeason || /\bcomplete\s+series\b/i.test(text)
+    return { kind: 'season-pack', kindLabel: isWholeSeries ? 'Complete series pack' : parsed.season != null ? `Season ${parsed.season} pack` : 'Season pack' }
+  }
   if (/\b(?:movie|film|gekijouban|gekijōban|theatrical)\b/i.test(text) || parsed.releaseType === 'Movie') {
     return { kind: 'movie', kindLabel: 'Movie' }
   }
@@ -134,6 +153,13 @@ function detectKind(title: string, parsed: ReturnType<typeof parseReleaseCore>):
   }
   if (parsed.episodeNumber != null) return { kind: 'episode', kindLabel: `Episode ${String(parsed.episodeNumber).padStart(2, '0')}` }
   return { kind: 'unknown', kindLabel: null }
+}
+
+/** True for collections that explicitly bundle more than one numbered season. */
+export function isMultiSeasonCollection(title: string | null | undefined): boolean {
+  if (typeof title !== 'string' || !title) return false
+  const seasons = Array.from(htmlToText(title).matchAll(/\bseasons?\s*0*(\d{1,2})\b/gi), (match) => Number(match[1]))
+  return new Set(seasons).size > 1
 }
 
 /** Conservatively classify only explicit language/audio and subtitle claims. */
