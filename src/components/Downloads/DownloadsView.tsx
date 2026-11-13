@@ -10,6 +10,7 @@ import { AlertTriangle, Check, Film, FileText, FolderOpen, HardDrive, Pause, Pla
 import type { AnimeFolder, P2pState, StorageOverview, StorageTitleUsage, TorrentJob, TorrentJobStatus } from '../../types'
 import { formatFileSize } from '../../utils/format'
 import { showGlobalToast } from '../Toast'
+import { useDeveloperMode } from '../../utils/devMode'
 
 interface DownloadsViewProps {
   onRefreshLibrary: () => void
@@ -77,6 +78,8 @@ export const DownloadsView: React.FC<DownloadsViewProps> = ({ onRefreshLibrary, 
 
   const api = window.electronAPI
   const hasOverviewApi = typeof api?.getStorageOverview === 'function'
+  // Developer-only UI gates (diagnostics buttons etc.). Session-only flag.
+  const isDeveloper = useDeveloperMode()
 
   const loadOverview = useCallback(async () => {
     if (!window.electronAPI?.getStorageOverview) return
@@ -506,14 +509,16 @@ export const DownloadsView: React.FC<DownloadsViewProps> = ({ onRefreshLibrary, 
                     </div>
 
                     <div className="flex shrink-0 items-center gap-1.5">
-                      <button
-                        type="button"
-                        onClick={() => handleCopyDiagnostics(job.infoHash)}
-                        title="Copy diagnostic history to clipboard"
-                        className="flex h-8 w-8 items-center justify-center rounded-full border border-white/10 bg-zinc-800/60 text-zinc-400 transition-colors hover:bg-zinc-700/60 hover:text-white"
-                      >
-                        <FileText className="h-4 w-4" />
-                      </button>
+                      {isDeveloper && (
+                        <button
+                          type="button"
+                          onClick={() => handleCopyDiagnostics(job.infoHash)}
+                          title="Copy diagnostic history to clipboard"
+                          className="flex h-8 w-8 items-center justify-center rounded-full border border-white/10 bg-zinc-800/60 text-zinc-400 transition-colors hover:bg-zinc-700/60 hover:text-white"
+                        >
+                          <FileText className="h-4 w-4" />
+                        </button>
+                      )}
                       {(canPause || canResume) && (
                         <button
                           type="button"

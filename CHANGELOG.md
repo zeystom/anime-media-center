@@ -1,5 +1,19 @@
 # Changelog
 
+## 1.0.18 — Episode Titles Integrity Fix & Hidden Developer Mode
+
+- **Fixed Wrong Episode Titles on Anime Detail Pages (ani.zip Interleaved Shorts):**
+  - ani.zip occasionally interleaves 2–5 minute specials (chibi shorts, PVs) into a season's main episode numbering (observed live: K-On! S1 — six ~3-minute shorts with their own monthly air dates occupied slots 2–7 of a 13-episode season, pushing the real episodes off their slots while keeping correct titles elsewhere).
+  - Added a runtime-consistency filter (`dropInterleavedShortRows`): ani.zip rows whose runtime is far below the season's typical length are dropped from the main numbering, and the freed slots are refilled from the clean Kitsu/AniList streaming sources in the pipeline merge.
+  - Shorts-only shows are unaffected (the median itself is small, so nothing qualifies as "far below typical"), and seasons with sparse runtime data are never filtered.
+  - Poisoned disk caches self-heal: cached rows are re-partitioned at every view open, and the final merged (clean) snapshot is persisted back, replacing the 7-day poisoned `anizip_<id>.json` records.
+  - Normalized the extensionless `./anilist` import to `./anilist.ts`, consistent with the module's other imports.
+- **Hidden Developer Mode (Session-Only):**
+  - New session-only capability flag (`src/utils/devMode.ts`): granted by tapping the version label in the settings footer 5 times ("You are now a developer" toast), automatically revoked on every app restart. Nothing is persisted to disk or localStorage.
+  - The version label stays completely stealth: no hover highlight, no cursor change, no tooltip.
+  - The "Copy diagnostic history to clipboard" button on torrent cards in Downloads is now visible only in developer mode.
+  - Extensible for future developer-only UI: gate new features with `useDeveloperMode()`.
+
 ## 1.0.17 — Instant .torrent Metadata Cache, Connecting Fixes & Player Title Overflow Wrapping
 
 - **Persistent Disk .torrent Cache for Instant Connecting (<100ms):**

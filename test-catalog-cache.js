@@ -635,6 +635,58 @@ const FRIEREN_PAYLOAD = {
 
 {
   const aniZip = await freshAniZip();
+
+  await runTest('dropInterleavedShortRows drops ~3-min specials interleaved into main numbering', async () => {
+    // Real-world poisoned snapshot (K-On! S1, ani.zip 2026-11): slots 2-7 held
+    // ~3-minute chibi shorts with monthly air dates, real episodes kept runtime 25.
+    const poisoned = [
+      { number: 1, title: 'Disband the Club!', thumbnailUrl: 'i1', airDate: '2009-04-02', runtime: 25 },
+      { number: 2, title: "Ricchan`s Kodak Moment Series: Mio / Yui", thumbnailUrl: 'i2', airDate: '2009-08-18', runtime: 3 },
+      { number: 3, title: "Mio`s Panties: Stripe Sketch Show", thumbnailUrl: 'i3', airDate: '2009-09-15', runtime: 2 },
+      { number: 4, title: 'Little Yui-chan: Christmas', thumbnailUrl: 'i4', airDate: '2009-10-20', runtime: 3 },
+      { number: 5, title: 'Uninhabited Island Series', thumbnailUrl: 'i5', airDate: '2009-11-17', runtime: 3 },
+      { number: 6, title: 'The Animal Series', thumbnailUrl: 'i6', airDate: '2009-12-15', runtime: 3 },
+      { number: 7, title: 'Winter... Chapter', thumbnailUrl: 'i7', airDate: '2010-01-19', runtime: 3 },
+      { number: 8, title: 'Freshman Reception!', thumbnailUrl: 'i8', airDate: '2009-05-21', runtime: 25 },
+      { number: 9, title: 'New Club Member!', thumbnailUrl: 'i9', airDate: '2009-05-28', runtime: 25 },
+      { number: 10, title: 'Training Camp Again!', thumbnailUrl: 'i10', airDate: '2009-06-04', runtime: 25 },
+      { number: 11, title: 'Crisis!?', thumbnailUrl: 'i11', airDate: '2009-06-11', runtime: 25 },
+      { number: 12, title: 'Light Music!', thumbnailUrl: 'i12', airDate: '2009-06-18', runtime: 25 },
+      { number: 13, title: 'Winter Days!', thumbnailUrl: 'i13', airDate: '2009-06-25', runtime: 25 },
+    ];
+    const { kept, dropped } = aniZip.dropInterleavedShortRows(poisoned);
+    assert.strictEqual(dropped, 6, 'all six interleaved shorts must be dropped');
+    assert.deepStrictEqual(kept.map((e) => e.number), [1, 8, 9, 10, 11, 12, 13]);
+
+    // The clean live payload must be untouched.
+    const clean = poisoned.filter((e) => e.runtime === 25).map((e, i) => ({ ...e, number: i + 1 }));
+    assert.strictEqual(aniZip.dropInterleavedShortRows(clean).dropped, 0);
+  });
+
+  await runTest('dropInterleavedShortRows keeps shorts-only shows and sparse runtime data', async () => {
+    // A shorts-only series: the median itself is small -> nothing qualifies.
+    const shortsOnly = Array.from({ length: 8 }, (_, i) => ({
+      number: i + 1, title: `Short ${i + 1}`, thumbnailUrl: `s${i}`, airDate: null, runtime: 3,
+    }));
+    assert.strictEqual(aniZip.dropInterleavedShortRows(shortsOnly).dropped, 0);
+
+    // Too few runtime-bearing rows to judge: never drop.
+    const sparse = [
+      { number: 1, title: 'A', thumbnailUrl: 'a', airDate: null, runtime: 25 },
+      { number: 2, title: 'B', thumbnailUrl: 'b', airDate: null, runtime: 2 },
+    ];
+    assert.strictEqual(aniZip.dropInterleavedShortRows(sparse).dropped, 0);
+
+    // No runtime data at all: never drop.
+    const noRuntime = Array.from({ length: 5 }, (_, i) => ({
+      number: i + 1, title: `Ep ${i + 1}`, thumbnailUrl: null, airDate: null, runtime: null,
+    }));
+    assert.strictEqual(aniZip.dropInterleavedShortRows(noRuntime).dropped, 0);
+  });
+}
+
+{
+  const aniZip = await freshAniZip();
   fetchHandler = (url) => {
     if (url.includes('anilist_id=206814')) {
       return jsonResponse(200, { episodes: {}, mappings: { anilist_id: 206814, kitsu_id: 50497 } });

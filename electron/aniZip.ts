@@ -19,7 +19,7 @@
 import fs from 'fs';
 import path from 'path';
 import { storage } from './storage.ts';
-import { runAniListQuery } from './anilist';
+import { runAniListQuery } from './anilist.ts';
 import { getFribbIndex, lookupFribbIds } from './fribb.ts';
 
 const ANI_ZIP_CACHE_NORMALIZER_VERSION = 2;
@@ -234,6 +234,32 @@ function snapshotComplete(episodes: RemoteEpisodeInfo[]): boolean {
 
 function snapshotServeable(episodes: RemoteEpisodeInfo[], fetchedAt: number, now = Date.now()): boolean {
   return snapshotComplete(episodes) || now - fetchedAt < INCOMPLETE_SNAPSHOT_TTL_MS;
+}
+
+/**
+ * ani.zip occasionally interleaves 2-5 minute specials (chibi shorts, PVs)
+ * into a season's main numbering (observed live: K-On! S1 — six ~3-minute
+ * shorts with their own monthly air dates occupied slots 2-7 of a 13-episode
+ * season, pushing the real episodes off their slots while keeping correct
+ * titles elsewhere). A runtime far below the season's typical length
+ * identifies those rows regardless of title wording — the freed slots are
+ * refilled from the clean Kitsu/AniList streaming sources in the pipeline
+ * merge. Shorts-only shows are unaffected: the median itself is small, so
+ * nothing qualifies as "far below typical".
+ */
+export function dropInterleavedShortRows(rows: RemoteEpisodeInfo[]): { kept: RemoteEpisodeInfo[]; dropped: number } {
+  const runtimes = rows
+    .map((episode) => episode.runtime)
+    .filter((runtime): runtime is number => typeof runtime === 'number' && runtime > 0)
+    .sort((a, b) => a - b);
+  // Median of the season. Only long-form seasons (>= 12 min typical) can have
+  // interleaved shorts; below that the series itself is shorts-shaped.
+  const typicalRuntime = runtimes.length >= 3 ? runtimes[Math.floor(runtimes.length / 2)] : null;
+  const isShort = typicalRuntime != null && typicalRuntime >= 12
+    ? (episode: RemoteEpisodeInfo) => episode.runtime != null && episode.runtime < typicalRuntime / 2
+    : () => false;
+  const kept = rows.filter((episode) => !isShort(episode));
+  return { kept, dropped: rows.length - kept.length };
 }
 
 /** Marks how the last fetchAniZipMappings call for an id obtained its rows. */
@@ -772,9 +798,12 @@ async function runRemoteEpisodesPipeline(anilistId: number, notify: (payload: Re
     return Number.isFinite(airTime) && airTime < seasonStartAt - WRONG_ENTRY_WINDOW_MS;
   };
   const partitionAniZip = (rows: RemoteEpisodeInfo[]) => {
-    const scoped = rows.filter((episode) => withinTitle(episode) && !isJunkTitle(episode) && !isWrongEntry(episode));
+    const { kept: nonShortRows } = dropInterleavedShortRows(rows);
+    const scoped = nonShortRows.filter((episode) => withinTitle(episode) && !isJunkTitle(episode) && !isWrongEntry(episode));
     return {
       scoped,
+      // Shorts count as junk so the merge below refills those slots from the
+      // clean Kitsu/AniList sources (and Stage 6 triggers the Kitsu fallback).
       droppedJunk: rows.length - scoped.length,
       droppedWrong: rows.filter((episode) => withinTitle(episode) && isWrongEntry(episode)).length,
     };

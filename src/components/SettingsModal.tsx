@@ -30,6 +30,7 @@ import {
 import { AppSettings } from '../types';
 import type { P2pState, RssProvider, UpdaterState, UpdateInfoPayload } from '../types';
 import { showGlobalToast } from './Toast';
+import { enableDeveloperMode, useDeveloperMode } from '../utils/devMode';
 import { P2pConsentModal } from './P2P/P2pConsentModal';
 import { UpdatePromptModal } from './UpdatePromptModal';
 import { formatFileSize } from '../utils/format';
@@ -382,6 +383,25 @@ export const SettingsModal: React.FC<SettingsModalProps> = ({
     const next = !checkForUpdatesOnStartup;
     setCheckForUpdatesOnStartup(next);
     onSave({ checkForUpdatesOnStartup: next });
+  };
+
+  // Hidden developer-mode unlock: 5 taps on the footer version label (within a
+  // 2s window each). Session-only — see src/utils/devMode.ts. Deliberately
+  // invisible: the label keeps no hover/cursor/tooltip affordances.
+  const developerMode = useDeveloperMode();
+  const versionTapsRef = useRef({ count: 0, lastAt: 0 });
+  const handleVersionTap = () => {
+    const now = Date.now();
+    const taps = versionTapsRef.current;
+    taps.count = now - taps.lastAt < 2000 ? taps.count + 1 : 1;
+    taps.lastAt = now;
+    if (taps.count < 5) return;
+    taps.count = 0;
+    if (enableDeveloperMode()) {
+      showGlobalToast('You are now a developer', 'success');
+    } else if (developerMode) {
+      showGlobalToast('Developer mode is already active', 'info');
+    }
   };
 
   const handleToggleAutoUpdate = () => {
@@ -2318,7 +2338,10 @@ export const SettingsModal: React.FC<SettingsModalProps> = ({
               <RotateCcw className="w-3.5 h-3.5" />
               <span>Reset tool paths</span>
             </button>
-            <span className="text-[11px] text-zinc-500 font-mono select-none">
+            <span
+              className="text-[11px] text-zinc-500 font-mono select-none"
+              onClick={handleVersionTap}
+            >
               v{appVersion}
             </span>
           </div>

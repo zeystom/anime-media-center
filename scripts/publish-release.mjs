@@ -40,16 +40,17 @@ if (!token) {
 
 const RELEASE_BODY = `## What's new in v${VERSION}
 
-### ⚡ Persistent Disk .torrent Cache & Instant Connecting (<100ms)
-- **Automatic .torrent Disk Caching:** Downloaded \`.torrent\` files and resolved swarm metadata are now saved to a persistent disk cache (\`torrents/<infoHash>.torrent\`).
-- **Instant Connecting (<100ms):** When starting or resuming downloads, the engine loads full metadata directly from the disk cache and passes it straight to the client, completely bypassing the slow \`ut_metadata\` peer negotiation phase.
-- **Fixed Tracker Rate-Limiting:** Removed aggressive tracker polling intervals that caused public trackers to rate-limit or time out (\`tracker request timed out (udp://exodus.desync.com:6969/announce)\`).
-- **Preserved Leecher Wires for PEX:** Stopped premature disconnection of leecher peers and slow wires during connecting, preserving Peer Exchange (PEX) discovery.
-- **Extended Watchdog Timeout:** Increased connecting watchdog timeout from 180s to 300s (5 minutes), with automatic extension when live peers are actively connected.
+### 🛠 Fixed Wrong Episode Titles on Anime Detail Pages
+- **Root cause:** ani.zip occasionally interleaves 2–5 minute specials (chibi shorts, PVs) into a season's main episode numbering. Observed live with K-On! S1: six ~3-minute shorts with their own monthly air dates occupied episode slots 2–7 of the 13-episode season, while the real episodes kept correct titles elsewhere — so the card showed "Ricchan's Kodak Moment Series…" instead of "Instruments!".
+- **Runtime-consistency filter:** ani.zip rows whose runtime is far below the season's typical length are now dropped from the main numbering; the freed slots are refilled from the clean Kitsu/AniList streaming sources.
+- **Safe heuristics:** shorts-only shows are unaffected (the season median itself is small), and seasons with sparse runtime data are never filtered.
+- **Self-healing caches:** poisoned \`anizip_<id>.json\` disk caches are re-partitioned at every view open and rewritten with the final clean merged snapshot — no manual cache cleanup needed.
 
-### 🎬 Player Header Long Title Wrapping
-- **Multi-Line Title Wrapping:** Long anime titles and official episode titles no longer cut off with an ellipsis (\`...\`) in the player top header. The title now wraps cleanly across up to two lines (\`line-clamp-2 break-words\`) with responsive alignment.
-- **Episode Drawer & Detail Rows:** Improved title clamping in \`EpisodeDrawer\` and \`EpisodeRow\` so long names fit without truncation.
+### 🕵️ Hidden Developer Mode (Session-Only)
+- Tap the version label in the Settings footer **5 times** to unlock ("You are now a developer").
+- **Stealth by design:** the label has no hover highlight, cursor change or tooltip — regular users can't discover it.
+- **Auto-revoked on restart:** the flag is session-only, never persisted to disk or localStorage.
+- The "Copy diagnostic history to clipboard" button on torrent cards in Downloads is now visible only in developer mode, and the mechanism is extensible for future dev-only UI.
 
 ---
 ### Assets included:
