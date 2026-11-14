@@ -1,5 +1,43 @@
 # Changelog
 
+## 2.0.0 — Design Overhaul, OVA Torrent Search Engine & Episode List Integrity
+
+A global update: a full visual overhaul of the app shell, a rework of the OVA torrent search and download pipeline, and integrity fixes for episode lists polluted by franchise extras.
+
+### 🎨 Design Overhaul
+
+- **Floating glass navbar:** the navbar is now a floating overlay — pages scroll under it so the backdrop blur reads real content, with a per-title hue tint. The banner tint fades out with scroll progress (it no longer hides the blur), and the blur is toggleable in Settings (`navbarBlur`, on by default) for weaker PCs.
+- **Glass design system:** new `GlassSelect` component, hue-family color remap, glow tokens, and banner fade rebalance; cold blue-gray hexes replaced with palette tokens throughout.
+- **Scroll performance:** navbar progress flows through a pub-sub outside React state, page trees are memoized, hover transitions are suppressed during scrolls, and pills use a backdrop-filter-free glass style — smooth FPS while scrolling long pages.
+- **Notifications drawer:** relative timestamps on a 5-second ticker while the drawer is open, swipe-to-dismiss rows, more opaque cards and larger fonts.
+- **Library cards:** rating pill that survives 2-line titles, icon-only Followed/Favourite badges, and catalog scores lazy-loaded for collection-only entries.
+- **Discover:** accent-gradient filter controls, centered mode tabs, and a cleaner header.
+- **Whisper Studio:** the episode selector is rebuilt as a thumbnail card grid with click-toggle and hold-drag sweep selection; redundant folder button removed; link-style buttons de-underlined.
+- **Single-episode titles** of any format (OVAs, specials, music videos) get the film treatment: hero Play/Download actions instead of a one-card grid.
+
+### 🔍 OVA Torrent Search & Downloads, End to End
+
+- **OVA pages search with parent-season aliases:** aliases are built from the AniList PARENT relation (previously only PREQUEL/SEQUEL, leaving the alias list empty so a single query fired). The ≤3 indexer queries now also run in parallel.
+- **Wrong-season bundle rejection on OVA pages:** franchise season chains are resolved for OVAs via the AniList graph, so mega-bundles containing other seasons are rejected during automatic search; the franchise filter guards automatic searches again (the condition was inverted).
+- **Smarter OVA auto-pick:** dedicated OVA/unknown releases compete with bundles inside seeded-first language tiers; shape ordering prefers dedicated → single-season bundle → whole-franchise mega-bundle; uncensored releases get a tie-break bonus; content-type tails (+OVA, +Movie, Specials, S01+02) keep prefix relevance and count as multi-season collections.
+- **Engine file selection fixes:** repaired the `ovaMarker` regex whose character class closed early — it had silently killed every `' ova '` basename match; plural OVA dirs/files are accepted, marker-matched files beat token-only matches, and ties break by distinctive title tokens.
+- **Multi-episode OVA series** (Hellsing Ultimate, DxD OVA): `episodeCount` is plumbed renderer → preload → job → persist/resume, so the whole download is kept and episode cards narrow by decimal or roman number; season isolation inside the OVA branch drops other seasons' OVAs from franchise mega-bundles.
+- **No more eternal zombie downloads:** a swarm stalled 75 s after both stall-recovery attempts with no peers and no available pieces now fails with a clear message instead of sitting at 0 MB/s forever.
+
+### 📺 Episode List Integrity (API Episode Search)
+
+- **Franchise extras no longer pose as regular episodes:** ani.zip crosswalks number franchise OVAs/specials as regular episodes (Steins;Gate's OVA shipped as ep 1 while the true "Turning Point" was missing). Every slot is now date-guarded against the AniList schedule spine, and rows airing after all higher-numbered episodes are dropped (`electron/episodeSlots.ts`). Validated across all 216 cached snapshots — zero legit episodes flagged. Poisoned caches self-heal on every view open.
+
+### ⚡ Subtitle Performance
+
+- **Two-phase subtitle extraction:** cold opens extract a 2-minute window around the playback position first (indexed seek, ~8% of the file, 1–3 s) while the full track builds in the background; the renderer swaps seamlessly via a `forceFull` re-request that dedupes onto the running extraction.
+
+### 🛠 Other Fixes & Polish
+
+- Season and OVA release downloads fixed end to end (season-batch title formats like `Title 01-12 Complete` are matched correctly against the franchise chain).
+- Collection-only cards fetch missing posters via catalog details (24 h cache), matching the queue-cover fallback pattern; the storage overview reloads when the active job set changes.
+- **No more subtitle-generation toasts during playback:** background Whisper events ("Episode Subtitles Ready", "Whisper Batch Completed", model/engine readiness) no longer pop toasts over the video player — they land silently in the notification center.
+
 ## 1.0.18 — Episode Titles Integrity Fix & Hidden Developer Mode
 
 - **Fixed Wrong Episode Titles on Anime Detail Pages (ani.zip Interleaved Shorts):**

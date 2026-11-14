@@ -114,6 +114,9 @@ export const App: React.FC = () => {
   const [visitedTabs, setVisitedTabs] = useState<Set<string>>(() => new Set(['home']));
   const [discoverInitialGenre, setDiscoverInitialGenre] = useState<string | null>(null);
   const [activePlayerEpisode, setActivePlayerEpisode] = useState<Episode | null>(null);
+  // Mirrors `activePlayerEpisode` for non-reactive readers (toast gating in
+  // addNotification) so IPC listeners never re-subscribe on play/stop.
+  const isPlayerOpenRef = useRef(false);
   const [playerInitialTime, setPlayerInitialTime] = useState<number>(0);
   const [settingsOpen, setSettingsOpen] = useState<boolean>(false);
   const [isWhisperActive, setIsWhisperActive] = useState<boolean>(false);
@@ -351,6 +354,10 @@ export const App: React.FC = () => {
       read: false,
     };
     setNotifications((previous) => [item, ...previous].slice(0, 200));
+    // Subtitle-generation events (whisper) stay silent while an episode plays
+    // in the player — no toast over the video, the entry still lands in the
+    // notification center for later.
+    if (item.kind === 'whisper' && isPlayerOpenRef.current) return;
     const toastType = item.tone === 'purple'
       ? 'purple'
       : item.tone === 'green'
@@ -383,6 +390,11 @@ export const App: React.FC = () => {
   useEffect(() => {
     try { localStorage.setItem(NOTIFICATIONS_STORAGE_KEY, JSON.stringify(notifications)); } catch {}
   }, [notifications]);
+
+  // Keep the toast-gate ref in lockstep with the player overlay state.
+  useEffect(() => {
+    isPlayerOpenRef.current = activePlayerEpisode !== null;
+  }, [activePlayerEpisode]);
 
   useEffect(() => {
     try { localStorage.setItem(FOLLOWED_ANIME_STORAGE_KEY, JSON.stringify(followedAnime)); } catch {}
