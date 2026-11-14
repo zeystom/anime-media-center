@@ -47,9 +47,20 @@ let isStartupCheckInProgress = false;
 let downloadedInstallerPath: string | null = null;
 let periodicTimer: NodeJS.Timeout | null = null;
 let activeDownloadPromise: Promise<{ success: boolean; error?: string }> | null = null;
-let maxDownloadPercent = 0;
-let maxTransferredBytes = 0;
+// Progress is tracked per phase ('delta' vs 'full'); a phase restart (electron-updater
+// falling back from differential to full download) resets these via resetProgressWindow().
+let phaseMaxPercent = 0;
+let phaseMaxTransferred = 0;
+let lastProgressTotal = 0;
+let currentPhase: 'delta' | 'full' = 'full';
 let startupUpdatePayload: UpdateInfoPayload | null = null;
+
+function resetProgressWindow(total: number, phase: 'delta' | 'full') {
+  phaseMaxPercent = 1;
+  phaseMaxTransferred = 0;
+  lastProgressTotal = total;
+  currentPhase = phase;
+}
 
 export function getStartupUpdateInfo(): UpdateInfoPayload | null {
   return startupUpdatePayload;
@@ -198,14 +209,25 @@ export function initUpdater(mainWindowGetter: () => BrowserWindow | null): void 
 
   updater.on('download-progress', (progress) => {
     updaterState.status = 'downloading';
+    const total = progress.total || 0;
+    const transferred = progress.transferred || 0;
+    // Differential download silently falls back to a full download: transferred restarts
+    // from ~0 while the total jumps to the full installer size. Detect that and start a
+    // new progress window so the UI shows a reset instead of a stuck monotonic percent.
+    const phaseRestart = lastProgressTotal > 0 && total > lastProgressTotal * 1.5 && transferred < phaseMaxTransferred;
+    if (phaseRestart) {
+      resetProgressWindow(total, 'full');
+    }
     const pct = typeof progress.percent === 'number' ? Math.round(progress.percent) : 0;
-    maxDownloadPercent = Math.max(maxDownloadPercent, Math.min(100, pct));
-    maxTransferredBytes = Math.max(maxTransferredBytes, progress.transferred || 0);
+    phaseMaxPercent = Math.max(phaseMaxPercent, Math.min(100, pct));
+    phaseMaxTransferred = Math.max(phaseMaxTransferred, transferred);
+    lastProgressTotal = Math.max(lastProgressTotal, total);
     updaterState.downloadProgress = {
-      percent: maxDownloadPercent,
+      percent: phaseMaxPercent,
       bytesPerSecond: Math.max(0, Math.round(progress.bytesPerSecond || 0)),
-      transferred: maxTransferredBytes,
-      total: Math.max(maxTransferredBytes, progress.total || 0),
+      transferred: phaseMaxTransferred,
+      total: lastProgressTotal,
+      phase: currentPhase,
     };
     broadcastState();
   });
@@ -396,7 +418,7 @@ async function downloadDirectAsset(url: string, fileName?: string | null, expect
   const headerLen = parseInt(resp.headers.get('content-length') || '0', 10);
   const total = (headerLen && headerLen > 0)
     ? headerLen
-    : (expectedSize && expectedSize > 0 ? expectedSize : 160 * 1024 * 1024);
+    : (expectedSize && expectedSize > 0 ? expectedSize : 0);
   const fileStream = fs.createWriteStream(targetPath);
 
   if (!resp.body) {
@@ -408,12 +430,17 @@ async function downloadDirectAsset(url: string, fileName?: string | null, expect
   let lastTime = Date.now();
   let lastBytes = 0;
 
+  // Fresh progress window for the full-installer phase (the differential phase may have
+  // run before us and left its maxima behind).
+  resetProgressWindow(total, 'full');
+
   // Immediate initial progress tick so the UI progress bar wakes up at 1%
   updaterState.downloadProgress = {
     percent: 1,
     bytesPerSecond: 0,
     transferred: 0,
     total,
+    phase: 'full',
   };
   broadcastState();
 
@@ -423,20 +450,22 @@ async function downloadDirectAsset(url: string, fileName?: string | null, expect
       if (done) break;
       fileStream.write(value);
       transferred += value.length;
-      maxTransferredBytes = Math.max(maxTransferredBytes, transferred);
+      phaseMaxTransferred = Math.max(phaseMaxTransferred, transferred);
 
       const now = Date.now();
       if (now - lastTime >= 150) {
         const bps = Math.round(((transferred - lastBytes) / (now - lastTime)) * 1000);
         lastTime = now;
         lastBytes = transferred;
-        const currentPercent = total > 0 ? Math.min(100, Math.round((maxTransferredBytes / total) * 100)) : 0;
-        maxDownloadPercent = Math.max(maxDownloadPercent, Math.max(1, currentPercent));
+        const currentPercent = total > 0 ? Math.min(100, Math.max(1, Math.round((transferred / total) * 100))) : 0;
+        phaseMaxPercent = Math.max(phaseMaxPercent, currentPercent);
+        lastProgressTotal = total;
         updaterState.downloadProgress = {
-          percent: maxDownloadPercent,
+          percent: phaseMaxPercent,
           bytesPerSecond: Math.max(0, bps),
-          transferred: maxTransferredBytes,
-          total: Math.max(maxTransferredBytes, total),
+          transferred,
+          total,
+          phase: 'full',
         };
         broadcastState();
       }
@@ -471,13 +500,15 @@ export async function downloadUpdate(): Promise<{ success: boolean; error?: stri
     return { success: true };
   }
 
-  maxDownloadPercent = 0;
-  maxTransferredBytes = 0;
+  resetProgressWindow(updaterState.updateInfo?.fileSize || 0, 'delta');
 
   activeDownloadPromise = (async () => {
     try {
       updaterState.status = 'downloading';
-      updaterState.downloadProgress = { percent: 1, bytesPerSecond: 0, transferred: 0, total: 160 * 1024 * 1024 };
+      // Initial tick: show the real installer size from the GitHub API when known instead
+      // of a hardcoded placeholder; the differential phase's own total replaces it.
+      const initialTotal = updaterState.updateInfo?.fileSize || 0;
+      updaterState.downloadProgress = { percent: 1, bytesPerSecond: 0, transferred: 0, total: initialTotal, phase: 'delta' };
       broadcastState();
 
       // 1. In packaged app, try electron-updater differential download first (uses blockmap to download only changed delta)
@@ -485,6 +516,7 @@ export async function downloadUpdate(): Promise<{ success: boolean; error?: stri
       if (updater && app && app.isPackaged) {
         try {
           console.log('[Updater] Attempting differential update via electron-updater...');
+          resetProgressWindow(0, 'delta');
           await updater.downloadUpdate();
           return { success: true };
         } catch (diffErr: any) {

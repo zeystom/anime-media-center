@@ -199,8 +199,19 @@ export const SettingsModal: React.FC<SettingsModalProps> = ({
   const [manualUpdateModalOpen, setManualUpdateModalOpen] = useState<boolean>(false);
   const [manualUpdateInfo, setManualUpdateInfo] = useState<UpdateInfoPayload | null>(null);
 
+  const updaterProgressPhaseRef = useRef<string | null>(null);
   useEffect(() => {
-    if (updaterState.downloadProgress && typeof updaterState.downloadProgress.percent === 'number') {
+    const phase = updaterState.downloadProgress?.phase ?? null;
+    if (phase !== updaterProgressPhaseRef.current) {
+      // New phase (delta -> full restart): start the displayed percent over instead of
+      // keeping the monotonic max from the previous phase.
+      updaterProgressPhaseRef.current = phase;
+      setUpdaterDisplayPercent(
+        updaterState.downloadProgress && typeof updaterState.downloadProgress.percent === 'number'
+          ? Math.round(updaterState.downloadProgress.percent)
+          : 0
+      );
+    } else if (updaterState.downloadProgress && typeof updaterState.downloadProgress.percent === 'number') {
       setUpdaterDisplayPercent((prev) => Math.max(prev, Math.round(updaterState.downloadProgress!.percent)));
     } else if (updaterState.status === 'downloaded') {
       setUpdaterDisplayPercent(100);
@@ -1941,7 +1952,10 @@ export const SettingsModal: React.FC<SettingsModalProps> = ({
                     </div>
                     {updaterState.downloadProgress && (
                       <div className="flex items-center justify-between text-[11px] text-zinc-500 font-mono">
-                        <span>{formatFileSize(updaterState.downloadProgress.transferred)} / {formatFileSize(updaterState.downloadProgress.total)}</span>
+                        <span>
+                          {formatFileSize(updaterState.downloadProgress.transferred)} / {formatFileSize(updaterState.downloadProgress.total)}
+                          {updaterState.downloadProgress.phase === 'delta' && <span className="text-zinc-600"> (delta)</span>}
+                        </span>
                         <span>{formatFileSize(updaterState.downloadProgress.bytesPerSecond)}/s</span>
                       </div>
                     )}

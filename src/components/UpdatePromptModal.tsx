@@ -262,6 +262,7 @@ export const UpdatePromptModal: React.FC<UpdatePromptModalProps> = ({
                 <div className="flex items-center justify-between text-[11px] text-zinc-400 font-mono">
                   <span>
                     {formatFileSize(progress.transferred)} / {formatFileSize(progress.total)}
+                    {progress.phase === 'delta' && <span className="text-zinc-500"> (delta)</span>}
                   </span>
                   <span>{formatFileSize(progress.bytesPerSecond)}/s</span>
                 </div>

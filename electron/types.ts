@@ -391,6 +391,8 @@ export interface UpdateProgressPayload {
   bytesPerSecond: number;
   transferred: number;
   total: number;
+  /** 'delta' = differential (blockmap) download, 'full' = full installer download */
+  phase?: 'delta' | 'full';
 }
 
 export interface UpdaterState {
