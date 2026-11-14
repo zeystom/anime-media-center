@@ -31,6 +31,19 @@ export const UpdatePromptModal: React.FC<UpdatePromptModalProps> = ({
   const [error, setError] = useState<string | null>(null);
   const [asyncReleaseNotes, setAsyncReleaseNotes] = useState<string | null>(updateInfo.releaseNotes || null);
 
+  // The modal doubles as a plain "What's New" release-notes viewer for the current
+  // version; when the offered version isn't newer there is nothing to update to.
+  const isActualUpdate = useMemo(() => {
+    const clean = (v: string) => v.replace(/^v/i, '').trim();
+    const l = clean(updateInfo.version || '').split('.').map((p) => parseInt(p, 10) || 0);
+    const c = clean(appVersion || '').split('.').map((p) => parseInt(p, 10) || 0);
+    for (let i = 0; i < Math.max(l.length, c.length); i++) {
+      if ((l[i] ?? 0) > (c[i] ?? 0)) return true;
+      if ((l[i] ?? 0) < (c[i] ?? 0)) return false;
+    }
+    return false;
+  }, [updateInfo.version, appVersion]);
+
   useEffect(() => {
     if (updateInfo.releaseNotes) {
       setAsyncReleaseNotes(updateInfo.releaseNotes);
@@ -209,7 +222,7 @@ export const UpdatePromptModal: React.FC<UpdatePromptModalProps> = ({
             </div>
             <div>
               <h3 id="update-prompt-title" className="text-sm font-bold text-white tracking-tight">
-                Update Available
+                {isActualUpdate ? 'Update Available' : "What's New"}
               </h3>
               <p className="text-xs text-zinc-400">
                 Kaiko v{updateInfo.version} (current: v{appVersion})
@@ -271,8 +284,17 @@ export const UpdatePromptModal: React.FC<UpdatePromptModalProps> = ({
           ) : (
             <>
               <p className="text-xs text-zinc-300 leading-relaxed">
-                A new version of Kaiko is available (<span className="font-semibold text-white">v{updateInfo.version}</span>).
-                You can update now directly without re-downloading through Git.
+                {isActualUpdate ? (
+                  <>
+                    A new version of Kaiko is available (<span className="font-semibold text-white">v{updateInfo.version}</span>).
+                    You can update now directly without re-downloading through Git.
+                  </>
+                ) : (
+                  <>
+                    Release notes for <span className="font-semibold text-white">v{updateInfo.version}</span> — you are
+                    already running this version.
+                  </>
+                )}
               </p>
 
               <div className="space-y-1.5">
@@ -298,8 +320,8 @@ export const UpdatePromptModal: React.FC<UpdatePromptModalProps> = ({
                 </div>
               )}
 
-              {/* Checkbox: "Don't show again and disable auto-updates" */}
-              {!hideDontShowAgain && (
+              {/* Checkbox: "Don't show again and disable auto-updates" (update prompts only) */}
+              {!hideDontShowAgain && isActualUpdate && (
                 <label className="flex items-center space-x-2.5 pt-2 cursor-pointer select-none group">
                   <input
                     type="checkbox"
@@ -344,7 +366,7 @@ export const UpdatePromptModal: React.FC<UpdatePromptModalProps> = ({
             >
               Minimize (downloading in background)
             </button>
-          ) : (
+          ) : isActualUpdate ? (
             <>
               <button
                 type="button"
@@ -362,6 +384,14 @@ export const UpdatePromptModal: React.FC<UpdatePromptModalProps> = ({
                 <span>Update Now</span>
               </button>
             </>
+          ) : (
+            <button
+              type="button"
+              onClick={handleDismiss}
+              className="px-4 py-2 rounded-xl text-xs font-medium text-zinc-400 hover:text-white hover:bg-zinc-800 transition-colors"
+            >
+              Close
+            </button>
           )}
         </div>
       </div>

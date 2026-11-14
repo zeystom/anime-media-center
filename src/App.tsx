@@ -1320,6 +1320,11 @@ export const App: React.FC = () => {
     return () => window.removeEventListener('keydown', handleGlobalKeyDown);
   }, [activePlayerEpisode, handleClosePlayer]);
 
+  // Two-finger touchpad swipe-back tracking (see the history-sentinel effect below).
+  const swipeAccumRef = useRef(0);
+  const swipeDirRef = useRef(0);
+  const swipeLastTsRef = useRef(0);
+
   // This is a single-page app, so the native mouse Back button must never
   // traverse Chromium's document history (which also contains the startup
   // splash page). Handle Back as an app-level stack instead. The touchpad
@@ -1350,6 +1355,56 @@ export const App: React.FC = () => {
       if (event.type === 'mousedown' && event.button === 3) navigateBack();
     };
 
+    // Horizontal swipe-back from raw wheel deltas. Only counts when the wheel
+    // motion is clearly horizontal, nothing horizontally scrollable consumes
+    // it, and enough distance (~2/3 of a trackpad swipe) accumulated in one
+    // gesture without a direction flip.
+    const canConsumeHorizontalScroll = (start: EventTarget | null, direction: number): boolean => {
+      let el = start instanceof Element ? start : null;
+      while (el && el !== document.body) {
+        const style = window.getComputedStyle(el);
+        const scrollableX = style.overflowX === 'auto' || style.overflowX === 'scroll' || style.overflowX === 'overlay';
+        if (scrollableX && el.scrollWidth > el.clientWidth + 1) {
+          const atStart = el.scrollLeft <= 0;
+          const atEnd = el.scrollLeft >= el.scrollWidth - el.clientWidth - 1;
+          if (!(direction < 0 ? atEnd : atStart)) return true;
+        }
+        el = el.parentElement;
+      }
+      return false;
+    };
+    const handleHorizontalSwipe = (event: WheelEvent) => {
+      const now = Date.now();
+      // Cooldown so momentum/inertia events can't immediately re-trigger.
+      if (now - swipeLastTsRef.current < 1200) {
+        swipeAccumRef.current = 0;
+        return;
+      }
+      const rawDx = event.deltaMode === 1 ? event.deltaX * 16 : event.deltaX;
+      const rawDy = event.deltaMode === 1 ? event.deltaY * 16 : event.deltaY;
+      if (Math.abs(rawDx) < 4 || Math.abs(rawDx) < Math.abs(rawDy) * 1.5) {
+        swipeAccumRef.current = 0;
+        swipeDirRef.current = 0;
+        return;
+      }
+      const dir = Math.sign(rawDx);
+      if (dir !== swipeDirRef.current) {
+        swipeDirRef.current = dir;
+        swipeAccumRef.current = 0;
+      }
+      if (canConsumeHorizontalScroll(event.target, dir)) {
+        swipeAccumRef.current = 0;
+        return;
+      }
+      swipeAccumRef.current += Math.abs(rawDx);
+      if (dir < 0 && swipeAccumRef.current > 350) {
+        swipeAccumRef.current = 0;
+        swipeDirRef.current = 0;
+        swipeLastTsRef.current = now;
+        navigateBack();
+      }
+    };
+
     // Keep one sentinel entry ahead so swipe-triggered traversal stays inside
     // this document. Re-pushed after every popstate; skipped when the current
     // entry already is the sentinel, so the stack doesn't grow unboundedly.
@@ -1369,11 +1424,17 @@ export const App: React.FC = () => {
     window.addEventListener('mouseup', suppressMouseNavigation, true);
     window.addEventListener('auxclick', suppressMouseNavigation, true);
     window.addEventListener('popstate', handlePopState);
+    // Fallback for precision touchpads where the two-finger horizontal swipe
+    // never becomes a history traversal (Windows): track mostly-horizontal
+    // wheel deltas and trigger back once enough distance accumulates — unless
+    // a horizontally scrollable container consumes the scroll first.
+    window.addEventListener('wheel', handleHorizontalSwipe, { passive: true });
     return () => {
       window.removeEventListener('mousedown', suppressMouseNavigation, true);
       window.removeEventListener('mouseup', suppressMouseNavigation, true);
       window.removeEventListener('auxclick', suppressMouseNavigation, true);
       window.removeEventListener('popstate', handlePopState);
+      window.removeEventListener('wheel', handleHorizontalSwipe);
     };
   }, [detailSource, currentTab, activePlayerEpisode, settingsOpen, handleClosePlayer]);
 

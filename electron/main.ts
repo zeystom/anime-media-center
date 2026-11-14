@@ -454,6 +454,10 @@ async function createWindow() {
     // leave the user staring at a loading screen instead of the app.
     if (!mainWindow.isDestroyed()) mainWindow.webContents.navigationHistory.clear();
 
+    // Note: Chromium's 'swipe' webContents event is macOS-only, so touchpad
+    // back-swipe on Windows is handled in the renderer (wheel-based fallback
+    // + popstate sentinel) instead of here.
+
     // Refresh the local age-rating index in the background. On first install
     // this starts immediately; the renderer keeps its bundled snapshot until
     // the fresh copy is ready.

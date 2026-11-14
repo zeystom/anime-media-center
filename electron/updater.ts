@@ -500,6 +500,15 @@ export async function downloadUpdate(): Promise<{ success: boolean; error?: stri
     return { success: true };
   }
 
+  // The modal doubles as a release-notes viewer for the current version; never
+  // re-download the same (or older) version through that path.
+  if (!isNewerVersion(updaterState.updateInfo?.version, updaterState.currentVersion)) {
+    updaterState.status = 'not-available';
+    updaterState.error = null;
+    broadcastState();
+    return { success: false, error: 'You are already running the latest version' };
+  }
+
   resetProgressWindow(updaterState.updateInfo?.fileSize || 0, 'delta');
 
   activeDownloadPromise = (async () => {
