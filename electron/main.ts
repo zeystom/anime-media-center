@@ -1695,7 +1695,10 @@ function setupIpcHandlers() {
     // (they are episode-independent). Ranking and episode-dependent filters
     // re-run per request below.
     const cacheKey = queries.join(' || ');
-    let cached = searchResultCache.get(cacheKey);
+    let cached: { inspected: ReleaseSearchResult[]; reports: ProviderReport[]; fetchedAt: number } | undefined = searchResultCache.get(cacheKey);
+    // Never serve a failed attempt from cache (e.g. every provider timed out
+    // because the network was down): a retry must re-attempt the providers.
+    if (cached?.reports.some((report) => !report.ok)) cached = undefined;
     if (!cached || Date.now() - cached.fetchedAt > SEARCH_CACHE_TTL_MS) {
       // Search every query across all enabled providers in PARALLEL — the
       // queries are independent and indexers like Nyaa routinely serve 504s on
@@ -1744,11 +1747,21 @@ function setupIpcHandlers() {
       // before ranking so automatic mode cannot mistake an unknown track list for
       // a confirmed English dub/sub release.
       const inspectedResults = await inspectReleaseResults(relevant, providers, 40);
-      cached = { inspected: inspectedResults, reports: [...reportByProvider.values()], fetchedAt: Date.now() };
-      searchResultCache.set(cacheKey, cached);
-      if (searchResultCache.size > 24) {
-        const oldest = [...searchResultCache.entries()].sort((a, b) => a[1].fetchedAt - b[1].fetchedAt)[0];
-        if (oldest) searchResultCache.delete(oldest[0]);
+      const mergedReports = [...reportByProvider.values()];
+      const hadProviderFailure = mergedReports.some((report) => !report.ok);
+      // Cache only usable attempts. A failed search (all providers timed out
+      // / offline / 5xx with nothing found) stays uncached so the next attempt
+      // re-queries the providers instead of replaying the error.
+      const cacheable = !hadProviderFailure || inspectedResults.length > 0;
+      if (cacheable) {
+        cached = { inspected: inspectedResults, reports: mergedReports, fetchedAt: Date.now() };
+        searchResultCache.set(cacheKey, cached);
+        if (searchResultCache.size > 24) {
+          const oldest = [...searchResultCache.entries()].sort((a, b) => a[1].fetchedAt - b[1].fetchedAt)[0];
+          if (oldest) searchResultCache.delete(oldest[0]);
+        }
+      } else {
+        cached = { inspected: inspectedResults, reports: mergedReports, fetchedAt: Date.now() };
       }
     }
     // Per-request ranking of the cached inspected set for THIS episode, then
