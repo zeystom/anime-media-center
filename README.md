@@ -7,7 +7,7 @@
 <p align="center"><strong>Your anime library, player, and subtitle studio — on your PC.</strong></p>
 
 <p align="center">
-  <img src="https://img.shields.io/badge/Version-2.0.0-ec4899?style=flat-square" alt="Version 2.0.0" />
+  <img src="https://img.shields.io/badge/Version-2.0.1-ec4899?style=flat-square" alt="Version 2.0.1" />
   <img src="https://img.shields.io/badge/Platform-Windows%2010%20%2F%2011-blue?style=flat-square" alt="Windows 10 and 11" />
   <img src="https://img.shields.io/badge/Electron-33-47848F?style=flat-square&logo=electron" alt="Electron 33" />
   <img src="https://img.shields.io/badge/License-MIT-green?style=flat-square" alt="MIT License" />
@@ -15,7 +15,7 @@
 
 Kaiko organizes anime files already on your drives, finds catalog information, and plays episodes locally with built-in FFmpeg support. Optional features include AI subtitle generation with Faster-Whisper and torrent downloads from indexers that you configure yourself.
 
-> **Kaiko 2.0.0 — the design overhaul release.** The app shell is rebuilt around a floating glass navbar and a unified glass design system, OVA torrent search and downloads work end to end (parent-season aliases, wrong-season bundle rejection, multi-episode OVA handling), episode lists no longer show franchise extras as regular episodes, and cold subtitle opens use fast two-phase extraction. See the [changelog](CHANGELOG.md) for the full list.
+> **Kaiko 2.0.1 — hotfix release on top of the 2.0.0 design overhaul:** honest update-download progress, the What's New dialog no longer offers a same-version update, two-finger touchpad swipe back works on Windows laptops, and failed provider searches are retried instead of replaying a cached error. The shell overhaul, OVA torrent pipeline and episode-list integrity work of 2.0.0 are all included — the full 2.0.0 feature list is in the [changelog](CHANGELOG.md).
 
 ## Features
 
@@ -35,7 +35,7 @@ For a magnet link that contains no tracker address, the engine appends a small l
 
 ## Install the Windows app
 
-Download the `Kaiko Setup 2.0.0.exe` installer from the project’s GitHub Releases page, run it, and choose an install folder. The installer creates shortcuts. Updates can also be installed directly from within the app via **Settings → Application Updates** or the startup update prompt (featuring rich GitHub-formatted release notes). During a normal uninstall, Kaiko asks separately whether to remove saved settings, anime lists, and watch history, and whether to clear the contents of configured media-library folders. Both choices default to **No**; deleting library contents requires a second confirmation listing the folders. Clearing a library folder removes every file inside it, not just Kaiko downloads, and leaves the folder itself in place. Silent uninstall and app upgrades preserve personal data. The first launch may take a little longer while Windows initializes Electron.
+Download the `Kaiko Setup 2.0.1.exe` installer from the project’s GitHub Releases page, run it, and choose an install folder. The installer creates shortcuts. Updates can also be installed directly from within the app via **Settings → Application Updates** or the startup update prompt (featuring rich GitHub-formatted release notes). During a normal uninstall, Kaiko asks separately whether to remove saved settings, anime lists, and watch history, and whether to clear the contents of configured media-library folders. Both choices default to **No**; deleting library contents requires a second confirmation listing the folders. Clearing a library folder removes every file inside it, not just Kaiko downloads, and leaves the folder itself in place. Silent uninstall and app upgrades preserve personal data. The first launch may take a little longer while Windows initializes Electron.
 
 FFmpeg and a lightweight 7-Zip decompression engine (`7z.exe` + `7z.dll`) are bundled directly into Kaiko for seamless playback, extraction, and automated engine setup out-of-the-box across all Windows versions (Windows 10 & 11). The Faster-Whisper-XXL engine can be downloaded and configured automatically in 1-click directly inside Kaiko (or auto-detected from Subtitle Edit / custom paths). Recommended AI models (`large-v3-turbo`, `medium`, `small`) can also be downloaded in 1-click directly from the Settings menu or Whisper Studio.
 

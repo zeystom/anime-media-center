@@ -1,5 +1,17 @@
 # Changelog
 
+## 2.0.1 — Hotfix: Update Flow & Provider Retry
+
+### 🔄 Update Flow
+- **Honest download progress:** the update progress bar no longer shows a hardcoded 160 MB total followed by jumpy delta/full phases. The differential (blockmap) phase is labeled `(delta)`, a silent fallback from the delta to the full installer restarts the progress window instead of keeping a stuck monotonic percent, and the real installer size from the GitHub release API replaces the placeholder.
+- **"What's New" no longer offers a fake update:** viewing release notes for the current version renders the modal as a plain notes viewer (Close button, no "Update Now", no don't-show-again checkbox), and the main process refuses to re-download the same version. "Check for Updates" on the latest release only confirms you are up to date.
+
+### 🖥 Touchpad Swipe Back
+- **Two-finger swipe back works on Windows laptops:** the app now tracks mostly-horizontal touchpad swipes at the wheel level (the Chromium overscroll gesture often never fires there). Swiping left returns to the previous screen — over horizontally scrollable rails the swipe scrolls them instead, at end-of-scroll it hands off to back navigation. Direction flips reset the gesture and a cooldown absorbs trackpad inertia.
+
+### 🌐 Provider Errors & Retries
+- **Failed provider searches are no longer cached:** when all providers fail (timeout, offline, 5xx) the empty result is not written into the search cache, so retrying the download immediately re-queries the providers instead of replaying the cached error for two minutes. Partial failures that still found usable releases stay cached so a season queue drain doesn't hammer providers.
+
 ## 2.0.0 — Design Overhaul, OVA Torrent Search Engine & Episode List Integrity
 
 A global update: a full visual overhaul of the app shell, a rework of the OVA torrent search and download pipeline, and integrity fixes for episode lists polluted by franchise extras.

@@ -38,38 +38,19 @@ if (!token) {
   process.exit(1);
 }
 
-const RELEASE_BODY = `## Kaiko 2.0.0 — Design Overhaul, OVA Torrent Search Engine & Episode List Integrity
+const RELEASE_BODY = `## Kaiko 2.0.1 — Hotfix: Update Flow, Touchpad Swipe Back & Provider Retry
 
-A global update: a full visual overhaul of the app shell, a rework of the OVA torrent search and download pipeline, and integrity fixes for episode lists polluted by franchise extras.
+A hotfix on top of the 2.0.0 design overhaul: honest update-download progress, no more fake same-version update prompts, two-finger touchpad swipe back working on Windows laptops, and provider errors that actually retry instead of replaying a cached failure.
 
-### 🎨 Design Overhaul
-- **Floating glass navbar:** pages scroll under the navbar so the backdrop blur reads real content, with a per-title hue tint. The banner tint fades out with scroll progress (it no longer hides the blur), and the blur is toggleable in Settings for weaker PCs.
-- **Glass design system:** new \`GlassSelect\` component, hue-family color remap, glow tokens, banner fade rebalance; cold blue-gray hexes replaced with palette tokens throughout.
-- **Scroll performance:** navbar progress flows through a pub-sub outside React state, page trees are memoized, hover transitions are suppressed during scrolls — smooth FPS on long pages.
-- **Notifications drawer:** relative timestamps on a 5-second ticker, swipe-to-dismiss rows, more opaque cards and larger fonts.
-- **Library cards:** rating pill that survives 2-line titles, icon-only Followed/Favourite badges, catalog scores lazy-loaded for collection-only entries.
-- **Discover:** accent-gradient filter controls, centered mode tabs, cleaner header.
-- **Whisper Studio:** the episode selector is rebuilt as a thumbnail card grid with click-toggle and hold-drag sweep selection; redundant folder button removed; link-style buttons de-underlined.
-- **Single-episode titles** of any format (OVAs, specials, music videos) get the film treatment: hero Play/Download actions instead of a one-card grid.
+### 🔄 Update Flow
+- **Honest download progress:** the update progress bar no longer starts with a hardcoded 160 MB total followed by jumpy delta/full phases. The differential (blockmap) phase is labeled \`(delta)\`, a silent fallback from the delta to the full installer restarts the progress window instead of keeping a stuck monotonic percent, and the real installer size from the GitHub release API replaces the placeholder.
+- **"What's New" no longer offers a fake update:** viewing release notes for the current version renders the dialog as a plain notes viewer (Close button, no "Update Now"), and the main process refuses to re-download the same version. "Check for Updates" on the latest release only confirms you are up to date.
 
-### 🔍 OVA Torrent Search & Downloads, End to End
-- **OVA pages search with parent-season aliases:** aliases are built from the AniList PARENT relation (previously the alias list was empty and only one query fired). The ≤3 indexer queries now also run in parallel.
-- **Wrong-season bundle rejection on OVA pages:** franchise season chains are resolved for OVAs via the AniList graph, so mega-bundles containing other seasons are rejected during automatic search; the franchise filter guards automatic searches again (the condition was inverted).
-- **Smarter OVA auto-pick:** dedicated OVA releases compete with bundles inside seeded-first language tiers; shape ordering prefers dedicated → single-season bundle → whole-franchise mega-bundle; uncensored releases get a tie-break bonus; content-type tails (+OVA, +Movie, Specials, S01+02) keep prefix relevance and count as multi-season collections.
-- **Engine file selection fixes:** repaired the \`ovaMarker\` regex that had silently killed every \`' ova '\` basename match; plural OVA dirs/files are accepted, marker-matched files beat token-only matches, ties break by distinctive title tokens.
-- **Multi-episode OVA series** (Hellsing Ultimate, DxD OVA): \`episodeCount\` is plumbed renderer → preload → job → persist/resume — the whole download is kept and episode cards narrow by decimal or roman number; other seasons' OVAs are dropped from franchise mega-bundles.
-- **No more eternal zombie downloads:** a swarm stalled 75 s after both stall-recovery attempts with no peers and no available pieces fails with a clear message instead of sitting at 0 MB/s forever.
+### 🖥 Touchpad Swipe Back
+- **Two-finger swipe back works on Windows laptops:** the app now tracks mostly-horizontal touchpad swipes at the wheel level (the Chromium overscroll gesture often never fires there). Swiping left returns to the previous screen — over horizontally scrollable rails the swipe scrolls them instead, and at end-of-scroll it hands off to back navigation. Direction flips reset the gesture and a cooldown absorbs trackpad inertia.
 
-### 📺 Episode List Integrity (API Episode Search)
-- **Franchise extras no longer pose as regular episodes:** ani.zip crosswalks number franchise OVAs/specials as regular episodes (Steins;Gate's OVA shipped as ep 1 while the true "Turning Point" was missing). Every slot is now date-guarded against the AniList schedule spine, and rows airing after all higher-numbered episodes are dropped. Validated across all 216 cached snapshots — zero legit episodes flagged. Poisoned caches self-heal on every view open.
-
-### ⚡ Subtitle Performance
-- **Two-phase subtitle extraction:** cold opens extract a 2-minute window around the playback position first (indexed seek, ~8% of the file, 1–3 s) while the full track builds in the background; the renderer swaps seamlessly onto the full track when it is ready.
-
-### 🛠 Other Fixes & Polish
-- Season and OVA release downloads fixed end to end (season-batch title formats like \`Title 01-12 Complete\` are matched correctly against the franchise chain).
-- Collection-only cards fetch missing posters via catalog details (24 h cache); the storage overview reloads when the active job set changes.
-- **No more subtitle-generation toasts during playback:** background Whisper events ("Episode Subtitles Ready", "Whisper Batch Completed", model/engine readiness) no longer pop toasts over the video player — they land silently in the notification center.
+### 🌐 Provider Errors & Retries
+- **Failed provider searches are no longer cached:** when all providers fail (timeout, offline, 5xx) the empty result is not written into the search cache, so retrying the download immediately re-queries the providers instead of replaying the cached error for two minutes. Partial failures that still found usable releases stay cached so a season queue drain doesn't hammer providers per episode.
 
 ---
 ### Assets included:

@@ -1,6 +1,6 @@
 {
   "name": "anime-media-center",
-  "version": "2.0.0",
+  "version": "2.0.1",
   "description": "Kaiko — your anime library and home media center",
   "type": "module",
   "main": "dist-electron/bootstrap.js",
