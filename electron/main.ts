@@ -6,7 +6,7 @@ import { fileURLToPath } from 'url';
 import { storage, autoDetectFfmpegPath, autoDetectWhisperPath } from './storage';
 import { resolveUserDataPath } from './userDataPath';
 import { streamServer } from './server';
-import { probeMkv, extractEmbeddedSubtitle, extractEmbeddedAss, extractEmbeddedFonts, getFolderHash, getCachedFolderFonts, filterFontsForAss, parseSrt, readMkvEmbeddedTitle, readContainerDuration, cleanupOldCaches } from './ffmpeg';
+import { probeMkv, extractEmbeddedSubtitle, extractEmbeddedAss, extractEmbeddedFonts, getFolderHash, getCachedFolderFonts, filterFontsForAss, parseSrt, readMkvEmbeddedTitle, readContainerDuration, cleanupOldCaches, isEmbeddedSubtitleCached, isEmbeddedAssCached, extractEmbeddedSubtitleWindow, extractEmbeddedAssWindow } from './ffmpeg';
 import { whisperManager } from './whisper';
 import { findExternalSubtitles } from './subtitles';
 import { AnimeFolder, Episode, PlaybackProgress, SeasonPreference, VIDEO_EXTENSIONS, ReleaseSearchResult, ProviderReport, DiscoverCatalogParams } from './types';
@@ -137,9 +137,54 @@ async function checkFolderSubtitles(
   return result;
 }
 
+// Scan results cache: entering Whisper Studio (or re-selecting a folder)
+// used to re-scan every file — subtitle probing, duration reads, Kitsu
+// metadata — on each entry. Cache keyed by root+folder with the directory's
+// mtime as the guard: any file added/removed (new .srt, new episode) bumps
+// the directory mtime and invalidates the entry; TTL backs it up.
+interface FolderScanCacheEntry {
+  mtimeMs: number;
+  at: number;
+  episodes: Episode[];
+}
+const folderScanCache = new Map<string, FolderScanCacheEntry>();
+const FOLDER_SCAN_TTL_MS = 60_000;
+
 async function scanFolderForEpisodes(folderPath: string, port: number, targetRoot?: string): Promise<Episode[]> {
   if (!fs.existsSync(folderPath)) return [];
 
+  try {
+    const cacheKey = `${targetRoot || ''}::${folderPath}`;
+    let dirMtimeMs = 0;
+    try {
+      dirMtimeMs = fs.statSync(folderPath).mtimeMs;
+    } catch {}
+    const cached = folderScanCache.get(cacheKey);
+    if (
+      cached &&
+      cached.mtimeMs === dirMtimeMs &&
+      Date.now() - cached.at < FOLDER_SCAN_TTL_MS
+    ) {
+      return cached.episodes;
+    }
+
+    const episodes = await scanFolderForEpisodesUncached(folderPath, port, targetRoot);
+    if (episodes.length > 0) {
+      folderScanCache.set(cacheKey, { mtimeMs: dirMtimeMs, at: Date.now(), episodes });
+      if (folderScanCache.size > 40) {
+        const now = Date.now();
+        for (const [key, entry] of folderScanCache) {
+          if (now - entry.at > FOLDER_SCAN_TTL_MS) folderScanCache.delete(key);
+        }
+      }
+    }
+    return episodes;
+  } catch {
+    return scanFolderForEpisodesUncached(folderPath, port, targetRoot);
+  }
+}
+
+async function scanFolderForEpisodesUncached(folderPath: string, port: number, targetRoot?: string): Promise<Episode[]> {
   try {
     const files = fs.readdirSync(folderPath);
     const videoFiles = files.filter((f) =>
@@ -1095,7 +1140,7 @@ function setupIpcHandlers() {
     return { success: true };
   });
 
-  ipcMain.handle('extract-subtitle-track', async (_event, filePath, trackId, trackIndex, isExternal, externalPath) => {
+  ipcMain.handle('extract-subtitle-track', async (_event, filePath, trackId, trackIndex, isExternal, externalPath, playbackPosSec?: number, forceFull?: boolean) => {
     const settings = storage.getSettings();
     const port = streamServer.getPort();
 
@@ -1127,6 +1172,48 @@ function setupIpcHandlers() {
       const metadata = await probeMkv(filePath, settings.ffmpegPath);
       const track = metadata.subtitleTracks.find((t) => t.index === trackIndex);
       const isAss = track && /ass|ssa/i.test(track.codec || '');
+
+      if (isAss) {
+        const fullCached = isEmbeddedAssCached(filePath, trackIndex);
+        // WINDOW FAST PATH: a full-track extraction streams the whole MKV
+        // through ffmpeg (15-20s for a 1.5-3GB episode on an HDD). When the
+        // player tells us its playback position, extract only a ~2-minute
+        // slice around it first (one indexed seek + ~8% of the file) so
+        // subtitles appear in 1-3s, while the full extraction continues in
+        // the background; the renderer re-requests with forceFull to swap.
+        if (!fullCached && !forceFull && playbackPosSec != null && Number.isFinite(playbackPosSec) && playbackPosSec > 0) {
+          const from = Math.max(0, Math.floor((playbackPosSec - 10) / 120) * 120);
+          const duration = 140;
+          const windowContent = await extractEmbeddedAssWindow(filePath, trackIndex, from, duration, settings.ffmpegPath);
+          if (windowContent) {
+            return {
+              format: 'ass',
+              content: windowContent,
+              fonts: getCachedFolderFonts(getFolderHash(filePath), port),
+              port,
+              cues: [],
+              fontsPending: false,
+              partial: { fromMs: from * 1000, toMs: (from + duration) * 1000 },
+            };
+          }
+        }
+      } else {
+        const fullCached = isEmbeddedSubtitleCached(filePath, trackIndex);
+        if (!fullCached && !forceFull && playbackPosSec != null && Number.isFinite(playbackPosSec) && playbackPosSec > 0) {
+          const from = Math.max(0, Math.floor((playbackPosSec - 10) / 120) * 120);
+          const duration = 140;
+          const windowContent = await extractEmbeddedSubtitleWindow(filePath, trackIndex, from, duration, settings.ffmpegPath);
+          if (windowContent) {
+            return {
+              format: 'srt',
+              port,
+              cues: parseSrt(windowContent),
+              fontsPending: false,
+              partial: { fromMs: from * 1000, toMs: (from + duration) * 1000 },
+            };
+          }
+        }
+      }
 
       if (isAss) {
         const folderHash = getFolderHash(filePath);

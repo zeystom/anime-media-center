@@ -190,7 +190,7 @@ export const UpdatePromptModal: React.FC<UpdatePromptModalProps> = ({
 
   return createPortal(
     <div
-      className="fixed inset-0 z-[120] flex items-center justify-center p-4 bg-black/80 animate-in fade-in duration-150"
+      className="fixed inset-0 z-[120] flex items-center justify-center p-4 modal-dimmer animate-in fade-in duration-150"
       onClick={handleDismiss}
     >
       <div
@@ -198,7 +198,7 @@ export const UpdatePromptModal: React.FC<UpdatePromptModalProps> = ({
         aria-modal="true"
         data-modal="true"
         aria-labelledby="update-prompt-title"
-        className="w-full max-w-lg flex flex-col bg-[#141418] border border-white/10 rounded-2xl text-zinc-100 shadow-2xl animate-in zoom-in-95 duration-150 overflow-hidden"
+        className="modal-glass w-full max-w-lg flex flex-col rounded-2xl text-zinc-100 animate-in zoom-in-95 duration-150 overflow-hidden"
         onClick={(e) => e.stopPropagation()}
       >
         {/* Header */}
@@ -316,7 +316,7 @@ export const UpdatePromptModal: React.FC<UpdatePromptModalProps> = ({
         </div>
 
         {/* Footer Actions */}
-        <div className="px-6 py-4 border-t border-white/10 flex items-center justify-end space-x-3 shrink-0 bg-[#141418]">
+        <div className="px-6 py-4 border-t border-white/10 flex items-center justify-end space-x-3 shrink-0 bg-black/25">
           {isDownloaded ? (
             <>
               <button
@@ -355,7 +355,7 @@ export const UpdatePromptModal: React.FC<UpdatePromptModalProps> = ({
               <button
                 type="button"
                 onClick={handleStartUpdate}
-                className="flex items-center space-x-2 px-5 py-2 rounded-xl bg-purple-600 hover:bg-purple-500 text-white font-medium text-xs shadow-lg shadow-purple-600/20 transition-all"
+                className="btn-primary flex items-center space-x-2 px-5 py-2 rounded-xl text-white font-medium text-xs transition-all"
               >
                 <ArrowUpCircle className="w-3.5 h-3.5" />
                 <span>Update Now</span>

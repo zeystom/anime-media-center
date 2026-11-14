@@ -608,12 +608,9 @@ function parseFfmpegProbeOutput(filePath: string, stderr: string): VideoMetadata
 const inFlightAss = new Map<string, Promise<string>>();
 const inFlightSrt = new Map<string, Promise<string>>();
 
-export async function extractEmbeddedSubtitle(
-  filePath: string,
-  streamIndex: number,
-  ffmpegPath: string
-): Promise<string> {
-  const cacheDir = storage.getSubtitleCacheDir();
+/** Stable per-(file, track) subtitle cache path shared by the full extractor,
+ *  the positioned window extractor and the cached() checks. */
+function subtitleCacheFile(filePath: string, streamIndex: number, ext: 'srt' | 'ass'): string {
   let mtime = 0;
   let size = 0;
   try {
@@ -622,7 +619,34 @@ export async function extractEmbeddedSubtitle(
     size = st.size;
   } catch {}
   const fileHash = crypto.createHash('md5').update(`${filePath}:${mtime}:${size}:${streamIndex}`).digest('hex');
-  const cacheFile = path.join(cacheDir, `${fileHash}.srt`);
+  return path.join(storage.getSubtitleCacheDir(), `${fileHash}.${ext}`);
+}
+
+export function isEmbeddedSubtitleCached(filePath: string, streamIndex: number): boolean {
+  const cacheFile = subtitleCacheFile(filePath, streamIndex, 'srt');
+  try {
+    return fs.existsSync(cacheFile) && fs.statSync(cacheFile).size > 0;
+  } catch {
+    return false;
+  }
+}
+
+export function isEmbeddedAssCached(filePath: string, streamIndex: number): boolean {
+  const cacheFile = subtitleCacheFile(filePath, streamIndex, 'ass');
+  try {
+    return fs.existsSync(cacheFile) && fs.statSync(cacheFile).size > 0;
+  } catch {
+    return false;
+  }
+}
+
+export async function extractEmbeddedSubtitle(
+  filePath: string,
+  streamIndex: number,
+  ffmpegPath: string
+): Promise<string> {
+  const cacheDir = storage.getSubtitleCacheDir();
+  const cacheFile = subtitleCacheFile(filePath, streamIndex, 'srt');
 
   if (fs.existsSync(cacheFile)) {
     try {
@@ -690,15 +714,7 @@ export async function extractEmbeddedAss(
   ffmpegPath: string
 ): Promise<string> {
   const cacheDir = storage.getSubtitleCacheDir();
-  let mtime = 0;
-  let size = 0;
-  try {
-    const st = fs.statSync(filePath);
-    mtime = Math.round(st.mtimeMs);
-    size = st.size;
-  } catch {}
-  const fileHash = crypto.createHash('md5').update(`${filePath}:${mtime}:${size}:${streamIndex}`).digest('hex');
-  const cacheFile = path.join(cacheDir, `${fileHash}.ass`);
+  const cacheFile = subtitleCacheFile(filePath, streamIndex, 'ass');
 
   if (fs.existsSync(cacheFile)) {
     try {
@@ -758,6 +774,109 @@ export async function extractEmbeddedAss(
 
   inFlightAss.set(cacheFile, promise);
   return promise;
+}
+
+// ---- Positioned window extraction ---------------------------------------
+// A full-track extraction streams the ENTIRE MKV through ffmpeg (subtitle
+// packets are interleaved throughout the container), which costs a whole
+// file read — 15-20s for a 1.5-3GB episode on an HDD. A window extraction
+// seeks through the MKV cue index and reads only ~8% of the file, returning
+// in 1-3s; the full extraction keeps running in the background for the swap.
+
+const inFlightSrtWin = new Map<string, Promise<string>>();
+const inFlightAssWin = new Map<string, Promise<string>>();
+
+function windowCacheFile(filePath: string, streamIndex: number, fromSec: number, durationSec: number, ext: 'srt' | 'ass'): string {
+  let mtime = 0;
+  let size = 0;
+  try {
+    const st = fs.statSync(filePath);
+    mtime = Math.round(st.mtimeMs);
+    size = st.size;
+  } catch {}
+  const hash = crypto.createHash('md5').update(`${filePath}:${mtime}:${size}:${streamIndex}:win${fromSec}-${durationSec}`).digest('hex');
+  return path.join(storage.getSubtitleCacheDir(), `${hash}.${ext}`);
+}
+
+async function extractWindow(
+  filePath: string,
+  streamIndex: number,
+  fromSec: number,
+  durationSec: number,
+  ffmpegPath: string,
+  ext: 'srt' | 'ass'
+): Promise<string> {
+  const cacheFile = windowCacheFile(filePath, streamIndex, fromSec, durationSec, ext);
+  try {
+    const stat = fs.statSync(cacheFile);
+    if (stat.size > 0) return fs.readFileSync(cacheFile, 'utf-8');
+  } catch {}
+
+  const inFlight = ext === 'ass' ? inFlightAssWin.get(cacheFile) : inFlightSrtWin.get(cacheFile);
+  if (inFlight) return inFlight;
+
+  const promise = new Promise<string>((resolve) => {
+    const args = [
+      '-hide_banner',
+      '-y',
+      '-ss', String(Math.max(0, fromSec)),
+      '-t', String(durationSec),
+      '-discard:v', 'all',
+      '-discard:a', 'all',
+      '-i', filePath,
+      '-map', `0:${streamIndex}`,
+      '-vn',
+      '-an',
+      '-c:s', ext === 'ass' ? 'copy' : 'srt',
+      cacheFile,
+    ];
+
+    const child = spawn(ffmpegPath, args, {
+      windowsHide: true,
+      stdio: ['ignore', 'ignore', 'ignore'],
+    });
+
+    child.on('close', () => {
+      (ext === 'ass' ? inFlightAssWin : inFlightSrtWin).delete(cacheFile);
+      try {
+        const stat = fs.statSync(cacheFile);
+        if (stat.size > 0) return resolve(fs.readFileSync(cacheFile, 'utf-8'));
+        fs.unlinkSync(cacheFile);
+      } catch {}
+      resolve('');
+    });
+
+    child.on('error', () => {
+      (ext === 'ass' ? inFlightAssWin : inFlightSrtWin).delete(cacheFile);
+      try {
+        if (fs.existsSync(cacheFile)) fs.unlinkSync(cacheFile);
+      } catch {}
+      resolve('');
+    });
+  });
+
+  (ext === 'ass' ? inFlightAssWin : inFlightSrtWin).set(cacheFile, promise);
+  return promise;
+}
+
+export async function extractEmbeddedSubtitleWindow(
+  filePath: string,
+  streamIndex: number,
+  fromSec: number,
+  durationSec: number,
+  ffmpegPath: string
+): Promise<string> {
+  return extractWindow(filePath, streamIndex, fromSec, durationSec, ffmpegPath, 'srt');
+}
+
+export async function extractEmbeddedAssWindow(
+  filePath: string,
+  streamIndex: number,
+  fromSec: number,
+  durationSec: number,
+  ffmpegPath: string
+): Promise<string> {
+  return extractWindow(filePath, streamIndex, fromSec, durationSec, ffmpegPath, 'ass');
 }
 
 const inFlightFonts = new Map<string, Promise<string[]>>();

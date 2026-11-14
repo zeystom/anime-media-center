@@ -64,10 +64,10 @@ export const EpisodeCard: React.FC<EpisodeCardProps> = ({ episode, progress, onP
   return (
     <div
       onClick={handleClick}
-      className={`group relative bg-[#18181c] rounded-xl overflow-hidden border transition-all duration-200 flex flex-col shadow-sm ${
+      className={`group relative bg-[#1a1620] rounded-xl overflow-hidden border transition-all duration-200 flex flex-col shadow-sm ${
         episode.isDownloading
           ? 'border-amber-500/20 hover:border-amber-500/40 cursor-not-allowed opacity-90'
-          : 'hover:bg-[#202026] border-zinc-800/80 hover:border-zinc-700 cursor-pointer hover:shadow-xl hover:shadow-black/40 hover:-translate-y-0.5'
+          : 'hover:bg-[#221c29] border-zinc-800/80 hover:border-zinc-700 cursor-pointer hover:shadow-xl hover:shadow-black/40 hover:-translate-y-0.5'
       }`}
     >
       {/* Thumbnail Aspect Container (16:9) */}

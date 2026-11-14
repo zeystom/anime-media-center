@@ -19,7 +19,7 @@ interface HomeViewProps {
   onOpenDiscover: () => void;
 }
 
-export const HomeView: React.FC<HomeViewProps> = ({
+const HomeViewImpl: React.FC<HomeViewProps> = ({
   upNext,
   folders,
   history,
@@ -148,3 +148,7 @@ export const HomeView: React.FC<HomeViewProps> = ({
     </div>
   );
 };
+
+// Memoized: Home keeps every visited rail mounted; App-level churn (scroll
+// progress, P2P bursts) must not re-render the whole card tree.
+export const HomeView = React.memo(HomeViewImpl);

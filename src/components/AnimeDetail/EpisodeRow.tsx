@@ -105,7 +105,7 @@ export const EpisodeRow: React.FC<EpisodeRowProps> = ({
   const relativeAir = useMemo(() => formatRelativeAirDate(airDate), [airDate])
 
   return (
-    <article className={`group overflow-hidden rounded-2xl border bg-[#17181e] shadow-sm transition hover:-translate-y-0.5 hover:shadow-xl hover:shadow-black/30 ${isFeatureFilm ? 'grid grid-cols-1 sm:grid-cols-[minmax(0,1fr)_1.15fr]' : ''} ${downloadActive ? 'border-cyan-400/25' : 'border-white/[0.08] hover:border-white/15'}`}>
+    <article className={`episode-card group relative overflow-hidden rounded-2xl border bg-elevated shadow-sm transition hover:-translate-y-0.5 hover:shadow-xl hover:shadow-black/30 ${isFeatureFilm ? 'grid grid-cols-1 sm:grid-cols-[minmax(0,1fr)_1.15fr]' : ''} ${downloadActive ? 'border-rose-400/30' : 'border-white/[0.08] hover:border-white/15'}`}>
       <div className={`relative aspect-video overflow-hidden bg-zinc-950 ${isFeatureFilm ? 'sm:aspect-auto sm:min-h-[250px]' : ''}`}>
         {activeThumbnail && !imgError ? (
           <img src={activeThumbnail} alt="" loading="lazy" onError={() => {
@@ -127,13 +127,13 @@ export const EpisodeRow: React.FC<EpisodeRowProps> = ({
 
         {downloaded && !downloadActive && onPlay && (
           <button type="button" onClick={onPlay} title="Play episode" className="absolute inset-0 flex items-center justify-center bg-black/20 opacity-0 transition hover:opacity-100 focus:opacity-100">
-            <span className="flex h-12 w-12 items-center justify-center rounded-full bg-rose-500 text-white shadow-lg shadow-rose-950/50"><Play className="ml-0.5 h-5 w-5 fill-current" /></span>
+            <span className="flex h-12 w-12 items-center justify-center rounded-full bg-[linear-gradient(135deg,#FF1E6D_0%,#A31246_100%)] text-white shadow-glow-crimson"><Play className="ml-0.5 h-5 w-5 fill-current" /></span>
           </button>
         )}
 
         {!downloaded && !downloadActive && onDownload && !unaired && (
           <div className="absolute inset-0 flex items-center justify-center">
-            <DownloadActionButton type="button" onClick={onDownload} onLongPress={onDownloadLongPress || onDownload} title="Queue episode download · hold for manual search" className="flex h-12 w-12 items-center justify-center rounded-full border border-cyan-100/30 bg-cyan-300/20 text-cyan-100 shadow-lg shadow-black/40 backdrop-blur-md transition hover:scale-110 hover:bg-cyan-300/35 focus:outline-none focus:ring-2 focus:ring-cyan-200/70">
+            <DownloadActionButton type="button" onClick={onDownload} onLongPress={onDownloadLongPress || onDownload} title="Queue episode download · hold for manual search" className="flex h-12 w-12 items-center justify-center rounded-full border border-white/15 bg-white/[0.08] text-zinc-100 shadow-lg shadow-black/40 backdrop-blur-md transition hover:scale-110 hover:bg-rose-500/25 hover:text-rose-100 hover:border-rose-300/40 focus:outline-none focus:ring-2 focus:ring-rose-300/60">
               <Download className="h-5 w-5" />
             </DownloadActionButton>
           </div>
@@ -145,9 +145,9 @@ export const EpisodeRow: React.FC<EpisodeRowProps> = ({
               <svg viewBox="0 0 72 72" className={`absolute inset-0 h-full w-full ${ringPercent == null ? 'release-search-ring' : '-rotate-90'}`}>
                 <defs>
                   <linearGradient id={`ep-ring-${ringGradientId}`} x1="0%" y1="0%" x2="100%" y2="100%">
-                    <stop offset="0%" stopColor="#67e8f9" />
-                    <stop offset="55%" stopColor="#22d3ee" />
-                    <stop offset="100%" stopColor="#6ee7b7" />
+                    <stop offset="0%" stopColor="#B81450" />
+                    <stop offset="55%" stopColor="#FF1E6D" />
+                    <stop offset="100%" stopColor="#FF9DBB" />
                   </linearGradient>
                 </defs>
                 <circle cx="36" cy="36" r={ringRadius} fill="none" stroke="black" strokeOpacity="0.45" strokeWidth="5" />
@@ -157,11 +157,11 @@ export const EpisodeRow: React.FC<EpisodeRowProps> = ({
                   <circle cx="36" cy="36" r={ringRadius} fill="none" stroke={`url(#ep-ring-${ringGradientId})`} strokeWidth="5" strokeLinecap="round" strokeDasharray={ringCircumference} strokeDashoffset={ringCircumference * (1 - ringPercent / 100)} className="transition-[stroke-dashoffset] duration-500 ease-out" />
                 )}
               </svg>
-              <div className={`flex h-12 w-12 items-center justify-center rounded-full border shadow-lg shadow-black/40 backdrop-blur-[2px] ${torrentJob?.status === 'paused' ? 'border-amber-100/30 bg-amber-300/20 text-amber-100' : 'border-cyan-100/30 bg-cyan-300/20 text-cyan-100'}`}>
+              <div className={`flex h-12 w-12 items-center justify-center rounded-full border shadow-lg shadow-black/40 backdrop-blur-[2px] ${torrentJob?.status === 'paused' ? 'border-amber-100/30 bg-amber-300/20 text-amber-100' : 'border-rose-100/30 bg-rose-500/20 text-rose-100'}`}>
                 {torrentJob?.status === 'paused' ? <Pause className="h-5 w-5" /> : <Download className="h-5 w-5" />}
               </div>
             </div>
-            {ringPercent != null && <span className="mt-1 text-[11px] font-bold text-cyan-100 drop-shadow">{Math.round(ringPercent)}%</span>}
+            {ringPercent != null && <span className="mt-1 text-[11px] font-bold text-rose-100 drop-shadow">{Math.round(ringPercent)}%</span>}
           </div>
         )}
 
@@ -202,7 +202,7 @@ export const EpisodeRow: React.FC<EpisodeRowProps> = ({
         <div className="flex flex-col justify-center p-5 sm:p-8 lg:p-10">
           <div className="flex flex-wrap items-center gap-2">
             <span className="rounded-full border px-2.5 py-1 text-[10px] font-bold uppercase tracking-[0.16em]" style={{ color: 'var(--anime-accent)', borderColor: 'var(--anime-accent-soft)', backgroundColor: 'var(--anime-accent-soft)' }}>Feature film</span>
-            <span className={`rounded-full border px-2.5 py-1 text-[10px] font-semibold ${downloaded ? 'border-emerald-300/20 bg-emerald-300/10 text-emerald-200' : downloadActive ? 'border-cyan-300/20 bg-cyan-300/10 text-cyan-200' : 'border-white/10 bg-black/20 text-zinc-400'}`}>
+            <span className={`rounded-full border px-2.5 py-1 text-[10px] font-semibold ${downloaded ? 'border-emerald-300/20 bg-emerald-300/10 text-emerald-200' : downloadActive ? 'border-rose-300/20 bg-rose-300/10 text-rose-200' : 'border-white/10 bg-black/20 text-zinc-400'}`}>
               {watched ? 'Watched' : downloaded ? 'Ready to watch' : downloadActive ? 'Downloading' : remoteOnly ? 'Not downloaded' : 'Available'}
             </span>
           </div>
@@ -221,15 +221,15 @@ export const EpisodeRow: React.FC<EpisodeRowProps> = ({
           )}
 
           <div className="mt-6 flex flex-wrap items-center gap-2.5">
-            {downloaded && onPlay && <button type="button" onClick={onPlay} className="inline-flex items-center gap-2 rounded-xl px-5 py-3 text-sm font-bold text-white shadow-lg transition hover:-translate-y-0.5" style={{ backgroundColor: 'var(--anime-accent)', boxShadow: '0 10px 28px var(--anime-accent-soft)' }}><Play className="h-4 w-4 fill-current" />{filmCanResume ? 'Resume movie' : watched ? 'Watch again' : 'Play movie'}</button>}
-            {!downloaded && onDownload && !unaired && <DownloadActionButton type="button" onClick={onDownload} onLongPress={onDownloadLongPress || onDownload} title="Download movie · hold for manual search" className="inline-flex items-center gap-2 rounded-xl border border-cyan-200/20 bg-cyan-300/10 px-5 py-3 text-sm font-bold text-cyan-100 transition hover:bg-cyan-300/20"><Download className="h-4 w-4" />Download movie</DownloadActionButton>}
-            {onWhisper && <button type="button" onClick={onWhisper} title="Generate subtitles" className="inline-flex items-center gap-2 rounded-xl border border-indigo-400/20 bg-indigo-400/[0.06] px-4 py-3 text-xs font-semibold text-indigo-200 transition hover:bg-indigo-400/15"><Wand2 className="h-4 w-4" /><span>Subtitles</span></button>}
-            {onDelete && <button type="button" onClick={onDelete} title="Delete downloaded movie" className="inline-flex items-center gap-2 rounded-xl border border-rose-400/20 bg-rose-400/[0.05] px-4 py-3 text-xs font-semibold text-rose-200 transition hover:bg-rose-400/15"><Trash2 className="h-4 w-4" /><span>Delete file</span></button>}
+            {downloaded && onPlay && <button type="button" onClick={onPlay} className="btn-primary inline-flex items-center gap-2 rounded-xl px-5 py-3 text-sm font-bold text-white transition hover:-translate-y-0.5"><Play className="h-4 w-4 fill-current" />{filmCanResume ? 'Resume movie' : watched ? 'Watch again' : 'Play movie'}</button>}
+            {!downloaded && onDownload && !unaired && <DownloadActionButton type="button" onClick={onDownload} onLongPress={onDownloadLongPress || onDownload} title="Download movie · hold for manual search" className="btn-glass inline-flex items-center gap-2 rounded-xl px-5 py-3 text-sm font-bold text-zinc-200 transition"><Download className="h-4 w-4" />Download movie</DownloadActionButton>}
+            {onWhisper && <button type="button" onClick={onWhisper} title="Generate subtitles" className="btn-glass inline-flex items-center gap-2 rounded-xl px-4 py-3 text-xs font-semibold text-zinc-200 transition"><Wand2 className="h-4 w-4 text-rose-300/90" /><span>Subtitles</span></button>}
+            {onDelete && <button type="button" onClick={onDelete} title="Delete downloaded movie" className="btn-glass inline-flex items-center gap-2 rounded-xl px-4 py-3 text-xs font-semibold text-zinc-300 transition hover:text-rose-200"><Trash2 className="h-4 w-4 transition-colors group-hover:text-rose-400" /><span>Delete file</span></button>}
             {onDownload && downloadRoots.length > 1 && <div className="relative">
               <button type="button" aria-label="Choose download folder" title={`Download folder: ${selectedDownloadRoot || downloadRoots[0]}`} onClick={() => setFolderMenuOpen((open) => !open)} className="flex h-11 w-11 items-center justify-center rounded-xl border border-white/10 text-zinc-300 transition hover:bg-white/5"><MoreHorizontal className="h-4 w-4" /></button>
-              {folderMenuOpen && <div className="absolute bottom-full right-0 z-50 mb-2 max-h-52 w-64 overflow-y-auto rounded-xl border border-white/10 bg-[#17181f] p-1.5 shadow-2xl">
+              {folderMenuOpen && <div className="glass-dropdown animate-pop-in absolute bottom-full right-0 z-50 mb-2 max-h-52 w-64 overflow-y-auto rounded-xl p-1.5">
                 <p className="px-2 py-1.5 text-[10px] font-bold uppercase tracking-wider text-zinc-500">Download to folder</p>
-                {downloadRoots.map((root) => <button key={root} type="button" title={root} onClick={() => { onSelectDownloadRoot?.(root); setFolderMenuOpen(false) }} className={`block w-full rounded-lg px-2 py-2 text-left text-[11px] transition-colors ${selectedDownloadRoot === root ? 'bg-cyan-300/10 text-cyan-100' : 'text-zinc-300 hover:bg-white/5'}`}><span className="block truncate font-medium">{root.split(/[\\/]/).filter(Boolean).slice(-1)[0] || root}</span><span className="mt-0.5 block truncate font-mono text-[9px] text-zinc-500">{root}</span></button>)}
+                {downloadRoots.map((root) => <button key={root} type="button" title={root} onClick={() => { onSelectDownloadRoot?.(root); setFolderMenuOpen(false) }} className={`block w-full rounded-lg px-2 py-2 text-left text-[11px] transition-colors ${selectedDownloadRoot === root ? 'bg-rose-500/15 text-rose-200' : 'text-zinc-300 hover:bg-white/5'}`}><span className="block truncate font-medium">{root.split(/[\\/]/).filter(Boolean).slice(-1)[0] || root}</span><span className="mt-0.5 block truncate font-mono text-[9px] text-zinc-500">{root}</span></button>)}
               </div>}
             </div>}
           </div>

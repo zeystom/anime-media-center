@@ -251,18 +251,21 @@ export const TrackControls: React.FC<TrackControlsProps> = ({
 
   return (
     <div
-      className="fixed inset-0 z-50 flex items-center justify-center p-4 bg-black/80 animate-in fade-in duration-150"
+      className="fixed inset-0 z-50 flex items-center justify-center p-4 modal-dimmer animate-in fade-in duration-150"
       onClick={handleClose}
     >
       <div
-        className="relative w-full max-w-4xl glass-dropdown rounded-2xl border border-zinc-700/80 p-6 text-zinc-100 shadow-2xl animate-in zoom-in-95 duration-150"
+        role="dialog"
+        aria-modal="true"
+        data-modal="true"
+        className="modal-glass relative w-full max-w-4xl rounded-2xl p-6 text-zinc-100 animate-in zoom-in-95 duration-150"
         onClick={(e) => e.stopPropagation()}
       >
         {/* Header */}
         <div className="flex items-center justify-between pb-4 border-b border-zinc-800">
           <div className="flex items-center space-x-3">
             {activeTab === 'styling' ? (
-              <div className="w-8 h-8 rounded-lg bg-amber-500/20 text-amber-400 flex items-center justify-center border border-amber-500/30">
+              <div className="w-8 h-8 rounded-lg bg-rose-500/20 text-rose-400 flex items-center justify-center border border-rose-500/30">
                 <Sparkles className="w-4 h-4" />
               </div>
             ) : (
@@ -296,7 +299,7 @@ export const TrackControls: React.FC<TrackControlsProps> = ({
         {/* TAB 1: Tracks & Channels Selection */}
         {activeTab === 'tracks' && (
           <>
-            <div className="grid grid-cols-1 md:grid-cols-3 gap-6 py-5">
+            <div className="grid grid-cols-1 md:grid-cols-3 gap-6 py-5 animate-in fade-in slide-in-from-left-2 duration-200">
               {/* Column 1: Audio Track */}
               <div className="space-y-3">
                 <div className="flex items-center space-x-2 text-xs font-bold uppercase tracking-wider text-zinc-400">
@@ -406,14 +409,14 @@ export const TrackControls: React.FC<TrackControlsProps> = ({
               <div className="space-y-3">
                 <div className="flex items-center justify-between text-xs font-bold uppercase tracking-wider text-zinc-400">
                   <div className="flex items-center space-x-2">
-                    <Sparkles className="w-4 h-4 text-yellow-400" />
+                    <Sparkles className="w-4 h-4 text-rose-400" />
                     <span>2nd Sub / Signs (Top)</span>
                   </div>
                   <button
                     onClick={onToggleTopSub}
                     className={`px-2 py-0.5 rounded text-[10px] font-bold uppercase border transition-colors ${
                       topSubEnabled
-                        ? 'bg-yellow-500/20 text-yellow-300 border-yellow-500/40'
+                        ? 'bg-rose-500/20 text-rose-300 border-rose-500/40'
                         : 'bg-zinc-800 text-zinc-500 border-zinc-700'
                     }`}
                   >
@@ -427,12 +430,12 @@ export const TrackControls: React.FC<TrackControlsProps> = ({
                     onClick={() => onSelectTopSub(null)}
                     className={`w-full flex items-center justify-between p-2.5 rounded-xl text-left text-xs transition-all border ${
                       selectedTopSubId === null
-                        ? 'bg-yellow-500/20 border-yellow-500/60 text-yellow-200 font-semibold shadow-sm'
+                        ? 'bg-rose-500/20 border-rose-500/60 text-rose-200 font-semibold shadow-sm'
                         : 'bg-zinc-900/60 border-zinc-800/80 text-zinc-400 hover:bg-zinc-800/60'
                     }`}
                   >
                     <span>OFF (No Top Signs)</span>
-                    {selectedTopSubId === null && <Check className="w-4 h-4 text-yellow-400 shrink-0" />}
+                    {selectedTopSubId === null && <Check className="w-4 h-4 text-rose-400 shrink-0" />}
                   </button>
 
                   {topSignsTracks.length > 0 ? (
@@ -445,19 +448,19 @@ export const TrackControls: React.FC<TrackControlsProps> = ({
                           onClick={() => onSelectTopSub(track.id)}
                           className={`w-full flex items-center justify-between p-2.5 rounded-xl text-left text-xs transition-all border ${
                             isSelected
-                              ? 'bg-yellow-500/20 border-yellow-500/60 text-yellow-200 font-semibold shadow-sm'
+                              ? 'bg-rose-500/20 border-rose-500/60 text-rose-200 font-semibold shadow-sm'
                               : 'bg-zinc-900/60 border-zinc-800/80 text-zinc-300 hover:bg-zinc-800/60'
                           }`}
                         >
                           <div className="truncate mr-2">
                             <div className="truncate font-medium">{title}</div>
-                            <div className="text-[10px] text-yellow-500/80">English Signs / Forced Only</div>
+                            <div className="text-[10px] text-rose-500/80">English Signs / Forced Only</div>
                           </div>
                           <div className="flex items-center space-x-2 shrink-0">
                             <span className="px-1.5 py-0.5 rounded text-[10px] font-mono font-medium bg-zinc-800 text-zinc-400 border border-zinc-700/50">
                               {badge}
                             </span>
-                            {isSelected && <Check className="w-4 h-4 text-yellow-400 shrink-0" />}
+                            {isSelected && <Check className="w-4 h-4 text-rose-400 shrink-0" />}
                           </div>
                         </button>
                       );
@@ -552,7 +555,7 @@ export const TrackControls: React.FC<TrackControlsProps> = ({
                   onClick={() => setActiveTab('styling')}
                   className="flex items-center space-x-1.5 px-3 py-1.5 rounded-lg bg-zinc-800/80 hover:bg-zinc-700/80 text-zinc-200 hover:text-white border border-white/10 text-xs font-semibold transition-all shadow-sm"
                 >
-                  <SlidersHorizontal className="w-3.5 h-3.5 text-amber-400" />
+                  <SlidersHorizontal className="w-3.5 h-3.5 text-rose-400" />
                   <span>Advanced</span>
                 </button>
               </div>
@@ -575,13 +578,13 @@ export const TrackControls: React.FC<TrackControlsProps> = ({
 
         {/* TAB 2: Modern Subtitle Customization with Live Preview */}
         {activeTab === 'styling' && (
-          <div className="py-4 space-y-5 animate-in fade-in duration-150">
+          <div className="py-4 space-y-5 animate-in fade-in slide-in-from-right-2 duration-200">
             {/* Live Subtitle Preview Box with Dedicated Header Bar & Rainbow Spectrum Test */}
             <div className="w-full rounded-2xl bg-gradient-to-b from-[#181822] via-[#0d0d12] to-black border border-zinc-700/60 overflow-hidden shadow-2xl flex flex-col">
               {/* Separate Header Bar (Never overlaps subtitle dialogue) */}
               <div className="px-4 py-2 bg-zinc-900/90 border-b border-zinc-800/80 flex items-center justify-between text-xs font-mono">
                 <div className="flex items-center space-x-2 text-zinc-300 font-semibold">
-                  <Sparkles className="w-3.5 h-3.5 text-amber-400" />
+                  <Sparkles className="w-3.5 h-3.5 text-rose-400" />
                   <span>Live Preview</span>
                 </div>
 
@@ -591,7 +594,7 @@ export const TrackControls: React.FC<TrackControlsProps> = ({
                     onClick={() => setPreviewBackdrop('spectrum')}
                     className={`px-2 py-0.5 rounded transition-all font-semibold ${
                       previewBackdrop === 'spectrum'
-                        ? 'bg-amber-500/20 text-amber-300 border border-amber-500/40 shadow-sm'
+                        ? 'bg-rose-500/20 text-rose-300 border border-rose-500/40 shadow-sm'
                         : 'text-zinc-400 hover:text-zinc-200'
                     }`}
                   >
@@ -651,7 +654,7 @@ export const TrackControls: React.FC<TrackControlsProps> = ({
                 )}
 
                 {previewBackdrop === 'bright' && (
-                  <div className="absolute inset-x-3 inset-y-2 rounded-xl bg-gradient-to-b from-sky-200 via-amber-100 to-white border border-white/20 shadow-inner" />
+                  <div className="absolute inset-x-3 inset-y-2 rounded-xl bg-gradient-to-b from-sky-200 via-rose-100 to-white border border-white/20 shadow-inner" />
                 )}
 
                 {/* Subtitle Dialogue (Rendered on top at z-10) */}
@@ -685,7 +688,7 @@ export const TrackControls: React.FC<TrackControlsProps> = ({
                 <div className="space-y-2">
                   <div className="flex items-center justify-between text-xs font-bold text-zinc-300">
                     <span className="flex items-center space-x-1.5">
-                      <Type className="w-4 h-4 text-amber-400" />
+                      <Type className="w-4 h-4 text-rose-400" />
                       <span>Font Size</span>
                     </span>
                     <span className="font-mono text-zinc-400">{fontSize}px</span>
@@ -725,7 +728,7 @@ export const TrackControls: React.FC<TrackControlsProps> = ({
                           onClick={() => onUpdateFontSize(preset.size)}
                           className={`px-2 py-1 rounded-lg border text-[11px] font-medium transition-all ${
                             fontSize === preset.size
-                              ? 'bg-amber-500/20 text-amber-300 border-amber-500/50 font-bold'
+                              ? 'bg-rose-500/20 text-rose-300 border-rose-500/50 font-bold'
                               : 'bg-zinc-900/60 text-zinc-400 border-zinc-800 hover:bg-zinc-800/80 hover:text-zinc-200'
                           }`}
                         >
@@ -770,18 +773,18 @@ export const TrackControls: React.FC<TrackControlsProps> = ({
                 <div className="space-y-2 p-3 rounded-xl bg-zinc-900/60 border border-zinc-800">
                   <div className="flex items-center justify-between text-xs font-bold text-zinc-300">
                     <div className="flex items-center space-x-1.5">
-                      <Layers className="w-4 h-4 text-amber-400" />
+                      <Layers className="w-4 h-4 text-rose-400" />
                       <span>Outline Thickness</span>
                     </div>
                     <div className="flex items-center space-x-2 font-mono text-[11px]">
-                      <span className={currOutlineStep.id === 'thick' ? 'text-amber-400 font-semibold' : 'text-zinc-300 font-medium'}>
+                      <span className={currOutlineStep.id === 'thick' ? 'text-rose-400 font-semibold' : 'text-zinc-300 font-medium'}>
                         {currOutlineStep.px}px • {currOutlineStep.label}
                       </span>
                       {currOutlineStep.id !== 'thick' && (
                         <button
                           type="button"
                           onClick={() => onUpdateOutlineWidth?.('thick')}
-                          className="text-[10px] text-zinc-500 hover:text-amber-400 underline transition-colors"
+                          className="text-[10px] text-zinc-500 hover:text-rose-400 underline transition-colors"
                           title="Reset to Standard (3px)"
                         >
                           Reset
@@ -796,7 +799,7 @@ export const TrackControls: React.FC<TrackControlsProps> = ({
                     <div className="relative h-2 w-full rounded-full bg-zinc-800 border border-zinc-700/60">
                       {/* Filled Progress Bar */}
                       <div
-                        className="h-full rounded-full bg-gradient-to-r from-amber-500 to-amber-400 transition-all duration-75"
+                        className="h-full rounded-full bg-gradient-to-r from-rose-500 to-rose-400 transition-all duration-75"
                         style={{ width: `${(currOutlineIndex / (OUTLINE_WIDTH_STEPS.length - 1)) * 100}%` }}
                       />
 
@@ -816,11 +819,11 @@ export const TrackControls: React.FC<TrackControlsProps> = ({
                               // Prominent Visual Dot for Standard Size (3px)
                               <div className="relative flex items-center justify-center">
                                 {/* Subtle Glowing Halo around standard point */}
-                                <div className="w-4 h-4 rounded-full bg-amber-400/25 absolute animate-pulse" />
+                                <div className="w-4 h-4 rounded-full bg-rose-400/25 absolute animate-pulse" />
                                 {/* Solid Visual Dot Indicator */}
                                 <div
                                   className={`w-2.5 h-2.5 rounded-full border border-black shadow-md transition-colors ${
-                                    isPassed ? 'bg-white' : 'bg-amber-400'
+                                    isPassed ? 'bg-white' : 'bg-rose-400'
                                   }`}
                                   title="Standard default size (3px)"
                                 />
@@ -839,7 +842,7 @@ export const TrackControls: React.FC<TrackControlsProps> = ({
 
                       {/* Slider Thumb */}
                       <div
-                        className="absolute top-1/2 -translate-x-1/2 -translate-y-1/2 w-4 h-4 rounded-full bg-white shadow-md border-2 border-amber-500 pointer-events-none transition-transform duration-75 hover:scale-110"
+                        className="absolute top-1/2 -translate-x-1/2 -translate-y-1/2 w-4 h-4 rounded-full bg-white shadow-md border-2 border-rose-500 pointer-events-none transition-transform duration-75 hover:scale-110"
                         style={{ left: `${(currOutlineIndex / (OUTLINE_WIDTH_STEPS.length - 1)) * 100}%` }}
                       />
                     </div>
@@ -878,13 +881,13 @@ export const TrackControls: React.FC<TrackControlsProps> = ({
                             isSelected
                               ? 'text-white font-bold'
                               : isStandard
-                              ? 'text-amber-400 font-semibold'
+                              ? 'text-rose-400 font-semibold'
                               : 'text-zinc-500'
                           }`}
                         >
                           {isStandard ? (
                             <span className="flex items-center space-x-1">
-                              <span className="w-1.5 h-1.5 rounded-full bg-amber-400 inline-block" />
+                              <span className="w-1.5 h-1.5 rounded-full bg-rose-400 inline-block" />
                               <span>Standard (3px)</span>
                             </span>
                           ) : step.id === 'none' ? (

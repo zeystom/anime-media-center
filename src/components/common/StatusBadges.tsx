@@ -8,7 +8,7 @@ export interface StatusBadgesProps {
   className?: string
 }
 
-const PILL_BASE = 'inline-flex items-center gap-1 rounded font-bold uppercase tracking-wide'
+const PILL_BASE = 'inline-flex items-center gap-1 rounded-full font-bold uppercase tracking-wide glass-pill'
 
 /**
  * Row of micro-pills summarizing local + user-list state for one title:
@@ -30,7 +30,7 @@ export const StatusBadges: React.FC<StatusBadgesProps> = ({ state, size = 'md', 
       <span
         key="downloading"
         title="Downloading to this PC"
-        className={`${PILL_BASE} ${pillSize} animate-pulse bg-indigo-600/90 text-white`}
+        className={`${PILL_BASE} ${pillSize} animate-pulse text-rose-300`}
       >
         <ArrowDownToLine className={iconCls} />
         <span>{Math.round(state.downloadProgress ?? 0)}%</span>
@@ -45,7 +45,7 @@ export const StatusBadges: React.FC<StatusBadgesProps> = ({ state, size = 'md', 
       <span
         key="on-pc"
         title={isComplete ? 'Fully downloaded on this PC' : 'On this PC'}
-        className={`${PILL_BASE} ${pillSize} bg-zinc-800/90 ${isComplete ? 'text-emerald-400' : 'text-zinc-300'}`}
+        className={`${PILL_BASE} ${pillSize} ${isComplete ? 'text-emerald-300' : 'text-zinc-300'}`}
       >
         <HardDrive className={iconCls} />
         <span>
@@ -57,7 +57,7 @@ export const StatusBadges: React.FC<StatusBadgesProps> = ({ state, size = 'md', 
 
   if (state.isWatched) {
     pills.push(
-      <span key="watched" title="Watched" className={`${PILL_BASE} ${pillSize} bg-emerald-600/90 text-white`}>
+      <span key="watched" title="Watched" className={`${PILL_BASE} ${pillSize} text-emerald-300`}>
         <Check className={iconCls} />
         <span>Watched</span>
       </span>
@@ -70,7 +70,7 @@ export const StatusBadges: React.FC<StatusBadgesProps> = ({ state, size = 'md', 
       <span
         key={`release-${badge}`}
         title={badge}
-        className={`${PILL_BASE} ${pillSize} bg-red-500/15 text-red-300 ring-1 ring-inset ring-red-500/30`}
+        className={`${PILL_BASE} ${pillSize} text-rose-300`}
       >
         {badge}
       </span>

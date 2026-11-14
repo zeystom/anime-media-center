@@ -28,6 +28,7 @@ import type { ParsedRelease } from '../../lib/releaseParser/types.ts'
 import { formatEpisodeNumberPart, parseReleaseCore } from '../../lib/releaseParser/regexEngine.ts'
 import { classifyRelease, detectSeasonFromTitle, qualityRank, TORRENT_LANGUAGES, type ReleaseClassification, type ReleaseKind, type TorrentLanguageCode } from '../../lib/releaseParser/releaseClassification.ts'
 import { formatFileSize } from '../../utils/format'
+import { GlassSelect } from '../common/GlassSelect'
 
 interface ReleasePickerModalProps {
   open: boolean
@@ -136,10 +137,12 @@ export const ReleasePickerModal: React.FC<ReleasePickerModalProps> = ({
   // Escape closes the picker. Capture phase + preventDefault so it wins over
   // the detail overlay's own Escape handler (which skips defaultPrevented
   // events) and the global player rescue listener in App.
+  // Yields to an open GlassSelect menu so one Escape press closes only the menu.
   useEffect(() => {
     if (!open) return
     const onKey = (e: KeyboardEvent) => {
       if (e.key === 'Escape') {
+        if (document.querySelector('[data-select-menu-open="true"]')) return
         e.preventDefault()
         e.stopPropagation()
         onCancel()
@@ -369,14 +372,14 @@ export const ReleasePickerModal: React.FC<ReleasePickerModalProps> = ({
 
   return (
     <div
-      className="fixed inset-0 z-50 flex items-center justify-center bg-black/80 p-4 animate-in fade-in duration-150"
+      className="fixed inset-0 z-50 flex items-center justify-center modal-dimmer p-4 animate-in fade-in duration-150"
       onClick={onCancel}
     >
       <div
         role="dialog"
         aria-modal="true"
         data-modal="true"
-        className="flex max-h-[85vh] w-full max-w-2xl flex-col rounded-2xl border border-white/10 bg-[#141418] shadow-2xl animate-in zoom-in-95 duration-150"
+        className="modal-glass flex max-h-[85vh] w-full max-w-2xl flex-col rounded-2xl animate-in zoom-in-95 duration-150"
         onClick={(e) => e.stopPropagation()}
       >
         {/* Header */}
@@ -445,32 +448,35 @@ export const ReleasePickerModal: React.FC<ReleasePickerModalProps> = ({
 
         {!loading && results.length > 0 && (
           <div className="flex flex-wrap items-center gap-2 px-5 pt-2">
-            <select
-              aria-label="Filter by release type"
+            <GlassSelect
+              ariaLabel="Filter by release type"
               value={typeFilter}
-              onChange={(event) => setTypeFilter(event.target.value as ReleaseTypeFilter)}
-              className="min-w-40 rounded-lg border border-white/10 bg-zinc-900 px-2.5 py-1.5 text-[11px] font-semibold text-zinc-200 outline-none focus:border-indigo-400/50"
-            >
-              {TYPE_FILTERS.map((option) => <option key={option.value} value={option.value}>{option.label}</option>)}
-            </select>
-            <select
-              aria-label="Filter by audio language"
+              onChange={(value) => setTypeFilter(value as ReleaseTypeFilter)}
+              options={TYPE_FILTERS.map((option) => ({ value: option.value, label: option.label }))}
+              className="min-w-40 py-1.5 rounded-lg"
+            />
+            <GlassSelect
+              ariaLabel="Filter by audio language"
               value={audioFilter}
-              onChange={(event) => setAudioFilter(event.target.value as ReleaseLanguageFilter)}
-              className="min-w-36 rounded-lg border border-white/10 bg-zinc-900 px-2.5 py-1.5 text-[11px] font-semibold text-zinc-200 outline-none focus:border-indigo-400/50"
-            >
-              <option value="all">Any audio</option><option value="unknown">Audio not listed</option>
-              {TORRENT_LANGUAGES.map((option) => <option key={option.code} value={option.code}>{option.label} audio</option>)}
-            </select>
-            <select
-              aria-label="Filter by subtitle language"
+              onChange={(value) => setAudioFilter(value as ReleaseLanguageFilter)}
+              options={[
+                { value: 'all', label: 'Any audio' },
+                { value: 'unknown', label: 'Audio not listed' },
+                ...TORRENT_LANGUAGES.map((option) => ({ value: option.code, label: `${option.label} audio` })),
+              ]}
+              className="min-w-36 py-1.5 rounded-lg"
+            />
+            <GlassSelect
+              ariaLabel="Filter by subtitle language"
               value={subtitleFilter}
-              onChange={(event) => setSubtitleFilter(event.target.value as ReleaseLanguageFilter)}
-              className="min-w-36 rounded-lg border border-white/10 bg-zinc-900 px-2.5 py-1.5 text-[11px] font-semibold text-zinc-200 outline-none focus:border-indigo-400/50"
-            >
-              <option value="all">Any subtitles</option><option value="unknown">Subtitles not listed</option>
-              {TORRENT_LANGUAGES.map((option) => <option key={option.code} value={option.code}>{option.label} subtitles</option>)}
-            </select>
+              onChange={(value) => setSubtitleFilter(value as ReleaseLanguageFilter)}
+              options={[
+                { value: 'all', label: 'Any subtitles' },
+                { value: 'unknown', label: 'Subtitles not listed' },
+                ...TORRENT_LANGUAGES.map((option) => ({ value: option.code, label: `${option.label} subtitles` })),
+              ]}
+              className="min-w-36 py-1.5 rounded-lg"
+            />
             <span className="ml-auto text-[10px] text-zinc-500">Language filters use release title and details</span>
           </div>
         )}

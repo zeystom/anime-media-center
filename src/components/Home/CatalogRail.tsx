@@ -41,10 +41,10 @@ export const CatalogRail: React.FC<CatalogRailProps> = ({
     <section className="home-rail-section mb-10">
       <div className="mb-4 flex items-center justify-between gap-2.5">
         <div className="flex items-center gap-2.5">
-          <span className="h-2 w-2 rounded-full bg-cyan-300 shadow-[0_0_10px_rgba(103,232,249,0.65)]" />
+          <span className="h-2 w-2 rounded-full bg-rose-400 shadow-[0_0_10px_rgba(255,30,109,0.65)]" />
           <h2 className="text-lg font-black uppercase tracking-wide text-white">{title}</h2>
         </div>
-        {onSeeMore && <button type="button" onClick={onSeeMore} className="text-xs font-semibold text-cyan-300 transition hover:text-cyan-100">See all →</button>}
+        {onSeeMore && <button type="button" onClick={onSeeMore} className="text-xs font-semibold text-rose-300 transition hover:text-rose-100">See all →</button>}
       </div>
 
       {loading ? (

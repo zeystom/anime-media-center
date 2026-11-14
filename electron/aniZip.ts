@@ -21,6 +21,7 @@ import path from 'path';
 import { storage } from './storage.ts';
 import { runAniListQuery } from './anilist.ts';
 import { getFribbIndex, lookupFribbIds } from './fribb.ts';
+import { resolveSlotRow, findLateNumberedExtras } from './episodeSlots.ts';
 
 const ANI_ZIP_CACHE_NORMALIZER_VERSION = 3;
 
@@ -827,11 +828,13 @@ async function runRemoteEpisodesPipeline(anilistId: number, notify: (payload: Re
   };
   const partitionAniZip = (rows: RemoteEpisodeInfo[]) => {
     const { kept: nonShortRows } = dropInterleavedShortRows(rows);
-    const scoped = nonShortRows.filter((episode) => withinTitle(episode) && !isJunkTitle(episode) && !isWrongEntry(episode));
+    const lateExtras = findLateNumberedExtras(nonShortRows);
+    const scoped = nonShortRows.filter((episode) => withinTitle(episode) && !isJunkTitle(episode) && !isWrongEntry(episode) && !lateExtras.has(episode));
     return {
       scoped,
-      // Shorts count as junk so the merge below refills those slots from the
-      // clean Kitsu/AniList sources (and Stage 6 triggers the Kitsu fallback).
+      // Shorts and late-numbered extras count as junk so the merge below
+      // refills those slots from the clean Kitsu/AniList sources (and Stage 6
+      // triggers the Kitsu fallback).
       droppedJunk: rows.length - scoped.length,
       droppedWrong: rows.filter((episode) => withinTitle(episode) && isWrongEntry(episode)).length,
     };
@@ -843,6 +846,11 @@ async function runRemoteEpisodesPipeline(anilistId: number, notify: (payload: Re
   let droppedWrong = 0;
   let alternateEpisodes: RemoteEpisodeInfo[] = [];
   let lastPushedJson = '';
+  // Set by the last payload build: a schedule slot we know aired (it has an
+  // AniList airing time) but could not title. Signals the Kitsu fallback even
+  // when the ani.zip rows themselves look complete — the mis-numbered-extra
+  // fix leaves such slots titleless on purpose (Steins;Gate's OVA-as-ep-1).
+  let lastBuiltDatedMissingTitle = false;
   const snapshotScore = (rows: RemoteEpisodeInfo[]) =>
     rows.reduce((acc, episode) => acc + (episode.title ? 2 : 0) + (episode.thumbnailUrl ? 1 : 0) + (episode.airDate ? 1 : 0), 0);
   // Monotonic state: a later snapshot must never roll back what the UI
@@ -871,43 +879,14 @@ async function runRemoteEpisodesPipeline(anilistId: number, notify: (payload: Re
 
   // Slot-based merge (Hayase-style): every slot 1..count renders; AniList
   // supplies the schedule spine and the planned count, ani.zip/Kitsu/streaming
-  // enrich the slots. ani.zip rows resolve onto slots by number — or by
-  // closest air date when specials interleave into the numbering or the
-  // counts disagree, consuming rows so one entry cannot fill two slots.
+  // enrich the slots. Rows resolve onto slots via resolveSlotRow — air dates
+  // guard every assignment so franchise extras crosswalked as regular
+  // episodes (Steins;Gate's OVA as ep 1) cannot hijack a slot, and one row
+  // can never fill two.
   const buildCurrentPayload = (): RemoteEpisodesResult => {
     const aniZipCount = aniZipEpisodeCountCache.get(id) ?? null;
-    const hasSpecials = maxEpisode != null && rawRows.some((episode) => episode.number > maxEpisode);
-    const countMismatch = aniListCount != null && aniZipCount != null && aniZipCount !== aniListCount;
-    const matchByDate = (hasSpecials || countMismatch) && scheduleByNumber.size > 0;
-    const DATE_MATCH_TOLERANCE_MS = 3 * 24 * 60 * 60 * 1000;
     const rowPool = [...scopedAniZip];
     const consumed = new Set<RemoteEpisodeInfo>();
-    const resolveAniZipRow = (number: number): RemoteEpisodeInfo | null => {
-      const slot = scheduleByNumber.get(number);
-      if (matchByDate && slot != null) {
-        let best: RemoteEpisodeInfo | null = null;
-        let bestDist = Number.POSITIVE_INFINITY;
-        for (const row of rowPool) {
-          if (consumed.has(row) || !row.airDate) continue;
-          const airTime = Date.parse(row.airDate);
-          if (!Number.isFinite(airTime)) continue;
-          const dist = Math.abs(airTime - slot);
-          if (dist < bestDist || (dist === bestDist && best != null && Math.abs(row.number - number) < Math.abs(best.number - number))) {
-            best = row;
-            bestDist = dist;
-          }
-        }
-        // A tight cutoff keeps a wrong-show crosswalk (dates months off) from
-        // being stretched onto schedule slots.
-        if (best != null && bestDist <= DATE_MATCH_TOLERANCE_MS) {
-          consumed.add(best);
-          return best;
-        }
-      }
-      const byNumber = rowPool.find((row) => row.number === number && !consumed.has(row));
-      if (byNumber) consumed.add(byNumber);
-      return byNumber ?? null;
-    };
 
     const slotCount = Math.max(
       aniListCount ?? 0,
@@ -917,9 +896,10 @@ async function runRemoteEpisodesPipeline(anilistId: number, notify: (payload: Re
       streamEpisodes.size > 0 ? Math.max(...streamEpisodes.keys()) : 0,
     );
     const mergedByNumber = new Map<number, RemoteEpisodeInfo>();
+    let datedSlotMissingTitle = false;
     for (let number = 1; number <= slotCount; number += 1) {
       if (maxEpisode != null && number > maxEpisode) break;
-      const row = resolveAniZipRow(number);
+      const row = resolveSlotRow(number, rowPool, consumed, scheduleByNumber);
       const alternate = alternateEpisodes.find((episode) => episode.number === number);
       const stream = streamEpisodes.get(number);
       const slotTime = scheduleByNumber.get(number);
@@ -931,6 +911,7 @@ async function runRemoteEpisodesPipeline(anilistId: number, notify: (payload: Re
       // Platform-only rows (streaming list without an ani.zip/Kitsu row) are
       // usually shorts the platform interleaved into the season listing.
       if (!row && !alternate && stream && JUNK_TITLE_RE.test(title || '')) continue;
+      if (slotIso && !title) datedSlotMissingTitle = true;
       mergedByNumber.set(number, {
         number,
         title,
@@ -951,6 +932,7 @@ async function runRemoteEpisodesPipeline(anilistId: number, notify: (payload: Re
         return Number.isFinite(airTime) && airTime > now;
       })
       .sort((a, b) => a.number - b.number);
+    lastBuiltDatedMissingTitle = sorted.some((episode) => !!episode.airDate && !episode.title);
 
     // Series artwork travels with the same payload as the rows — a wrong-show
     // crosswalk poisons both, so only trust it when the rows are not poisoned.
@@ -1042,7 +1024,7 @@ async function runRemoteEpisodesPipeline(anilistId: number, notify: (payload: Re
   // refetched per view open.
   const kitsuIdRaw = kitsuIdMemoryCache.get(id) ?? lookupFribbIds(id)?.kitsuId ?? null;
   const kitsuId = kitsuIdRaw == null ? null : String(kitsuIdRaw);
-  if (kitsuId && (scopedAniZip.length === 0 || droppedJunk > 0 || droppedWrong > 0 || scopedAniZip.some((episode) => !episode.title || !episode.thumbnailUrl))) {
+  if (kitsuId && (scopedAniZip.length === 0 || droppedJunk > 0 || droppedWrong > 0 || lastBuiltDatedMissingTitle || scopedAniZip.some((episode) => !episode.title || !episode.thumbnailUrl))) {
     const cachedKitsu = kitsuEpisodesMemoryCache.get(kitsuId) ?? readKitsuEpisodesCache(kitsuId);
     if (cachedKitsu && kitsuCacheFresh(cachedKitsu.fetchedAt, cachedKitsu.episodes)) {
       kitsuEpisodesMemoryCache.set(kitsuId, cachedKitsu);

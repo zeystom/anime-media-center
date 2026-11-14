@@ -29,7 +29,7 @@ function formatAgeRating(value: string | null): { label: string; description: st
  * chip, optional local-status badges over a subtle bottom gradient, and a
  * two-line clamped title underneath.
  */
-export const AnimeCard: React.FC<AnimeCardProps> = ({ item, badgeState = null, showCatalogBadges = false, ageRating = null, ageRatingLoaded = false, titleLanguage = 'english', onClick }) => {
+const AnimeCardImpl: React.FC<AnimeCardProps> = ({ item, badgeState = null, showCatalogBadges = false, ageRating = null, ageRatingLoaded = false, titleLanguage = 'english', onClick }) => {
   const [imgError, setImgError] = useState(false)
   // Hover prefetch: arm a short timer on enter and cancel it on leave, so a
   // sweep across a rail produces zero requests while a resting cursor warms
@@ -47,10 +47,10 @@ export const AnimeCard: React.FC<AnimeCardProps> = ({ item, badgeState = null, s
   const showImage = !!item.posterUrl && !imgError
   const normalizedAgeRating = formatAgeRating(ageRating)
   const ageRatingTone = normalizedAgeRating.label === 'NR'
-    ? 'border-zinc-300/20 bg-zinc-950 text-zinc-200'
+    ? 'text-zinc-200'
     : ['R-17+', 'R+', 'Rx'].includes(normalizedAgeRating.label)
-      ? 'border-amber-300/30 bg-amber-950 text-amber-100'
-      : 'border-teal-300/25 bg-teal-950 text-teal-100'
+      ? 'text-amber-200'
+      : 'text-plum-200'
   const hasBadges =
     !!badgeState &&
     (badgeState.isDownloading || badgeState.isOnPc || badgeState.isWatched || (badgeState.releaseBadges?.length ?? 0) > 0)
@@ -66,12 +66,12 @@ export const AnimeCard: React.FC<AnimeCardProps> = ({ item, badgeState = null, s
             ? 'Cancelled'
             : null
   const releaseClass = item.status === 'RELEASING'
-    ? 'border-emerald-300/30 bg-emerald-950/90 text-emerald-100'
+    ? 'text-emerald-200'
     : item.status === 'NOT_YET_RELEASED'
-      ? 'border-sky-300/30 bg-sky-950/90 text-sky-100'
+      ? 'text-plum-200'
       : item.status === 'HIATUS' || item.status === 'CANCELLED'
-        ? 'border-amber-300/30 bg-amber-950/90 text-amber-100'
-        : 'border-white/15 bg-zinc-950/90 text-zinc-100'
+        ? 'text-amber-200'
+        : 'text-zinc-100'
   const formatLabel = item.format === 'TV'
     ? 'Series'
     : item.format === 'TV_SHORT'
@@ -98,7 +98,7 @@ export const AnimeCard: React.FC<AnimeCardProps> = ({ item, badgeState = null, s
       onMouseLeave={cancelWarm}
       className="anime-card group w-[180px] shrink-0 cursor-pointer transition-transform duration-150 hover:-translate-y-0.5 xl:w-[192px]"
     >
-      <div className="relative aspect-[2/3] overflow-hidden rounded-2xl border border-white/[0.09] bg-zinc-900 shadow-lg shadow-black/20 transition-colors group-hover:border-violet-300/30">
+      <div className="relative aspect-[2/3] overflow-hidden rounded-2xl border border-white/[0.09] bg-zinc-900 shadow-lg shadow-black/20 transition-colors group-hover:border-rose-300/40">
         {showImage ? (
           <img
             src={item.posterUrl || ''}
@@ -118,12 +118,12 @@ export const AnimeCard: React.FC<AnimeCardProps> = ({ item, badgeState = null, s
         {showCatalogBadges && (
           <div className="absolute left-1.5 right-9 top-1.5 flex flex-wrap items-start gap-1">
             {item.seasonYear != null && (
-              <span className="inline-flex items-center rounded-md border border-white/20 bg-black/90 px-1.5 py-1 text-[9px] font-bold leading-none text-zinc-100 shadow-sm">
+              <span className="glass-pill inline-flex items-center rounded-md px-1.5 py-1 text-[9px] font-bold leading-none text-zinc-100 shadow-sm">
                 {item.seasonYear}
               </span>
             )}
             {releaseLabel && (
-              <span className={`inline-flex items-center rounded-md border px-1.5 py-1 text-[9px] font-bold leading-none shadow-sm ${releaseClass}`}>
+              <span className={`glass-pill inline-flex items-center rounded-md px-1.5 py-1 text-[9px] font-bold leading-none shadow-sm ${releaseClass}`}>
                 {releaseLabel}
                 {item.status === 'RELEASING' && item.episodesCount != null && airedEpisodes != null && (
                   <span className="ml-1 font-extrabold text-white">{airedEpisodes}/{item.episodesCount}</span>
@@ -134,13 +134,13 @@ export const AnimeCard: React.FC<AnimeCardProps> = ({ item, badgeState = null, s
               </span>
             )}
             {formatLabel && (
-              <span className="inline-flex items-center rounded-md border border-white/20 bg-zinc-900 px-1.5 py-1 text-[9px] font-bold leading-none text-zinc-100 shadow-sm">
+              <span className="glass-pill inline-flex items-center rounded-md px-1.5 py-1 text-[9px] font-bold leading-none text-zinc-100 shadow-sm">
                 {formatLabel}
               </span>
             )}
             <span
               title={ageRatingLoaded ? normalizedAgeRating.description : 'Loading MyAnimeList age rating…'}
-              className={`inline-flex items-center rounded-md border px-1.5 py-1 text-[9px] font-bold leading-none shadow-sm ${ageRatingTone}`}
+              className={`glass-pill inline-flex items-center rounded-md px-1.5 py-1 text-[9px] font-bold leading-none shadow-sm ${ageRatingTone}`}
             >
               {item.idMal == null ? 'NR' : ageRatingLoaded ? normalizedAgeRating.label : '…'}
             </span>
@@ -148,7 +148,7 @@ export const AnimeCard: React.FC<AnimeCardProps> = ({ item, badgeState = null, s
         )}
 
         {item.averageScore != null && (
-          <div className="absolute top-1 right-1 flex items-center gap-0.5 rounded bg-black/85 px-1 py-0.5 text-[10px] font-bold text-white">
+          <div className="glass-pill absolute top-1 right-1 flex items-center gap-0.5 rounded-md px-1 py-0.5 text-[10px] font-bold text-white">
             <Star className="w-2.5 h-2.5 fill-amber-400 text-amber-400" />
             <span>{Math.round(item.averageScore)}</span>
           </div>
@@ -167,3 +167,7 @@ export const AnimeCard: React.FC<AnimeCardProps> = ({ item, badgeState = null, s
     </div>
   )
 }
+
+// Memoized: rails and grids re-render often (ratings loading in, page merges);
+// per-card props stay stable so each card skips reconciliation.
+export const AnimeCard = React.memo(AnimeCardImpl)

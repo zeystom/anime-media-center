@@ -3,6 +3,7 @@ import { RefreshCw, Film, Search, Star, X, ArrowDownToLine, CheckCircle2, Folder
 import { AnimeFolder, PlaybackProgress, UserLibraryEntry, UserListStatus } from '../../types';
 import type { FavouriteAnime, FollowedAnime } from '../../types/notifications';
 import { cleanSeriesTitle, formatFileSize, isFolderMovie } from '../../utils/format';
+import { GlassSelect } from '../common/GlassSelect';
 
 interface FolderBrowserProps {
   libraryRoot?: string;
@@ -155,28 +156,38 @@ export const FolderBrowser: React.FC<FolderBrowserProps> = ({
   }, [folders, favouriteAnime, followedAnime, userEntries]);
 
   // Collection-only cards (watching/planning/... with no on-disk folder) show
-  // a placeholder when their list entry was saved without a poster. Fetch the
-  // official AniList poster via catalog details — cached 24 h on the main
-  // side. One fetch per unique anilistId (same pattern as the queue covers).
+  // a placeholder when their list entry was saved without a poster, and their
+  // pseudo-folders carry no averageScore — fetch both via catalog details
+  // (cached 24 h on the main side). One fetch per unique anilistId.
   const [collectionPosters, setCollectionPosters] = useState<Map<number, string>>(new Map());
-  const collectionPosterFetchedRef = useRef<Set<number>>(new Set());
+  const [collectionScores, setCollectionScores] = useState<Map<number, number>>(new Map());
+  const collectionDetailsFetchedRef = useRef<Set<number>>(new Set());
   useEffect(() => {
     const wanted = [...new Set(libraryFolders
       .filter((folder) => folder.collectionOnly && folder.anilistId != null
-        && !folder.posterUrl && !collectionPosterFetchedRef.current.has(folder.anilistId))
+        && ((!folder.posterUrl || folder.averageScore == null)
+          && !collectionDetailsFetchedRef.current.has(folder.anilistId)))
       .map((folder) => folder.anilistId as number))];
     if (wanted.length === 0) return;
-    for (const id of wanted) collectionPosterFetchedRef.current.add(id);
+    for (const id of wanted) collectionDetailsFetchedRef.current.add(id);
     void (async () => {
       const api = window.electronAPI;
       if (!api?.getCatalogDetails) return;
       for (const anilistId of wanted) {
         try {
           const details = await api.getCatalogDetails(anilistId);
-          if (details?.posterUrl) {
+          if (!details) continue;
+          if (details.posterUrl) {
             setCollectionPosters((prev) => {
               const next = new Map(prev);
               next.set(anilistId, details.posterUrl as string);
+              return next;
+            });
+          }
+          if (typeof details.averageScore === 'number' && details.averageScore > 0) {
+            setCollectionScores((prev) => {
+              const next = new Map(prev);
+              next.set(anilistId, details.averageScore as number);
               return next;
             });
           }
@@ -289,7 +300,7 @@ export const FolderBrowser: React.FC<FolderBrowserProps> = ({
 
   return (
     <div className="mx-auto min-h-full w-full max-w-[1800px] px-6 py-7 2xl:px-12">
-      <section className="relative mb-6 overflow-hidden rounded-[26px] border border-white/[0.08] bg-[#12141b] px-6 py-7 shadow-2xl shadow-black/20 md:px-9 md:py-8">
+      <section className="relative mb-6 overflow-hidden rounded-[26px] border border-white/[0.08] bg-[#0F0B15] px-6 py-7 shadow-2xl shadow-black/20 md:px-9 md:py-8">
         <div className="pointer-events-none absolute -right-20 -top-32 h-80 w-80 rounded-full bg-rose-500/[0.08] blur-3xl" />
         <div className="pointer-events-none absolute -bottom-36 left-1/3 h-72 w-72 rounded-full bg-violet-500/[0.07] blur-3xl" />
         <div className="relative">
@@ -380,18 +391,16 @@ export const FolderBrowser: React.FC<FolderBrowserProps> = ({
 
             <div className="flex flex-wrap items-center gap-3">
               {/* Sort control */}
-              <div className="relative">
-                <ArrowUpDown className="w-4 h-4 text-zinc-500 absolute left-3.5 top-1/2 -translate-y-1/2 pointer-events-none" />
-                <select
+              <div className="relative min-w-[190px]">
+                <GlassSelect
                   value={sortMode}
-                  onChange={(e) => setSortMode(e.target.value as SortMode)}
-                  className="appearance-none w-full min-w-[190px] rounded-xl border border-white/[0.08] bg-[#0d0e12]/90 py-3 pl-11 pr-8 text-sm text-zinc-200 shadow-inner transition-all focus:border-violet-400/50 focus:outline-none focus:ring-2 focus:ring-violet-500/20"
+                  onChange={(value) => setSortMode(value as SortMode)}
+                  options={(Object.keys(SORT_LABELS) as SortMode[]).map((mode) => ({ value: mode, label: SORT_LABELS[mode] }))}
+                  ariaLabel="Sort library"
                   title="Sort library"
-                >
-                  {(Object.keys(SORT_LABELS) as SortMode[]).map((mode) => (
-                    <option key={mode} value={mode} className="bg-[#0d0e12]">{SORT_LABELS[mode]}</option>
-                  ))}
-                </select>
+                  leadingIcon={<ArrowUpDown className="h-4 w-4" />}
+                  className="h-12 w-full py-3 text-sm"
+                />
               </div>
 
               {/* Live Filter / Search Input */}
@@ -402,7 +411,7 @@ export const FolderBrowser: React.FC<FolderBrowserProps> = ({
                   value={searchQuery}
                   onChange={(e) => setSearchQuery(e.target.value)}
                   placeholder="Filter by title or genre..."
-                  className="w-full rounded-xl border border-white/[0.08] bg-[#0d0e12]/90 py-3 pl-11 pr-9 text-sm text-zinc-200 shadow-inner transition-all placeholder:text-zinc-500 focus:border-violet-400/50 focus:outline-none focus:ring-2 focus:ring-violet-500/20"
+                  className="w-full rounded-xl border border-white/[0.08] bg-[#0F0B15]/90 py-3 pl-11 pr-9 text-sm text-zinc-200 shadow-inner transition-all placeholder:text-zinc-500 focus:border-violet-400/50 focus:outline-none focus:ring-2 focus:ring-violet-500/20"
                 />
                 {searchQuery && (
                   <button
@@ -471,7 +480,7 @@ export const FolderBrowser: React.FC<FolderBrowserProps> = ({
                       )}
 
                       {/* Vignette Gradients */}
-                      <div className="absolute inset-0 bg-gradient-to-t from-black/95 via-black/35 to-black/20 group-hover:via-black/20 transition-all pointer-events-none" />
+                      <div className="absolute inset-0 bg-gradient-to-t from-black/95 via-black/45 to-black/20 group-hover:via-black/25 transition-all pointer-events-none" />
 
                       {/* Top Badges: Subtitle Status & Episode Count */}
                       <div className="absolute top-2.5 left-2.5 right-2.5 flex items-center justify-between pointer-events-none z-10">
@@ -542,19 +551,28 @@ export const FolderBrowser: React.FC<FolderBrowserProps> = ({
 
                       {(isFavourite(folder) || isFollowed(folder)) && (
                         <div className="absolute left-2.5 top-10 z-10 flex flex-wrap gap-1.5 pointer-events-none">
-                          {isFavourite(folder) && <span title="Favourite" className="inline-flex items-center gap-1 rounded-md border border-rose-300/30 bg-rose-950/85 px-1.5 py-1 text-[9px] font-bold text-rose-100 shadow-md backdrop-blur"><Heart className="h-3 w-3 fill-current" />Favourite</span>}
-                          {isFollowed(folder) && <span title="Followed for new episode alerts" className="inline-flex items-center gap-1 rounded-md border border-emerald-300/30 bg-emerald-950/85 px-1.5 py-1 text-[9px] font-bold text-emerald-100 shadow-md backdrop-blur"><Bell className="h-3 w-3" />Followed</span>}
+                          {isFavourite(folder) && <span title="Favourite" className="flex h-6 w-6 items-center justify-center rounded-md border border-rose-300/30 bg-rose-950/85 text-rose-100 shadow-md backdrop-blur"><Heart className="h-3.5 w-3.5 fill-current" /></span>}
+                          {isFollowed(folder) && <span title="Followed for new episode alerts" className="flex h-6 w-6 items-center justify-center rounded-md border border-emerald-300/30 bg-emerald-950/85 text-emerald-100 shadow-md backdrop-blur"><Bell className="h-3.5 w-3.5" /></span>}
                         </div>
                       )}
 
                       {/* Bottom Text, Watch Progress & Score */}
                       <div className="absolute bottom-0 left-0 right-0 p-3 pointer-events-none z-10 flex flex-col justify-end space-y-1.5">
-                        {(folder.averageScore || userEntry?.score) && (
-                          <div className="flex items-center space-x-1 text-amber-400 text-[10px] font-bold">
-                            <Star className="w-3 h-3 fill-amber-400" />
-                            <span>{folder.averageScore ? (folder.averageScore / 10).toFixed(1) : `${userEntry?.score}/10`}</span>
-                          </div>
-                        )}
+                        {(() => {
+                          // Collection-only pseudo-folders are built without a
+                          // score — the catalog-details loader fills it in.
+                          const collectionAverage = folder.anilistId != null ? collectionScores.get(folder.anilistId) : undefined;
+                          const displayScore = folder.averageScore ?? collectionAverage ?? null;
+                          if (!displayScore && !userEntry?.score) return null;
+                          return (
+                            <div className="flex">
+                              <span className="inline-flex items-center gap-1 rounded-md border border-white/10 bg-black/70 px-1.5 py-0.5 text-[10px] font-bold text-amber-400 backdrop-blur-sm">
+                                <Star className="w-3 h-3 fill-amber-400" />
+                                <span>{displayScore ? (displayScore / 10).toFixed(1) : `${userEntry?.score}/10`}</span>
+                              </span>
+                            </div>
+                          );
+                        })()}
                         <h4
                           className="text-xs sm:text-sm font-extrabold text-white tracking-tight line-clamp-2 group-hover:text-red-400 transition-colors drop-shadow-sm"
                           title={displayTitle}

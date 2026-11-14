@@ -61,8 +61,10 @@ contextBridge.exposeInMainWorld('electronAPI', {
     trackId: string,
     trackIndex: number | null,
     isExternal: boolean,
-    externalPath?: string
-  ) => ipcRenderer.invoke('extract-subtitle-track', filePath, trackId, trackIndex, isExternal, externalPath),
+    externalPath?: string,
+    playbackPosSec?: number,
+    forceFull?: boolean
+  ) => ipcRenderer.invoke('extract-subtitle-track', filePath, trackId, trackIndex, isExternal, externalPath, playbackPosSec, forceFull),
   warmSubtitles: (filePath: string) => ipcRenderer.invoke('subtitles:warm', filePath),
   onSubtitleFontsReady: (callback: (data: { filePath: string; trackIndex: number; fonts: string[] }) => void) => {
     const listener = (_e: Electron.IpcRendererEvent, data: { filePath: string; trackIndex: number; fonts: string[] }) => callback(data);

@@ -53,7 +53,7 @@ interface WhisperStudioProps {
 
 const STORAGE_KEY_WHISPER_TUNING = 'kaiko_whisper_tuning_preset';
 
-export const WhisperStudio: React.FC<WhisperStudioProps> = ({
+const WhisperStudioImpl: React.FC<WhisperStudioProps> = ({
   initialFolder,
   whisperExists = true,
   onRefreshLibrary,
@@ -278,7 +278,15 @@ export const WhisperStudio: React.FC<WhisperStudioProps> = ({
     } catch {}
   }, [settings?.whisperModel, settings?.customModelPath]);
 
+  // Refresh models when the tab becomes active, but throttle the disk scans
+  // behind it: rapid tab switches re-ran check-binaries (model directory
+  // walks) on every entry and stuttered the transition.
+  const lastModelsRefreshRef = useRef(0);
   useEffect(() => {
+    if (!isActiveTab) return;
+    const now = Date.now();
+    if (now - lastModelsRefreshRef.current < 20_000) return;
+    lastModelsRefreshRef.current = now;
     refreshModels();
   }, [refreshModels, isActiveTab]);
 
@@ -635,17 +643,6 @@ export const WhisperStudio: React.FC<WhisperStudioProps> = ({
     }
   };
 
-  const handleBrowseFolder = async () => {
-    if (isProcessing) return;
-    const folder = await window.electronAPI.browseFolder(selectedFolder);
-    if (folder) {
-      setSelectedFolder(folder);
-      setUserPromptOverride(null);
-      setDetectedCharacters([]);
-      setDetectedAnimeTitle('');
-    }
-  };
-
   const handleSelectQuality = (newPreset: 'anime' | 'bgm' | 'fast') => {
     setQualityOption(newPreset);
     if (newPreset === 'anime') {
@@ -835,16 +832,43 @@ export const WhisperStudio: React.FC<WhisperStudioProps> = ({
     });
   };
 
-  const toggleEpisodePath = (path: string) => {
+  // Phone-gallery style band selection: press a card to set the sweep mode
+  // (select if it was off, deselect if it was on), then drag across the grid
+  // — every card the pointer passes over joins the sweep. A plain press
+  // without movement is just a click-toggle.
+  const episodeDragRef = useRef<{ active: boolean; select: boolean } | null>(null);
+
+  const setEpisodePathSelected = (path: string, select: boolean) => {
     setSelectedEpisodePaths((prev) => {
+      if (select === prev.has(path)) return prev;
       const next = new Set(prev);
-      if (next.has(path)) {
-        next.delete(path);
-      } else {
-        next.add(path);
-      }
+      if (select) next.add(path);
+      else next.delete(path);
       return next;
     });
+  };
+
+  const beginEpisodeDrag = (ep: Episode, event: React.PointerEvent<HTMLDivElement>) => {
+    if (isProcessing || event.button !== 0) return;
+    const select = !selectedEpisodePaths.has(ep.filePath);
+    episodeDragRef.current = { active: true, select };
+    setEpisodePathSelected(ep.filePath, select);
+    try {
+      event.currentTarget.setPointerCapture(event.pointerId);
+    } catch {}
+  };
+
+  const handleEpisodeDragMove = (event: React.PointerEvent<HTMLDivElement>) => {
+    const drag = episodeDragRef.current;
+    if (!drag?.active) return;
+    const target = document.elementFromPoint(event.clientX, event.clientY) as HTMLElement | null;
+    const card = target?.closest('[data-episode-card]') as HTMLElement | null;
+    const path = card?.getAttribute('data-episode-card');
+    if (path) setEpisodePathSelected(path, drag.select);
+  };
+
+  const endEpisodeDrag = () => {
+    episodeDragRef.current = null;
   };
 
   const hasSubtitles = (e: (typeof episodes)[0]) =>
@@ -871,7 +895,7 @@ export const WhisperStudio: React.FC<WhisperStudioProps> = ({
   const activeProcessingEpisode = currentFile ? cleanEpisodeTitle(currentFile) : null;
 
   return (
-    <div className="flex-1 flex flex-col h-[calc(100vh-3.5rem)] overflow-hidden bg-[#0f0f12] p-6 space-y-5">
+    <div className="flex-1 flex flex-col h-[calc(100vh-3.5rem)] overflow-hidden bg-[#07060A] p-6 space-y-5">
       {/* Top Banner / Heading */}
       <div className="flex flex-wrap items-center justify-between gap-4 pb-2 border-b border-zinc-800 shrink-0">
         <div>
@@ -888,7 +912,7 @@ export const WhisperStudio: React.FC<WhisperStudioProps> = ({
           {isProcessing ? (
             <button
               onClick={handleCancel}
-              className="flex items-center space-x-2 px-5 py-2.5 rounded-xl bg-red-600 hover:bg-red-500 text-white font-bold text-xs shadow-lg shadow-red-600/30 transition-all active:scale-95"
+              className="btn-glass flex items-center space-x-2 px-5 py-2.5 rounded-xl text-rose-200 font-bold text-xs transition-all active:scale-95"
             >
               <StopCircle className="w-4 h-4" />
               <span>Cancel Queue</span>
@@ -898,7 +922,7 @@ export const WhisperStudio: React.FC<WhisperStudioProps> = ({
               onClick={handleStartSeason}
               disabled={!selectedFolder || episodes.length === 0 || probing || !whisperExists || selectedEpisodePaths.size === 0 || Boolean(downloadingModelName)}
               title={downloadingModelName ? `Cannot start generation: model "${downloadingModelName}" is downloading` : undefined}
-              className="flex items-center space-x-2 px-6 py-2.5 rounded-xl bg-gradient-to-r from-red-600 to-indigo-600 hover:from-red-500 hover:to-indigo-500 text-white font-bold text-xs shadow-lg shadow-indigo-600/20 transition-all hover:scale-[1.02] active:scale-[0.98] disabled:opacity-50 disabled:cursor-not-allowed"
+              className="btn-primary flex items-center space-x-2 px-6 py-2.5 rounded-xl text-white font-bold text-xs transition-all hover:scale-[1.02] active:scale-[0.98] disabled:opacity-50 disabled:cursor-not-allowed"
             >
               <Play className="w-4 h-4 fill-white" />
               <span>
@@ -975,7 +999,7 @@ export const WhisperStudio: React.FC<WhisperStudioProps> = ({
               <button
                 type="button"
                 onClick={handleDownloadEngine}
-                className="px-3.5 py-1.5 rounded-xl bg-purple-600 hover:bg-purple-500 text-white font-semibold transition-all text-xs shadow-md shadow-purple-600/20 flex items-center space-x-1.5"
+                className="btn-primary px-3.5 py-1.5 rounded-xl text-white font-semibold transition-all text-xs flex items-center space-x-1.5"
               >
                 <Download className="w-3.5 h-3.5" />
                 <span>Install Engine in Kaiko</span>
@@ -999,34 +1023,25 @@ export const WhisperStudio: React.FC<WhisperStudioProps> = ({
         {/* Left Column: 3 Compact Steps */}
         <div className="lg:col-span-5 flex flex-col space-y-4 overflow-y-auto pr-1 scrollbar-thin">
           {/* Step 1: Anime Selection */}
-          <div className="rounded-2xl bg-[#141418] border border-white/10 space-y-3 shadow-md p-4">
+          <div className="rounded-2xl glass-panel space-y-3 shadow-md p-4">
             <div className="flex items-center justify-between">
               <span className="text-xs font-bold uppercase tracking-wider text-zinc-400">
                 1. Anime
               </span>
 
-              <div className="flex items-center space-x-2">
-                {libraryFolders.length > 0 && (
-                  <button
-                    type="button"
-                    disabled={isProcessing}
-                    onClick={() => setShowAnimePicker(true)}
-                    className="flex items-center space-x-1.5 px-2.5 py-1 rounded-lg bg-indigo-600/20 hover:bg-indigo-600/30 text-indigo-300 border border-indigo-500/30 text-xs font-medium transition-colors disabled:opacity-50"
-                  >
-                    <Film className="w-3.5 h-3.5" />
-                    <span>Change Anime</span>
-                  </button>
-                )}
+              {/* Custom-folder browsing lives inside the anime picker's footer
+                  ("Browse folder on disk..."), so no separate icon button here. */}
+              {libraryFolders.length > 0 && (
                 <button
                   type="button"
                   disabled={isProcessing}
-                  onClick={handleBrowseFolder}
-                  title="Browse custom folder on disk"
-                  className="p-1.5 rounded-lg bg-zinc-800 hover:bg-zinc-700 text-zinc-400 hover:text-white border border-white/10 text-xs transition-colors disabled:opacity-50"
+                  onClick={() => setShowAnimePicker(true)}
+                  className="flex items-center space-x-1.5 px-2.5 py-1 rounded-lg bg-indigo-600/20 hover:bg-indigo-600/30 text-indigo-300 border border-indigo-500/30 text-xs font-medium transition-colors disabled:opacity-50"
                 >
-                  <FolderOpen className="w-3.5 h-3.5" />
+                  <Film className="w-3.5 h-3.5" />
+                  <span>Change Anime</span>
                 </button>
-              </div>
+              )}
             </div>
 
             {selectedFolder ? (
@@ -1106,7 +1121,7 @@ export const WhisperStudio: React.FC<WhisperStudioProps> = ({
           </div>
 
           {/* Step 2: Audio Stream Selection */}
-          <div className="rounded-2xl bg-[#141418] border border-white/10 space-y-3 shadow-md p-4">
+          <div className="rounded-2xl glass-panel space-y-3 shadow-md p-4">
             <div className="flex items-center justify-between">
               <span className="text-xs font-bold uppercase tracking-wider text-zinc-400 block">
                 2. Audio
@@ -1130,7 +1145,7 @@ export const WhisperStudio: React.FC<WhisperStudioProps> = ({
                   type="button"
                   disabled={isProcessing}
                   onClick={() => setIsAudioTracksExpanded(true)}
-                  className="text-xs text-indigo-400 hover:text-indigo-300 font-semibold underline shrink-0 disabled:opacity-50"
+                  className="text-xs text-indigo-400 hover:text-indigo-300 font-semibold shrink-0 disabled:opacity-50"
                 >
                   Change
                 </button>
@@ -1196,7 +1211,7 @@ export const WhisperStudio: React.FC<WhisperStudioProps> = ({
                     <button
                       type="button"
                       onClick={() => setIsAudioTracksExpanded(false)}
-                      className="text-xs text-zinc-400 hover:text-white underline"
+                      className="text-xs text-zinc-400 hover:text-white"
                     >
                       Done
                     </button>
@@ -1207,7 +1222,7 @@ export const WhisperStudio: React.FC<WhisperStudioProps> = ({
           </div>
 
           {/* Step 3: Quality & Settings */}
-          <div className="rounded-2xl bg-[#141418] border border-white/10 space-y-3 shadow-md p-4">
+          <div className="rounded-2xl glass-panel space-y-3 shadow-md p-4">
             <div className="flex items-center justify-between">
               <span className="text-xs font-bold uppercase tracking-wider text-zinc-400 block">
                 3. Quality
@@ -1278,7 +1293,7 @@ export const WhisperStudio: React.FC<WhisperStudioProps> = ({
                   <button
                     type="button"
                     onClick={onOpenSettings}
-                    className="text-[11px] text-indigo-400 hover:text-indigo-300 underline font-medium transition-colors"
+                    className="text-[11px] text-indigo-400 hover:text-indigo-300 font-semibold transition-colors"
                   >
                     Manage in Settings
                   </button>
@@ -1344,7 +1359,7 @@ export const WhisperStudio: React.FC<WhisperStudioProps> = ({
                   type="button"
                   disabled={isProcessing}
                   onClick={() => setIsEditingPrompt((prev) => !prev)}
-                  className="text-xs text-indigo-400 hover:text-indigo-300 font-semibold underline shrink-0 disabled:opacity-50"
+                  className="text-xs text-indigo-400 hover:text-indigo-300 font-semibold shrink-0 disabled:opacity-50"
                 >
                   {isEditingPrompt ? 'Close' : detectedCharacters.length > 0 ? 'Edit' : 'Add'}
                 </button>
@@ -1359,7 +1374,7 @@ export const WhisperStudio: React.FC<WhisperStudioProps> = ({
                       type="button"
                       disabled={isProcessing}
                       onClick={() => setUserPromptOverride(null)}
-                      className="text-[10px] text-zinc-400 hover:text-white underline disabled:opacity-50"
+                      className="text-[10px] text-zinc-400 hover:text-white disabled:opacity-50"
                     >
                       Reset to default
                     </button>
@@ -1559,7 +1574,7 @@ export const WhisperStudio: React.FC<WhisperStudioProps> = ({
               </div>
               <div className="w-full h-2 rounded-full bg-zinc-800 overflow-hidden">
                 <div
-                  className="h-full bg-gradient-to-r from-indigo-500 via-purple-500 to-red-500 rounded-full transition-all duration-300"
+                  className="h-full bg-gradient-to-r from-rose-600 via-rose-500 to-rose-300 rounded-full transition-all duration-300"
                   style={{ width: `${overallProgress}%` }}
                 />
               </div>
@@ -1578,7 +1593,7 @@ export const WhisperStudio: React.FC<WhisperStudioProps> = ({
           ) : null}
 
           {/* Interactive Season Queue & Episode Selector */}
-          <div className="flex-1 rounded-2xl bg-[#141418] border border-white/10 flex flex-col min-h-[220px] overflow-hidden shadow-md">
+          <div className="flex-1 rounded-2xl glass-panel flex flex-col min-h-[220px] overflow-hidden shadow-md">
             {/* Queue Header & Filters */}
             <div className="flex items-center justify-between px-4 py-3 bg-zinc-900/80 border-b border-zinc-800/80 shrink-0">
               <div className="flex items-center space-x-3">
@@ -1598,6 +1613,9 @@ export const WhisperStudio: React.FC<WhisperStudioProps> = ({
                     Episodes ({selectedEpisodePaths.size} selected)
                   </span>
                 </button>
+                <span className="hidden xl:inline text-[10px] font-medium text-zinc-600">
+                  Click to select · hold &amp; drag to sweep multiple
+                </span>
               </div>
 
               {/* Filter: All | Without Subtitles */}
@@ -1627,8 +1645,14 @@ export const WhisperStudio: React.FC<WhisperStudioProps> = ({
               </div>
             </div>
 
-            {/* Episode Rows List */}
-            <div className="flex-1 p-3 overflow-y-auto space-y-2 scrollbar-thin">
+            {/* Episode Cards Grid — click toggles; hold + drag sweeps the
+                selection across cards (phone-gallery style). */}
+            <div
+              className="flex-1 p-3 overflow-y-auto scrollbar-thin select-none"
+              onPointerMove={handleEpisodeDragMove}
+              onPointerUp={endEpisodeDrag}
+              onPointerCancel={endEpisodeDrag}
+            >
               {episodes.length === 0 ? (
                 <div className="h-full flex flex-col items-center justify-center text-zinc-500 text-xs p-6 text-center">
                   <span>No episodes loaded. Select an anime folder to view episodes.</span>
@@ -1638,119 +1662,115 @@ export const WhisperStudio: React.FC<WhisperStudioProps> = ({
                   <span>All episodes already have subtitles! Switch filter to "All" to re-generate.</span>
                 </div>
               ) : (
-                filteredEpisodes.map((ep) => {
-                  const parsed = cleanEpisodeTitle(ep.fileName);
-                  const isSelected = selectedEpisodePaths.has(ep.filePath);
-                  const isCurrent = currentFile && ep.fileName === currentFile;
-                  const queueMatch = queue.find((q) => q.filePath === ep.filePath || q.fileName === ep.fileName);
+                <div className="grid grid-cols-[repeat(auto-fill,minmax(170px,1fr))] gap-3">
+                  {filteredEpisodes.map((ep) => {
+                    const parsed = cleanEpisodeTitle(ep.fileName);
+                    const isSelected = selectedEpisodePaths.has(ep.filePath);
+                    const isCurrent = currentFile && ep.fileName === currentFile;
+                    const queueMatch = queue.find((q) => q.filePath === ep.filePath || q.fileName === ep.fileName);
+                    const thumb = ep.thumbnailUrl || ep.kitsuThumbnail || null;
 
-                  return (
-                    <div
-                      key={ep.filePath}
-                      className={`p-2.5 rounded-xl border flex items-center justify-between space-x-3 transition-all ${
-                        isCurrent
-                          ? 'bg-indigo-600/15 border-indigo-500/60 shadow-sm'
-                          : isSelected
-                          ? 'bg-zinc-900/70 border-zinc-800 text-zinc-200'
-                          : ep.hasWhisperSrt
-                          ? 'bg-zinc-900/20 border-zinc-800/30 text-zinc-500 opacity-50'
-                          : 'bg-zinc-900/30 border-zinc-800/40 text-zinc-400 opacity-70'
-                      }`}
-                    >
-                      {/* Checkbox & Title */}
-                      <div className="flex items-center space-x-2.5 truncate mr-2">
-                        <input
-                          type="checkbox"
-                          disabled={isProcessing}
-                          checked={isSelected}
-                          onChange={() => toggleEpisodePath(ep.filePath)}
-                          className="w-4 h-4 rounded bg-zinc-800 border-zinc-700 text-indigo-600 focus:ring-0 cursor-pointer disabled:opacity-50 shrink-0"
-                        />
-
-                        <span
-                          className={`px-1.5 py-0.5 rounded text-[10px] font-bold shrink-0 ${
-                            isCurrent
-                              ? 'bg-indigo-600 text-white'
-                              : ep.hasWhisperSrt
-                              ? 'bg-emerald-500/20 text-emerald-300 border border-emerald-500/30'
-                              : 'bg-zinc-800 text-zinc-400'
-                          }`}
-                        >
-                          {parsed.episodeLabel}
+                    let statusBadge: React.ReactNode;
+                    if (isCurrent) {
+                      statusBadge = currentSpeed?.includes('Downloading model') ? (
+                        <span className="font-mono font-bold text-amber-400 animate-pulse">Downloading model…</span>
+                      ) : (
+                        <span className="flex items-center space-x-1 font-mono font-bold text-indigo-400 animate-pulse">
+                          <span>{overallProgress}%</span>
+                          {currentSpeed && <span className="text-zinc-400">({currentSpeed})</span>}
                         </span>
-
-                        <span
-                          className={`text-xs truncate font-medium ${
-                            isCurrent ? 'text-indigo-300 font-bold' : ep.hasWhisperSrt ? 'text-zinc-400' : 'text-zinc-200'
-                          }`}
-                          title={ep.fileName}
-                        >
-                          {parsed.displayTitle}
+                      );
+                    } else if (isProcessing && queueMatch) {
+                      statusBadge = queueMatch.status === 'completed' ? (
+                        <span className="inline-flex items-center space-x-1 rounded border border-emerald-500/20 bg-emerald-500/10 px-1.5 py-0.5 font-semibold text-emerald-400">
+                          <CheckCircle2 className="h-3 w-3" />
+                          <span>Done</span>
                         </span>
-                      </div>
+                      ) : queueMatch.status === 'processing' ? (
+                        <span className="font-mono font-bold text-indigo-400 animate-pulse">Running</span>
+                      ) : queueMatch.status === 'failed' ? (
+                        <span className="font-semibold text-red-400">Failed</span>
+                      ) : (
+                        <span className="text-zinc-500">Queued</span>
+                      );
+                    } else if (ep.hasWhisperSrt) {
+                      statusBadge = (
+                        <span className="inline-flex items-center space-x-1 rounded border border-emerald-500/20 bg-emerald-500/10 px-1.5 py-0.5 font-semibold text-emerald-400" title="Whisper AI subtitle ready (.whisper.srt)">
+                          <CheckCircle2 className="h-3 w-3" />
+                          <span>Done</span>
+                        </span>
+                      );
+                    } else if (ep.hasEmbeddedDubtitles) {
+                      statusBadge = <span className="rounded border border-purple-500/30 bg-purple-500/15 px-1.5 py-0.5 font-semibold text-purple-300" title="Embedded English Dubtitles (SDH)">Dub Sub</span>;
+                    } else if (ep.hasExternalSrt) {
+                      statusBadge = <span className="rounded border border-blue-500/30 bg-blue-500/15 px-1.5 py-0.5 font-semibold text-blue-300" title="External Subtitle ready (.srt)">Ext Sub</span>;
+                    } else if (ep.hasEmbeddedSubtitles) {
+                      statusBadge = <span className="rounded border border-emerald-500/30 bg-emerald-500/15 px-1.5 py-0.5 font-semibold text-emerald-300" title="Embedded Subtitles">Sub</span>;
+                    } else {
+                      statusBadge = <span className="text-zinc-600">No subtitles</span>;
+                    }
 
-                      {/* Status Badges & Quick Action */}
-                      <div className="flex items-center space-x-2 shrink-0">
-                        {isCurrent ? (
-                          currentSpeed?.includes('Downloading model') ? (
-                            <span className="text-amber-400 font-bold text-[11px] font-mono animate-pulse">
-                              Downloading Model...
-                            </span>
+                    return (
+                      <div
+                        key={ep.filePath}
+                        data-episode-card={ep.filePath}
+                        onPointerDown={(event) => beginEpisodeDrag(ep, event)}
+                        title={ep.fileName}
+                        className={`group relative overflow-hidden rounded-xl border transition-all ${
+                          isCurrent
+                            ? 'border-indigo-500/70 bg-zinc-900/80 ring-2 ring-indigo-500/40'
+                            : isSelected
+                            ? 'border-indigo-400/60 bg-zinc-900/80 ring-1 ring-indigo-500/30'
+                            : ep.hasWhisperSrt
+                            ? 'border-zinc-800/50 bg-zinc-900/30 opacity-70 hover:opacity-100'
+                            : 'border-zinc-800/60 bg-zinc-900/40 hover:border-zinc-700'
+                        } ${isProcessing ? 'cursor-default' : 'cursor-pointer'}`}
+                      >
+                        <div className="relative aspect-video overflow-hidden bg-zinc-950">
+                          {thumb ? (
+                            <img src={thumb} alt="" draggable={false} loading="lazy" decoding="async" className="h-full w-full object-cover" />
                           ) : (
-                            <span className="text-indigo-400 font-bold text-[11px] font-mono animate-pulse flex items-center space-x-1">
-                              <span>{overallProgress}%</span>
-                              {currentSpeed && <span className="text-[10px] text-zinc-400">({currentSpeed})</span>}
-                            </span>
-                          )
-                        ) : isProcessing && queueMatch ? (
-                          queueMatch.status === 'completed' ? (
-                            <span className="flex items-center space-x-1 text-emerald-400 text-[11px] font-semibold bg-emerald-500/10 px-2 py-0.5 rounded border border-emerald-500/20">
-                              <CheckCircle2 className="w-3.5 h-3.5" />
-                              <span>Done</span>
-                            </span>
-                          ) : queueMatch.status === 'processing' ? (
-                            <span className="text-indigo-400 font-bold text-[11px] font-mono animate-pulse">Running</span>
-                          ) : queueMatch.status === 'failed' ? (
-                            <span className="text-red-400 text-[11px]">Failed</span>
-                          ) : (
-                            <span className="text-zinc-500 text-[11px]">Queued</span>
-                          )
-                        ) : ep.hasWhisperSrt ? (
-                          <span className="flex items-center space-x-1 text-emerald-400 text-[11px] font-semibold bg-emerald-500/10 px-2 py-0.5 rounded border border-emerald-500/20" title="Whisper AI subtitle ready (.whisper.srt)">
-                            <CheckCircle2 className="w-3.5 h-3.5" />
-                            <span>Done</span>
-                          </span>
-                        ) : ep.hasEmbeddedDubtitles ? (
-                          <span className="text-purple-300 text-[10px] font-semibold bg-purple-500/15 px-1.5 py-0.5 rounded border border-purple-500/30" title="Embedded English Dubtitles (SDH)">
-                            Dub Sub
-                          </span>
-                        ) : ep.hasExternalSrt ? (
-                          <span className="text-blue-300 text-[10px] font-semibold bg-blue-500/15 px-1.5 py-0.5 rounded border border-blue-500/30" title="External Subtitle ready (.srt)">
-                            Ext Sub
-                          </span>
-                        ) : ep.hasEmbeddedSubtitles ? (
-                          <span className="text-emerald-300 text-[10px] font-semibold bg-emerald-500/15 px-1.5 py-0.5 rounded border border-emerald-500/30" title="Embedded Subtitles">
-                            Sub
-                          </span>
-                        ) : (
-                          <span className="text-zinc-500 text-[11px]">No subtitles</span>
-                        )}
+                            <div className="flex h-full w-full items-center justify-center text-zinc-700">
+                              <Film className="h-6 w-6" />
+                            </div>
+                          )}
+                          <div className="pointer-events-none absolute inset-0 bg-gradient-to-t from-black/70 via-transparent to-black/30" />
 
-                        {/* Quick Transcribe Single Episode Button */}
-                        {!isProcessing && !downloadingModelName && (
-                          <button
-                            type="button"
-                            onClick={() => handleStartSingleEpisode(ep)}
-                            title="Generate this episode"
-                            className="p-1 rounded text-zinc-400 hover:text-white hover:bg-zinc-800 transition-colors"
-                          >
-                            <Play className="w-3 h-3" />
-                          </button>
-                        )}
+                          <span className={`absolute left-1.5 top-1.5 rounded px-1.5 py-0.5 text-[10px] font-bold ${isCurrent ? 'bg-indigo-600 text-white' : 'bg-black/80 text-zinc-200'}`}>
+                            {parsed.episodeLabel}
+                          </span>
+
+                          {isSelected && (
+                            <span className="absolute right-1.5 top-1.5 flex h-5 w-5 items-center justify-center rounded-full bg-indigo-500 text-white shadow">
+                              <CheckCircle2 className="h-3.5 w-3.5" />
+                            </span>
+                          )}
+
+                          {!isProcessing && !downloadingModelName && (
+                            <button
+                              type="button"
+                              onPointerDown={(event) => event.stopPropagation()}
+                              onClick={() => handleStartSingleEpisode(ep)}
+                              title="Generate this episode"
+                              className="absolute bottom-1.5 right-1.5 flex h-6 w-6 items-center justify-center rounded-full bg-rose-500 text-white opacity-0 shadow transition group-hover:opacity-100 hover:bg-rose-400"
+                            >
+                              <Play className="h-3 w-3 fill-current" />
+                            </button>
+                          )}
+                        </div>
+
+                        <div className="p-2">
+                          <p className={`truncate text-[11px] font-semibold ${isCurrent ? 'text-indigo-300' : ep.hasWhisperSrt ? 'text-zinc-400' : 'text-zinc-200'}`} title={ep.fileName}>
+                            {parsed.displayTitle}
+                          </p>
+                          <div className="mt-1 flex min-h-[18px] items-center text-[10px]">
+                            {statusBadge}
+                          </div>
+                        </div>
                       </div>
-                    </div>
-                  );
-                })
+                    );
+                  })}
+                </div>
               )}
             </div>
           </div>
@@ -1760,7 +1780,7 @@ export const WhisperStudio: React.FC<WhisperStudioProps> = ({
             <button
               type="button"
               onClick={() => setShowTerminal((prev) => !prev)}
-              className="w-full flex items-center justify-between px-4 py-2.5 bg-[#141418] hover:bg-zinc-800/60 text-zinc-300 transition-colors"
+              className="w-full flex items-center justify-between px-4 py-2.5 bg-white/[0.03] hover:bg-zinc-800/60 text-zinc-300 transition-colors"
             >
               <div className="flex items-center space-x-2">
                 <Terminal className="w-4 h-4 text-indigo-400" />
@@ -1796,16 +1816,16 @@ export const WhisperStudio: React.FC<WhisperStudioProps> = ({
           aria-modal="true"
           data-modal="true"
           onClick={() => setShowAnimePicker(false)}
-          className="fixed inset-0 z-50 bg-black/80 backdrop-blur-sm flex items-center justify-center p-4 animate-in fade-in duration-200"
+          className="fixed inset-0 z-50 modal-dimmer flex items-center justify-center p-4 animate-in fade-in duration-200"
         >
           <div
             onClick={(e) => e.stopPropagation()}
-            className="relative w-full max-w-3xl rounded-2xl bg-[#141418] border border-white/10 shadow-2xl flex flex-col max-h-[85vh] overflow-hidden"
+            className="modal-glass relative w-full max-w-3xl rounded-2xl flex flex-col max-h-[85vh] overflow-hidden"
           >
             {/* Modal Header */}
-            <div className="flex items-center justify-between p-4 border-b border-zinc-800 shrink-0">
+            <div className="flex items-center justify-between p-4 border-b border-white/10 shrink-0">
               <div className="flex items-center space-x-2">
-                <Film className="w-5 h-5 text-indigo-400" />
+                <Film className="w-5 h-5 text-rose-400" />
                 <h2 className="text-base font-bold text-white">Select Anime from Library</h2>
                 <span className="text-xs font-semibold px-2 py-0.5 rounded-full bg-zinc-800 text-zinc-300 border border-white/5">
                   {filteredFolders.length}
@@ -2075,3 +2095,7 @@ export const WhisperStudio: React.FC<WhisperStudioProps> = ({
     </div>
   );
 };
+
+// Memoized: the studio stays mounted forever, so App-level re-renders (P2P
+// bursts, notification churn) must not reconcile this 2000-line tree.
+export const WhisperStudio = React.memo(WhisperStudioImpl);

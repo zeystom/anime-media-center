@@ -18,6 +18,7 @@ import type { AppSettings, DiscoverAgeRating, DiscoverCatalogParams, DiscoverMod
 import { toRailItem, type RailItem } from '../../hooks/useCatalog'
 import { useLocalStatus } from '../../hooks/useLocalStatus'
 import { AnimeCard } from '../common/AnimeCard'
+import { GlassSelect } from '../common/GlassSelect'
 import { normalizeAgeRating } from '../../utils/ageRating'
 import { useAgeRatings } from '../../hooks/useAgeRatings'
 
@@ -135,28 +136,30 @@ function isHentaiItem(item: { isAdult?: boolean; genres?: string[]; tags?: strin
   return false
 }
 
-function SelectField({ label, value, onChange, children, className = '', disabled = false }: {
+function SelectField({ label, value, onChange, options, className = '', disabled = false }: {
   label: string
   value: string
   onChange: (value: string) => void
-  children: React.ReactNode
+  options: Array<{ value: string; label: string }>
   className?: string
   disabled?: boolean
 }) {
   return (
     <label className={`relative flex min-w-0 flex-col gap-1.5 ${disabled ? 'opacity-45' : ''} ${className}`}>
       <span className="text-[9px] font-bold uppercase tracking-[0.15em] text-zinc-500">{label}</span>
-      <span className="relative">
-        <select disabled={disabled} value={value} onChange={(event) => onChange(event.target.value)} className="h-10 w-full appearance-none rounded-xl border border-white/[0.09] bg-[#11131a] px-3 pr-9 text-xs font-semibold text-zinc-200 outline-none transition focus:border-rose-400/50 focus:ring-2 focus:ring-rose-500/10 disabled:cursor-not-allowed disabled:bg-white/[0.015] disabled:text-zinc-500">
-          {children}
-        </select>
-        <ChevronDown className={`pointer-events-none absolute right-3 top-1/2 h-3.5 w-3.5 -translate-y-1/2 text-zinc-500 ${disabled ? 'opacity-40' : ''}`} />
-      </span>
+      <GlassSelect
+        disabled={disabled}
+        value={value}
+        onChange={onChange}
+        options={options}
+        ariaLabel={label}
+        className="h-10 w-full"
+      />
     </label>
   )
 }
 
-export const DiscoverView: React.FC<DiscoverViewProps> = ({
+const DiscoverViewImpl: React.FC<DiscoverViewProps> = ({
   history,
   userEntries,
   folders,
@@ -400,7 +403,7 @@ export const DiscoverView: React.FC<DiscoverViewProps> = ({
 
   return (
     <div className="mx-auto min-h-full w-full max-w-[1800px] px-6 py-7 2xl:px-12">
-      <section className="relative mb-6 overflow-hidden rounded-[26px] border border-white/[0.08] bg-[#12141b] px-6 py-7 shadow-2xl shadow-black/20 md:px-9 md:py-8">
+      <section className="relative mb-6 overflow-hidden rounded-[26px] border border-white/[0.08] bg-[#0F0B15] px-6 py-7 shadow-2xl shadow-black/20 md:px-9 md:py-8">
         <div className="pointer-events-none absolute -right-20 -top-32 h-80 w-80 rounded-full bg-rose-500/[0.08] blur-3xl" />
         <div className="pointer-events-none absolute -bottom-36 left-1/3 h-72 w-72 rounded-full bg-violet-500/[0.07] blur-3xl" />
         <div className="relative">
@@ -412,27 +415,30 @@ export const DiscoverView: React.FC<DiscoverViewProps> = ({
         </div>
       </section>
 
-      <div className="mb-5 flex flex-wrap items-center gap-2 rounded-2xl border border-white/[0.07] bg-white/[0.025] p-2">
+      <div className="mb-5 flex flex-wrap items-center justify-center gap-2 rounded-2xl border border-white/[0.07] bg-white/[0.025] p-2">
         {MODE_OPTIONS.map((option) => (
-          <button key={option.value} type="button" onClick={() => setMode(option.value)} className={`flex items-center gap-2 rounded-xl px-4 py-2.5 text-xs font-bold transition ${mode === option.value && !debouncedQuery ? 'bg-rose-500 text-white shadow-lg shadow-rose-950/30' : 'text-zinc-400 hover:bg-white/[0.05] hover:text-white'}`}>
+          <button key={option.value} type="button" onClick={() => setMode(option.value)} className={`flex items-center gap-2 rounded-xl px-4 py-2.5 text-xs font-bold transition ${mode === option.value && !debouncedQuery ? 'bg-[linear-gradient(135deg,#FF1E6D_0%,#A31246_100%)] text-white shadow-[0_4px_16px_rgba(255,30,109,0.35)]' : 'text-zinc-400 hover:bg-white/[0.05] hover:text-white'}`}>
             {option.icon}<span>{option.label}</span>
           </button>
         ))}
-        <span className="ml-auto hidden pr-2 text-[10px] text-zinc-600 md:block">{debouncedQuery ? 'Search results' : activeMode.description}</span>
       </div>
 
-      <section className="mb-5 rounded-2xl border border-white/[0.08] bg-[#111319]/90 p-4 shadow-xl shadow-black/10 md:p-5">
+      {/* Filter wrapper shares the mode-tabs panel's warm neutral surface
+          (bg-white/[0.025]) — the old cold blue-gray #111319 clashed with the
+          obsidian-plum palette. Inner controls keep their own styling. */}
+      <section className="mb-5 rounded-2xl border border-white/[0.07] bg-white/[0.025] p-4 shadow-xl shadow-black/10 md:p-5">
         <div className="flex flex-col gap-4">
           <div className="flex flex-col gap-3 lg:flex-row lg:items-center">
             <label className="relative min-w-0 flex-1">
               <Search className="pointer-events-none absolute left-4 top-1/2 h-4 w-4 -translate-y-1/2 text-zinc-500" />
-              <input value={query} onChange={(event) => setQuery(event.target.value)} placeholder="Search titles, aliases, or Japanese names…" className="h-12 w-full rounded-xl border border-white/[0.09] bg-[#0b0c10] pl-11 pr-4 text-sm text-zinc-100 outline-none transition placeholder:text-zinc-600 focus:border-rose-400/50 focus:ring-2 focus:ring-rose-500/10" />
+              <input value={query} onChange={(event) => setQuery(event.target.value)} placeholder="Search titles, aliases, or Japanese names…" className="h-12 w-full rounded-xl border border-white/[0.09] bg-[#07060A] pl-11 pr-4 text-sm text-zinc-100 outline-none transition placeholder:text-zinc-600 focus:border-rose-400/50 focus:ring-2 focus:ring-rose-500/10" />
               {query && <button type="button" onClick={() => setQuery('')} className="absolute right-3 top-1/2 -translate-y-1/2 rounded-md px-2 py-1 text-[10px] font-semibold text-zinc-500 hover:text-white">Clear</button>}
             </label>
           </div>
 
           {seasonControlsVisible && (
-            <div className="flex flex-wrap items-center gap-4 rounded-2xl border border-white/[0.07] bg-[#0d0f15] px-4 py-3">
+            // Warm plum elevated inset (--bg-elevated) instead of the cold blue-gray #0d0f15.
+            <div className="flex flex-wrap items-center gap-4 rounded-2xl border border-white/[0.06] bg-[#0F0B15]/70 px-4 py-3">
               <div className="flex min-w-[220px] flex-1 items-center gap-3">
                 <span className="flex h-10 w-10 shrink-0 items-center justify-center rounded-xl border border-rose-300/15 bg-rose-400/[0.08] text-rose-200"><CalendarDays className="h-4 w-4" /></span>
                 <span className="min-w-0">
@@ -440,27 +446,27 @@ export const DiscoverView: React.FC<DiscoverViewProps> = ({
                   <span className="mt-0.5 block text-[10px] text-zinc-500">Choose one season or include releases from every year.</span>
                 </span>
               </div>
-              <div role="group" aria-label="Season filter" className="inline-flex shrink-0 items-center rounded-xl border border-white/[0.08] bg-[#090a0e] p-1">
+              <div role="group" aria-label="Season filter" className="inline-flex shrink-0 items-center rounded-xl border border-white/[0.08] bg-[#0c0910] p-1">
                 <button
                   type="button"
                   aria-pressed={seasonSelectionEnabled}
                   onClick={() => debouncedQuery ? setSearchScope('season') : setSeasonFilterEnabled(true)}
-                  className={`rounded-lg px-3 py-2 text-[11px] font-bold transition ${seasonSelectionEnabled ? 'bg-rose-500 text-white shadow-md shadow-rose-950/30' : 'text-zinc-500 hover:text-zinc-200'}`}
+                  className={`rounded-lg px-3 py-2 text-[11px] font-bold transition ${seasonSelectionEnabled ? 'bg-[linear-gradient(135deg,#FF1E6D_0%,#A31246_100%)] text-white shadow-[0_4px_14px_rgba(255,30,109,0.35)]' : 'text-zinc-500 hover:text-zinc-200'}`}
                 >{debouncedQuery ? 'In season' : 'One season'}</button>
                 <button
                   type="button"
                   aria-pressed={!seasonSelectionEnabled}
                   onClick={() => debouncedQuery ? setSearchScope('all') : setSeasonFilterEnabled(false)}
-                  className={`rounded-lg px-3 py-2 text-[11px] font-bold transition ${!seasonSelectionEnabled ? 'bg-rose-500 text-white shadow-md shadow-rose-950/30' : 'text-zinc-500 hover:text-zinc-200'}`}
+                  className={`rounded-lg px-3 py-2 text-[11px] font-bold transition ${!seasonSelectionEnabled ? 'bg-[linear-gradient(135deg,#FF1E6D_0%,#A31246_100%)] text-white shadow-[0_4px_14px_rgba(255,30,109,0.35)]' : 'text-zinc-500 hover:text-zinc-200'}`}
                 >{debouncedQuery ? 'All anime' : 'All seasons'}</button>
               </div>
               <div className="flex flex-wrap items-end gap-3 border-l border-white/[0.07] pl-4">
-                <SelectField disabled={!seasonSelectionEnabled} label="Season" value={season} onChange={(value) => setSeason(value as DiscoverSeason)} className="w-[145px]">
-                  {SEASONS.map((entry) => <option key={entry.value} value={entry.value}>{entry.label}</option>)}
-                </SelectField>
-                <SelectField disabled={!seasonSelectionEnabled} label="Year" value={String(year)} onChange={(value) => setYear(Number(value))} className="w-[115px]">
-                  {availableYears.map((value) => <option key={value} value={value}>{value}</option>)}
-                </SelectField>
+                <SelectField disabled={!seasonSelectionEnabled} label="Season" value={season} onChange={(value) => setSeason(value as DiscoverSeason)} className="w-[145px]"
+                  options={SEASONS.map((entry) => ({ value: entry.value, label: entry.label }))}
+                />
+                <SelectField disabled={!seasonSelectionEnabled} label="Year" value={String(year)} onChange={(value) => setYear(Number(value))} className="w-[115px]"
+                  options={availableYears.map((value) => ({ value: String(value), label: String(value) }))}
+                />
               </div>
             </div>
           )}
@@ -479,8 +485,8 @@ export const DiscoverView: React.FC<DiscoverViewProps> = ({
                 onClick={() => setIsGenrePickerOpen(!isGenrePickerOpen)}
                 className={`relative h-10 w-full appearance-none rounded-xl border px-3 pr-8 text-left text-xs font-semibold outline-none transition flex items-center justify-between ${
                   selectedGenres.length > 0
-                    ? 'border-rose-400/50 bg-[#16131c] text-rose-200 ring-1 ring-rose-500/20'
-                    : 'border-white/[0.09] bg-[#11131a] text-zinc-200 hover:border-white/20'
+                    ? 'border-rose-400/50 bg-[#1d1320] text-rose-200 ring-1 ring-rose-500/20'
+                    : 'border-white/[0.09] bg-[#0f0b15]/85 text-zinc-200 hover:border-white/20'
                 }`}
               >
                 <span className="truncate">
@@ -495,7 +501,7 @@ export const DiscoverView: React.FC<DiscoverViewProps> = ({
 
               {/* Multi-select Dropdown Popover */}
               {isGenrePickerOpen && (
-                <div className="absolute left-0 top-full z-50 mt-2 w-80 sm:w-96 rounded-2xl border border-white/[0.12] bg-[#141620]/95 p-3.5 shadow-2xl shadow-black/80 backdrop-blur-xl">
+                <div className="glass-dropdown animate-pop-in absolute left-0 top-full z-50 mt-2 w-80 sm:w-96 rounded-2xl p-3.5">
                   <div className="flex items-center justify-between pb-2 border-b border-white/[0.07]">
                     <span className="text-xs font-bold text-white flex items-center gap-1.5">
                       <SlidersHorizontal className="h-3.5 w-3.5 text-rose-400" />
@@ -518,7 +524,7 @@ export const DiscoverView: React.FC<DiscoverViewProps> = ({
                       value={genreSearch}
                       onChange={(e) => setGenreSearch(e.target.value)}
                       placeholder="Search genres or tags..."
-                      className="h-8 w-full rounded-lg border border-white/[0.08] bg-[#0c0d12] pl-8 pr-3 text-xs text-zinc-200 placeholder:text-zinc-600 outline-none focus:border-rose-400/40"
+                      className="h-8 w-full rounded-lg border border-white/[0.08] bg-[#0F0B15] pl-8 pr-3 text-xs text-zinc-200 placeholder:text-zinc-600 outline-none focus:border-rose-400/40"
                     />
                     {genreSearch && (
                       <button
@@ -548,7 +554,7 @@ export const DiscoverView: React.FC<DiscoverViewProps> = ({
                                 onClick={() => toggleGenre(g)}
                                 className={`inline-flex items-center gap-1 rounded-lg px-2.5 py-1 text-[11px] font-semibold transition-all ${
                                   isSelected
-                                    ? 'bg-rose-500 text-white shadow-md shadow-rose-950/40'
+                                    ? 'bg-[linear-gradient(135deg,#FF1E6D_0%,#A31246_100%)] text-white shadow-[0_4px_14px_rgba(255,30,109,0.35)]'
                                     : 'bg-white/[0.05] text-zinc-300 hover:bg-white/[0.1] hover:text-white'
                                 }`}
                               >
@@ -613,31 +619,28 @@ export const DiscoverView: React.FC<DiscoverViewProps> = ({
               )}
             </div>
 
-            <SelectField label="Format" value={format} onChange={setFormat}>
-              <option value="">All formats</option>
-              {FORMATS.map((entry) => <option key={entry.value} value={entry.value}>{entry.label}</option>)}
-            </SelectField>
-            <SelectField label="Status" value={status} onChange={setStatus}>
-              <option value="">Any status</option>
-              {STATUSES.map((entry) => <option key={entry.value} value={entry.value}>{entry.label}</option>)}
-            </SelectField>
-            <SelectField label="Minimum score" value={String(minScore)} onChange={(value) => setMinScore(Number(value))}>
-              <option value="0">Any score</option>
-              {[60, 70, 75, 80, 85, 90].map((value) => <option key={value} value={value}>{value}+ / 100</option>)}
-            </SelectField>
-            <SelectField label="Sort by" value={sort} onChange={(value) => setSort(value as DiscoverSort)}>
-              {SORTS.filter((entry) => {
+            <SelectField label="Format" value={format} onChange={setFormat}
+              options={[{ value: '', label: 'All formats' }, ...FORMATS.map((entry) => ({ value: entry.value, label: entry.label }))]}
+            />
+            <SelectField label="Status" value={status} onChange={setStatus}
+              options={[{ value: '', label: 'Any status' }, ...STATUSES.map((entry) => ({ value: entry.value, label: entry.label }))]}
+            />
+            <SelectField label="Minimum score" value={String(minScore)} onChange={(value) => setMinScore(Number(value))}
+              options={[{ value: '0', label: 'Any score' }, ...[60, 70, 75, 80, 85, 90].map((value) => ({ value: String(value), label: `${value}+ / 100` }))]}
+            />
+            <SelectField label="Sort by" value={sort} onChange={(value) => setSort(value as DiscoverSort)}
+              options={SORTS.filter((entry) => {
                 if (entry.value === 'SEARCH_MATCH') return Boolean(debouncedQuery)
                 if (entry.value === 'RECOMMENDATION') return mode === 'recommended' && !debouncedQuery
                 return true
-              }).map((entry) => <option key={entry.value} value={entry.value}>{entry.label}</option>)}
-            </SelectField>
-            <SelectField label="Age rating" value={ageRating} onChange={(value) => setAgeRating(value as DiscoverAgeRating)}>
-              <option value="ALL">Any rating</option>
-              {['G', 'PG', 'PG-13', 'R-17+', 'R+', 'NR'].map((value) => (
-                <option key={value} value={value}>{value === 'G' ? 'G · All ages' : value === 'PG' ? 'PG · Parental guidance' : value === 'NR' ? 'NR · Not rated' : value}</option>
-              ))}
-            </SelectField>
+              }).map((entry) => ({ value: entry.value, label: entry.label }))}
+            />
+            <SelectField label="Age rating" value={ageRating} onChange={(value) => setAgeRating(value as DiscoverAgeRating)}
+              options={[{ value: 'ALL', label: 'Any rating' }, ...['G', 'PG', 'PG-13', 'R-17+', 'R+', 'NR'].map((value) => ({
+                value,
+                label: value === 'G' ? 'G · All ages' : value === 'PG' ? 'PG · Parental guidance' : value === 'NR' ? 'NR · Not rated' : value,
+              }))]}
+            />
           </div>
 
           {/* Active Genre Chips */}
@@ -746,3 +749,7 @@ export const DiscoverView: React.FC<DiscoverViewProps> = ({
     </div>
   )
 }
+
+// Memoized: the catalog grid can hold 100+ cards; App-level churn must not
+// reconcile it.
+export const DiscoverView = React.memo(DiscoverViewImpl);

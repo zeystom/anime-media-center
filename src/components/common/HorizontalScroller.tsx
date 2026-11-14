@@ -140,8 +140,8 @@ export const HorizontalScroller: React.FC<HorizontalScrollerProps> = ({ children
       >
         {children}
       </div>
-      <button type="button" aria-label="Scroll left" onPointerDown={(e) => e.stopPropagation()} onClick={() => scrollByPage(-1)} className={`absolute left-1 top-1/2 z-20 flex h-10 w-10 -translate-y-1/2 items-center justify-center rounded-full border border-white/15 bg-[#101116]/90 text-zinc-100 shadow-lg backdrop-blur transition-all hover:border-white/30 hover:bg-[#20222b] ${edges.left ? 'scale-100 opacity-100' : 'pointer-events-none scale-90 opacity-0'}`}><ChevronLeft className="h-5 w-5" /></button>
-      <button type="button" aria-label="Scroll right" onPointerDown={(e) => e.stopPropagation()} onClick={() => scrollByPage(1)} className={`absolute right-1 top-1/2 z-20 flex h-10 w-10 -translate-y-1/2 items-center justify-center rounded-full border border-white/15 bg-[#101116]/90 text-zinc-100 shadow-lg backdrop-blur transition-all hover:border-white/30 hover:bg-[#20222b] ${edges.right ? 'scale-100 opacity-100' : 'pointer-events-none scale-90 opacity-0'}`}><ChevronRight className="h-5 w-5" /></button>
+      <button type="button" aria-label="Scroll left" onPointerDown={(e) => e.stopPropagation()} onClick={() => scrollByPage(-1)} className={`absolute left-1 top-1/2 z-20 flex h-10 w-10 -translate-y-1/2 items-center justify-center rounded-full border border-white/15 bg-[#0F0B15]/90 text-zinc-100 shadow-lg backdrop-blur transition-all hover:border-white/30 hover:bg-[#1D1826] ${edges.left ? 'scale-100 opacity-100' : 'pointer-events-none scale-90 opacity-0'}`}><ChevronLeft className="h-5 w-5" /></button>
+      <button type="button" aria-label="Scroll right" onPointerDown={(e) => e.stopPropagation()} onClick={() => scrollByPage(1)} className={`absolute right-1 top-1/2 z-20 flex h-10 w-10 -translate-y-1/2 items-center justify-center rounded-full border border-white/15 bg-[#0F0B15]/90 text-zinc-100 shadow-lg backdrop-blur transition-all hover:border-white/30 hover:bg-[#1D1826] ${edges.right ? 'scale-100 opacity-100' : 'pointer-events-none scale-90 opacity-0'}`}><ChevronRight className="h-5 w-5" /></button>
     </div>
   )
 }

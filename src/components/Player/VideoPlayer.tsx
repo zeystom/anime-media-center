@@ -865,14 +865,18 @@ export const VideoPlayer: React.FC<VideoPlayerProps> = ({
   useEffect(() => {
     let isCancelled = false;
 
-    async function loadSubtitles() {
+    async function loadSubtitles(isRefresh = false) {
       // Do not leave the previous episode's cues visible while the next
-      // episode's subtitle track is being extracted and parsed.
-      setMainCues([]);
-      setTopCues([]);
-      setLoadedAssContent('');
-      setIsMainAssActive(false);
-      setIsTopAssActive(false);
+      // episode's subtitle track is being extracted and parsed. A refresh
+      // (swapping a partial window for the full track) keeps the current
+      // cues on screen to avoid a subtitle flicker mid-playback.
+      if (!isRefresh) {
+        setMainCues([]);
+        setTopCues([]);
+        setLoadedAssContent('');
+        setIsMainAssActive(false);
+        setIsTopAssActive(false);
+      }
       if (!metadata || metadata.filePath !== episode.filePath) {
         setSubtitlesLoading(true);
         return;
@@ -884,7 +888,14 @@ export const VideoPlayer: React.FC<VideoPlayerProps> = ({
       const mainTrack = metadata.subtitleTracks.find((s) => s.id === selectedMainSubId);
       const topTrack = topSubEnabled ? metadata.subtitleTracks.find((s) => s.id === selectedTopSubId) : null;
 
-      setSubtitlesLoading(true);
+      if (!isRefresh) setSubtitlesLoading(true);
+
+      // The first (cold) extraction of an embedded track streams the whole
+      // MKV through ffmpeg — 15-20s on an HDD. Passing the playback position
+      // makes the main process extract a ~2-minute window around it first
+      // (1-3s) and keeps building the full track in the background; the
+      // follow-up forceFull request swaps in the complete set when it lands.
+      const posSec = video && video.currentTime > 1 ? Math.floor(video.currentTime) : undefined;
 
       try {
         const [mainRes, topRes] = await Promise.all([
@@ -894,7 +905,9 @@ export const VideoPlayer: React.FC<VideoPlayerProps> = ({
                 mainTrack.id,
                 mainTrack.index,
                 mainTrack.type === 'external',
-                mainTrack.filePath
+                mainTrack.filePath,
+                isRefresh ? undefined : posSec,
+                isRefresh
               )
             : Promise.resolve(null),
           topTrack && topSubEnabled
@@ -903,7 +916,9 @@ export const VideoPlayer: React.FC<VideoPlayerProps> = ({
                 topTrack.id,
                 topTrack.index,
                 topTrack.type === 'external',
-                topTrack.filePath
+                topTrack.filePath,
+                isRefresh ? undefined : posSec,
+                isRefresh
               )
             : Promise.resolve(null),
         ]);
@@ -945,6 +960,17 @@ export const VideoPlayer: React.FC<VideoPlayerProps> = ({
         setMainCues(newMainCues);
         setTopCues(newTopCues);
         setSubtitlesLoading(false);
+
+        // Partial window payloads: the full track is still extracting in the
+        // background — re-request with forceFull; the IPC call dedupes onto
+        // the running extraction and resolves the moment it completes, then
+        // the full cues/ASS replace the window in place.
+        const hasPartial = Boolean(mainRes?.partial || topRes?.partial);
+        if (hasPartial && !isCancelled) {
+          window.setTimeout(() => {
+            if (!isCancelled) void loadSubtitles(true);
+          }, 1200);
+        }
 
         // Clean up previous JASSUB instance
         if (jassubRef.current) {
@@ -1362,7 +1388,7 @@ export const VideoPlayer: React.FC<VideoPlayerProps> = ({
     // If inside or right before a detected opening range
     if (detectedOpening && currentAbsoluteTime < detectedOpening.end) {
       handleSeek(detectedOpening.end);
-      showRipple('forward', `Opening Skipped (${formatTime(detectedOpening.end)})`);
+      showRipple('forward', 'Skipped');
     } else {
       showRipple('info', 'No opening detected');
     }
@@ -1762,13 +1788,30 @@ export const VideoPlayer: React.FC<VideoPlayerProps> = ({
       {/* YouTube Style Animated Seeking Ripple */}
       <RippleIndicator type={ripple?.type} text={ripple?.text} />
 
-      {/* Loading Spinner */}
+      {/* Loading State: blurred thumbnail backdrop, episode title and a
+          crimson-magenta pulsing loader (replaces the plain black screen). */}
       {loading && (
-        <div className="absolute inset-0 flex flex-col items-center justify-center bg-black/80 z-30 pointer-events-none">
-          <div className="w-12 h-12 rounded-full border-4 border-red-600/30 border-t-red-600 animate-spin mb-3" />
-          <span className="text-xs font-semibold text-zinc-300 tracking-wide">
-            Preparing 10-bit Video Stream...
-          </span>
+        <div className="absolute inset-0 z-30 overflow-hidden pointer-events-none flex flex-col items-center justify-center">
+          <img
+            src={episode.kitsuThumbnail || episode.thumbnailUrl || PLACEHOLDER_EPISODE_IMAGE}
+            alt=""
+            aria-hidden="true"
+            className="absolute inset-0 h-full w-full scale-110 object-cover opacity-30 blur-3xl saturate-150"
+          />
+          <div className="absolute inset-0 bg-black/45" />
+          <div className="relative flex flex-col items-center px-6 text-center">
+            <div className="relative mb-4 h-14 w-14">
+              <span className="loader-pulse absolute inset-0 rounded-full border-2 border-rose-500/25" />
+              <span className="loader-pulse absolute inset-0 rounded-full border-2 border-transparent border-t-rose-500 border-r-rose-400/70" style={{ animationDelay: '150ms' }} />
+              <span className="loader-pulse absolute inset-[10px] rounded-full bg-rose-500/20" style={{ animationDelay: '300ms' }} />
+            </div>
+            <p className="text-sm font-bold text-white tracking-tight" title={fullPlayerTitle}>
+              {fullPlayerTitle}
+            </p>
+            <span className="mt-1.5 text-xs font-medium text-zinc-400 tracking-wide">
+              Preparing 10-bit Video Stream...
+            </span>
+          </div>
         </div>
       )}
 
@@ -1811,16 +1854,24 @@ export const VideoPlayer: React.FC<VideoPlayerProps> = ({
         )}
       </div>
 
-      {/* Bottom Player Controls Bar (Auto-hiding) */}
+      {/* Bottom HUD (Auto-hiding). Edge-to-edge cinematic gradient scrim —
+          no detached box. Visibility animates with opacity + translateY. */}
       <div
         onMouseMove={(e) => {
           resetControlsTimer();
           e.stopPropagation();
         }}
-        className={`absolute bottom-0 left-0 right-0 pt-16 pb-6 px-6 bg-gradient-to-t from-black/90 via-black/60 to-transparent flex flex-col space-y-3 z-40 transition-opacity duration-300 ${
-          areControlsVisible ? 'opacity-100 pointer-events-auto' : 'opacity-0 pointer-events-none'
+        className={`absolute bottom-0 left-0 right-0 z-40 transition-all duration-300 ease-fluid ${
+          areControlsVisible ? 'opacity-100 translate-y-0 pointer-events-auto' : 'opacity-0 translate-y-3 pointer-events-none'
         }`}
       >
+        {/* Cinematic scrim: flush to the bottom/left/right edges, no border. */}
+        <div
+          className="flex flex-col space-y-3 px-7 pb-5 pt-9"
+          style={{
+            background: 'linear-gradient(to top, rgba(6, 4, 10, 0.94) 0%, rgba(6, 4, 10, 0.65) 55%, transparent 100%)',
+          }}
+        >
         {/* Seekbar Scrubber with Hover Thumbnail Previews */}
         <TimelineScrubber
           currentTime={currentAbsoluteTime}
@@ -1837,7 +1888,7 @@ export const VideoPlayer: React.FC<VideoPlayerProps> = ({
           <div className="flex items-center space-x-3 sm:space-x-4">
             <button
               onClick={togglePlay}
-              className="p-2 rounded-xl text-white hover:text-red-500 transition-colors"
+              className="p-2 rounded-full text-white hover:bg-white/[0.08] hover:text-rose-400 transition-colors"
               aria-label={isPlaying ? 'Pause [Space]' : 'Play [Space]'}
             >
               {isPlaying ? <Pause className="w-6 h-6 fill-white" /> : <Play className="w-6 h-6 fill-white" />}
@@ -1847,9 +1898,9 @@ export const VideoPlayer: React.FC<VideoPlayerProps> = ({
             <button
               onClick={handlePlayNextEpisode}
               disabled={!nextEpisode}
-              className={`p-2 rounded-xl transition-all ${
+              className={`p-2 rounded-full transition-all ${
                 nextEpisode
-                  ? 'text-zinc-300 hover:text-white hover:bg-white/10 active:scale-95 cursor-pointer'
+                  ? 'text-zinc-300 hover:text-white hover:bg-white/[0.08] active:scale-95 cursor-pointer'
                   : 'text-zinc-600 opacity-25 cursor-not-allowed'
               }`}
               title={
@@ -1870,7 +1921,7 @@ export const VideoPlayer: React.FC<VideoPlayerProps> = ({
                   setIsMuted(nextMute);
                   if (videoRef.current) videoRef.current.muted = nextMute;
                 }}
-                className="p-1.5 rounded-lg text-zinc-300 hover:text-white transition-colors"
+                className="p-1.5 rounded-full text-zinc-300 hover:bg-white/[0.08] hover:text-white transition-colors"
                 aria-label="Mute [M]"
               >
                 {isMuted || volume === 0 ? (
@@ -1915,7 +1966,7 @@ export const VideoPlayer: React.FC<VideoPlayerProps> = ({
                 setEpisodeDrawerOpenMode('button');
                 setIsEpisodeDrawerOpen((prev) => !prev);
               }}
-              className="flex items-center space-x-2 px-3 py-1.5 rounded-xl bg-zinc-900/80 hover:bg-zinc-800 text-zinc-200 hover:text-white border border-white/15 text-xs font-medium transition-all shadow-sm cursor-pointer"
+              className="flex items-center space-x-2 rounded-full border border-white/[0.12] bg-[rgba(18,12,26,0.75)] px-3.5 py-1.5 text-xs font-medium text-zinc-200 backdrop-blur-[16px] transition-all cursor-pointer hover:border-rose-400/50 hover:bg-[rgba(24,16,34,0.85)] hover:text-white"
               aria-label="Episodes (E)"
               title="Episodes (E)"
             >
@@ -1926,7 +1977,7 @@ export const VideoPlayer: React.FC<VideoPlayerProps> = ({
             {/* Audio & Subtitles Menu (formerly in top bar) */}
             <button
               onClick={() => setIsTrackControlsOpen(true)}
-              className="flex items-center space-x-2 px-3 py-1.5 rounded-xl bg-zinc-900/80 hover:bg-zinc-800 text-zinc-200 hover:text-white border border-white/15 text-xs font-medium transition-all shadow-sm cursor-pointer"
+              className="flex items-center space-x-2 rounded-full border border-white/[0.12] bg-[rgba(18,12,26,0.75)] px-3.5 py-1.5 text-xs font-medium text-zinc-200 backdrop-blur-[16px] transition-all cursor-pointer hover:border-rose-400/50 hover:bg-[rgba(24,16,34,0.85)] hover:text-white"
               aria-label="Configure Audio Tracks & Subtitles"
               title="Audio & Subtitles"
             >
@@ -1937,29 +1988,30 @@ export const VideoPlayer: React.FC<VideoPlayerProps> = ({
             {/* Fullscreen Button */}
             <button
               onClick={toggleFullscreen}
-              className="p-2 rounded-xl text-zinc-300 hover:text-white transition-colors cursor-pointer"
+              className="p-2 rounded-full text-zinc-300 hover:bg-white/[0.08] hover:text-white transition-colors cursor-pointer"
               aria-label={isFullscreen ? 'Exit Fullscreen [F]' : 'Fullscreen [F]'}
             >
               {isFullscreen ? <Minimize className="w-5 h-5" /> : <Maximize className="w-5 h-5" />}
             </button>
           </div>
         </div>
+        </div>
       </div>
 
       {/* Floating Skip Intro / Opening Prompt Card (Netflix / Crunchyroll style) */}
       {isIntroActive && detectedOpening && (
         <div
-          className={`absolute left-6 z-40 transition-all duration-300 flex items-center select-none pointer-events-auto ${
-            areControlsVisible ? 'bottom-32 opacity-100 translate-y-0' : 'bottom-16 opacity-90 hover:opacity-100 translate-y-0'
+          className={`absolute left-6 z-40 transition-all duration-300 flex items-center select-none pointer-events-auto animate-in fade-in slide-in-from-bottom-3 ${
+            areControlsVisible ? 'bottom-36 opacity-100 translate-y-0' : 'bottom-16 opacity-90 hover:opacity-100 translate-y-0'
           }`}
         >
-          <div className="bg-zinc-950/90 hover:bg-zinc-900/95 backdrop-blur-2xl border border-white/20 p-2 pl-3.5 pr-2.5 rounded-2xl shadow-2xl flex items-center space-x-2.5 transition-all group hover:border-red-500/50 hover:shadow-red-500/10">
+          <div className="glass-pill hover:bg-[#120a12]/80 p-2 pl-3.5 pr-2.5 rounded-full shadow-2xl flex items-center space-x-2.5 transition-all group hover:border-rose-400/50 hover:shadow-[0_0_26px_rgba(255,30,109,0.18)]">
             <button
               onClick={handleSkipIntro}
-              className="flex items-center space-x-2 text-white font-bold text-xs group-hover:text-red-400 transition-colors"
+              className="flex items-center space-x-2 text-white font-bold text-xs group-hover:text-rose-300 transition-colors"
               title="Skip Opening Theme [S]"
             >
-              <FastForward className="w-4 h-4 text-red-500 fill-red-500 group-hover:scale-110 transition-transform" />
+              <FastForward className="w-4 h-4 text-rose-500 fill-rose-500 group-hover:scale-110 transition-transform" />
               <span>
                 {`Skip Opening (${formatTime(detectedOpening.end)})`}
               </span>
@@ -1992,8 +2044,8 @@ export const VideoPlayer: React.FC<VideoPlayerProps> = ({
 
         return (
           <div
-            className={`absolute right-6 z-40 bg-zinc-950/95 backdrop-blur-2xl border border-white/15 p-3.5 rounded-2xl shadow-2xl flex items-center space-x-3.5 animate-in slide-in-from-bottom-4 transition-all duration-300 ${
-              areControlsVisible ? 'bottom-32' : 'bottom-16'
+            className={`absolute right-6 z-40 glass-pill p-3.5 rounded-2xl shadow-2xl flex items-center space-x-3.5 animate-in fade-in slide-in-from-bottom-4 transition-all duration-300 ${
+              areControlsVisible ? 'bottom-36' : 'bottom-16'
             }`}
           >
             <div className="w-16 sm:w-20 aspect-video rounded-xl overflow-hidden shrink-0 bg-black border border-white/10 relative">
@@ -2021,7 +2073,7 @@ export const VideoPlayer: React.FC<VideoPlayerProps> = ({
 
             <button
               onClick={handlePlayNextEpisode}
-              className="px-3.5 py-2 rounded-xl bg-red-600 hover:bg-red-500 text-white text-xs font-bold flex items-center space-x-1.5 shadow-lg shadow-red-600/30 transition-all hover:scale-105 active:scale-95 shrink-0"
+              className="btn-primary px-3.5 py-2 rounded-xl text-white text-xs font-bold flex items-center space-x-1.5 transition-all hover:scale-105 active:scale-95 shrink-0"
             >
               <span>Play Next</span>
               <SkipForward className="w-3.5 h-3.5 fill-white" />

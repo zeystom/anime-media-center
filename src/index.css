@@ -2,9 +2,36 @@
 @tailwind components;
 @tailwind utilities;
 
+/*
+ * Kaiko Design System — "Obsidian & Crimson"
+ * Single source of truth for surfaces, brand accents, glass treatments and motion.
+ */
+:root {
+  /* Background surfaces */
+  --bg-void: #07060A;
+  --bg-elevated: #0F0B15;
+  --bg-glass: rgba(18, 12, 26, 0.65);
+  --bg-glass-heavy: rgba(14, 9, 20, 0.82);
+
+  /* Brand accents (Crimson / Dark Magenta / Plum) */
+  --accent-primary: #FF1E6D;
+  --accent-secondary: #B81450;
+  --accent-plum: #4A154B;
+  --accent-gradient: linear-gradient(135deg, #FF1E6D 0%, #A31246 100%);
+
+  /* Borders & highlights */
+  --border-glass: rgba(255, 255, 255, 0.07);
+  --border-crimson-subtle: rgba(255, 30, 109, 0.28);
+  --glow-crimson: 0 8px 28px -4px rgba(255, 30, 109, 0.45);
+
+  /* Motion */
+  --ease-fluid: cubic-bezier(0.22, 1, 0.36, 1);
+}
+
 @layer base {
   body {
-    @apply bg-[#0b0c10] text-zinc-100 antialiased selection:bg-violet-600 selection:text-white;
+    @apply text-zinc-100 antialiased;
+    background-color: var(--bg-void);
     font-family: 'Space Grotesk', 'Inter', -apple-system, BlinkMacSystemFont, 'Segoe UI', Roboto, Oxygen, Ubuntu, Cantarell, sans-serif;
   }
 }
@@ -20,12 +47,12 @@
 }
 
 ::-webkit-scrollbar-thumb {
-  background: #343439;
+  background: #302B3D;
   border-radius: 999px;
 }
 
 ::-webkit-scrollbar-thumb:hover {
-  background: #8a3ffc;
+  background: rgba(255, 30, 109, 0.55);
 }
 
 /* Hide scrollbars utility */
@@ -51,9 +78,39 @@
   contain-intrinsic-size: auto 330px;
 }
 
+/* While a page is actively scrolling, silence hover machinery on the content
+   streaming under a stationary cursor: every card passing under the pointer
+   fired enter/leave and started scale/border-color transitions (layer churn
+   that ate FPS in card-dense areas). pointer-events:none also stops hover
+   from applying at all; the flag clears ~150ms after the last scroll event. */
+[data-scrolling] * {
+  pointer-events: none !important;
+  transition: none !important;
+}
+
 .home-rail-section {
   content-visibility: auto;
   contain-intrinsic-size: auto 400px;
+}
+
+/* Episode/library cards: a subtle banner-accent glow along the top edge that
+   fades in on hover. Uses the per-title --anime-accent when the details page
+   provides one, falling back to the brand crimson. */
+.episode-card::after {
+  content: '';
+  position: absolute;
+  top: 0;
+  left: 12%;
+  right: 12%;
+  height: 1px;
+  background: linear-gradient(90deg, transparent, var(--anime-accent, #FF1E6D), transparent);
+  opacity: 0;
+  transition: opacity 220ms var(--ease-fluid);
+  pointer-events: none;
+  z-index: 1;
+}
+.episode-card:hover::after {
+  opacity: 0.8;
 }
 
 /* Subtitle Styling: Netflix/Fansub Grade */
@@ -83,30 +140,188 @@
   line-height: 1.3;
 }
 
-/* Glassmorphism helpers */
+/* ------------------------------------------------------------------ */
+/* Glassmorphism primitives                                            */
+/* ------------------------------------------------------------------ */
+
+/* Layered surface glass (cards, rails, sidebars) */
 .glass-panel {
-  background: rgba(18, 20, 29, 0.76);
-  border: 1px solid rgba(255, 255, 255, 0.08);
-  backdrop-filter: blur(18px);
-  -webkit-backdrop-filter: blur(18px);
+  background: var(--bg-glass);
+  border: 1px solid var(--border-glass);
+  backdrop-filter: blur(18px) saturate(150%);
+  -webkit-backdrop-filter: blur(18px) saturate(150%);
 }
 
+/* Popovers, dropdown menus, drawers (dense obsidian-plum glass — page text
+   must never read through) */
 .glass-dropdown {
-  background: rgba(18, 18, 22, 0.98);
-  border: 1px solid rgba(255, 255, 255, 0.12);
-  box-shadow: 0 16px 40px rgba(0, 0, 0, 0.8);
+  background: rgba(12, 9, 18, 0.92);
+  border: 1px solid rgba(255, 255, 255, 0.1);
+  backdrop-filter: blur(36px) saturate(180%);
+  -webkit-backdrop-filter: blur(36px) saturate(180%);
+  box-shadow: 0 24px 60px rgba(0, 0, 0, 0.85), 0 0 0 1px rgba(255, 30, 109, 0.12);
 }
 
-/* Stitch-inspired shared canvas, glass surfaces, and violet focus treatment. */
+/* Modals & drawers: dense plum glass with inner top highlight */
+.modal-glass {
+  background: rgba(12, 9, 18, 0.92);
+  border: 1px solid rgba(255, 255, 255, 0.1);
+  backdrop-filter: blur(32px) saturate(170%);
+  -webkit-backdrop-filter: blur(32px) saturate(170%);
+  box-shadow: 0 32px 80px rgba(0, 0, 0, 0.8), inset 0 1px 0 rgba(255, 255, 255, 0.1);
+}
+
+/* Modal dimmer with blurred backdrop */
+.modal-dimmer {
+  background: rgba(4, 2, 8, 0.6);
+  backdrop-filter: blur(8px);
+  -webkit-backdrop-filter: blur(8px);
+}
+
+/* Frosted glass pill — badges (SUB / Score / Airing / Episodes), status chips.
+   Deliberately NO backdrop-filter: grids render dozens of these per frame
+   while scrolling, and each backdrop root is a full re-composite. The higher
+   background alpha matches the old blurred look at a fraction of the cost. */
+.glass-pill {
+  background: rgba(10, 7, 14, 0.8);
+  border: 1px solid rgba(255, 255, 255, 0.12);
+}
+
+/* Uniform dark-glass secondary button (Follow / Favourite / Download / Whisper / Delete ...) */
+.btn-glass {
+  background: rgba(255, 255, 255, 0.06);
+  border: 1px solid rgba(255, 255, 255, 0.1);
+  backdrop-filter: blur(16px) saturate(150%);
+  -webkit-backdrop-filter: blur(16px) saturate(150%);
+  transition: background-color 180ms var(--ease-fluid), border-color 180ms var(--ease-fluid),
+    transform 180ms var(--ease-fluid), box-shadow 180ms var(--ease-fluid);
+}
+.btn-glass:hover {
+  background: rgba(255, 255, 255, 0.1);
+  border-color: rgba(255, 255, 255, 0.18);
+}
+.btn-glass:active {
+  transform: scale(0.97);
+}
+
+/* Primary CTA — accent gradient with crimson glow (Play / Resume / Generate Subtitles) */
+.btn-primary {
+  background-image: var(--accent-gradient);
+  border: 1px solid rgba(255, 30, 109, 0.4);
+  box-shadow: var(--glow-crimson);
+  transition: filter 200ms var(--ease-fluid), transform 200ms var(--ease-fluid), box-shadow 200ms var(--ease-fluid);
+}
+.btn-primary:hover {
+  filter: brightness(1.12);
+  box-shadow: 0 10px 34px -4px rgba(255, 30, 109, 0.6);
+}
+.btn-primary:active {
+  transform: scale(0.97);
+}
+
+/* Banner-hued CTA (2026-11-14, user request): the Resume buttons on the Home
+   hero and the title page take the artwork's hue instead of the brand
+   gradient. Hue-only tint with fixed saturation/lightness so every artwork
+   hue stays readable (no muddy raw-pixel colors). Consumes --anime-hue set
+   by the host surface (AnimeDetailView scroll root, UpNextWidget hero). */
+.btn-hue {
+  background-image: linear-gradient(135deg, hsl(var(--anime-hue, 347) 85% 55%), hsl(var(--anime-hue, 347) 78% 40%));
+  border: 1px solid hsla(var(--anime-hue, 347), 85%, 70%, 0.5);
+  box-shadow: 0 8px 28px -4px hsla(var(--anime-hue, 347), 85%, 50%, 0.5);
+  transition: filter 200ms var(--ease-fluid), transform 200ms var(--ease-fluid), box-shadow 200ms var(--ease-fluid);
+}
+.btn-hue:hover {
+  filter: brightness(1.12);
+  box-shadow: 0 10px 34px -4px hsla(var(--anime-hue, 347), 85%, 52%, 0.65);
+}
+.btn-hue:active {
+  transform: scale(0.97);
+}
+
+/* Crimson selection + focus treatment, unified across the app */
 ::selection {
-  background: rgba(138, 63, 252, 0.65);
+  background: rgba(255, 30, 109, 0.55);
   color: #fff;
 }
 
 input:focus-visible,
 select:focus-visible,
 button:focus-visible {
-  outline-color: rgba(138, 63, 252, 0.75);
+  outline-color: rgba(255, 30, 109, 0.75);
+}
+
+/* Popover / dropdown entrance: smooth scale+fade */
+@keyframes pop-in {
+  from {
+    opacity: 0;
+    transform: scale(0.94) translateY(-4px);
+  }
+  to {
+    opacity: 1;
+    transform: scale(1) translateY(0);
+  }
+}
+.animate-pop-in {
+  animation: pop-in 180ms var(--ease-fluid) both;
+  transform-origin: top center;
+}
+
+/* Modal entrance: soft rise + fade */
+@keyframes modal-rise {
+  from {
+    opacity: 0;
+    transform: translateY(14px) scale(0.985);
+  }
+  to {
+    opacity: 1;
+    transform: translateY(0) scale(1);
+  }
+}
+.animate-modal-rise {
+  animation: modal-rise 240ms var(--ease-fluid) both;
+}
+
+@keyframes dimmer-fade {
+  from { opacity: 0; }
+  to { opacity: 1; }
+}
+.animate-dimmer-fade {
+  animation: dimmer-fade 200ms ease both;
+}
+
+/* Player center OSD: circular frosted badge with pop-pulse, fade out at end. */
+@keyframes osd-pop {
+  0% { opacity: 0; transform: scale(0.75); }
+  16% { opacity: 1; transform: scale(1.08); }
+  28% { opacity: 1; transform: scale(1); }
+  76% { opacity: 1; transform: scale(1); }
+  100% { opacity: 0; transform: scale(0.96); }
+}
+.osd-badge {
+  animation: osd-pop 1s var(--ease-fluid) both;
+  will-change: opacity, transform;
+}
+
+/* Directional icon nudge for ±5s seek feedback. */
+@keyframes osd-nudge-right {
+  0%, 100% { transform: translateX(0); }
+  32% { transform: translateX(6px); }
+}
+@keyframes osd-nudge-left {
+  0%, 100% { transform: translateX(0); }
+  32% { transform: translateX(-6px); }
+}
+.osd-nudge-right { animation: osd-nudge-right 1s var(--ease-fluid) both; }
+.osd-nudge-left { animation: osd-nudge-left 1s var(--ease-fluid) both; }
+
+/* Player loading loader pulse (crimson) */
+@keyframes loader-pulse {
+  0%, 100% { opacity: 0.35; transform: scale(0.96); }
+  50% { opacity: 1; transform: scale(1.04); }
+}
+.loader-pulse {
+  animation: loader-pulse 1.4s ease-in-out infinite;
+  will-change: opacity, transform;
 }
 
 /*
@@ -208,7 +423,7 @@ canvas.JASSUB {
      at diagonal rotation angles, which reads as a flickering/jerky beam. */
   position: absolute;
   inset: -100%;
-  background: conic-gradient(from 0deg, transparent 0deg, transparent 250deg, #22d3ee 312deg, #6ee7b7 348deg, transparent 360deg);
+  background: conic-gradient(from 0deg, transparent 0deg, transparent 250deg, #FF1E6D 312deg, #FF9DBB 348deg, transparent 360deg);
   animation: download-beam-spin 2.6s linear infinite;
   will-change: transform;
   backface-visibility: hidden;
@@ -329,9 +544,9 @@ canvas.JASSUB {
   font-size: 0.7rem;
   padding: 0.1rem 0.35rem;
   border-radius: 0.375rem;
-  background-color: rgba(255, 255, 255, 0.08);
-  color: #c084fc;
-  border: 1px solid rgba(255, 255, 255, 0.06);
+  background-color: rgba(255, 30, 109, 0.1);
+  color: #FF6FA3;
+  border: 1px solid rgba(255, 30, 109, 0.14);
 }
 
 .release-notes-content pre {
@@ -352,18 +567,18 @@ canvas.JASSUB {
 }
 
 .release-notes-content a {
-  color: #c084fc;
+  color: #FF5E92;
   text-decoration: underline;
   text-underline-offset: 2px;
   transition: color 0.15s;
 }
 
 .release-notes-content a:hover {
-  color: #d8b4fe;
+  color: #FF9DBB;
 }
 
 .release-notes-content blockquote {
-  border-left: 2px solid rgba(168, 85, 247, 0.5);
+  border-left: 2px solid rgba(255, 30, 109, 0.5);
   padding-left: 0.65rem;
   margin: 0.5rem 0;
   font-style: italic;
@@ -375,4 +590,3 @@ canvas.JASSUB {
   border-top: 1px solid rgba(255, 255, 255, 0.08);
   margin: 0.6rem 0;
 }
-

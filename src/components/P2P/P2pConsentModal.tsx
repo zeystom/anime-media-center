@@ -37,7 +37,7 @@ export const P2pConsentModal: React.FC<P2pConsentModalProps> = ({ onAccept, onCa
 
   return (
     <motion.div
-      className="fixed inset-0 z-[70] flex items-center justify-center bg-black/80 p-4"
+      className="fixed inset-0 z-[70] flex items-center justify-center modal-dimmer p-4"
       initial={{ opacity: 0 }}
       animate={{ opacity: 1 }}
       transition={{ duration: 0.15 }}
@@ -51,7 +51,7 @@ export const P2pConsentModal: React.FC<P2pConsentModalProps> = ({ onAccept, onCa
         aria-modal="true"
         data-modal="true"
         aria-labelledby="p2p-consent-title"
-        className="w-full max-w-md flex flex-col rounded-2xl border border-white/10 bg-[#141418] text-zinc-100 shadow-2xl"
+        className="modal-glass w-full max-w-md flex flex-col rounded-2xl text-zinc-100"
         initial={{ opacity: 0, scale: 0.95 }}
         animate={{ opacity: 1, scale: 1 }}
         transition={{ duration: 0.18, ease: 'easeOut' }}

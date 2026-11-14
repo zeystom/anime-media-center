@@ -112,8 +112,22 @@ export function useLocalStatus(
   const statusFor = useMemo(() => {
     const progressMap: Record<string, PlaybackProgress> = history || {}
     const entryMap: Record<number, UserLibraryEntry> = userEntries || {}
+    // Result cache: rails/grids call statusFor per card on every render, and
+    // memoized AnimeCards need a stable badgeState identity to skip
+    // reconciliation. The cache resets with the useMemo's inputs.
+    const resultCache = new Map<string, LocalBadgeState | null>()
 
     return (ref: LocalStatusRef): LocalBadgeState | null => {
+      const cacheKey = `${normalizeRefAnilistId(ref?.anilistId) ?? ''}|${ref?.title ?? ''}|${ref?.apiEpisodesCount ?? ''}`
+      const cached = resultCache.get(cacheKey)
+      if (cached !== undefined) return cached
+      const resolved = resolveStatus(ref)
+      if (resultCache.size > 600) resultCache.clear()
+      resultCache.set(cacheKey, resolved)
+      return resolved
+    }
+
+    function resolveStatus(ref: LocalStatusRef): LocalBadgeState | null {
       const refId = normalizeRefAnilistId(ref?.anilistId)
 
       // anilistId match first, normalized-title match second. Exact-id folders

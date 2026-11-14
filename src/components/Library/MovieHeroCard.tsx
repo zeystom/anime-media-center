@@ -98,7 +98,7 @@ export const MovieHeroCard: React.FC<MovieHeroCardProps> = ({
     <div
       data-movie-hero-card="true"
       data-folder-path={folder.folderPath}
-      className="relative rounded-2xl overflow-hidden border border-white/10 bg-gradient-to-br from-[#16161b] via-[#121216] to-[#0d0d10] p-5 sm:p-7 shadow-2xl backdrop-blur-md"
+      className="relative rounded-2xl overflow-hidden border border-white/10 bg-gradient-to-br from-[#15101C] via-[#110C17] to-[#0C0911] p-5 sm:p-7 shadow-2xl backdrop-blur-md"
     >
       {/* Ambient background glow if preview image is available */}
       {previewImg && !imgError && (
@@ -108,7 +108,7 @@ export const MovieHeroCard: React.FC<MovieHeroCardProps> = ({
             alt=""
             className="absolute inset-0 w-full h-full object-cover blur-3xl opacity-15 scale-125 pointer-events-none"
           />
-          <div className="absolute inset-0 bg-gradient-to-r from-[#121216]/95 via-[#121216]/80 to-transparent pointer-events-none" />
+          <div className="absolute inset-0 bg-gradient-to-r from-[#110C17]/95 via-[#110C17]/80 to-transparent pointer-events-none" />
         </>
       )}
 
@@ -167,8 +167,8 @@ export const MovieHeroCard: React.FC<MovieHeroCardProps> = ({
           {/* Center Overlay: Downloading State vs Normal Play Button */}
           {isDownloading ? (
             <div className="absolute inset-0 flex flex-col items-center justify-center p-6 text-center z-10 pointer-events-none">
-              <div className="w-14 h-14 rounded-2xl bg-amber-500/20 border border-amber-500/40 backdrop-blur-md flex items-center justify-center mb-3 shadow-xl shadow-amber-500/10">
-                <ArrowDownToLine className="w-7 h-7 text-amber-400 animate-pulse" />
+              <div className="w-14 h-14 rounded-2xl bg-rose-500/20 border border-rose-500/40 backdrop-blur-md flex items-center justify-center mb-3 shadow-xl shadow-rose-500/10">
+                <ArrowDownToLine className="w-7 h-7 text-rose-400 animate-pulse" />
               </div>
               <span className="text-sm font-bold text-white tracking-wide drop-shadow-md">
                 {downloadProgress !== undefined ? `Downloading (${downloadProgress}%)...` : 'Downloading in Progress...'}
@@ -183,7 +183,7 @@ export const MovieHeroCard: React.FC<MovieHeroCardProps> = ({
               {downloadProgress !== undefined && (
                 <div className="w-40 h-1.5 bg-white/20 rounded-full mt-2.5 overflow-hidden backdrop-blur-sm">
                   <div
-                    className="h-full bg-gradient-to-r from-amber-500 to-amber-400 transition-all duration-300 rounded-full"
+                    className="h-full bg-gradient-to-r from-rose-600 to-rose-400 transition-all duration-300 rounded-full"
                     style={{ width: `${downloadProgress}%` }}
                   />
                 </div>
@@ -323,15 +323,15 @@ export const MovieHeroCard: React.FC<MovieHeroCardProps> = ({
             <button
               onClick={handlePlayClick}
               disabled={isDownloading}
-              className={`flex items-center space-x-2.5 px-6 py-3 rounded-xl font-bold text-sm transition-all shadow-lg select-none ${
+              className={`flex items-center space-x-2.5 px-6 py-3 rounded-xl font-bold text-sm transition-all select-none ${
                 isDownloading
                   ? 'bg-zinc-800 text-zinc-500 border border-zinc-700/40 cursor-not-allowed opacity-60'
-                  : 'bg-gradient-to-r from-red-600 to-red-500 hover:from-red-500 hover:to-red-400 text-white shadow-red-600/30 hover:shadow-red-600/50 hover:scale-[1.02] active:scale-[0.98]'
+                  : 'btn-primary text-white hover:scale-[1.02] active:scale-[0.98]'
               }`}
             >
               {isDownloading ? (
                 <>
-                  <ArrowDownToLine className="w-4 h-4 text-amber-400 animate-pulse" />
+                  <ArrowDownToLine className="w-4 h-4 text-rose-400 animate-pulse" />
                   <span>
                     {downloadProgress !== undefined
                       ? `Downloading (${downloadProgress}%)...`

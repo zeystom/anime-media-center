@@ -129,8 +129,8 @@ export const SeasonHero: React.FC<SeasonHeroProps> = ({ items, loading, onSelect
         )}
 
         {/* Gradient overlays: bottom fade into page bg + left readability shade */}
-        <div className="absolute inset-x-0 bottom-0 h-3/4 bg-gradient-to-t from-[#0b0c10] to-transparent pointer-events-none" />
-        <div className="absolute inset-0 bg-gradient-to-r from-[#0b0c10]/95 via-[#0b0c10]/55 to-transparent pointer-events-none" />
+        <div className="absolute inset-x-0 bottom-0 h-3/4 bg-gradient-to-t from-[#07060A] to-transparent pointer-events-none" />
+        <div className="absolute inset-0 bg-gradient-to-r from-[#07060A]/95 via-[#07060A]/55 to-transparent pointer-events-none" />
 
         {/* Foreground content */}
         <div className="absolute inset-0 flex items-center">

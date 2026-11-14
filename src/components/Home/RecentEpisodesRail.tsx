@@ -166,7 +166,9 @@ export const RecentEpisodesRail: React.FC<RecentEpisodesRailProps> = ({ folders,
           const image = remote?.thumbnailUrl || episode.kitsuThumbnail || folder.bannerUrl || folder.posterUrl || PLACEHOLDER_EPISODE_IMAGE
 
           return (
-            <button key={episode.filePath} onClick={() => onPlay(episode, progress.currentTime)} className="group w-[250px] shrink-0 overflow-hidden rounded-2xl border border-white/[0.08] bg-[#151720]/90 text-left shadow-lg shadow-black/20 transition hover:-translate-y-1 hover:border-rose-300/30 hover:shadow-rose-950/20">
+            // Warm plum-gray card surface (#171320) — the old #151720 leaned
+            // blue and read cold next to the rest of the Home palette.
+            <button key={episode.filePath} onClick={() => onPlay(episode, progress.currentTime)} className="group w-[250px] shrink-0 overflow-hidden rounded-2xl border border-white/[0.08] bg-[#171320]/90 text-left shadow-lg shadow-black/20 transition hover:-translate-y-1 hover:border-rose-300/30 hover:shadow-rose-950/20">
               <div className="relative aspect-video overflow-hidden bg-zinc-950">
                 {image && <img src={image} alt="" draggable={false} loading="lazy" decoding="async" fetchPriority="low" className="h-full w-full object-cover transition duration-500 group-hover:scale-105" />}
                 <div className="absolute inset-0 flex items-center justify-center bg-black/0 transition group-hover:bg-black/30">

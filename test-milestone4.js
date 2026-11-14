@@ -276,8 +276,8 @@ runTest('6.2 Human-readable feature chips rendered in WhisperStudio', () => {
 
 runTest('6.3 Left configuration cards harmonized with consistent styling', () => {
   assert(
-    whisperStudioSrc.includes('rounded-2xl bg-[#141418] border border-white/10 space-y-3 shadow-md'),
-    'Configuration cards in WhisperStudio must share consistent dark rounded styling'
+    whisperStudioSrc.includes('rounded-2xl glass-panel space-y-3 shadow-md'),
+    'Configuration cards in WhisperStudio must share consistent glassmorphic styling'
   );
 });
 

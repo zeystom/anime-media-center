@@ -21,13 +21,22 @@ function loadRecentSearches(): RailItem[] {
   }
 }
 
+/** Tiny pub-sub carrying scroll progress so only the navbar re-renders per
+ *  scroll step instead of the whole App tree. Owned by App via useRef. */
+export interface NavbarBackdropEmitter {
+  value: number;
+  listeners: Set<(progress: number) => void>;
+}
+
 interface NavbarProps {
   currentTab: AppTab;
   /** Artwork softly visible beneath the translucent title bar. */
   backdropImage?: string | null;
   backdropMode?: 'ambient' | 'anime';
-  /** 1 while the source hero is in view, fading to 0 as it scrolls away. */
-  backdropProgress?: number;
+  /** Scroll-progress pub-sub: 1 while the source hero is in view, fading to 0 as it scrolls away. */
+  backdropEmitter?: React.MutableRefObject<NavbarBackdropEmitter>;
+  /** Glass blur over scrolled content (Settings → Navbar blur). Off = the cheap banner-only blur on a near-solid bar. */
+  blurEnabled?: boolean;
   onSelectTab: (tab: AppTab) => void;
   onOpenSettings: () => void;
   onSelectSearchItem: (item: RailItem) => void;
@@ -54,11 +63,169 @@ interface NavbarProps {
   onNotificationAction: (item: AppNotification) => void;
 }
 
-export const Navbar: React.FC<NavbarProps> = ({
+const DISMISS_THRESHOLD_PX = 96;
+const DRAG_START_PX = 8;
+
+// Coarse relative buckets for notification rows ("a few seconds ago" →
+// seconds → minutes → hours → days → ...). Recomputed against a ticker so
+// labels age in place while the drawer is open.
+function timeAgo(timestamp: number, now: number): string {
+  const seconds = Math.max(0, Math.floor((now - timestamp) / 1000));
+  if (seconds < 10) return 'a few seconds ago';
+  if (seconds < 60) return seconds === 1 ? '1 second ago' : `${seconds} seconds ago`;
+  const minutes = Math.floor(seconds / 60);
+  if (minutes < 60) return minutes === 1 ? 'a minute ago' : `${minutes} minutes ago`;
+  const hours = Math.floor(minutes / 60);
+  if (hours < 24) return hours === 1 ? 'an hour ago' : `${hours} hours ago`;
+  const days = Math.floor(hours / 24);
+  if (days < 7) return days === 1 ? 'a day ago' : `${days} days ago`;
+  const weeks = Math.floor(days / 7);
+  if (weeks < 5) return weeks === 1 ? 'a week ago' : `${weeks} weeks ago`;
+  const months = Math.floor(days / 30);
+  if (months < 12) return months === 1 ? 'a month ago' : `${months} months ago`;
+  const years = Math.floor(days / 365);
+  return years === 1 ? 'a year ago' : `${years} years ago`;
+}
+
+// One notification card with horizontal swipe-to-dismiss. A press without
+// movement never starts a drag, so the row's buttons keep their normal
+// clicks; capture begins only after the drag threshold is crossed.
+const NotificationRow: React.FC<{
+  item: AppNotification;
+  toneClass: string;
+  now: number;
+  onRead: (id: string) => void;
+  onOpen: (item: AppNotification) => void;
+  onDismiss: (id: string) => void;
+}> = ({ item, toneClass, now, onRead, onOpen, onDismiss }) => {
+  const [dragX, setDragX] = useState(0);
+  const [dragging, setDragging] = useState(false);
+  const [exiting, setExiting] = useState(false);
+  const dragXRef = useRef(0);
+  const gestureRef = useRef({ pointerId: -1, startX: 0, started: false });
+
+  const endGesture = () => {
+    gestureRef.current.pointerId = -1;
+    gestureRef.current.started = false;
+    setDragging(false);
+  };
+
+  const handlePointerDown = (event: React.PointerEvent<HTMLDivElement>) => {
+    if (exiting) return;
+    if (event.pointerType === 'mouse' && event.button !== 0) return;
+    gestureRef.current = { pointerId: event.pointerId, startX: event.clientX, started: false };
+  };
+
+  const handlePointerMove = (event: React.PointerEvent<HTMLDivElement>) => {
+    const gesture = gestureRef.current;
+    if (gesture.pointerId !== event.pointerId || exiting) return;
+    const dx = event.clientX - gesture.startX;
+    if (!gesture.started) {
+      if (Math.abs(dx) < DRAG_START_PX) return;
+      gesture.started = true;
+      setDragging(true);
+      try { event.currentTarget.setPointerCapture(event.pointerId); } catch {}
+    }
+    // Resistance past 140px so the card feels rubber-banded, not infinite.
+    const abs = Math.abs(dx);
+    const eased = abs <= 140 ? abs : 140 + (abs - 140) * 0.25;
+    const next = Math.sign(dx) * eased;
+    dragXRef.current = next;
+    setDragX(next);
+  };
+
+  const handlePointerEnd = (event: React.PointerEvent<HTMLDivElement>) => {
+    const gesture = gestureRef.current;
+    if (gesture.pointerId !== event.pointerId) return;
+    if (gesture.started) {
+      if (Math.abs(dragXRef.current) > DISMISS_THRESHOLD_PX) {
+        setExiting(true);
+        setDragX(Math.sign(dragXRef.current) * 520);
+        window.setTimeout(() => onDismiss(item.id), 170);
+      } else {
+        setDragX(0); // springs back via the transition below
+      }
+    }
+    endGesture();
+  };
+
+  return (
+    <div
+      onPointerDown={handlePointerDown}
+      onPointerMove={handlePointerMove}
+      onPointerUp={handlePointerEnd}
+      onPointerCancel={handlePointerEnd}
+      onClickCapture={(event) => {
+        // Swallow the click that trails a completed drag so buttons under the
+        // release point never fire.
+        if (dragging || exiting) {
+          event.preventDefault();
+          event.stopPropagation();
+        }
+      }}
+      style={{
+        transform: `translateX(${dragX}px)`,
+        opacity: exiting ? 0 : Math.max(0.35, 1 - Math.abs(dragX) / 190),
+        transition: dragging
+          ? 'none'
+          : 'transform 190ms cubic-bezier(0.22, 1, 0.36, 1), opacity 160ms linear',
+        touchAction: 'pan-y',
+      }}
+      className="mb-1.5 flex gap-3 rounded-xl border border-white/[0.08] bg-[#1a1424]/90 p-3.5 transition-colors hover:border-rose-400/25 hover:bg-[#251b30]"
+    >
+      <div className={`mt-0.5 flex h-9 w-9 shrink-0 items-center justify-center rounded-lg ${toneClass}`}>
+        {item.kind === 'airing' ? (
+          <Radio className="h-4 w-4" />
+        ) : item.kind === 'follow' ? (
+          <Bell className="h-4 w-4" />
+        ) : item.kind === 'whisper' ? (
+          <Sparkles className="h-4 w-4" />
+        ) : item.state === 'error' ? (
+          <AlertTriangle className="h-4 w-4" />
+        ) : (
+          <Download className="h-4 w-4" />
+        )}
+      </div>
+      <div className="min-w-0 flex-1">
+        <p className="text-[13px] font-semibold text-zinc-100">{item.title}</p>
+        <p className="mt-1 text-xs leading-relaxed text-zinc-300">{item.message}</p>
+        {item.kind === 'download' && item.state === 'downloading' && item.progress != null && (
+          <div className="mt-1.5 flex items-center gap-2">
+            <div className="h-1 flex-1 overflow-hidden rounded-full bg-white/10">
+              <div className="h-full rounded-full bg-gradient-to-r from-rose-600 to-rose-400 transition-all" style={{ width: `${Math.max(3, Math.min(100, item.progress))}%` }} />
+            </div>
+            <span className="font-mono text-[10px] text-zinc-400">{Math.round(item.progress)}%</span>
+          </div>
+        )}
+        <div className="mt-2 flex items-center justify-between gap-2">
+          <span className="text-[11px] text-zinc-500" title={new Date(item.createdAt).toLocaleString()}>
+            {timeAgo(item.createdAt, now)}
+          </span>
+          {item.kind === 'airing' && item.anilistId && item.episode ? (
+            <button type="button" onClick={() => { onRead(item.id); onOpen(item); }} className={`rounded-lg px-2.5 py-1 text-[11px] font-bold transition ${item.finalEpisode ? 'bg-violet-400/10 text-violet-200 hover:bg-violet-400/20' : 'bg-emerald-400/10 text-emerald-200 hover:bg-emerald-400/20'}`}>Find EP {item.episode}</button>
+          ) : item.kind === 'download' ? (
+            <button type="button" onClick={() => { onRead(item.id); onOpen(item); }} className="rounded-lg bg-emerald-400/10 px-2.5 py-1 text-[11px] font-bold text-emerald-200 transition hover:bg-emerald-400/20">Downloads</button>
+          ) : item.kind === 'whisper' ? (
+            <button type="button" onClick={() => { onRead(item.id); onOpen(item); }} className="rounded-lg bg-rose-400/10 px-2.5 py-1 text-[11px] font-bold text-rose-200 transition hover:bg-rose-400/20">Whisper Studio</button>
+          ) : item.kind !== 'follow' && !item.read ? (
+            <button type="button" onClick={() => onRead(item.id)} className="text-[11px] font-semibold text-zinc-400 hover:text-zinc-200">Mark read</button>
+          ) : null}
+        </div>
+      </div>
+      <div className="flex shrink-0 items-start gap-1">
+        {!item.read && <span className="mt-1.5 h-1.5 w-1.5 rounded-full bg-rose-400" />}
+        <button type="button" onClick={() => onDismiss(item.id)} title="Dismiss notification" aria-label={`Dismiss ${item.title}`} className="-mr-1 -mt-1 rounded-md p-1 text-zinc-600 transition hover:bg-white/[0.08] hover:text-zinc-200"><X className="h-3.5 w-3.5" /></button>
+      </div>
+    </div>
+  );
+};
+
+const NavbarImpl: React.FC<NavbarProps> = ({
   currentTab,
   backdropImage,
   backdropMode,
-  backdropProgress = 1,
+  backdropEmitter,
+  blurEnabled = true,
   onSelectTab,
   onOpenSettings,
   onSelectSearchItem,
@@ -79,6 +246,31 @@ export const Navbar: React.FC<NavbarProps> = ({
   const [recentSearches, setRecentSearches] = useState<RailItem[]>(() => loadRecentSearches());
   const searchBoxRef = useRef<HTMLDivElement>(null);
   const notificationsRef = useRef<HTMLDivElement>(null);
+  // Scroll progress arrives via the App-owned pub-sub, so the (memoized)
+  // navbar re-renders alone while page trees stay untouched during scrolls.
+  const [backdropProgress, setBackdropProgress] = useState(1);
+  // Ticker for relative notification timestamps — runs only while the
+  // notifications drawer is open, so closed labels cost nothing.
+  const [nowTick, setNowTick] = useState(() => Date.now());
+
+  useEffect(() => {
+    if (!notificationsOpen) return;
+    setNowTick(Date.now());
+    const timer = window.setInterval(() => setNowTick(Date.now()), 5000);
+    return () => window.clearInterval(timer);
+  }, [notificationsOpen]);
+
+  useEffect(() => {
+    if (!backdropEmitter) return;
+    const emitter = backdropEmitter.current;
+    const listener = (progress: number) => setBackdropProgress(progress);
+    emitter.listeners.add(listener);
+    setBackdropProgress(emitter.value);
+    return () => {
+      emitter.listeners.delete(listener);
+    };
+    // eslint-disable-next-line react-hooks/exhaustive-deps
+  }, [backdropEmitter]);
 
   useEffect(() => {
     let mounted = true;
@@ -161,7 +353,14 @@ export const Navbar: React.FC<NavbarProps> = ({
 
   return (
     <header
-      className={`isolate relative z-50 flex h-[72px] shrink-0 select-none items-center justify-between gap-6 border-b border-white/[0.08] pl-8 [-webkit-app-region:drag] [&>*]:[-webkit-app-region:no-drag] ${backdropImage ? 'bg-[#101116]/45 backdrop-blur-xl' : 'bg-[#101116]/95 backdrop-blur-2xl'}`}
+      className={`isolate absolute inset-x-0 top-0 z-50 flex h-[72px] select-none items-center justify-between gap-6 border-b border-white/[0.06] pl-8 [-webkit-app-region:drag] [&>*]:[-webkit-app-region:no-drag] ${
+        blurEnabled
+          ? `backdrop-saturate-[1.5] ${backdropImage ? 'bg-[#0a070e]/55 backdrop-blur-[22px]' : 'bg-[#0a070e]/75 backdrop-blur-[22px]'}`
+          : // No glass blur: the bar goes near-solid so the scrolled content
+            // beneath never muddies it; the banner child keeps its own cheap
+            // self-blur, which is the "banner-only" budget mode.
+            'bg-[#0a070e]/95'
+      }`}
     >
       {backdropImage && (
         <div aria-hidden className="pointer-events-none absolute inset-0 z-0 overflow-hidden">
@@ -180,16 +379,19 @@ export const Navbar: React.FC<NavbarProps> = ({
           <div
             className="absolute inset-0"
             style={{
-              backgroundColor: `rgba(16,17,22,${backdropMode === 'anime' ? 0.45 + (1 - backdropProgress) * 0.45 : 0.7 + (1 - backdropProgress) * 0.25})`,
+              // The tint fades OUT together with the banner image: an opaque
+              // plate here would hide the header's backdrop-blur of scrolled
+              // content (cards/rails passing under the navbar).
+              backgroundColor: `rgba(16,17,22,${(backdropMode === 'anime' ? 0.45 : 0.7) * Math.max(0, Math.min(1, backdropProgress))})`,
               transition: 'background-color 120ms linear',
             }}
           />
-          <div className="absolute inset-0 bg-gradient-to-b from-[#101116]/20 via-transparent to-[#101116]/35" />
+          <div className="absolute inset-0 bg-gradient-to-b from-[#0F0B15]/20 via-transparent to-[#0F0B15]/35" />
         </div>
       )}
       {/* Brand Logo & Name */}
       <div className="relative z-10 flex cursor-pointer items-center space-x-3" onClick={() => onSelectTab('home')}>
-        <div className="flex h-11 w-11 items-center justify-center rounded-xl border border-rose-300/20 bg-gradient-to-br from-rose-500/35 via-violet-700/25 to-cyan-300/20 shadow-lg shadow-rose-950/40">
+        <div className="flex h-11 w-11 items-center justify-center rounded-xl border border-rose-300/25 bg-gradient-to-br from-rose-500/40 via-plum-900/50 to-rose-500/20 shadow-lg shadow-black/40">
             <img src="./kaiko-mark.svg" alt="" draggable={false} className="h-full w-full object-cover" />
         </div>
         <div className="flex items-center space-x-2">
@@ -206,16 +408,16 @@ export const Navbar: React.FC<NavbarProps> = ({
           onChange={(event) => setQuery(event.target.value)}
           onFocus={() => { setSearchOpen(true); setNotificationsOpen(false); }}
           placeholder="Search anime or episodes..."
-          className="w-full rounded-full border border-white/[0.08] bg-[#0b0c10]/75 py-2.5 pl-11 pr-4 text-xs text-zinc-200 shadow-inner outline-none transition placeholder:text-zinc-500 focus:border-rose-400/40 focus:ring-2 focus:ring-rose-500/15"
+          className="w-full rounded-full border border-white/[0.09] bg-[#0f0b15]/70 py-2.5 pl-11 pr-4 text-xs text-zinc-200 shadow-inner outline-none transition placeholder:text-zinc-500 focus:border-rose-400/50 focus:ring-2 focus:ring-rose-500/20"
         />
-        {searchOpen && !query.trim() && recentSearches.length > 0 && <div className="absolute left-0 right-0 top-full z-50 mt-2 overflow-hidden rounded-2xl border border-white/10 bg-[#141620]/[0.98] p-1.5 shadow-2xl backdrop-blur-xl">
+        {searchOpen && !query.trim() && recentSearches.length > 0 && <div className="glass-dropdown animate-pop-in absolute left-0 right-0 top-full z-50 mt-2 overflow-hidden rounded-2xl p-1.5">
           <p className="flex items-center gap-1.5 px-3 pb-1 pt-2 text-[10px] font-bold uppercase tracking-wider text-zinc-500"><History className="h-3 w-3" /> Recent</p>
           {recentSearches.map((item) => <button key={item.anilistId} onClick={() => { recordRecentSearch(item); onSelectSearchItem(item); setQuery(''); setSearchOpen(false) }} onMouseEnter={() => armWarm(item.anilistId)} onMouseLeave={() => cancelWarm(item.anilistId)} className="flex w-full items-center gap-3 rounded-xl p-2 text-left transition hover:bg-white/[0.07]">
             <span className="h-12 w-9 shrink-0 overflow-hidden rounded-md bg-zinc-900">{item.posterUrl && <img src={item.posterUrl} alt="" className="h-full w-full object-cover" />}</span>
             <span className="min-w-0"><span className="block truncate text-xs font-semibold text-zinc-100">{item.title}</span><span className="mt-1 block text-[10px] text-zinc-500">{item.seasonYear ?? 'Anime'}{item.format ? ` · ${item.format}` : ''}</span></span>
           </button>)}
         </div>}
-        {searchOpen && query.trim() && <div className="absolute left-0 right-0 top-full z-50 mt-2 overflow-hidden rounded-2xl border border-white/10 bg-[#141620]/[0.98] p-1.5 shadow-2xl backdrop-blur-xl">
+        {searchOpen && query.trim() && <div className="glass-dropdown animate-pop-in absolute left-0 right-0 top-full z-50 mt-2 overflow-hidden rounded-2xl p-1.5">
           {loading ? <p className="px-3 py-4 text-xs text-zinc-500">Searching…</p> : results.length === 0 ? <p className="px-3 py-4 text-xs text-zinc-500">No matching anime</p> : results.slice(0, 7).map((item) => <button key={item.anilistId} onClick={() => { recordRecentSearch(item); onSelectSearchItem(item); setQuery(''); setSearchOpen(false) }} onMouseEnter={() => armWarm(item.anilistId)} onMouseLeave={() => cancelWarm(item.anilistId)} className="flex w-full items-center gap-3 rounded-xl p-2 text-left transition hover:bg-white/[0.07]">
             <span className="h-12 w-9 shrink-0 overflow-hidden rounded-md bg-zinc-900">{item.posterUrl && <img src={item.posterUrl} alt="" className="h-full w-full object-cover" />}</span>
             <span className="min-w-0"><span className="block truncate text-xs font-semibold text-zinc-100">{item.title}</span><span className="mt-1 block text-[10px] text-zinc-500">{item.seasonYear ?? 'Anime'}{item.format ? ` · ${item.format}` : ''}</span></span>
@@ -229,7 +431,7 @@ export const Navbar: React.FC<NavbarProps> = ({
           onClick={() => onSelectTab('home')}
           className={`flex items-center space-x-2 px-4 py-1.5 rounded-md rounded-l-full text-sm font-medium transition-all ${
             currentTab === 'home'
-              ? 'bg-rose-500 text-white shadow-[0_0_22px_rgba(244,63,94,0.32)]'
+              ? 'bg-[linear-gradient(135deg,#FF1E6D_0%,#A31246_100%)] text-white shadow-[0_0_22px_rgba(255,30,109,0.38)]'
               : 'text-zinc-400 hover:bg-white/5 hover:text-zinc-100'
           }`}
         >
@@ -241,7 +443,7 @@ export const Navbar: React.FC<NavbarProps> = ({
           onClick={() => onSelectTab('discover')}
           className={`flex items-center space-x-2 rounded-md px-4 py-1.5 text-sm font-medium transition-all ${
             currentTab === 'discover'
-              ? 'bg-rose-500 text-white shadow-[0_0_22px_rgba(244,63,94,0.32)]'
+              ? 'bg-[linear-gradient(135deg,#FF1E6D_0%,#A31246_100%)] text-white shadow-[0_0_22px_rgba(255,30,109,0.38)]'
               : 'text-zinc-400 hover:bg-white/5 hover:text-zinc-100'
           }`}
         >
@@ -253,7 +455,7 @@ export const Navbar: React.FC<NavbarProps> = ({
           onClick={() => onSelectTab('library')}
           className={`flex items-center space-x-2 px-4 py-1.5 rounded-md text-sm font-medium transition-all ${
             currentTab === 'library'
-              ? 'bg-rose-500 text-white shadow-[0_0_22px_rgba(244,63,94,0.32)]'
+              ? 'bg-[linear-gradient(135deg,#FF1E6D_0%,#A31246_100%)] text-white shadow-[0_0_22px_rgba(255,30,109,0.38)]'
               : 'text-zinc-400 hover:bg-white/5 hover:text-zinc-100'
           }`}
         >
@@ -265,7 +467,7 @@ export const Navbar: React.FC<NavbarProps> = ({
           onClick={() => onSelectTab('schedule')}
           className={`flex items-center space-x-2 px-4 py-1.5 rounded-md text-sm font-medium transition-all ${
             currentTab === 'schedule'
-              ? 'bg-rose-500 text-white shadow-[0_0_22px_rgba(244,63,94,0.32)]'
+              ? 'bg-[linear-gradient(135deg,#FF1E6D_0%,#A31246_100%)] text-white shadow-[0_0_22px_rgba(255,30,109,0.38)]'
               : 'text-zinc-400 hover:bg-white/5 hover:text-zinc-100'
           }`}
         >
@@ -277,9 +479,9 @@ export const Navbar: React.FC<NavbarProps> = ({
           onClick={() => onSelectTab('downloads')}
           className={`relative flex items-center space-x-2 px-4 py-1.5 rounded-md text-sm font-medium transition-all ${
             currentTab === 'downloads'
-              ? 'bg-rose-500 text-white shadow-[0_0_22px_rgba(244,63,94,0.32)]'
+              ? 'bg-[linear-gradient(135deg,#FF1E6D_0%,#A31246_100%)] text-white shadow-[0_0_22px_rgba(255,30,109,0.38)]'
               : 'text-zinc-400 hover:bg-white/5 hover:text-zinc-100'
-          } ${downloadsActive ? 'shadow-[0_0_18px_rgba(34,211,238,0.35)]' : ''}`}
+          } ${downloadsActive ? 'shadow-[0_0_18px_rgba(255,30,109,0.4)]' : ''}`}
         >
           {downloadsActive && (
             <span aria-hidden className="download-beam-mask">
@@ -294,11 +496,11 @@ export const Navbar: React.FC<NavbarProps> = ({
           onClick={() => onSelectTab('whisper')}
           className={`relative flex items-center space-x-2 px-4 py-1.5 rounded-md rounded-r-full text-sm font-medium transition-all ${
             currentTab === 'whisper'
-              ? 'border border-violet-500/20 bg-violet-500/[0.08] text-violet-200'
+              ? 'bg-[linear-gradient(135deg,#FF1E6D_0%,#A31246_100%)] text-white shadow-[0_0_22px_rgba(255,30,109,0.38)]'
               : 'text-zinc-400 hover:bg-white/5 hover:text-zinc-100'
           }`}
         >
-          <Sparkles className="w-4 h-4 text-indigo-400" />
+          <Sparkles className="w-4 h-4 text-rose-300" />
           <span>Whisper Studio</span>
           {isWhisperActive && (
             <span className="flex h-2 w-2 relative">
@@ -336,13 +538,13 @@ export const Navbar: React.FC<NavbarProps> = ({
             className="relative rounded-lg p-2 text-zinc-400 transition hover:bg-zinc-800/80 hover:text-white"
           >
             <Bell className="h-5 w-5" />
-            {unreadCount > 0 && <span className="absolute right-1 top-1 h-2 w-2 rounded-full bg-rose-400 ring-2 ring-[#101116]" />}
+            {unreadCount > 0 && <span className="absolute right-1 top-1 h-2 w-2 rounded-full bg-rose-400 ring-2 ring-[#0F0B15]" />}
           </button>
           {notificationsOpen && (
-            <div className="absolute right-0 top-full z-[80] mt-3 w-[min(92vw,390px)] overflow-hidden rounded-2xl border border-white/10 bg-[#141620] shadow-2xl shadow-black/60">
+            <div className="glass-dropdown animate-pop-in absolute right-0 top-full z-[80] mt-3 w-[min(92vw,440px)] overflow-hidden rounded-2xl">
               <div className="flex items-center justify-between border-b border-white/[0.08] px-4 py-3">
                 <div>
-                  <p className="text-sm font-bold text-white">Notifications</p>
+                  <p className="text-[15px] font-bold text-white">Notifications</p>
                   <p className="mt-0.5 text-[10px] text-zinc-500">{unreadCount ? `${unreadCount} unread` : 'You’re all caught up'}</p>
                 </div>
                 <div className="flex items-center gap-1">
@@ -350,53 +552,22 @@ export const Navbar: React.FC<NavbarProps> = ({
                   <button type="button" onClick={onClearNotifications} title="Clear notifications" className="rounded-lg p-2 text-zinc-500 transition hover:bg-white/[0.06] hover:text-rose-300"><Trash2 className="h-4 w-4" /></button>
                 </div>
               </div>
-              <div className="max-h-[min(65vh,520px)] overflow-y-auto p-2">
+              {/* overflow-x-hidden: a swipe-translated card counts toward the
+                  scrollable overflow region and would spawn a horizontal
+                  scrollbar mid-drag; clip it instead. */}
+              <div className="max-h-[min(65vh,520px)] overflow-y-auto overflow-x-hidden p-2">
                 {notifications.length === 0 ? (
                   <p className="px-4 py-10 text-center text-xs text-zinc-500">Download and airing updates will appear here.</p>
                 ) : notifications.map((item) => (
-                  <div key={item.id} className={`mb-1 flex gap-3 rounded-xl border p-3 ${toneClasses[notificationTone(item)]?.card || 'border-white/[0.06]'} ${item.read ? 'bg-transparent' : 'bg-white/[0.04]'}`}>
-                    <div className={`mt-0.5 flex h-8 w-8 shrink-0 items-center justify-center rounded-lg ${toneClasses[notificationTone(item)]?.icon || 'bg-zinc-400/10 text-zinc-300'}`}>
-                      {item.kind === 'airing' ? (
-                        <Radio className="h-4 w-4" />
-                      ) : item.kind === 'follow' ? (
-                        <Bell className="h-4 w-4" />
-                      ) : item.kind === 'whisper' ? (
-                        <Sparkles className="h-4 w-4" />
-                      ) : item.state === 'error' ? (
-                        <AlertTriangle className="h-4 w-4" />
-                      ) : (
-                        <Download className="h-4 w-4" />
-                      )}
-                    </div>
-                    <div className="min-w-0 flex-1">
-                      <p className="text-xs font-semibold text-zinc-100">{item.title}</p>
-                      <p className="mt-1 text-[11px] leading-relaxed text-zinc-400">{item.message}</p>
-                      {item.kind === 'download' && item.state === 'downloading' && item.progress != null && (
-                        <div className="mt-1.5 flex items-center gap-2">
-                          <div className="h-1 flex-1 overflow-hidden rounded-full bg-white/10">
-                            <div className="h-full rounded-full bg-gradient-to-r from-rose-500 to-cyan-300 transition-all" style={{ width: `${Math.max(3, Math.min(100, item.progress))}%` }} />
-                          </div>
-                          <span className="font-mono text-[10px] text-zinc-400">{Math.round(item.progress)}%</span>
-                        </div>
-                      )}
-                      <div className="mt-2 flex items-center justify-between gap-2">
-                        <span className="text-[10px] text-zinc-600">{new Date(item.createdAt).toLocaleString()}</span>
-                        {item.kind === 'airing' && item.anilistId && item.episode ? (
-                          <button type="button" onClick={() => { onNotificationRead(item.id); onNotificationAction(item); setNotificationsOpen(false); }} className={`rounded-lg px-2.5 py-1 text-[10px] font-bold transition ${item.finalEpisode ? 'bg-violet-400/10 text-violet-200 hover:bg-violet-400/20' : 'bg-emerald-400/10 text-emerald-200 hover:bg-emerald-400/20'}`}>Find EP {item.episode}</button>
-                        ) : item.kind === 'download' ? (
-                          <button type="button" onClick={() => { onNotificationRead(item.id); onNotificationAction(item); setNotificationsOpen(false); }} className="rounded-lg bg-emerald-400/10 px-2.5 py-1 text-[10px] font-bold text-emerald-200 transition hover:bg-emerald-400/20">Downloads</button>
-                        ) : item.kind === 'whisper' ? (
-                          <button type="button" onClick={() => { onNotificationRead(item.id); onNotificationAction(item); setNotificationsOpen(false); }} className="rounded-lg bg-indigo-400/10 px-2.5 py-1 text-[10px] font-bold text-indigo-200 transition hover:bg-indigo-400/20">Whisper Studio</button>
-                        ) : item.kind !== 'follow' && !item.read ? (
-                          <button type="button" onClick={() => onNotificationRead(item.id)} className="text-[10px] font-semibold text-zinc-500 hover:text-zinc-200">Mark read</button>
-                        ) : null}
-                      </div>
-                    </div>
-                    <div className="flex shrink-0 items-start gap-1">
-                      {!item.read && <span className="mt-1.5 h-1.5 w-1.5 rounded-full bg-rose-400" />}
-                      <button type="button" onClick={() => onDismissNotification(item.id)} title="Dismiss notification" aria-label={`Dismiss ${item.title}`} className="-mr-1 -mt-1 rounded-md p-1 text-zinc-600 transition hover:bg-white/[0.08] hover:text-zinc-200"><X className="h-3.5 w-3.5" /></button>
-                    </div>
-                  </div>
+                  <NotificationRow
+                    key={item.id}
+                    item={item}
+                    toneClass={toneClasses[notificationTone(item)]?.icon || 'bg-zinc-400/10 text-zinc-300'}
+                    now={nowTick}
+                    onRead={onNotificationRead}
+                    onOpen={(entry) => { onNotificationAction(entry); setNotificationsOpen(false); }}
+                    onDismiss={onDismissNotification}
+                  />
                 ))}
               </div>
             </div>
@@ -444,3 +615,7 @@ export const Navbar: React.FC<NavbarProps> = ({
     </header>
   );
 };
+
+// Memoized: App re-renders (P2P bursts, notifications, tab switches) must not
+// reconcile the whole navbar; scroll progress arrives via the emitter above.
+export const Navbar = React.memo(NavbarImpl);

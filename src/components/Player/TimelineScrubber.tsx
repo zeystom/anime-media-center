@@ -286,21 +286,25 @@ export const TimelineScrubber: React.FC<TimelineScrubberProps> = ({
       onMouseDown={handleMouseDown}
       className="relative w-full h-8 flex items-center cursor-pointer select-none group"
     >
-      {/* Background Track Bar */}
-      <div className="relative w-full h-1.5 group-hover:h-2 bg-white/20 rounded-full overflow-hidden transition-all duration-150">
+      {/* Background Track Bar: 4px resting, 7px on hover */}
+      <div className="relative w-full h-1 group-hover:h-[7px] bg-white/15 rounded-full overflow-hidden transition-all duration-200 ease-fluid">
         {/* Instant Ghost Bar */}
         <div
           ref={ghostBarRef}
-          className={`absolute left-0 top-0 bottom-0 bg-white/30 rounded-full pointer-events-none transition-opacity duration-150 ${
+          className={`absolute left-0 top-0 bottom-0 bg-white/25 rounded-full pointer-events-none transition-opacity duration-150 ${
             isHovering ? 'opacity-100' : 'opacity-0'
           }`}
           style={{ width: '0%' }}
         />
 
-        {/* Current Playback Progress Bar */}
+        {/* Current Playback Progress Bar — crimson-magenta gradient */}
         <div
-          className="absolute left-0 top-0 bottom-0 bg-red-600 rounded-full shadow-sm shadow-red-600/50 z-10"
-          style={{ width: `${progressPercent}%` }}
+          className="absolute left-0 top-0 bottom-0 rounded-full z-10"
+          style={{
+            width: `${progressPercent}%`,
+            background: 'linear-gradient(90deg, #9E1148, #FF1E6D)',
+            boxShadow: '0 0 10px rgba(255, 30, 109, 0.6)',
+          }}
         />
 
         {/* Opening Theme Segment Highlight (Amber / Golden accent - ALWAYS visible with crisp start/end tick notches) */}
@@ -348,21 +352,31 @@ export const TimelineScrubber: React.FC<TimelineScrubberProps> = ({
         style={{ left: '0%' }}
       />
 
-      {/* Scrubber Knob / Active Playhead */}
+      {/* Scrubber Knob / Active Playhead — glowing crimson thumb */}
       <div
-        className="absolute w-3.5 h-3.5 bg-red-500 rounded-full shadow-lg shadow-black/80 -translate-x-1/2 scale-0 group-hover:scale-100 transition-transform duration-100 pointer-events-none ring-2 ring-white/30 z-30"
-        style={{ left: `${progressPercent}%` }}
+        className="absolute w-3.5 h-3.5 rounded-full -translate-x-1/2 scale-0 group-hover:scale-100 transition-transform duration-100 pointer-events-none ring-2 ring-rose-200/40 z-30"
+        style={{ left: `${progressPercent}%`, backgroundColor: '#FF1E6D', boxShadow: '0 0 14px #FF1E6D, 0 2px 8px rgba(0,0,0,0.8)' }}
       />
 
-      {/* Zero-Latency Floating Hover Preview Card (Centered directly above cursor) */}
+      {/* Zero-Latency Floating Hover Preview Card (Centered directly above cursor).
+          Spring scaling: fades+lifts from scale(0.92) to scale(1) while hovering. */}
       <div
         ref={tooltipRef}
-        className={`absolute bottom-9 left-0 pointer-events-none z-40 transition-opacity duration-150 ${
-          isHovering && duration > 0 ? 'opacity-100' : 'opacity-0'
-        }`}
+        className="absolute bottom-9 left-0 pointer-events-none z-40"
         style={{ willChange: 'transform', width: `${BOX_WIDTH}px` }}
       >
-        <div className="relative p-1.5 rounded-2xl bg-[#121217]/95 border border-white/15 shadow-2xl shadow-black/90 backdrop-blur-2xl flex flex-col items-center">
+        <div
+          className={`relative p-1.5 rounded-2xl border shadow-2xl shadow-black/90 backdrop-blur-2xl flex flex-col items-center transition-all duration-200 ease-fluid ${
+            isHovering && duration > 0
+              ? 'opacity-100 scale-100 -translate-y-0'
+              : 'opacity-0 scale-[0.92] translate-y-1.5'
+          }`}
+          style={{
+            background: 'rgba(15, 10, 22, 0.82)',
+            borderColor: 'rgba(255, 255, 255, 0.14)',
+            transformOrigin: 'bottom center',
+          }}
+        >
           {/* 16:9 Thumbnail Box */}
           <div className="w-full aspect-video bg-black rounded-xl overflow-hidden relative border border-white/10 shadow-inner">
             {displayedThumbUrl ? (
@@ -380,7 +394,7 @@ export const TimelineScrubber: React.FC<TimelineScrubberProps> = ({
           </div>
 
           {/* Time Badge & Opening Pill (Fixed height to guarantee card size never jumps) */}
-          <div className="mt-1 px-2.5 h-[22px] rounded-lg bg-black/60 border border-white/5 flex items-center justify-center space-x-1.5 box-border">
+          <div className="mt-1 px-2.5 h-[22px] rounded-lg bg-black/50 border border-white/5 flex items-center justify-center space-x-1.5 box-border">
             <span
               ref={timestampRef}
               className="text-xs font-mono font-bold text-zinc-100 tracking-wider leading-none"
@@ -399,8 +413,8 @@ export const TimelineScrubber: React.FC<TimelineScrubberProps> = ({
           {/* Precision Pointer Arrow (Aligns exactly to cursor position) */}
           <div
             ref={arrowRef}
-            className="absolute -bottom-1.5 w-3 h-3 bg-[#121217] border-r border-b border-white/15 -translate-x-1/2 rotate-45"
-            style={{ left: `${HALF_WIDTH}px` }}
+            className="absolute -bottom-1.5 w-3 h-3 -translate-x-1/2 rotate-45 border-r border-b"
+            style={{ left: `${HALF_WIDTH}px`, backgroundColor: 'rgba(15, 10, 22, 0.9)', borderColor: 'rgba(255, 255, 255, 0.14)' }}
           />
         </div>
       </div>

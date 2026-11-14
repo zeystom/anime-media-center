@@ -18,9 +18,9 @@ export const TerminalLog: React.FC<TerminalLogProps> = ({ logs, onClear }) => {
   }, [logs, autoScroll]);
 
   return (
-    <div className="flex flex-col h-full rounded-2xl bg-[#0c0c0e] border border-zinc-800/80 overflow-hidden shadow-2xl">
+    <div className="flex flex-col h-full rounded-2xl bg-black/50 border border-white/[0.08] overflow-hidden shadow-2xl">
       {/* Terminal Title Bar */}
-      <div className="flex items-center justify-between px-4 py-2.5 bg-[#141418] border-b border-zinc-800/80">
+      <div className="flex items-center justify-between px-4 py-2.5 bg-white/[0.03] border-b border-white/[0.07]">
         <div className="flex items-center space-x-2">
           <div className="flex space-x-1.5 mr-2">
             <div className="w-2.5 h-2.5 rounded-full bg-red-500/80" />

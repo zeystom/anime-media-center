@@ -83,8 +83,8 @@ const EpisodeDrawerItem: React.FC<EpisodeItemProps> = ({
       onClick={onSelect}
       className={`group relative p-3 rounded-2xl cursor-pointer transition-all duration-200 border flex items-center space-x-3.5 ${
         isPlaying
-          ? 'bg-red-500/10 border-red-500/50 shadow-lg shadow-red-500/5'
-          : 'bg-[#16161b]/80 border-white/[0.06] hover:bg-[#1f1f26] hover:border-white/20'
+          ? 'bg-rose-500/10 border-rose-400/50 shadow-[0_0_22px_rgba(255,30,109,0.15)]'
+          : 'bg-white/[0.04] border-white/[0.07] hover:bg-white/[0.08] hover:border-white/20'
       }`}
     >
       {/* Thumbnail Card (16:9 aspect) */}
@@ -113,18 +113,18 @@ const EpisodeDrawerItem: React.FC<EpisodeItemProps> = ({
 
         {/* Active Now Playing Indicator / Hover Play Overlay */}
         {isPlaying ? (
-          <div className="absolute inset-0 bg-red-950/40 backdrop-blur-[1px] flex items-center justify-center">
-            <div className="w-8 h-8 rounded-full bg-red-600 text-white flex items-center justify-center shadow-lg shadow-red-600/50 ring-2 ring-white/20">
+          <div className="absolute inset-0 bg-rose-950/40 backdrop-blur-[1px] flex items-center justify-center">
+            <div className="w-8 h-8 rounded-full bg-[linear-gradient(135deg,#FF1E6D_0%,#A31246_100%)] text-white flex items-center justify-center shadow-glow-crimson-sm ring-2 ring-white/20">
               <Play className="w-4 h-4 ml-0.5 fill-white" />
             </div>
-            <div className="absolute bottom-1 right-1 px-1.5 py-0.5 rounded text-[9px] font-bold uppercase tracking-wider bg-red-600 text-white flex items-center space-x-1 shadow-sm">
+            <div className="absolute bottom-1 right-1 px-1.5 py-0.5 rounded text-[9px] font-bold uppercase tracking-wider bg-rose-600 text-white flex items-center space-x-1 shadow-sm">
               <span className="w-1.5 h-1.5 rounded-full bg-white animate-pulse" />
               <span>Playing</span>
             </div>
           </div>
         ) : (
           <div className="absolute inset-0 bg-black/40 opacity-0 group-hover:opacity-100 transition-opacity flex items-center justify-center backdrop-blur-[1px]">
-            <div className="w-8 h-8 rounded-full bg-red-600/90 text-white flex items-center justify-center shadow-md transform group-hover:scale-110 transition-transform">
+            <div className="w-8 h-8 rounded-full bg-[linear-gradient(135deg,#FF1E6D_0%,#A31246_100%)] text-white flex items-center justify-center shadow-md transform group-hover:scale-110 transition-transform">
               <Play className="w-4 h-4 ml-0.5 fill-white" />
             </div>
           </div>
@@ -289,7 +289,7 @@ export const EpisodeDrawer: React.FC<EpisodeDrawerProps> = ({
       onClick={closeOnBackdrop ? onClose : undefined}
     >
       <div
-        className={`w-full sm:max-w-md md:max-w-[480px] h-full bg-[#101014]/95 backdrop-blur-2xl border-l border-white/10 p-6 flex flex-col shadow-[-25px_0_60px_rgba(0,0,0,0.85)] transition-transform duration-400 ease-[cubic-bezier(0.16,1,0.3,1)] transform ${
+        className={`w-full sm:max-w-md md:max-w-[480px] h-full bg-[#0c0812]/80 backdrop-blur-[30px] backdrop-saturate-[1.8] border-l border-white/10 p-6 flex flex-col shadow-[-25px_0_60px_rgba(0,0,0,0.85)] transition-transform duration-400 ease-[cubic-bezier(0.16,1,0.3,1)] transform ${
           isOpen ? 'translate-x-0' : 'translate-x-full'
         }`}
         onClick={(e) => e.stopPropagation()}
@@ -339,7 +339,7 @@ export const EpisodeDrawer: React.FC<EpisodeDrawerProps> = ({
           <button
             onClick={onToggleAutoPlayNext}
             className={`w-11 h-6 rounded-full p-0.5 transition-colors duration-200 ${
-              autoPlayNext ? 'bg-red-600' : 'bg-zinc-700'
+              autoPlayNext ? 'bg-[linear-gradient(135deg,#FF1E6D_0%,#A31246_100%)] shadow-glow-crimson-sm' : 'bg-zinc-700'
             }`}
           >
             <div

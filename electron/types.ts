@@ -43,6 +43,9 @@ export interface SubtitleTrackPayload {
   port?: number;
   cues?: SubtitleCue[];
   fontsPending?: boolean;
+  /** Set when only a playback-position window was extracted — the full
+   *  track keeps building in the background; re-request with forceFull. */
+  partial?: { fromMs: number; toMs: number };
 }
 
 export interface VideoChapter {
@@ -169,6 +172,8 @@ export interface AppSettings {
   subtitlesOutlineWidth?: 'thin' | 'medium' | 'thick' | 'heavy' | 'none';
   subtitlesOutlineColor?: string;
   animeTitleLanguage?: 'english' | 'romaji' | 'native';
+  /** Navbar glass blur over scrolled content; default true. Turn off on weak PCs — the banner keeps its own cheap blur either way. */
+  navbarBlur?: boolean;
   /** Legacy setting retained only so older settings files remain readable; incomplete titles are always hidden. */
   hideDownloadingAnime?: boolean;
   whisperOptions?: WhisperOptions;

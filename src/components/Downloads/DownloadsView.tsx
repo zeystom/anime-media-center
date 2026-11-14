@@ -632,14 +632,14 @@ export const DownloadsView: React.FC<DownloadsViewProps> = ({ onRefreshLibrary, 
       {/* Delete confirmation modal */}
       {confirmTarget && (
         <div
-          className="fixed inset-0 z-50 flex items-center justify-center bg-black/80 p-4 animate-in fade-in duration-150"
+          className="fixed inset-0 z-50 flex items-center justify-center modal-dimmer p-4 animate-in fade-in duration-150"
           onClick={() => !deleting && setConfirmTarget(null)}
         >
           <div
             role="dialog"
             aria-modal="true"
             data-modal="true"
-            className="w-full max-w-md rounded-2xl border border-white/10 bg-[#141418] p-5 text-zinc-100 shadow-2xl animate-in zoom-in-95 duration-150"
+            className="modal-glass w-full max-w-md rounded-2xl p-5 text-zinc-100 animate-in zoom-in-95 duration-150"
             onClick={(e) => e.stopPropagation()}
           >
             <div className="flex items-start gap-3">

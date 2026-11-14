@@ -30,7 +30,7 @@ export const LiveDialogueStream: React.FC<LiveDialogueStreamProps> = ({
   const parsedCurrent = currentFile ? cleanEpisodeTitle(currentFile) : null;
 
   return (
-    <div className="flex flex-col h-[320px] rounded-2xl bg-[#141418] border border-white/10 overflow-hidden shadow-lg">
+    <div className="flex flex-col h-[320px] rounded-2xl glass-panel overflow-hidden shadow-lg">
       {/* Header Bar */}
       <div className="flex items-center justify-between px-4 py-3 bg-zinc-900/80 border-b border-zinc-800/80 shrink-0">
         <div className="flex items-center space-x-2.5 truncate mr-2">

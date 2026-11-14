@@ -1,6 +1,6 @@
 import React, { useEffect, useMemo, useRef, useState } from 'react';
 import { motion } from 'framer-motion';
-import { ArrowRight, Play } from 'lucide-react';
+import { ArrowRight, Play, X } from 'lucide-react';
 import { Episode, PlaybackProgress } from '../../types';
 import { formatTime, cleanSeriesTitle, cleanEpisodeTitle } from '../../utils/format';
 
@@ -75,10 +75,25 @@ export const UpNextWidget: React.FC<UpNextWidgetProps> = ({ data, onPlay, onOpen
   const [description, setDescription] = useState<string | null>(null);
   const descriptionRef = useRef<HTMLParagraphElement | null>(null);
   const [descriptionClamped, setDescriptionClamped] = useState(false);
-  const [descriptionExpanded, setDescriptionExpanded] = useState(false);
+  const [descriptionReaderOpen, setDescriptionReaderOpen] = useState(false);
+
+  // Full-description reader modal (mirrors the anime overview reader) — the
+  // banner no longer reflows to fit the whole text.
+  useEffect(() => {
+    if (!descriptionReaderOpen) return;
+    const handleKeyDown = (event: KeyboardEvent) => {
+      if (event.key === 'Escape') {
+        event.stopPropagation();
+        setDescriptionReaderOpen(false);
+      }
+    };
+    window.addEventListener('keydown', handleKeyDown);
+    return () => window.removeEventListener('keydown', handleKeyDown);
+  }, [descriptionReaderOpen]);
+
   useEffect(() => {
     setDescription(null);
-    setDescriptionExpanded(false);
+    setDescriptionReaderOpen(false);
     if (!anilistId || !window.electronAPI?.getCatalogDetails) return;
     let cancelled = false;
     window.electronAPI.getCatalogDetails(anilistId)
@@ -94,10 +109,9 @@ export const UpNextWidget: React.FC<UpNextWidgetProps> = ({ data, onPlay, onOpen
     return () => { cancelled = true; };
   }, [anilistId]);
   useEffect(() => {
-    if (descriptionExpanded) return;
     const el = descriptionRef.current;
     setDescriptionClamped(!!el && el.scrollHeight > el.clientHeight + 1);
-  }, [description, descriptionExpanded]);
+  }, [description]);
 
   const displayTitle = useMemo(() => cleanSeriesTitle(seasonName) || seasonName, [seasonName]);
 
@@ -148,16 +162,18 @@ export const UpNextWidget: React.FC<UpNextWidgetProps> = ({ data, onPlay, onOpen
     || `Episode ${progress.episodeNumber || episode.episodeNumber || ''}`.trim();
 
   return (
+    <>
     <motion.div
       data-backdrop-hero
       initial={{ opacity: 0, y: 8 }}
       animate={{ opacity: 1, y: 0 }}
       transition={{ duration: 0.35, ease: 'easeOut' }}
       style={{
-        background: `radial-gradient(ellipse at 78% 20%, hsla(${themeHue}, 80%, 48%, .2), transparent 52%), #090a0f`,
+        '--anime-hue': themeHue,
+        background: `radial-gradient(ellipse at 78% 20%, hsla(${themeHue}, 80%, 48%, .2), transparent 52%), #07060A`,
         borderColor: `hsla(${themeHue}, 65%, 68%, .24)`,
         boxShadow: `0 28px 90px rgba(0,0,0,.45), 0 0 58px hsla(${themeHue}, 78%, 48%, .16)`,
-      }}
+      } as React.CSSProperties}
       className="group relative mb-10 min-h-[360px] overflow-hidden rounded-3xl border shadow-[0_28px_90px_rgba(0,0,0,0.45)] md:min-h-[440px] 2xl:min-h-[500px]"
     >
       {/* Full-bleed banner art with a deep cinematic fade for readable text. */}
@@ -190,7 +206,7 @@ export const UpNextWidget: React.FC<UpNextWidgetProps> = ({ data, onPlay, onOpen
         />
       )}
       <div className="pointer-events-none absolute inset-0 bg-[linear-gradient(90deg,rgba(7,8,12,0.88)_0%,rgba(7,8,12,0.62)_42%,rgba(7,8,12,0.06)_100%)]" />
-      <div className="pointer-events-none absolute inset-0 bg-gradient-to-t from-[#090a0f]/90 via-transparent to-[#090a0f]/10" />
+      <div className="pointer-events-none absolute inset-0 bg-gradient-to-t from-[#07060A]/90 via-transparent to-[#07060A]/10" />
       <div className="pointer-events-none absolute inset-0 mix-blend-screen" style={{ background: `radial-gradient(ellipse at 80% 18%, hsla(${themeHue}, 90%, 58%, .18), transparent 58%)` }} />
 
       <div className="relative z-10 flex min-h-[360px] max-w-3xl flex-col justify-end p-7 md:min-h-[440px] md:p-10 2xl:min-h-[500px] 2xl:p-14">
@@ -208,21 +224,21 @@ export const UpNextWidget: React.FC<UpNextWidgetProps> = ({ data, onPlay, onOpen
           <>
             <p
               ref={descriptionRef}
-              onClick={() => { if (descriptionClamped) setDescriptionExpanded((expanded) => !expanded) }}
-              title={descriptionClamped ? (descriptionExpanded ? 'Show less' : 'Show full description') : undefined}
-              className={`mt-3 max-w-2xl text-[13px] leading-relaxed text-zinc-300/85 drop-shadow-md transition-colors md:text-sm ${
+              onClick={() => { if (descriptionClamped) setDescriptionReaderOpen(true) }}
+              title={descriptionClamped ? 'Show full description' : undefined}
+              className={`mt-3 max-w-2xl text-[13px] leading-relaxed text-zinc-300/85 drop-shadow-md transition-colors md:text-sm line-clamp-3 ${
                 descriptionClamped ? 'cursor-pointer hover:text-zinc-200' : ''
-              } ${descriptionExpanded ? '' : 'line-clamp-3'}`}
+              }`}
             >
               {description}
             </p>
             {descriptionClamped && (
               <button
                 type="button"
-                onClick={() => setDescriptionExpanded((expanded) => !expanded)}
+                onClick={() => setDescriptionReaderOpen(true)}
                 className="self-start text-[11px] font-semibold text-zinc-400 transition-colors hover:text-zinc-200"
               >
-                {descriptionExpanded ? 'Show less' : 'Show more'}
+                Show more
               </button>
             )}
           </>
@@ -233,12 +249,12 @@ export const UpNextWidget: React.FC<UpNextWidgetProps> = ({ data, onPlay, onOpen
             <span>{percent}% completed</span><span>{formatTime(remaining)} remaining</span>
           </div>
           <div className="h-2 overflow-hidden rounded-full border border-white/10 bg-black/45 p-[2px] backdrop-blur">
-            <div className="h-full rounded-full transition-all" style={{ width: `${percent}%`, background: `linear-gradient(90deg, hsl(${themeHue} 78% 48%), hsl(${(themeHue + 24) % 360} 84% 64%))`, boxShadow: `0 0 16px hsla(${themeHue}, 78%, 55%, .45)` }} />
+            <div className="h-full rounded-full transition-all" style={{ width: `${percent}%`, background: 'linear-gradient(90deg, #9E1148, #FF1E6D)', boxShadow: '0 0 16px rgba(255, 30, 109, 0.45)' }} />
           </div>
         </div>
 
         <div className="mt-6 flex flex-wrap items-center gap-3">
-          <button onClick={() => onPlay(episode, startAt)} style={{ backgroundColor: `hsl(${themeHue} 78% 53%)`, boxShadow: `0 10px 32px hsla(${themeHue}, 78%, 48%, .3)` }} className="inline-flex items-center gap-2.5 rounded-2xl px-6 py-3.5 text-sm font-extrabold text-white transition hover:-translate-y-0.5 hover:brightness-110 active:translate-y-0" title={`Resume ${progress.episodeNumber || 'episode'}`}>
+          <button onClick={() => onPlay(episode, startAt)} className="btn-hue inline-flex items-center gap-2.5 rounded-2xl px-6 py-3.5 text-sm font-extrabold text-white transition hover:-translate-y-0.5 active:translate-y-0" title={`Resume ${progress.episodeNumber || 'episode'}`}>
             <Play className="h-4 w-4 fill-current" /> Resume {progress.episodeNumber || 'episode'}
           </button>
           {onOpenDetails && <button onClick={onOpenDetails} className="inline-flex items-center gap-2 rounded-2xl border border-white/15 bg-white/[0.06] px-5 py-3.5 text-sm font-semibold text-zinc-100 backdrop-blur transition hover:bg-white/10">
@@ -247,5 +263,53 @@ export const UpNextWidget: React.FC<UpNextWidgetProps> = ({ data, onPlay, onOpen
         </div>
       </div>
     </motion.div>
+
+    {/* Full-description reader — separate window like the anime overview,
+        so the banner never reflows to fit long text. */}
+    {descriptionReaderOpen && description && (
+      <div
+        className="fixed inset-0 z-[80] flex items-center justify-center modal-dimmer p-4 animate-in fade-in duration-150"
+        onClick={() => setDescriptionReaderOpen(false)}
+      >
+        <section
+          role="dialog"
+          aria-modal="true"
+          data-modal="true"
+          aria-labelledby="upnext-description-title"
+          className="modal-glass flex max-h-[min(78vh,760px)] w-full max-w-2xl flex-col overflow-hidden rounded-2xl animate-in zoom-in-95 duration-150"
+          onClick={(event) => event.stopPropagation()}
+        >
+          <header className="flex items-start justify-between gap-4 border-b border-white/[0.07] px-5 py-4 sm:px-6">
+            <div className="min-w-0">
+              <p className="text-[10px] font-bold uppercase tracking-[0.2em] text-rose-300">Synopsis</p>
+              <h2 id="upnext-description-title" className="mt-1 line-clamp-2 text-base font-bold text-white sm:text-lg">{displayTitle}</h2>
+              <p className="mt-0.5 truncate text-[11px] text-zinc-500">{episodeTitle}</p>
+            </div>
+            <button
+              type="button"
+              autoFocus
+              aria-label="Close full description"
+              onClick={() => setDescriptionReaderOpen(false)}
+              className="flex h-9 w-9 shrink-0 items-center justify-center rounded-lg border border-white/10 text-zinc-400 transition hover:bg-white/10 hover:text-white focus:outline-none focus:ring-2 focus:ring-white/30"
+            >
+              <X className="h-4 w-4" />
+            </button>
+          </header>
+          <div className="overflow-y-auto px-5 py-5 text-sm leading-7 text-zinc-200 sm:px-6 sm:py-6">
+            {description}
+          </div>
+          <footer className="flex justify-end border-t border-white/[0.07] px-5 py-3 sm:px-6">
+            <button
+              type="button"
+              onClick={() => setDescriptionReaderOpen(false)}
+              className="rounded-lg px-3 py-2 text-xs font-semibold text-zinc-300 transition hover:bg-white/10 hover:text-white"
+            >
+              Close
+            </button>
+          </footer>
+        </section>
+      </div>
+    )}
+    </>
   );
 };

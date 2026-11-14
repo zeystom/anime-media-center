@@ -570,8 +570,8 @@ runTest('3.3 WhisperStudio processing options card uses consistent glassmorphic 
   );
 
   assert(
-    wsSrc.includes('rounded-2xl bg-[#141418] border border-white/10 space-y-3 shadow-md'),
-    'Processing options card must match standard rounded dark container'
+    wsSrc.includes('rounded-2xl glass-panel space-y-3 shadow-md'),
+    'Processing options card must match standard glassmorphic container'
   );
 });
 

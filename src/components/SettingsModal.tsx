@@ -30,6 +30,7 @@ import {
 import { AppSettings } from '../types';
 import type { P2pState, RssProvider, UpdaterState, UpdateInfoPayload } from '../types';
 import { showGlobalToast } from './Toast';
+import { GlassSelect } from './common/GlassSelect';
 import { enableDeveloperMode, useDeveloperMode } from '../utils/devMode';
 import { P2pConsentModal } from './P2P/P2pConsentModal';
 import { UpdatePromptModal } from './UpdatePromptModal';
@@ -115,6 +116,7 @@ export const SettingsModal: React.FC<SettingsModalProps> = ({
   const [animeTitleLanguage, setAnimeTitleLanguage] = useState<'english' | 'romaji' | 'native'>(
     settings.animeTitleLanguage ?? 'english'
   );
+  const [navbarBlur, setNavbarBlur] = useState<boolean>(settings.navbarBlur ?? true);
 
   const [binaryStatus, setBinaryStatus] = useState<{
     ffmpegExists: boolean;
@@ -385,6 +387,12 @@ export const SettingsModal: React.FC<SettingsModalProps> = ({
     onSave({ checkForUpdatesOnStartup: next });
   };
 
+  const handleToggleNavbarBlur = () => {
+    const next = !navbarBlur;
+    setNavbarBlur(next);
+    onSave({ navbarBlur: next });
+  };
+
   // Hidden developer-mode unlock: 5 taps on the footer version label (within a
   // 2s window each). Session-only — see src/utils/devMode.ts. Deliberately
   // invisible: the label keeps no hover/cursor/tooltip affordances.
@@ -484,11 +492,13 @@ export const SettingsModal: React.FC<SettingsModalProps> = ({
     onClose();
   };
 
-  // Handle Escape key to close (the P2P consent modal handles its own Escape)
+  // Handle Escape key to close (the P2P consent modal handles its own Escape).
+  // Yields to an open GlassSelect menu so one Escape press closes only the menu.
   useEffect(() => {
     if (!isOpen) return;
     const handleKeyDown = (e: KeyboardEvent) => {
       if (e.key === 'Escape') {
+        if (document.querySelector('[data-select-menu-open="true"]')) return;
         e.preventDefault();
         e.stopPropagation();
         e.stopImmediatePropagation();
@@ -1095,14 +1105,14 @@ export const SettingsModal: React.FC<SettingsModalProps> = ({
 
   return createPortal((
     <div
-      className="fixed inset-0 z-[100] flex items-center justify-center p-4 bg-black/80 animate-in fade-in duration-150"
+      className="fixed inset-0 z-[100] flex items-center justify-center p-4 modal-dimmer animate-in fade-in duration-150"
       onClick={handleClose}
     >
       <div
         role="dialog"
         aria-modal="true"
         data-modal="true"
-        className="w-full max-w-xl max-h-[90vh] flex flex-col bg-[#141418] border border-white/10 rounded-2xl text-zinc-100 shadow-2xl animate-in zoom-in-95 duration-150 overflow-hidden"
+        className="modal-glass w-full max-w-xl max-h-[90vh] flex flex-col rounded-2xl text-zinc-100 animate-in zoom-in-95 duration-150 overflow-hidden"
         onClick={(e) => e.stopPropagation()}
       >
         {/* Header */}
@@ -1246,6 +1256,25 @@ export const SettingsModal: React.FC<SettingsModalProps> = ({
                 </button>
               ))}
             </div>
+          </div>
+
+          {/* Navbar blur toggle: the glass blur over scrolled content is the
+              heaviest per-frame effect; weak PCs can turn it off and keep the
+              cheap banner-only blur. */}
+          <div className="flex items-center justify-between p-3 rounded-xl bg-zinc-900/60 border border-white/5">
+            <div className="space-y-0.5 pr-3">
+              <span className="text-xs font-medium text-zinc-200">
+                Navbar blur
+              </span>
+              <p className="text-[11px] text-zinc-400">
+                Glass blur behind the top bar while scrolling. Turn off on weaker PCs — banners keep a cheap blur either way
+              </p>
+            </div>
+            <ToggleSwitch
+              checked={navbarBlur}
+              onChange={handleToggleNavbarBlur}
+              label="Navbar blur"
+            />
           </div>
 
           {/* Section: Faster-Whisper AI Subtitles Engine */}
@@ -1516,7 +1545,7 @@ export const SettingsModal: React.FC<SettingsModalProps> = ({
                     <button
                       type="button"
                       onClick={handleDownloadWhisperEngine}
-                      className="flex items-center space-x-1.5 px-3.5 py-1.5 rounded-lg bg-purple-600 hover:bg-purple-500 text-white text-xs font-semibold shadow-md shadow-purple-600/20 transition-all shrink-0"
+                      className="btn-primary flex items-center space-x-1.5 px-3.5 py-1.5 rounded-lg text-white text-xs font-semibold transition-all shrink-0"
                     >
                       <Download className="w-3.5 h-3.5" />
                       <span>Download Engine</span>
@@ -1857,7 +1886,7 @@ export const SettingsModal: React.FC<SettingsModalProps> = ({
                         <button
                           type="button"
                           onClick={handleDownloadUpdate}
-                          className="flex items-center space-x-1.5 px-3.5 py-1.5 rounded-lg bg-purple-600 hover:bg-purple-500 text-white text-xs font-medium transition-all shadow-sm"
+                          className="btn-primary flex items-center space-x-1.5 px-3.5 py-1.5 rounded-lg text-white text-xs font-medium transition-all"
                         >
                           <Download className="w-3.5 h-3.5" />
                           <span>Update Now</span>
@@ -2184,16 +2213,18 @@ export const SettingsModal: React.FC<SettingsModalProps> = ({
                     </div>
                     <div className="space-y-1">
                       <label className="text-[10px] font-medium text-zinc-400">Seed after complete</label>
-                      <select
-                        value={limitSeedMinutes}
-                        onChange={(e) => handleSeedMinutesChange(e.target.value)}
-                        className="w-full px-3 py-2 rounded-lg bg-zinc-950/70 border border-white/10 text-xs text-zinc-200 focus:outline-none focus:border-zinc-500 cursor-pointer"
-                      >
-                        <option value="0">Stop immediately</option>
-                        <option value="15">15 minutes</option>
-                        <option value="60">1 hour</option>
-                        <option value="480">8 hours</option>
-                      </select>
+                      <GlassSelect
+                        value={String(limitSeedMinutes)}
+                        onChange={(value) => handleSeedMinutesChange(value)}
+                        options={[
+                          { value: '0', label: 'Stop immediately' },
+                          { value: '15', label: '15 minutes' },
+                          { value: '60', label: '1 hour' },
+                          { value: '480', label: '8 hours' },
+                        ]}
+                        ariaLabel="Seed after complete"
+                        className="w-full px-3 py-2 rounded-lg"
+                      />
                       <p className="text-[10px] text-zinc-500">How long to keep seeding once done.</p>
                     </div>
                   </div>
@@ -2226,17 +2257,19 @@ export const SettingsModal: React.FC<SettingsModalProps> = ({
                               placeholder="Indexer name"
                               className="flex-1 min-w-0 px-2.5 py-1.5 rounded-lg bg-zinc-900 border border-white/10 text-xs text-zinc-200 placeholder-zinc-600 focus:outline-none focus:border-zinc-500"
                             />
-                            <select
+                            <GlassSelect
                               value={provider.type}
-                              onChange={(e) =>
-                                handleProviderField(index, { type: e.target.value as RssProvider['type'] })
+                              onChange={(value) =>
+                                handleProviderField(index, { type: value as RssProvider['type'] })
                               }
-                              className="px-2 py-1.5 rounded-lg bg-zinc-900 border border-white/10 text-xs text-zinc-200 focus:outline-none focus:border-zinc-500 cursor-pointer shrink-0"
+                              options={[
+                                { value: 'rss', label: 'RSS' },
+                                { value: 'torznab', label: 'Torznab' },
+                              ]}
+                              ariaLabel="Feed type"
                               title="Feed type"
-                            >
-                              <option value="rss">RSS</option>
-                              <option value="torznab">Torznab</option>
-                            </select>
+                              className="px-2 py-1.5 rounded-lg shrink-0 w-28"
+                            />
                             <input
                               type="checkbox"
                               checked={provider.enabled}
@@ -2328,7 +2361,7 @@ export const SettingsModal: React.FC<SettingsModalProps> = ({
         </div>
 
         {/* Footer Actions */}
-        <div className="px-6 py-4 border-t border-white/10 flex items-center justify-between shrink-0 bg-[#141418]">
+        <div className="px-6 py-4 border-t border-white/10 flex items-center justify-between shrink-0 bg-black/25">
           <div className="flex items-center space-x-3">
             <button
               type="button"

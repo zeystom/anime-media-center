@@ -85,7 +85,7 @@ export interface ElectronAPI {
   scanLibrary: (rootPath?: string | string[]) => Promise<import('../../electron/types').AnimeFolder[]>;
   getFolderEpisodes: (folderPath: string) => Promise<import('../../electron/types').Episode[]>;
   probeVideo: (filePath: string) => Promise<import('../../electron/types').VideoMetadata>;
-  extractSubtitleTrack: (filePath: string, trackId: string, trackIndex: number | null, isExternal: boolean, externalPath?: string) => Promise<import('../../electron/types').SubtitleTrackPayload>;
+  extractSubtitleTrack: (filePath: string, trackId: string, trackIndex: number | null, isExternal: boolean, externalPath?: string, playbackPosSec?: number, forceFull?: boolean) => Promise<import('../../electron/types').SubtitleTrackPayload>;
   warmSubtitles?: (filePath: string) => Promise<{ success: boolean }>;
   onSubtitleFontsReady?: (callback: (data: { filePath: string; trackIndex: number; fonts: string[] }) => void) => () => void;
   savePlaybackProgress: (progress: import('../../electron/types').PlaybackProgress) => Promise<void>;

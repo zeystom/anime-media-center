@@ -196,7 +196,7 @@ const MetaChip: React.FC<{ children: React.ReactNode; className?: string; title?
   </span>
 )
 
-export const AnimeDetailView: React.FC<AnimeDetailViewProps> = ({
+const AnimeDetailViewImpl: React.FC<AnimeDetailViewProps> = ({
   source,
   folders,
   history,
@@ -769,6 +769,13 @@ export const AnimeDetailView: React.FC<AnimeDetailViewProps> = ({
     [mergedRows, safeEpisodePage]
   )
 
+  // One-episode entries of ANY format (OVAs, specials, music videos, 1-ep
+  // TV shorts) get the film treatment: the hero Play/Resume + Download
+  // actions carry everything and a one-card "Episodes" grid would only
+  // repeat them. Multi-episode OVAs keep the full episode grid — the
+  // mergedRows guard makes the actual payload win over a bad AniList count.
+  const isSingleEpisodeEntry = !isFeatureFilm && episodeTotal === 1 && mergedRows.length <= 1
+
   // After the new page renders, bring the top of the episode section back into
   // view (only for explicit pager clicks, not the auto-jump on open).
   useEffect(() => {
@@ -1244,19 +1251,60 @@ export const AnimeDetailView: React.FC<AnimeDetailViewProps> = ({
       ref={scrollContainerRef}
       onScroll={(event) => reportBackdropProgress(event.currentTarget)}
       style={animeThemeStyle}
-      className="fixed inset-x-0 bottom-0 top-[72px] z-40 overflow-y-auto bg-[#0b0c10]"
+      className="fixed inset-x-0 bottom-0 top-0 z-40 overflow-y-auto pt-[72px] bg-void"
     >
+      {/* Full-page ambient color bleed: an unclipped, heavily blurred
+          duplicate of the banner anchored at the page root (NOT inside the
+          hero's overflow wrapper) so the color atmosphere flows behind the
+          Episodes header and the first row of cards. A CSS mask dissolves it
+          smoothly, so it never ends in a visible line. */}
+      <div
+        aria-hidden
+        className="pointer-events-none absolute inset-x-0 top-0 z-0 h-[950px] overflow-hidden"
+        style={{
+          maskImage: 'linear-gradient(to bottom, black 20%, transparent 100%)',
+          WebkitMaskImage: 'linear-gradient(to bottom, black 20%, transparent 100%)',
+        }}
+      >
+        {showBanner ? (
+          <img
+            src={hero.bannerUrl || ''}
+            alt=""
+            loading="eager"
+            decoding="async"
+            onError={() => setBgFailed(true)}
+            className="absolute inset-0 h-full w-full object-cover object-[center_28%] opacity-[0.28] blur-[110px] saturate-[1.9]"
+            style={{ transform: 'scale(1.15)' }}
+          />
+        ) : hero.posterUrl && !bgFailed ? (
+          <img
+            src={hero.posterUrl || ''}
+            alt=""
+            loading="lazy"
+            onError={() => setBgFailed(true)}
+            className="absolute inset-0 h-full w-full object-cover opacity-[0.24] blur-[110px] saturate-[1.9]"
+            style={{ transform: 'scale(1.15)' }}
+          />
+        ) : null}
+      </div>
+
       {/* Hero */}
       <div
         data-backdrop-hero
         className="relative z-20"
-        style={{
-          background: `radial-gradient(ellipse at 78% 8%, hsla(${themeHue}, 78%, 48%, .22), transparent 48%), #0b0c10`,
-        }}
       >
-        {/* Banner and its fades stay clipped to the hero so they never wash
-            over the episode section below. */}
-        <div className="pointer-events-none absolute inset-0 overflow-hidden">
+        {/* Crisp banner. The whole layer is masked so the artwork dissolves
+            completely into --bg-void BEFORE the hero's bottom edge — no hard
+            horizontal cutoff above the Episodes section. The solid span stays
+            wide (0–70%) so the artwork itself remains clearly visible; only
+            the tail dissolves. */}
+        <div
+          className="pointer-events-none absolute inset-0 overflow-hidden"
+          style={{
+            maskImage: 'linear-gradient(to bottom, black 0%, black 70%, transparent 97%)',
+            WebkitMaskImage: 'linear-gradient(to bottom, black 0%, black 70%, transparent 97%)',
+          }}
+        >
           {showBanner ? (
             <img
               src={hero.bannerUrl || ''}
@@ -1275,9 +1323,13 @@ export const AnimeDetailView: React.FC<AnimeDetailViewProps> = ({
               className="absolute inset-0 h-full w-full scale-125 object-cover opacity-20 blur-3xl"
             />
           ) : null}
-          <div className="pointer-events-none absolute inset-0" style={{ background: 'linear-gradient(to top, #0b0c10 0%, rgba(11,12,16,.72) 18%, rgba(11,12,16,.38) 42%, rgba(11,12,16,.12) 68%, transparent 100%)' }} />
-          <div className="pointer-events-none absolute inset-0" style={{ background: 'linear-gradient(to right, rgba(11,12,16,.68) 0%, rgba(11,12,16,.28) 48%, transparent 100%)' }} />
-          <div className="pointer-events-none absolute inset-0 mix-blend-screen" style={{ background: `radial-gradient(ellipse at 82% 20%, hsla(${themeHue}, 85%, 56%, .22), transparent 58%)` }} />
+          {/* Directional text-protection scrim behind the left/center hero
+              content: guaranteed contrast over any banner brightness. */}
+          <div className="pointer-events-none absolute inset-0" style={{ background: 'radial-gradient(circle at 30% 50%, rgba(7, 6, 10, 0.78) 0%, rgba(7, 6, 10, 0.35) 60%, transparent 100%)' }} />
+          {/* Multi-stop vertical dissolve into --bg-void. Kept gentle so the
+              banner reads clearly; the radial scrim above already guarantees
+              text contrast behind the hero content. */}
+          <div className="pointer-events-none absolute inset-0" style={{ background: 'linear-gradient(180deg, rgba(7, 6, 10, 0.10) 0%, rgba(7, 6, 10, 0.32) 55%, rgba(7, 6, 10, 0.72) 86%, #07060A 100%)' }} />
         </div>
 
         <div className="relative z-10 mx-auto flex w-full max-w-7xl flex-col gap-6 px-6 py-8 sm:flex-row sm:items-stretch">
@@ -1347,7 +1399,7 @@ export const AnimeDetailView: React.FC<AnimeDetailViewProps> = ({
                     </button>
 
                     {statusDropdownOpen && (
-                      <div className="absolute left-0 top-full z-50 mt-1.5 w-full min-w-[160px] rounded-xl border border-white/10 bg-[#12141c]/95 p-1 shadow-2xl shadow-black/80 backdrop-blur-xl">
+                      <div className="absolute left-0 top-full z-50 mt-1.5 w-full min-w-[160px] rounded-xl border border-white/10 glass-dropdown p-1 shadow-2xl shadow-black/80 backdrop-blur-xl">
                         {STATUS_OPTIONS.map((opt) => {
                           const conf = STATUS_THEME[opt.value]
                           const isSelected = statusValue === opt.value
@@ -1428,7 +1480,7 @@ export const AnimeDetailView: React.FC<AnimeDetailViewProps> = ({
                     </button>
 
                     {scoreDropdownOpen && (
-                      <div className="absolute right-0 top-full z-50 mt-1.5 w-24 max-h-60 overflow-y-auto rounded-xl border border-white/10 bg-[#12141c]/95 p-1 shadow-2xl shadow-black/80 backdrop-blur-xl">
+                      <div className="absolute right-0 top-full z-50 mt-1.5 w-24 max-h-60 overflow-y-auto rounded-xl border border-white/10 glass-dropdown p-1 shadow-2xl shadow-black/80 backdrop-blur-xl">
                         <button
                           type="button"
                           onClick={() => {
@@ -1477,12 +1529,41 @@ export const AnimeDetailView: React.FC<AnimeDetailViewProps> = ({
             transition={{ duration: 0.3, ease: 'easeOut' }}
             className="min-w-0 flex-1 pt-2 sm:flex sm:flex-col"
           >
-            <p className="mb-2 text-[10px] font-bold uppercase tracking-[0.22em]" style={{ color: `hsl(${themeHue} 78% 76%)` }}>Anime overview</p>
-            <h1 className="text-4xl font-black leading-tight tracking-tight text-white md:text-5xl" title={hero.title}>
+            {/* Frosted eyebrow pill tinted with the banner's own hue: dark
+                base keeps it legible over bright artwork, the border/text
+                pick up the per-title accent so it feels native to the banner. */}
+            <p
+              className="mb-3 inline-flex self-start items-center rounded-full px-2.5 py-1 text-[10px] font-bold uppercase tracking-[0.08em]"
+              style={{
+                background: 'rgba(12, 8, 18, 0.72)',
+                backdropFilter: 'blur(12px)',
+                WebkitBackdropFilter: 'blur(12px)',
+                border: `1px solid hsla(${themeHue}, 85%, 70%, 0.45)`,
+                color: `hsl(${themeHue}, 90%, 79%)`,
+              }}
+            >
+              Anime overview
+            </p>
+            {/* Click-to-copy title: no hover tooltip; the copy cursor signals
+                the affordance and a toast confirms the copy. */}
+            <h1
+              className="cursor-copy text-4xl font-black leading-tight tracking-tight text-white md:text-5xl"
+              onClick={() => {
+                navigator.clipboard?.writeText(hero.title)
+                  .then(() => showGlobalToast('Title copied to clipboard', 'success', 1800))
+                  .catch(() => {})
+              }}
+            >
               {hero.title}
             </h1>
             {hero.secondaryTitle && (
-              <p className="mt-1.5 text-xs font-semibold text-zinc-400">
+              <p
+                className="mt-1.5 text-xs font-medium"
+                style={{
+                  color: 'rgba(255, 255, 255, 0.88)',
+                  textShadow: '0 2px 10px rgba(0, 0, 0, 0.95), 0 0 24px rgba(0, 0, 0, 0.85)',
+                }}
+              >
                 {hero.secondaryTitle}
               </p>
             )}
@@ -1505,7 +1586,7 @@ export const AnimeDetailView: React.FC<AnimeDetailViewProps> = ({
                   <span>{hero.format}</span>
                 </MetaChip>
               )}
-              {episodeTotal > 0 && !isFeatureFilm && (
+              {episodeTotal > 0 && !isFeatureFilm && !isSingleEpisodeEntry && (
                 <MetaChip>
                   <span>{episodeTotal} EP</span>
                 </MetaChip>
@@ -1522,7 +1603,7 @@ export const AnimeDetailView: React.FC<AnimeDetailViewProps> = ({
                   <span>{ageRating}</span>
                 </MetaChip>
               )}
-              {!isFeatureFilm && releasedEpisodeCount != null && (hero.status === 'RELEASING' || hero.status === 'NOT_YET_RELEASED') && (
+              {!isFeatureFilm && !isSingleEpisodeEntry && releasedEpisodeCount != null && (hero.status === 'RELEASING' || hero.status === 'NOT_YET_RELEASED') && (
                 <MetaChip title="Episodes aired so far">
                   <span>{releasedEpisodeCount}{episodeTotal > 0 ? `/${episodeTotal}` : ''} aired</span>
                 </MetaChip>
@@ -1580,7 +1661,7 @@ export const AnimeDetailView: React.FC<AnimeDetailViewProps> = ({
               <>
                 <p
                   ref={descriptionRef}
-                  className="mt-4 line-clamp-5 max-w-2xl rounded-xl border border-white/[0.06] bg-[#080910]/55 px-3 py-2 text-[13px] leading-relaxed text-zinc-100/95 shadow-lg shadow-black/10 backdrop-blur-[3px]"
+                  className="mt-4 line-clamp-5 max-w-2xl rounded-xl border border-white/[0.08] bg-[rgba(10,7,15,0.72)] px-3.5 py-2.5 text-[13px] leading-relaxed text-zinc-100/95 shadow-lg shadow-black/20 backdrop-blur-[20px]"
                 >
                   {hero.description}
                 </p>
@@ -1602,13 +1683,13 @@ export const AnimeDetailView: React.FC<AnimeDetailViewProps> = ({
                 type="button"
                 onClick={handlePlayResume}
                 disabled={!resumeEpisode}
-                title={resumeEpisode ? (isFeatureFilm ? 'Play or resume this movie' : 'Play the first unwatched local episode') : 'No local episodes on this PC yet'}
-                className={`flex select-none items-center gap-2 rounded-xl px-6 py-3 text-sm font-bold shadow-lg transition-all active:scale-[0.98] ${
+                title={resumeEpisode ? (isFeatureFilm ? 'Play or resume this movie' : isSingleEpisodeEntry ? 'Play or resume this episode' : 'Play the first unwatched local episode') : 'No local episodes on this PC yet'}
+                className={`btn-hue flex select-none items-center gap-2 rounded-xl px-6 py-3 text-sm font-bold transition-all active:scale-[0.98] ${
                   resumeEpisode
                   ? 'text-white hover:scale-[1.02]'
-                    : 'cursor-not-allowed border border-zinc-700/40 bg-zinc-800 text-zinc-500 opacity-60 shadow-none'
+                    : 'cursor-not-allowed text-zinc-500 opacity-60'
                 }`}
-                style={resumeEpisode ? { background: `linear-gradient(110deg, hsl(${themeHue} 72% 48%), hsl(${(themeHue + 24) % 360} 82% 60%))`, boxShadow: `0 12px 30px hsla(${themeHue}, 70%, 45%, .28)` } : undefined}
+                style={resumeEpisode ? undefined : { backgroundImage: 'none', background: '#27272a', border: '1px solid rgba(255,255,255,0.06)', boxShadow: 'none' }}
               >
                 <Play className="h-4 w-4 fill-current" />
                 <span>
@@ -1627,23 +1708,23 @@ export const AnimeDetailView: React.FC<AnimeDetailViewProps> = ({
                     episodesCount: hero.episodesCount,
                   }, !isFollowing)}
                   title={isFollowing ? 'Unfollow series updates' : 'Follow series for new episode alerts'}
-                  className={`flex w-[124px] select-none items-center justify-center gap-1.5 rounded-xl border px-3 py-3 text-xs font-bold transition-all hover:scale-[1.02] active:scale-[0.98] ${
+                  className={`btn-glass flex w-[124px] select-none items-center justify-center gap-1.5 rounded-xl px-3 py-3 text-xs font-bold transition-all hover:scale-[1.02] active:scale-[0.98] ${
                     isFollowing
-                      ? 'border-emerald-400/35 bg-gradient-to-r from-emerald-500/20 to-teal-500/20 text-emerald-200 shadow-sm shadow-emerald-950/40 hover:bg-emerald-500/25'
-                      : 'border-emerald-400/25 bg-emerald-400/10 text-emerald-300 hover:border-emerald-400/40 hover:bg-emerald-400/20'
+                      ? 'text-emerald-200 shadow-glow-emerald-sm hover:bg-emerald-400/10'
+                      : 'text-zinc-300'
                   }`}
                 >
                   {isFollowing ? (
                     <>
-                      <BellRing className="h-4 w-4 text-emerald-300 shrink-0" />
+                      <BellRing className="h-4 w-4 text-emerald-300 drop-shadow-[0_0_6px_rgba(52,211,153,0.7)] shrink-0" />
                       <span className="truncate">Following</span>
-                      <Check className="h-3 w-3 text-emerald-400 shrink-0" />
+                      <Check className="h-3 w-3 text-emerald-300 shrink-0" />
                     </>
                   ) : (
                     <>
-                      <Bell className="h-4 w-4 text-emerald-400/80 shrink-0" />
+                      <Bell className="h-4 w-4 text-zinc-400 shrink-0" />
                       <span className="truncate">Follow</span>
-                      <Plus className="h-3 w-3 text-emerald-400/60 shrink-0" />
+                      <Plus className="h-3 w-3 text-zinc-500 shrink-0" />
                     </>
                   )}
                 </button>
@@ -1659,23 +1740,23 @@ export const AnimeDetailView: React.FC<AnimeDetailViewProps> = ({
                 }, !isFavourite)}
                 aria-pressed={isFavourite}
                 title={isFavourite ? 'Remove from favourites' : 'Add to favourites'}
-                className={`flex w-[136px] select-none items-center justify-center gap-1.5 rounded-xl border px-3 py-3 text-xs font-bold transition-all hover:scale-[1.02] active:scale-[0.98] ${
+                className={`btn-glass flex w-[136px] select-none items-center justify-center gap-1.5 rounded-xl px-3 py-3 text-xs font-bold transition-all hover:scale-[1.02] active:scale-[0.98] ${
                   isFavourite
-                    ? 'border-rose-400/40 bg-gradient-to-r from-rose-500/20 to-pink-500/20 text-rose-100 shadow-sm shadow-rose-950/40 hover:bg-rose-500/25'
-                    : 'border-rose-400/25 bg-rose-400/10 text-rose-200 hover:border-rose-400/40 hover:bg-rose-400/20'
+                    ? 'text-rose-100 shadow-glow-crimson-sm hover:bg-rose-500/10'
+                    : 'text-zinc-300'
                 }`}
               >
                 {isFavourite ? (
                   <>
-                    <Heart className="h-4 w-4 fill-current text-rose-400 shrink-0" />
+                    <Heart className="h-4 w-4 fill-current text-rose-400 drop-shadow-[0_0_6px_rgba(255,30,109,0.7)] shrink-0" />
                     <span className="truncate">Favourited</span>
                     <Check className="h-3 w-3 text-rose-300 shrink-0" />
                   </>
                 ) : (
                   <>
-                    <Heart className="h-4 w-4 text-rose-300/80 shrink-0" />
+                    <Heart className="h-4 w-4 text-zinc-400 shrink-0" />
                     <span className="truncate">Favourite</span>
-                    <Plus className="h-3 w-3 text-rose-400/60 shrink-0" />
+                    <Plus className="h-3 w-3 text-zinc-500 shrink-0" />
                   </>
                 )}
               </button>
@@ -1684,9 +1765,9 @@ export const AnimeDetailView: React.FC<AnimeDetailViewProps> = ({
                 <button
                   type="button"
                   onClick={() => onOpenWhisper(localFolder)}
-                  className="flex select-none items-center gap-2 rounded-xl border border-indigo-500/40 bg-indigo-600/20 px-4 py-3 text-xs font-bold text-indigo-300 transition-all hover:bg-indigo-600/30 hover:scale-[1.02] active:scale-[0.98]"
+                  className="btn-glass flex select-none items-center gap-2 rounded-xl px-4 py-3 text-xs font-bold text-zinc-200 transition-all hover:scale-[1.02] active:scale-[0.98]"
                 >
-                  <Wand2 className="h-4 w-4" />
+                  <Wand2 className="h-4 w-4 text-rose-300/90" />
                   <span>Whisper Batch Subtitles</span>
                 </button>
               )}
@@ -1696,9 +1777,9 @@ export const AnimeDetailView: React.FC<AnimeDetailViewProps> = ({
                   type="button"
                   onClick={() => setConfirmDeleteSeason(true)}
                   title="Delete the downloaded files from this PC (history and progress are kept)"
-                  className="flex select-none items-center gap-2 rounded-xl border border-red-500/30 bg-red-500/10 px-4 py-3 text-xs font-bold text-red-300 transition-all hover:bg-red-500/20 hover:scale-[1.02] active:scale-[0.98]"
+                  className="btn-glass group flex select-none items-center gap-2 rounded-xl px-4 py-3 text-xs font-bold text-zinc-300 transition-all hover:scale-[1.02] active:scale-[0.98]"
                 >
-                  <Trash2 className="h-4 w-4" />
+                  <Trash2 className="h-4 w-4 text-zinc-400 transition-colors group-hover:text-rose-400" />
                   <span>Delete from PC</span>
                 </button>
               )}
@@ -1711,10 +1792,10 @@ export const AnimeDetailView: React.FC<AnimeDetailViewProps> = ({
                     onLongPress={() => setPickerState({ episode: null })}
                     disabled={downloadedSeason || queueing}
                     title={downloadedSeason ? 'All listed episodes are already on this PC' : 'Click to download · hold for manual release search'}
-                    className={`flex select-none items-center gap-2 border border-cyan-400/30 bg-cyan-400/10 px-4 py-3 text-xs font-bold text-cyan-200 transition-all hover:bg-cyan-400/20 disabled:cursor-default disabled:opacity-60 ${downloadRoots.length > 1 ? 'rounded-l-xl border-r-0' : 'rounded-xl'}`}
+                    className={`btn-glass flex select-none items-center gap-2 px-4 py-3 text-xs font-bold text-zinc-200 transition-all hover:scale-[1.02] disabled:cursor-default disabled:opacity-60 disabled:hover:scale-100 ${downloadRoots.length > 1 ? 'rounded-l-xl' : 'rounded-xl'}`}
                   >
-                    {downloadedSeason ? <CheckCircle className="h-4 w-4" /> : <Download className="h-4 w-4" />}
-                    <span>{queueing ? 'Searching…' : downloadedSeason ? (isFeatureFilm ? 'Movie downloaded' : 'Season downloaded') : isFeatureFilm ? 'Download movie' : 'Download season'}</span>
+                    {downloadedSeason ? <CheckCircle className="h-4 w-4 text-emerald-300" /> : <Download className="h-4 w-4 text-zinc-300" />}
+                    <span>{queueing ? 'Searching…' : downloadedSeason ? (isFeatureFilm ? 'Movie downloaded' : isSingleEpisodeEntry ? 'Episode downloaded' : 'Season downloaded') : isFeatureFilm ? 'Download movie' : isSingleEpisodeEntry ? 'Download episode' : 'Download season'}</span>
                   </DownloadActionButton>
                   {downloadRoots.length > 1 && (
                     <>
@@ -1723,12 +1804,12 @@ export const AnimeDetailView: React.FC<AnimeDetailViewProps> = ({
                         aria-label="Choose download folder"
                         title={`Download to: ${defaultDownloadRoot || ''}`}
                         onClick={() => setSeasonFolderMenuOpen((open) => !open)}
-                        className="flex w-11 items-center justify-center rounded-r-xl border border-cyan-400/30 bg-cyan-400/10 text-cyan-200 transition-colors hover:bg-cyan-400/20"
+                        className="btn-glass -ml-px flex w-11 items-center justify-center rounded-r-xl text-zinc-300 transition-colors"
                       >
                         <MoreHorizontal className="h-4 w-4" />
                       </button>
                       {seasonFolderMenuOpen && (
-                        <div className="absolute bottom-full right-0 z-50 mb-2 max-h-56 w-72 overflow-y-auto rounded-xl border border-white/10 bg-[#17181f] p-1.5 shadow-2xl">
+                        <div className="glass-dropdown animate-pop-in absolute bottom-full right-0 z-50 mb-2 max-h-56 w-72 overflow-y-auto rounded-xl p-1.5">
                           <p className="px-2 py-1.5 text-[10px] font-bold uppercase tracking-wider text-zinc-500">Download to folder</p>
                           {downloadRoots.map((root) => (
                             <button
@@ -1736,7 +1817,7 @@ export const AnimeDetailView: React.FC<AnimeDetailViewProps> = ({
                               type="button"
                               title={root}
                               onClick={() => { setSelectedDownloadRoot(root); setSeasonFolderMenuOpen(false) }}
-                              className={`block w-full rounded-lg px-2 py-2 text-left text-[11px] transition-colors ${defaultDownloadRoot === root ? 'bg-cyan-300/10 text-cyan-100' : 'text-zinc-300 hover:bg-white/5'}`}
+                              className={`block w-full rounded-lg px-2 py-2 text-left text-[11px] transition-colors ${defaultDownloadRoot === root ? 'bg-rose-500/15 text-rose-200' : 'text-zinc-300 hover:bg-white/5'}`}
                             >
                               <span className="block truncate font-medium">{root.split(/[\\/]/).filter(Boolean).slice(-1)[0] || root}</span>
                               <span className="mt-0.5 block truncate font-mono text-[9px] text-zinc-500">{root}</span>
@@ -1752,10 +1833,10 @@ export const AnimeDetailView: React.FC<AnimeDetailViewProps> = ({
                   type="button"
                   disabled
                   title={DOWNLOAD_TOOLTIP}
-                  className="flex cursor-not-allowed select-none items-center gap-2 rounded-xl border border-zinc-700/40 bg-zinc-800/40 px-4 py-3 text-xs font-bold text-zinc-500 opacity-70"
+                  className="flex cursor-not-allowed select-none items-center gap-2 rounded-xl border border-white/[0.07] bg-white/[0.04] px-4 py-3 text-xs font-bold text-zinc-500 opacity-70"
                 >
                   <Download className="h-4 w-4" />
-                  <span>{isFeatureFilm ? 'Download movie' : 'Download season'}</span>
+                  <span>{isFeatureFilm ? 'Download movie' : isSingleEpisodeEntry ? 'Download episode' : 'Download season'}</span>
                 </button>
               )}
             </div>
@@ -1800,10 +1881,10 @@ export const AnimeDetailView: React.FC<AnimeDetailViewProps> = ({
 
       {/* Movies use the hero Play/Resume action; an episode-style movie card
           only repeats the same action and creates a one-item section. */}
-      {!isFeatureFilm && <>
+      {!isFeatureFilm && !isSingleEpisodeEntry && <>
       <section
         ref={episodesSectionRef}
-        className="mx-auto w-full max-w-7xl scroll-mt-4 px-6 pb-16"
+        className="relative z-10 mx-auto w-full max-w-7xl scroll-mt-4 px-6 pb-16"
       >
         <div className="mb-3 flex items-center justify-between">
           <div>
@@ -1924,7 +2005,7 @@ export const AnimeDetailView: React.FC<AnimeDetailViewProps> = ({
       </section>
       </>}
 
-      <section className="mx-auto w-full max-w-7xl px-6 pb-16">
+      <section className="relative z-10 mx-auto w-full max-w-7xl px-6 pb-16">
         <div className="mb-4 flex items-end justify-between gap-4">
           <div>
             <h2 className="text-xl font-black text-white">Related</h2>
@@ -1952,11 +2033,11 @@ export const AnimeDetailView: React.FC<AnimeDetailViewProps> = ({
                 </>
               )
               return isCurrent ? (
-                <div key={item.anilistId} aria-current="true" title="You are here" className="cursor-default overflow-hidden rounded-xl border border-violet-300/40 bg-[#17181e] shadow-lg shadow-violet-950/30 ring-2 ring-violet-400/80">
+                <div key={item.anilistId} aria-current="true" title="You are here" className="cursor-default overflow-hidden rounded-xl border border-violet-300/40 bg-[#171320] shadow-lg shadow-violet-950/30 ring-2 ring-violet-400/80">
                   {card}
                 </div>
               ) : (
-                <button key={item.anilistId} type="button" onClick={() => onOpenRelated(item)} className="group overflow-hidden rounded-xl border border-white/10 bg-[#17181e] text-left transition hover:-translate-y-0.5 hover:border-violet-300/40 hover:shadow-lg hover:shadow-violet-950/20">
+                <button key={item.anilistId} type="button" onClick={() => onOpenRelated(item)} className="group overflow-hidden rounded-xl border border-white/10 bg-elevated text-left transition hover:-translate-y-0.5 hover:border-rose-300/40 hover:shadow-lg hover:shadow-rose-950/20">
                   {card}
                 </button>
               )
@@ -1967,14 +2048,14 @@ export const AnimeDetailView: React.FC<AnimeDetailViewProps> = ({
 
       {descriptionReaderOpen && hero.description && (
         <div
-          className="fixed inset-0 z-[80] flex items-center justify-center bg-black/70 p-4 backdrop-blur-sm animate-in fade-in duration-150"
+          className="fixed inset-0 z-[80] flex items-center justify-center modal-dimmer p-4 animate-in fade-in duration-150"
           onClick={() => setDescriptionReaderOpen(false)}
         >
           <section
             role="dialog"
             aria-modal="true"
             aria-labelledby="anime-description-title"
-            className="flex max-h-[min(78vh,760px)] w-full max-w-2xl flex-col overflow-hidden rounded-2xl border border-white/10 bg-[#111218] shadow-2xl shadow-black/60 animate-in zoom-in-95 duration-150"
+            className="modal-glass flex max-h-[min(78vh,760px)] w-full max-w-2xl flex-col overflow-hidden rounded-2xl animate-in zoom-in-95 duration-150"
             onClick={(event) => event.stopPropagation()}
           >
             <header className="flex items-start justify-between gap-4 border-b border-white/[0.07] px-5 py-4 sm:px-6">
@@ -2011,14 +2092,14 @@ export const AnimeDetailView: React.FC<AnimeDetailViewProps> = ({
       {/* Season delete confirmation (files only — history and progress are kept) */}
       {confirmDeleteSeason && localFolder && (
         <div
-          className="fixed inset-0 z-50 flex items-center justify-center bg-black/80 p-4 animate-in fade-in duration-150"
+          className="fixed inset-0 z-50 flex items-center justify-center modal-dimmer p-4 animate-in fade-in duration-150"
           onClick={() => !deleteBusy && setConfirmDeleteSeason(false)}
         >
           <div
             role="dialog"
             aria-modal="true"
             data-modal="true"
-            className="w-full max-w-md rounded-2xl border border-white/10 bg-[#141418] p-5 text-zinc-100 shadow-2xl animate-in zoom-in-95 duration-150"
+            className="modal-glass w-full max-w-md rounded-2xl p-5 text-zinc-100 animate-in zoom-in-95 duration-150"
             onClick={(e) => e.stopPropagation()}
           >
             <div className="flex items-start gap-3">
@@ -2060,14 +2141,14 @@ export const AnimeDetailView: React.FC<AnimeDetailViewProps> = ({
       {/* Single-episode delete confirmation */}
       {confirmDeleteEpisode && (
         <div
-          className="fixed inset-0 z-50 flex items-center justify-center bg-black/80 p-4 animate-in fade-in duration-150"
+          className="fixed inset-0 z-50 flex items-center justify-center modal-dimmer p-4 animate-in fade-in duration-150"
           onClick={() => !deleteBusy && setConfirmDeleteEpisode(null)}
         >
           <div
             role="dialog"
             aria-modal="true"
             data-modal="true"
-            className="w-full max-w-md rounded-2xl border border-white/10 bg-[#141418] p-5 text-zinc-100 shadow-2xl animate-in zoom-in-95 duration-150"
+            className="modal-glass w-full max-w-md rounded-2xl p-5 text-zinc-100 animate-in zoom-in-95 duration-150"
             onClick={(e) => e.stopPropagation()}
           >
             <div className="flex items-start gap-3">
@@ -2127,3 +2208,7 @@ export const AnimeDetailView: React.FC<AnimeDetailViewProps> = ({
     </div>
   )
 }
+
+// Memoized: the title page re-renders on its own state only. App-level churn
+// (scroll progress, P2P bursts) must not reconcile this 2000-line tree.
+export const AnimeDetailView = React.memo(AnimeDetailViewImpl);

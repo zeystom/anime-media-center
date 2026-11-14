@@ -5,6 +5,7 @@ import { HomeView } from './components/Home/HomeView';
 import type { DetailSource } from './components/AnimeDetail/AnimeDetailView';
 import { CompletionPrompt, CompletionPromptData } from './components/common/CompletionPrompt';
 import { AnimeFolder, Episode, AppSettings, PlaybackProgress, UserLibraryEntry, P2pState, UpdateInfoPayload } from './types';
+import type { CatalogRelatedTitle } from './types';
 import { useLocalStatus } from './hooks/useLocalStatus';
 import { ToastProvider, showGlobalToast } from './components/Toast';
 import { getPathBasename, getPathDirname, formatFileSize, cleanSeriesTitle, cleanEpisodeTitle } from './utils/format';
@@ -117,7 +118,13 @@ export const App: React.FC = () => {
   const [settingsOpen, setSettingsOpen] = useState<boolean>(false);
   const [isWhisperActive, setIsWhisperActive] = useState<boolean>(false);
   const [detailSource, setDetailSource] = useState<DetailSource | null>(null);
-  const [navbarBackdropProgress, setNavbarBackdropProgress] = useState(1);
+  // Navbar backdrop progress lives OUTSIDE React state: scroll updates flow
+  // through a tiny pub-sub so only the navbar re-renders per scroll step —
+  // never the whole Home/Discover/Details page tree (scroll FPS).
+  const navbarProgressEmitter = useRef<{ value: number; listeners: Set<(progress: number) => void> }>({
+    value: 1,
+    listeners: new Set(),
+  });
   const [whisperMounted, setWhisperMounted] = useState(false);
   const [settingsMounted, setSettingsMounted] = useState(false);
   const [startupUpdate, setStartupUpdate] = useState<UpdateInfoPayload | null>(null);
@@ -151,13 +158,116 @@ export const App: React.FC = () => {
   }, [settingsOpen]);
 
   const updateNavbarBackdropProgress = useCallback((progress: number) => {
-    const next = Math.max(0, Math.min(1, Math.round(progress * 40) / 40));
-    setNavbarBackdropProgress((current) => Math.abs(current - next) < 0.025 ? current : next);
+    const emitter = navbarProgressEmitter.current;
+    // Quantized to 1/20 (was 1/40): during fast scrolls the coarser steps
+    // halve Navbar re-renders; the 120ms img transitions hide the stepping.
+    const next = Math.max(0, Math.min(1, Math.round(progress * 20) / 20));
+    if (Math.abs(emitter.value - next) < 0.05) return;
+    emitter.value = next;
+    emitter.listeners.forEach((listener) => listener(next));
+  }, []);
+
+  // Marks a scroll container as actively scrolling for ~150ms after the last
+  // scroll event. CSS keys off [data-scrolling] to suppress hover transitions
+  // on the cards streaming under a stationary cursor (enter/leave transition
+  // storms were eating FPS in card-dense areas).
+  const markScrolling = useCallback((event: React.UIEvent<HTMLDivElement>) => {
+    const el = event.currentTarget as HTMLDivElement & { __scrollIdle?: number };
+    el.setAttribute('data-scrolling', 'true');
+    window.clearTimeout(el.__scrollIdle);
+    el.__scrollIdle = window.setTimeout(() => el.removeAttribute('data-scrolling'), 150);
   }, []);
 
   useEffect(() => {
-    setNavbarBackdropProgress(1);
+    const emitter = navbarProgressEmitter.current;
+    if (emitter.value !== 1) {
+      emitter.value = 1;
+      emitter.listeners.forEach((listener) => listener(1));
+    }
   }, [currentTab, detailSource]);
+
+  // Stable handlers for the memoized page views below: identical identities
+  // let React.memo skip entire page trees during unrelated App re-renders
+  // (P2P progress bursts, notification churn, ...).
+  const handleSelectTab = useCallback((tab: 'home' | 'discover' | 'library' | 'schedule' | 'downloads' | 'whisper') => {
+    setInitialDownloadEpisode(null);
+    setDetailSource(null);
+    setCurrentTab(tab);
+  }, []);
+  const handleOpenSettings = useCallback(() => setSettingsOpen(true), []);
+  const handleSelectCatalogItem = useCallback((item: RailItem) => setDetailSource({ kind: 'catalog', item }), []);
+  const handleSelectLocalFolder = useCallback((folder: AnimeFolder) => setDetailSource({ kind: 'local', folder }), []);
+  const handleSelectSearchItem = useCallback((item: RailItem) => {
+    setInitialDownloadEpisode(null);
+    setDetailSource({ kind: 'catalog', item });
+  }, []);
+  const handleCloseDetails = useCallback(() => {
+    setInitialDownloadEpisode(null);
+    setDetailSource(null);
+  }, []);
+  const handleOpenSchedule = useCallback(() => setCurrentTab('schedule'), []);
+  const handleOpenDiscover = useCallback(() => setCurrentTab('discover'), []);
+  const handleSelectGenre = useCallback((genre: string) => {
+    setDetailSource(null);
+    setDiscoverInitialGenre(genre);
+    setCurrentTab('discover');
+  }, []);
+  const handleClearDiscoverGenre = useCallback(() => setDiscoverInitialGenre(null), []);
+  const handleOpenRelated = useCallback((item: CatalogRelatedTitle) => {
+    setDetailSource({
+      kind: 'catalog',
+      item: {
+        anilistId: item.anilistId,
+        title: item.title.english || item.title.romaji || '',
+        posterUrl: item.posterUrl,
+        bannerUrl: item.bannerUrl,
+        averageScore: item.averageScore,
+        episodesCount: item.episodesCount,
+        format: item.format || undefined,
+        status: item.status || undefined,
+        genres: item.genres,
+        seasonYear: item.seasonYear,
+      },
+    });
+  }, []);
+  const handleUserEntryChange = useCallback((entry: UserLibraryEntry) => {
+    setUserEntries((prev) => ({ ...prev, [entry.anilistId]: entry }));
+  }, []);
+  const handleUserEntryRemove = useCallback((id: number) => {
+    setUserEntries((prev) => {
+      const next = { ...prev };
+      delete next[id];
+      return next;
+    });
+  }, []);
+  const handleOpenWhisperFolder = useCallback((folder: AnimeFolder) => {
+    setSelectedFolder(folder);
+    setInitialDownloadEpisode(null);
+    setDetailSource(null);
+    setCurrentTab('whisper');
+  }, []);
+  const handleNotificationAction = useCallback((item: AppNotification) => {
+    if (item.kind === 'airing' && item.anilistId && item.episode) {
+      setInitialDownloadEpisode(item.episode);
+      setDetailSource({
+        kind: 'catalog',
+        item: toRailItem({
+          anilistId: item.anilistId,
+          idMal: null,
+          title: item.title,
+          posterUrl: item.posterUrl ?? null,
+          episode: item.episode,
+          airingAt: Math.floor(item.createdAt / 1000),
+        }),
+      });
+    } else if (item.kind === 'download') {
+      setDetailSource(null);
+      setCurrentTab('downloads');
+    } else if (item.kind === 'whisper') {
+      setDetailSource(null);
+      setCurrentTab('whisper');
+    }
+  }, []);
 
   // Library & Data state
   const [settings, setSettings] = useState<AppSettings>({
@@ -166,6 +276,7 @@ export const App: React.FC = () => {
     defaultLibraryRoot: '',
     libraryFolders: [],
     autoPlayNext: true,
+    navbarBlur: true,
     subtitlesFontSize: 38,
     subtitlesOutline: true,
     subtitlesTextColor: '#ffffff',
@@ -1006,7 +1117,7 @@ export const App: React.FC = () => {
   };
 
   // Play Episode
-  const handlePlayEpisode = (episode: Episode, startAt = 0) => {
+  const handlePlayEpisode = useCallback((episode: Episode, startAt = 0) => {
     if (episode.isDownloading) {
       showGlobalToast(
         'This media is currently downloading in your torrent client and cannot be played yet.',
@@ -1027,10 +1138,10 @@ export const App: React.FC = () => {
     if (window.electronAPI?.setFullScreen) {
       window.electronAPI.setFullScreen(true).catch(() => {});
     }
-  };
+  }, [folders, history]);
 
   // Close Player & Refresh Progress
-  const handleClosePlayer = async () => {
+  const handleClosePlayer = useCallback(async () => {
     // Automatically exit fullscreen and return to maximized windowed mode (taskbar visible)
     if (window.electronAPI?.setFullScreen) {
       await window.electronAPI.setFullScreen(false).catch(() => {});
@@ -1039,7 +1150,7 @@ export const App: React.FC = () => {
     const watchHistory = await window.electronAPI.getAllPlaybackProgress();
     setHistory(watchHistory);
     refreshUserEntries();
-  };
+  }, [refreshUserEntries]);
 
   // Switch episode inside Player
   const handlePlayerEpisodeChange = (newEpisode: Episode, startAt?: number) => {
@@ -1116,7 +1227,7 @@ export const App: React.FC = () => {
   };
 
   // Save Settings - Only rescan library if libraryFolders changed
-  const handleSaveSettings = async (newSettings: Partial<AppSettings>) => {
+  const handleSaveSettings = useCallback(async (newSettings: Partial<AppSettings>) => {
     const prevFolders = settings.libraryFolders || (settings.defaultLibraryRoot ? [settings.defaultLibraryRoot] : []);
     const updated = await window.electronAPI.updateSettings(newSettings);
     setSettings(updated);
@@ -1130,7 +1241,7 @@ export const App: React.FC = () => {
     if (foldersChanged) {
       handleRefreshLibrary();
     }
-  };
+  }, [settings.libraryFolders, settings.defaultLibraryRoot, handleRefreshLibrary]);
 
   const handleCloseSettings = useCallback(() => {
     setSettingsOpen(false);
@@ -1199,7 +1310,11 @@ export const App: React.FC = () => {
 
   // This is a single-page app, so the native mouse Back button must never
   // traverse Chromium's document history (which also contains the startup
-  // splash page). Handle Back as an app-level stack instead.
+  // splash page). Handle Back as an app-level stack instead. The touchpad
+  // two-finger swipe gesture (and Alt+Left) fire Chromium history traversal
+  // that cannot be prevented, so a sentinel history entry is kept: any
+  // traversal lands back on this same document (popstate) and re-runs the
+  // exact same app-level back action as the mouse Back button.
   useEffect(() => {
     const navigateBack = () => {
       if (activePlayerEpisode) {
@@ -1223,20 +1338,49 @@ export const App: React.FC = () => {
       if (event.type === 'mousedown' && event.button === 3) navigateBack();
     };
 
+    // Keep one sentinel entry ahead so swipe-triggered traversal stays inside
+    // this document. Re-pushed after every popstate; skipped when the current
+    // entry already is the sentinel, so the stack doesn't grow unboundedly.
+    const pushGuardEntry = () => {
+      try {
+        if (!window.history.state?.kaikoGuard) window.history.pushState({ kaikoGuard: true }, '');
+      } catch {}
+    };
+    const handlePopState = () => {
+      navigateBack();
+      pushGuardEntry();
+    };
+
+    pushGuardEntry();
     // Prevent Chromium from navigating away and handle Back exactly once.
     window.addEventListener('mousedown', suppressMouseNavigation, true);
     window.addEventListener('mouseup', suppressMouseNavigation, true);
     window.addEventListener('auxclick', suppressMouseNavigation, true);
+    window.addEventListener('popstate', handlePopState);
     return () => {
       window.removeEventListener('mousedown', suppressMouseNavigation, true);
       window.removeEventListener('mouseup', suppressMouseNavigation, true);
       window.removeEventListener('auxclick', suppressMouseNavigation, true);
+      window.removeEventListener('popstate', handlePopState);
     };
   }, [detailSource, currentTab, activePlayerEpisode, settingsOpen, handleClosePlayer]);
 
+  const p2pIndicator = useMemo(() => {
+    if (!p2pState?.enabled) {
+      return { enabled: false, status: 'P2P Off', icon: 'HardDrive', bgColor: 'bg-zinc-800', textColor: 'text-zinc-400' }
+    }
+    if (p2pState.jobs.some((j) => j.status === 'downloading' || j.status === 'connecting')) {
+      return { enabled: true, status: 'Downloading', icon: 'HardDrive', bgColor: 'bg-indigo-500/20', textColor: 'text-indigo-300' }
+    }
+    if (p2pState.jobs.some((j) => j.status === 'seeding')) {
+      return { enabled: true, status: 'Seeding', icon: 'ShieldCheck', bgColor: 'bg-emerald-500/20', textColor: 'text-emerald-300' }
+    }
+    return { enabled: true, status: 'Idle', icon: 'ShieldCheck', bgColor: 'bg-zinc-700', textColor: 'text-zinc-300' }
+  }, [p2pState]);
+
   return (
     <ToastProvider>
-      <div className="flex h-screen w-screen flex-col overflow-hidden bg-[#0b0c10] font-sans text-zinc-100">
+      <div className="relative flex h-screen w-screen flex-col overflow-hidden bg-[#07060A] font-sans text-zinc-100">
       {/* Top Navbar - Only rendered in Menu/Library/Whisper views */}
       {!activePlayerEpisode && (
         <>
@@ -1250,58 +1394,20 @@ export const App: React.FC = () => {
                 ? mostRecentWatched?.folder?.bannerUrl || mostRecentWatched?.folder?.posterUrl
                 : null}
             backdropMode={detailSource ? 'anime' : 'ambient'}
-            backdropProgress={navbarBackdropProgress}
-            onSelectTab={(tab) => {
-              setInitialDownloadEpisode(null);
-              setDetailSource(null);
-              setCurrentTab(tab);
-            }}
-            onOpenSettings={() => setSettingsOpen(true)}
-            onSelectSearchItem={(item) => {
-              setInitialDownloadEpisode(null);
-              setDetailSource({ kind: 'catalog', item });
-            }}
+            backdropEmitter={navbarProgressEmitter}
+            blurEnabled={settings.navbarBlur ?? true}
+            onSelectTab={handleSelectTab}
+            onOpenSettings={handleOpenSettings}
+            onSelectSearchItem={handleSelectSearchItem}
             notifications={notifications}
             onNotificationRead={markNotificationRead}
             onDismissNotification={dismissNotification}
             onMarkAllNotificationsRead={markAllNotificationsRead}
             onClearNotifications={clearNotifications}
-            onNotificationAction={(item) => {
-              if (item.kind === 'airing' && item.anilistId && item.episode) {
-                setInitialDownloadEpisode(item.episode);
-                setDetailSource({
-                  kind: 'catalog',
-                  item: toRailItem({
-                    anilistId: item.anilistId,
-                    idMal: null,
-                    title: item.title,
-                    posterUrl: item.posterUrl ?? null,
-                    episode: item.episode,
-                    airingAt: Math.floor(item.createdAt / 1000),
-                  }),
-                });
-              } else if (item.kind === 'download') {
-                setDetailSource(null);
-                setCurrentTab('downloads');
-              } else if (item.kind === 'whisper') {
-                setDetailSource(null);
-                setCurrentTab('whisper');
-              }
-            }}
+            onNotificationAction={handleNotificationAction}
             isWhisperActive={isWhisperActive}
             downloadsActive={!!p2pState?.enabled && p2pState.jobs.some((j) => j.status === 'downloading' || j.status === 'connecting' || j.status === 'queued')}
-            p2pIndicator={(() => {
-              if (!p2pState?.enabled) {
-                return { enabled: false, status: 'P2P Off', icon: 'HardDrive', bgColor: 'bg-zinc-800', textColor: 'text-zinc-400' }
-              }
-              if (p2pState.jobs.some((j) => j.status === 'downloading' || j.status === 'connecting')) {
-                return { enabled: true, status: 'Downloading', icon: 'HardDrive', bgColor: 'bg-indigo-500/20', textColor: 'text-indigo-300' }
-              }
-              if (p2pState.jobs.some((j) => j.status === 'seeding')) {
-                return { enabled: true, status: 'Seeding', icon: 'ShieldCheck', bgColor: 'bg-emerald-500/20', textColor: 'text-emerald-300' }
-              }
-              return { enabled: true, status: 'Idle', icon: 'ShieldCheck', bgColor: 'bg-zinc-700', textColor: 'text-zinc-300' }
-            })()}
+            p2pIndicator={p2pIndicator}
           />
         </>
       )}
@@ -1312,10 +1418,12 @@ export const App: React.FC = () => {
           activePlayerEpisode ? 'hidden' : 'block'
         }`}
       >
-        {/* Home Tab View */}
+        {/* Home Tab View — pt-[72px]: pages scroll UNDER the floating navbar so
+            its backdrop blur catches real scrolled content, not just banners. */}
         {(visitedTabs.has('home') || currentTab === 'home') && <div
-          className={`h-full overflow-y-auto ${currentTab === 'home' ? 'block' : 'hidden'}`}
+          className={`h-full overflow-y-auto pt-[72px] ${currentTab === 'home' ? 'block' : 'hidden'}`}
           onScroll={(event) => {
+            markScrolling(event);
             const hero = event.currentTarget.querySelector<HTMLElement>('[data-backdrop-hero]');
             if (!hero) {
               updateNavbarBackdropProgress(0);
@@ -1347,15 +1455,15 @@ export const App: React.FC = () => {
             history={history}
             userEntries={userEntries}
             onPlayEpisode={handlePlayEpisode}
-            onSelectCatalogItem={(item) => setDetailSource({ kind: 'catalog', item })}
-            onSelectLocalFolder={(folder) => setDetailSource({ kind: 'local', folder })}
-            onOpenSchedule={() => setCurrentTab('schedule')}
-            onOpenDiscover={() => setCurrentTab('discover')}
+            onSelectCatalogItem={handleSelectCatalogItem}
+            onSelectLocalFolder={handleSelectLocalFolder}
+            onOpenSchedule={handleOpenSchedule}
+            onOpenDiscover={handleOpenDiscover}
           />
         </div>}
 
         {/* Discover tab: genre-based catalog page with full-library search kept in the navbar. */}
-        {(visitedTabs.has('discover') || currentTab === 'discover') && <div className={`h-full overflow-y-auto ${currentTab === 'discover' ? 'block' : 'hidden'}`}>
+        {(visitedTabs.has('discover') || currentTab === 'discover') && <div className={`h-full overflow-y-auto pt-[72px] ${currentTab === 'discover' ? 'block' : 'hidden'}`} onScroll={markScrolling}>
           <Suspense fallback={<div className="flex h-full items-center justify-center text-sm text-zinc-500">Loading Discover…</div>}>
             <DiscoverView
               folders={visibleFolders}
@@ -1363,14 +1471,14 @@ export const App: React.FC = () => {
               userEntries={userEntries}
               settings={settings}
               initialGenre={discoverInitialGenre}
-              onClearInitialGenre={() => setDiscoverInitialGenre(null)}
-              onSelectItem={(item) => setDetailSource({ kind: 'catalog', item })}
+              onClearInitialGenre={handleClearDiscoverGenre}
+              onSelectItem={handleSelectCatalogItem}
             />
           </Suspense>
         </div>}
 
         {/* Library Tab View */}
-        {(visitedTabs.has('library') || currentTab === 'library') && <div className={`h-full overflow-y-auto ${currentTab === 'library' ? 'block' : 'hidden'}`}>
+        {(visitedTabs.has('library') || currentTab === 'library') && <div className={`h-full overflow-y-auto pt-[72px] ${currentTab === 'library' ? 'block' : 'hidden'}`}>
           <div className="w-full">
             {/* Library shelf: cards open the unified title page */}
             <Suspense fallback={<div className="py-12 text-center text-sm text-zinc-500">Loading Library…</div>}>
@@ -1409,10 +1517,10 @@ export const App: React.FC = () => {
         </div>}
 
         {/* Schedule Tab View */}
-        {(visitedTabs.has('schedule') || currentTab === 'schedule') && <div className={`h-full overflow-y-auto ${currentTab === 'schedule' ? 'block' : 'hidden'}`}>
+        {(visitedTabs.has('schedule') || currentTab === 'schedule') && <div className={`h-full overflow-y-auto pt-[72px] ${currentTab === 'schedule' ? 'block' : 'hidden'}`}>
           <Suspense fallback={<div className="flex h-full items-center justify-center text-sm text-zinc-500">Loading Schedule…</div>}>
             <ScheduleView
-              onSelectItem={(item) => setDetailSource({ kind: 'catalog', item })}
+              onSelectItem={handleSelectCatalogItem}
               statusFor={statusFor}
               followedAnime={followedAnime}
             />
@@ -1420,7 +1528,7 @@ export const App: React.FC = () => {
         </div>}
 
         {/* Downloads Tab View (storage usage + files-only deletion) */}
-        {(visitedTabs.has('downloads') || currentTab === 'downloads') && <div className={`h-full overflow-y-auto ${currentTab === 'downloads' ? 'block' : 'hidden'}`}>
+        {(visitedTabs.has('downloads') || currentTab === 'downloads') && <div className={`h-full overflow-y-auto pt-[72px] ${currentTab === 'downloads' ? 'block' : 'hidden'}`}>
           <Suspense fallback={<div className="flex h-full items-center justify-center text-sm text-zinc-500">Loading Downloads…</div>}>
             <DownloadsView onRefreshLibrary={handleRefreshLibrary} folders={visibleFolders} />
           </Suspense>
@@ -1428,13 +1536,13 @@ export const App: React.FC = () => {
 
         {/* Whisper Studio Tab View (Never unmounted so active jobs & terminal logs are preserved) */}
         {whisperMounted && (
-          <div className={`h-full flex-1 min-h-0 ${currentTab === 'whisper' ? 'flex flex-col' : 'hidden'}`}>
+          <div className={`h-full flex-1 min-h-0 pt-[72px] ${currentTab === 'whisper' ? 'flex flex-col' : 'hidden'}`}>
             <Suspense fallback={<div className="flex h-full items-center justify-center text-sm text-zinc-500">Loading Whisper Studio…</div>}>
               <WhisperStudio
                 initialFolder={selectedFolder}
                 whisperExists={binaryStatus.whisperExists}
                 onRefreshLibrary={handleRefreshLibrary}
-                onOpenSettings={() => setSettingsOpen(true)}
+                onOpenSettings={handleOpenSettings}
                 settings={settings}
                 onSaveSettings={handleSaveSettings}
                 isActiveTab={currentTab === 'whisper'}
@@ -1449,16 +1557,12 @@ export const App: React.FC = () => {
           Intentionally kept while detailSource is set: unmounts during playback and
           re-appears right after the player closes. */}
       {detailSource && !activePlayerEpisode && (
-        <Suspense fallback={<div className="fixed inset-0 z-40 flex items-center justify-center bg-[#0b0c10] text-sm text-zinc-400">Loading title…</div>}>
+        <Suspense fallback={<div className="fixed inset-0 z-40 flex items-center justify-center bg-[#07060A] text-sm text-zinc-400">Loading title…</div>}>
         <AnimeDetailView
           source={detailSource}
           initialDownloadEpisode={initialDownloadEpisode}
           settings={settings}
-          onSelectGenre={(genre) => {
-            setDetailSource(null);
-            setDiscoverInitialGenre(genre);
-            setCurrentTab('discover');
-          }}
+          onSelectGenre={handleSelectGenre}
           p2pState={p2pState}
           isFollowing={followedAnime.some((item) => item.anilistId === (detailSource.kind === 'catalog' ? detailSource.item.anilistId : detailSource.folder.anilistId))}
           onToggleFollow={toggleFollowAnime}
@@ -1473,43 +1577,13 @@ export const App: React.FC = () => {
           folders={visibleFolders}
           history={history}
           userEntries={userEntries}
-          onClose={() => {
-            setInitialDownloadEpisode(null);
-            setDetailSource(null);
-          }}
+          onClose={handleCloseDetails}
           onPlayEpisode={handlePlayEpisode}
-          onOpenRelated={(item) => setDetailSource({
-            kind: 'catalog',
-            item: {
-              anilistId: item.anilistId,
-              title: item.title.english || item.title.romaji || '',
-              posterUrl: item.posterUrl,
-              bannerUrl: item.bannerUrl,
-              averageScore: item.averageScore,
-              episodesCount: item.episodesCount,
-              format: item.format || undefined,
-              status: item.status || undefined,
-              genres: item.genres,
-              seasonYear: item.seasonYear,
-            },
-          })}
+          onOpenRelated={handleOpenRelated}
           onLibraryChanged={handleRefreshLibrary}
-          onUserEntryChange={(entry) => {
-            setUserEntries((prev) => ({ ...prev, [entry.anilistId]: entry }));
-          }}
-          onUserEntryRemove={(id) => {
-            setUserEntries((prev) => {
-              const next = { ...prev };
-              delete next[id];
-              return next;
-            });
-          }}
-          onOpenWhisper={(folder) => {
-            setSelectedFolder(folder);
-            setInitialDownloadEpisode(null);
-            setDetailSource(null);
-            setCurrentTab('whisper');
-          }}
+          onUserEntryChange={handleUserEntryChange}
+          onUserEntryRemove={handleUserEntryRemove}
+          onOpenWhisper={handleOpenWhisperFolder}
         />
         </Suspense>
       )}
@@ -1517,7 +1591,7 @@ export const App: React.FC = () => {
       {/* Fullscreen Video Player Modal or Safe Recovery Screen (BUG-01) */}
       {activePlayerEpisode &&
         (currentPlayingFolder ? (
-          <Suspense fallback={<div className="fixed inset-0 z-50 flex items-center justify-center bg-[#0f0f12] text-sm text-zinc-400">Loading player…</div>}>
+          <Suspense fallback={<div className="fixed inset-0 z-50 flex items-center justify-center bg-void text-sm text-zinc-400"><span className="loader-pulse inline-flex items-center gap-2"><span className="h-2 w-2 rounded-full bg-rose-500" />Loading player…</span></div>}>
           <VideoPlayer
             episode={activePlayerEpisode}
             seasonEpisodes={currentPlayingFolder.episodes}
@@ -1534,8 +1608,8 @@ export const App: React.FC = () => {
           />
           </Suspense>
         ) : (
-          <div className="fixed inset-0 z-50 bg-[#0f0f12] flex flex-col items-center justify-center p-6 text-center">
-            <div className="bg-zinc-900 border border-zinc-800 rounded-2xl p-8 max-w-md shadow-2xl flex flex-col items-center">
+          <div className="fixed inset-0 z-50 bg-void flex flex-col items-center justify-center p-6 text-center">
+            <div className="glass-panel border border-white/10 rounded-2xl p-8 max-w-md shadow-2xl flex flex-col items-center">
               <AlertCircle className="w-12 h-12 text-rose-500 mb-4 animate-pulse" />
               <h2 className="text-xl font-bold text-zinc-100 mb-2">Playback Initialization Error</h2>
               <p className="text-sm text-zinc-400 mb-6">
@@ -1543,7 +1617,7 @@ export const App: React.FC = () => {
               </p>
               <button
                 onClick={handleClosePlayer}
-                className="px-6 py-2.5 bg-rose-600 hover:bg-rose-500 text-white font-medium rounded-xl transition-colors shadow-lg shadow-rose-900/30"
+                className="btn-primary px-6 py-2.5 text-white font-medium rounded-xl transition-colors"
               >
                 Return to Library (Esc)
               </button>
