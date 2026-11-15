@@ -1,4 +1,4 @@
-import React, { useMemo } from 'react';
+import React, { useEffect, useMemo, useRef } from 'react';
 import { SubtitleCue } from '../../types';
 
 interface CueIndex {
@@ -30,9 +30,9 @@ function findActiveCues(index: CueIndex, time: number, limit: number): SubtitleC
   const found: SubtitleCue[] = [];
   for (let i = low - 1; i >= 0 && found.length < limit; i -= 1) {
     // Since this is a prefix maximum, no earlier cue can still be active.
-    if (prefixMaxEnd[i] < time) break;
+    if (prefixMaxEnd[i] <= time) break;
     const cue = cues[i];
-    if (time <= cue.end) found.push(cue);
+    if (time < cue.end) found.push(cue);
   }
   return found.reverse();
 }
@@ -146,6 +146,54 @@ export const SubtitleOverlay: React.FC<SubtitleOverlayProps> = ({
     return findActiveCues(topCueIndex, adjustedTime, 3);
   }, [topCueIndex, adjustedTime, topSubEnabled]);
 
+  const activeMainTextCues = useMemo(
+    () => activeMainCues.filter((cue) => !cue.bitmaps?.length && Boolean(cue.text?.trim())),
+    [activeMainCues]
+  );
+  const activeMainBitmapCues = useMemo(
+    () => activeMainCues.filter((cue) => Boolean(cue.bitmaps && cue.bitmaps.length > 0)),
+    [activeMainCues]
+  );
+  const activeTopTextCues = useMemo(
+    () => activeTopCues.filter((cue) => !cue.bitmaps?.length && Boolean(cue.text?.trim())),
+    [activeTopCues]
+  );
+  const activeTopBitmapCues = useMemo(
+    () => activeTopCues.filter((cue) => Boolean(cue.bitmaps && cue.bitmaps.length > 0)),
+    [activeTopCues]
+  );
+
+  // Pre-warm the next 3 upcoming PGS bitmap images so cues appear with zero flash
+  const prefetchedBitmapUrlsRef = useRef<Set<string>>(new Set());
+  useEffect(() => {
+    if (typeof Image === 'undefined') return;
+    const warmQueue: string[] = [];
+    const collectUpcoming = (cues: SubtitleCue[]) => {
+      for (let i = 0; i < cues.length && warmQueue.length < 6; i += 1) {
+        const cue = cues[i];
+        if (!cue.bitmaps?.length) continue;
+        if (cue.end < adjustedTime - 0.5) continue;
+        if (cue.start > adjustedTime + 20) break;
+        for (const bmp of cue.bitmaps) {
+          if (bmp.url && !prefetchedBitmapUrlsRef.current.has(bmp.url)) {
+            warmQueue.push(bmp.url);
+          }
+        }
+      }
+    };
+    collectUpcoming(mainCueIndex.cues);
+    if (topSubEnabled) collectUpcoming(topCueIndex.cues);
+
+    for (const url of warmQueue) {
+      if (prefetchedBitmapUrlsRef.current.size > 300) {
+        prefetchedBitmapUrlsRef.current.clear();
+      }
+      prefetchedBitmapUrlsRef.current.add(url);
+      const img = new Image();
+      img.src = url;
+    }
+  }, [mainCueIndex, topCueIndex, topSubEnabled, adjustedTime]);
+
   // Background style classes
   const bgClass = useMemo(() => {
     switch (bgStyle) {
@@ -163,6 +211,7 @@ export const SubtitleOverlay: React.FC<SubtitleOverlayProps> = ({
 
   const activeFontFamily = FONT_FAMILIES[fontFamily] || FONT_FAMILIES.sans;
   const computedShadow = useMemo(() => getSubtitleTextShadow(outlineWidth, outlineColor), [outlineWidth, outlineColor]);
+  const bitmapSizeScale = Math.max(0.65, Math.min(1.5, fontSize / 38));
 
   return (
     <div
@@ -173,13 +222,84 @@ export const SubtitleOverlay: React.FC<SubtitleOverlayProps> = ({
         willChange: 'transform',
       }}
     >
+      {/* Main Subtitle PGS Bitmaps positioned in exact video-frame coordinates */}
+      {activeMainBitmapCues.length > 0 && (() => {
+        const firstBmp = activeMainBitmapCues[0]?.bitmaps?.[0];
+        const cw = firstBmp?.canvasWidth || 1920;
+        const ch = firstBmp?.canvasHeight || 1080;
+        return (
+          <div className="absolute inset-0 pointer-events-none select-none flex items-center justify-center">
+            <div
+              className="relative"
+              style={{
+                width: `min(100vw, ${(100 * (cw / ch)).toFixed(4)}vh)`,
+                height: `min(100vh, ${(100 * (ch / cw)).toFixed(4)}vw)`,
+              }}
+            >
+              {activeMainBitmapCues.map((cue) =>
+                (cue.bitmaps || []).map((b, bIdx) => {
+                  const objCw = b.canvasWidth || cw;
+                  const objCh = b.canvasHeight || ch;
+                  const isNearBottom = (b.y + b.height) / objCh > 0.78;
+                  return (
+                    <img
+                      key={`${cue.id || cue.start}-${bIdx}`}
+                      src={b.url}
+                      alt=""
+                      draggable={false}
+                      className={`absolute pointer-events-none select-none object-contain transition-transform duration-300 ease-out ${
+                        isNearBottom && controlsVisible ? '-translate-y-20' : 'translate-y-0'
+                      }`}
+                      style={{
+                        left: `${(b.x / objCw) * 100}%`,
+                        top: `${(b.y / objCh) * 100}%`,
+                        width: `${(b.width / objCw) * 100}%`,
+                        height: `${(b.height / objCh) * 100}%`,
+                      }}
+                    />
+                  );
+                })
+              )}
+            </div>
+          </div>
+        );
+      })()}
+
       {/* 2nd Subtitle / Signs (Top) */}
       <div
-        className={`w-full flex justify-center items-start min-h-[60px] pt-2 transition-transform duration-300 ease-out ${
+        className={`w-full flex flex-col items-center justify-start gap-1.5 min-h-[60px] pt-2 transition-transform duration-300 ease-out ${
           controlsVisible ? 'translate-y-14' : 'translate-y-0'
         }`}
       >
-        {activeTopCues.length > 0 && (
+        {activeTopBitmapCues.length > 0 && (
+          <div className="w-full flex flex-col items-center gap-1 subtitles-overlay-top-bitmap">
+            {activeTopBitmapCues.map((cue) => {
+              const sortedBitmaps = [...(cue.bitmaps || [])].sort((a, b) => a.y - b.y || a.x - b.x);
+              return (
+                <div key={cue.id || cue.start} className="flex flex-col items-center gap-0.5">
+                  {sortedBitmaps.map((b, bIdx) => {
+                    const cw = b.canvasWidth || 1920;
+                    const ch = b.canvasHeight || 1080;
+                    const hVh = (b.height / ch) * 100 * bitmapSizeScale;
+                    const hVw = (b.height / cw) * 100 * bitmapSizeScale;
+                    return (
+                      <img
+                        key={bIdx}
+                        src={b.url}
+                        alt=""
+                        draggable={false}
+                        className="max-w-[92vw] w-auto object-contain pointer-events-none select-none"
+                        style={{ height: `min(${hVh.toFixed(3)}vh, ${hVw.toFixed(3)}vw)` }}
+                      />
+                    );
+                  })}
+                </div>
+              );
+            })}
+          </div>
+        )}
+
+        {activeTopTextCues.length > 0 && (
           <div
             className="max-w-[92vw] text-center px-4 py-1 rounded bg-black/60 transition-opacity duration-150 subtitles-overlay-top flex flex-col space-y-1"
             style={{
@@ -189,7 +309,7 @@ export const SubtitleOverlay: React.FC<SubtitleOverlayProps> = ({
               textShadow: computedShadow,
             }}
           >
-            {activeTopCues.map((cue) => (
+            {activeTopTextCues.map((cue) => (
               <div key={cue.id || cue.start}>
                 {cue.text.split('\n').map((line, idx) => (
                   <div key={idx}>{line}</div>
@@ -207,7 +327,7 @@ export const SubtitleOverlay: React.FC<SubtitleOverlayProps> = ({
           controlsVisible ? '-translate-y-24' : 'translate-y-0'
         }`}
       >
-        {activeMainCues.length > 0 && (
+        {activeMainTextCues.length > 0 && (
           <div
             className={`max-w-[92vw] text-center transition-opacity duration-100 flex flex-col space-y-1.5 subtitles-overlay-main ${bgClass}`}
             style={{
@@ -217,7 +337,7 @@ export const SubtitleOverlay: React.FC<SubtitleOverlayProps> = ({
               textShadow: computedShadow,
             }}
           >
-            {activeMainCues.map((cue) => (
+            {activeMainTextCues.map((cue) => (
               <div key={cue.id || cue.start}>
                 {cue.text.split('\n').map((line, idx) => (
                   <div key={idx}>{line}</div>

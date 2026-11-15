@@ -6,7 +6,8 @@ import { fileURLToPath } from 'url';
 import { storage, autoDetectFfmpegPath, autoDetectWhisperPath } from './storage';
 import { resolveUserDataPath } from './userDataPath';
 import { streamServer } from './server';
-import { probeMkv, extractEmbeddedSubtitle, extractEmbeddedAss, extractEmbeddedFonts, getFolderHash, getCachedFolderFonts, filterFontsForAss, parseSrt, readMkvEmbeddedTitle, readContainerDuration, cleanupOldCaches, isEmbeddedSubtitleCached, isEmbeddedAssCached, extractEmbeddedSubtitleWindow, extractEmbeddedAssWindow } from './ffmpeg';
+import { probeMkv, extractEmbeddedSubtitle, extractEmbeddedAss, extractEmbeddedPgs, extractEmbeddedFonts, getFolderHash, getCachedFolderFonts, filterFontsForAss, parseSrt, readMkvEmbeddedTitle, readContainerDuration, cleanupOldCaches, isEmbeddedSubtitleCached, isEmbeddedAssCached, isEmbeddedPgsCached, extractEmbeddedSubtitleWindow, extractEmbeddedAssWindow, extractEmbeddedPgsWindow } from './ffmpeg';
+import { isPgsCodec, isUnsupportedBitmapCodec, registerPgsSupFile } from './pgs';
 import { whisperManager } from './whisper';
 import { findExternalSubtitles } from './subtitles';
 import { AnimeFolder, Episode, PlaybackProgress, SeasonPreference, VIDEO_EXTENSIONS, ReleaseSearchResult, ProviderReport, DiscoverCatalogParams } from './types';
@@ -1307,27 +1308,65 @@ function setupIpcHandlers() {
     }
 
     if (trackIndex !== null && trackIndex !== undefined) {
-      // Check if this track is ASS/SSA (probeMkv uses in-memory cache, instant)
+      // Check track codec (probeMkv uses in-memory cache, instant)
       const metadata = await probeMkv(filePath, settings.ffmpegPath);
       const track = metadata.subtitleTracks.find((t) => t.index === trackIndex);
-      const isAss = track && /ass|ssa/i.test(track.codec || '');
+      const isAss = Boolean(track && /ass|ssa/i.test(track.codec || ''));
+      const isPgs = Boolean(track && isPgsCodec(track.codec));
+
+      if (track && isUnsupportedBitmapCodec(track.codec)) {
+        return {
+          format: 'srt',
+          port,
+          cues: [],
+          fontsPending: false,
+        };
+      }
+
+      if (isPgs) {
+        const fullCached = isEmbeddedPgsCached(filePath, trackIndex);
+        if (!fullCached && !forceFull && playbackPosSec != null && Number.isFinite(playbackPosSec) && playbackPosSec >= 0) {
+          const from = Math.max(0, Math.floor((playbackPosSec - 10) / 120) * 120);
+          const duration = 140;
+          const win = await extractEmbeddedPgsWindow(filePath, trackIndex, from, duration, settings.ffmpegPath);
+          if (win.ok) {
+            const cues = win.size > 0 && win.filePath ? registerPgsSupFile(win.filePath, port).cues : [];
+            return {
+              format: 'pgs',
+              port,
+              cues,
+              fontsPending: false,
+              partial: { fromMs: from * 1000, toMs: (from + duration) * 1000 },
+            };
+          }
+        }
+
+        const supPath = await extractEmbeddedPgs(filePath, trackIndex, settings.ffmpegPath);
+        const cues = supPath ? registerPgsSupFile(supPath, port).cues : [];
+        return {
+          format: 'pgs',
+          port,
+          cues,
+          fontsPending: false,
+        };
+      }
 
       if (isAss) {
         const fullCached = isEmbeddedAssCached(filePath, trackIndex);
         // WINDOW FAST PATH: a full-track extraction streams the whole MKV
-        // through ffmpeg (15-20s for a 1.5-3GB episode on an HDD). When the
-        // player tells us its playback position, extract only a ~2-minute
-        // slice around it first (one indexed seek + ~8% of the file) so
-        // subtitles appear in 1-3s, while the full extraction continues in
-        // the background; the renderer re-requests with forceFull to swap.
-        if (!fullCached && !forceFull && playbackPosSec != null && Number.isFinite(playbackPosSec) && playbackPosSec > 0) {
+        // through ffmpeg (15-40s on large files on an HDD). When the player
+        // tells us its playback position, extract only a ~2-minute slice
+        // around it first (one indexed seek + -copyts) so subtitles appear
+        // in 0.2-2s, while the full extraction continues in the background;
+        // the renderer re-requests with forceFull to swap.
+        if (!fullCached && !forceFull && playbackPosSec != null && Number.isFinite(playbackPosSec) && playbackPosSec >= 0) {
           const from = Math.max(0, Math.floor((playbackPosSec - 10) / 120) * 120);
           const duration = 140;
-          const windowContent = await extractEmbeddedAssWindow(filePath, trackIndex, from, duration, settings.ffmpegPath);
-          if (windowContent) {
+          const win = await extractEmbeddedAssWindow(filePath, trackIndex, from, duration, settings.ffmpegPath);
+          if (win.ok) {
             return {
               format: 'ass',
-              content: windowContent,
+              content: win.content,
               fonts: getCachedFolderFonts(getFolderHash(filePath), port),
               port,
               cues: [],
@@ -1338,15 +1377,15 @@ function setupIpcHandlers() {
         }
       } else {
         const fullCached = isEmbeddedSubtitleCached(filePath, trackIndex);
-        if (!fullCached && !forceFull && playbackPosSec != null && Number.isFinite(playbackPosSec) && playbackPosSec > 0) {
+        if (!fullCached && !forceFull && playbackPosSec != null && Number.isFinite(playbackPosSec) && playbackPosSec >= 0) {
           const from = Math.max(0, Math.floor((playbackPosSec - 10) / 120) * 120);
           const duration = 140;
-          const windowContent = await extractEmbeddedSubtitleWindow(filePath, trackIndex, from, duration, settings.ffmpegPath);
-          if (windowContent) {
+          const win = await extractEmbeddedSubtitleWindow(filePath, trackIndex, from, duration, settings.ffmpegPath);
+          if (win.ok) {
             return {
               format: 'srt',
               port,
-              cues: parseSrt(windowContent),
+              cues: win.content ? parseSrt(win.content) : [],
               fontsPending: false,
               partial: { fromMs: from * 1000, toMs: (from + duration) * 1000 },
             };

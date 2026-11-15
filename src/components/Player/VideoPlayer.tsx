@@ -505,6 +505,11 @@ export const VideoPlayer: React.FC<VideoPlayerProps> = ({
   const pendingSubtitleFileRef = useRef<string | null>(episode.filePath);
   const subtitleReadyFileRef = useRef<string | null>(null);
   const activeStreamFileRef = useRef<string | null>(null);
+  const partialWindowRef = useRef<{
+    main?: { fromMs: number; toMs: number };
+    top?: { fromMs: number; toMs: number };
+  }>({});
+  const seekWindowHandlerRef = useRef<((seekSec: number) => void) | null>(null);
 
   // Hold playback at episode boundaries until that episode's selected subtitle
   // tracks are ready, so the opening seconds cannot run ahead without captions.
@@ -868,38 +873,173 @@ export const VideoPlayer: React.FC<VideoPlayerProps> = ({
   // 2. Subtitle Extraction & JASSUB Rendering
   useEffect(() => {
     let isCancelled = false;
+    let refreshTimerId: number | null = null;
+    let windowSeekSeq = 0;
 
-    async function loadSubtitles(isRefresh = false) {
+    const getAbsolutePositionSec = () => {
+      const video = videoRef.current;
+      const fromTimeRef = Number.isFinite(timeRef.current) ? timeRef.current : -1;
+      if (fromTimeRef >= 0) return Math.floor(fromTimeRef);
+      return Math.max(0, Math.floor(streamStartTimeRef.current + (video?.currentTime || 0)));
+    };
+
+    const applyExtractedSubtitles = async (
+      mainRes: Awaited<ReturnType<typeof window.electronAPI.extractSubtitleTrack>> | null,
+      topRes: Awaited<ReturnType<typeof window.electronAPI.extractSubtitleTrack>> | null,
+      isFullResult: boolean
+    ) => {
+      if (isCancelled || !metadata) return;
+
+      const video = videoRef.current;
+      const port = serverPortRef.current;
+
+      let assContent = '';
+      const assFonts: string[] = [];
+      let newMainCues: SubtitleCue[] = [];
+      let newTopCues: SubtitleCue[] = [];
+      let mainIsAss = false;
+      let topIsAss = false;
+
+      // 1. Process Main Track
+      if (mainRes) {
+        if (mainRes.format === 'ass' && mainRes.content) {
+          mainIsAss = true;
+          assContent = mainRes.content;
+          if (mainRes.fonts) assFonts.push(...mainRes.fonts);
+          newMainCues = parseAssToCues(mainRes.content);
+        } else if (mainRes.cues) {
+          newMainCues = mainRes.cues;
+        }
+      }
+
+      // 2. Process Top Track (Signs, Songs, 2nd Subtitles)
+      if (topRes) {
+        if (topRes.format === 'ass' && topRes.content) {
+          topIsAss = true;
+          assContent = assContent ? combineAss(assContent, topRes.content) : topRes.content;
+          if (topRes.fonts) assFonts.push(...topRes.fonts);
+          newTopCues = parseAssToCues(topRes.content);
+        } else if (topRes.cues) {
+          newTopCues = topRes.cues;
+        }
+      }
+
+      partialWindowRef.current = isFullResult
+        ? {}
+        : {
+            ...(mainRes?.partial ? { main: mainRes.partial } : {}),
+            ...(topRes?.partial ? { top: topRes.partial } : {}),
+          };
+
+      setLoadedAssContent(assContent);
+      setMainCues(newMainCues);
+      setTopCues(newTopCues);
+      setSubtitlesLoading(false);
+
+      const effectivePort = mainRes?.port || topRes?.port || serverPortRef.current || port;
+      if (effectivePort) serverPortRef.current = effectivePort;
+
+      // Skip recreating JASSUB if only plain text / PGS bitmap cues are active
+      const hasValidAss = Boolean(
+        assContent &&
+        assContent.trim().length > 50 &&
+        /\[Events\]/i.test(assContent)
+      );
+
+      if (jassubRef.current) {
+        try {
+          await jassubRef.current.destroy();
+        } catch {}
+        jassubRef.current = null;
+      }
+
+      if (isCancelled) return;
+
+      if (hasValidAss && video) {
+        try {
+          const uniqueFonts = [...new Set(assFonts)]
+            .filter((f) => !f.toLowerCase().includes('arialunicodems') && !f.toLowerCase().endsWith('.ttc'))
+            .slice(0, 32);
+
+          console.log(
+            `[VideoPlayer] Initializing JASSUB with ${uniqueFonts.length} fonts and combined ASS styles`
+          );
+
+          const jassub = new JASSUB({
+            video,
+            subContent: assContent, // CONTAINS BOTH MAIN AND 2ND SUBTITLES COMBINED!
+            fonts: uniqueFonts,
+            workerUrl,
+            wasmUrl,
+            modernWasmUrl,
+            timeOffset: streamStartTimeRef.current + syncOffsetRef.current,
+            debug: false,
+            prescaleFactor: 1.0,
+            maxRenderHeight: 1080,
+            libassMemoryLimit: 128,
+            libassGlyphLimit: 4096,
+          });
+          jassubRef.current = jassub;
+          setIsMainAssActive(mainIsAss);
+          setIsTopAssActive(topIsAss);
+
+          // Ensure timeOffset is 100% synchronized to the actual stream keyframe
+          jassub.timeOffset = streamStartTimeRef.current + syncOffsetRef.current;
+
+          try {
+            await jassub.ready;
+          } catch (err) {
+            console.warn('[VideoPlayer] JASSUB worker init failed, using HTML subtitle overlay fallback:', err);
+            if (jassubRef.current === jassub) {
+              try {
+                jassub.destroy();
+              } catch {}
+              jassubRef.current = null;
+              setIsMainAssActive(false);
+              setIsTopAssActive(false);
+            }
+          }
+        } catch (err) {
+          console.warn('[VideoPlayer] Error creating JASSUB instance, falling back to HTML overlay:', err);
+          setIsMainAssActive(false);
+          setIsTopAssActive(false);
+        }
+      } else {
+        setIsMainAssActive(false);
+        setIsTopAssActive(false);
+      }
+    };
+
+    async function loadSubtitles(isRefresh = false, overridePosSec?: number) {
       // Do not leave the previous episode's cues visible while the next
       // episode's subtitle track is being extracted and parsed. A refresh
       // (swapping a partial window for the full track) keeps the current
       // cues on screen to avoid a subtitle flicker mid-playback.
-      if (!isRefresh) {
+      if (!isRefresh && overridePosSec === undefined) {
         setMainCues([]);
         setTopCues([]);
         setLoadedAssContent('');
         setIsMainAssActive(false);
         setIsTopAssActive(false);
+        partialWindowRef.current = {};
       }
       if (!metadata || metadata.filePath !== episode.filePath) {
         setSubtitlesLoading(true);
         return;
       }
 
-      const video = videoRef.current;
-      const port = serverPortRef.current;
-
       const mainTrack = metadata.subtitleTracks.find((s) => s.id === selectedMainSubId);
       const topTrack = topSubEnabled ? metadata.subtitleTracks.find((s) => s.id === selectedTopSubId) : null;
 
-      if (!isRefresh) setSubtitlesLoading(true);
+      if (!isRefresh && overridePosSec === undefined) setSubtitlesLoading(true);
 
       // The first (cold) extraction of an embedded track streams the whole
-      // MKV through ffmpeg — 15-20s on an HDD. Passing the playback position
-      // makes the main process extract a ~2-minute window around it first
-      // (1-3s) and keeps building the full track in the background; the
-      // follow-up forceFull request swaps in the complete set when it lands.
-      const posSec = video && video.currentTime > 1 ? Math.floor(video.currentTime) : undefined;
+      // MKV through ffmpeg — 15-40s on a large file on an HDD. Passing the
+      // playback position makes the main process extract a ~2-minute window
+      // around it first (0.2-2s) and keeps building the full track in the
+      // background; the follow-up forceFull request swaps in the complete set.
+      const posSec = overridePosSec ?? getAbsolutePositionSec();
+      const mySeq = ++windowSeekSeq;
 
       try {
         const [mainRes, topRes] = await Promise.all([
@@ -929,125 +1069,25 @@ export const VideoPlayer: React.FC<VideoPlayerProps> = ({
 
         if (isCancelled) return;
 
-        let assContent = '';
-        const assFonts: string[] = [];
-        let newMainCues: SubtitleCue[] = [];
-        let newTopCues: SubtitleCue[] = [];
-        let mainIsAss = false;
-        let topIsAss = false;
-
-        // 1. Process Main Track
-        if (mainRes) {
-          if (mainRes.format === 'ass' && mainRes.content) {
-            mainIsAss = true;
-            assContent = mainRes.content;
-            if (mainRes.fonts) assFonts.push(...mainRes.fonts);
-            newMainCues = parseAssToCues(mainRes.content);
-          } else if (mainRes.cues) {
-            newMainCues = mainRes.cues;
-          }
+        // If a seek-window fetch finishes AFTER full extraction already landed,
+        // do not downgrade full tracks back to a partial window.
+        if (overridePosSec !== undefined && !partialWindowRef.current.main && !partialWindowRef.current.top) {
+          return;
+        }
+        if (overridePosSec !== undefined && mySeq !== windowSeekSeq) {
+          return;
         }
 
-        // 2. Process Top Track (Signs, Songs, 2nd Subtitles)
-        if (topRes) {
-          if (topRes.format === 'ass' && topRes.content) {
-            topIsAss = true;
-            assContent = assContent ? combineAss(assContent, topRes.content) : topRes.content;
-            if (topRes.fonts) assFonts.push(...topRes.fonts);
-            newTopCues = parseAssToCues(topRes.content);
-          } else if (topRes.cues) {
-            newTopCues = topRes.cues;
-          }
-        }
-
-        setLoadedAssContent(assContent);
-        setMainCues(newMainCues);
-        setTopCues(newTopCues);
-        setSubtitlesLoading(false);
-
-        // Partial window payloads: the full track is still extracting in the
-        // background — re-request with forceFull; the IPC call dedupes onto
-        // the running extraction and resolves the moment it completes, then
-        // the full cues/ASS replace the window in place.
         const hasPartial = Boolean(mainRes?.partial || topRes?.partial);
-        if (hasPartial && !isCancelled) {
-          window.setTimeout(() => {
-            if (!isCancelled) void loadSubtitles(true);
-          }, 1200);
-        }
-
-        // Clean up previous JASSUB instance
-        if (jassubRef.current) {
-          try {
-            await jassubRef.current.destroy();
-          } catch {}
-          jassubRef.current = null;
-        }
+        await applyExtractedSubtitles(mainRes, topRes, isRefresh || !hasPartial);
 
         if (isCancelled) return;
 
-        const effectivePort = mainRes?.port || topRes?.port || serverPortRef.current || port;
-        if (effectivePort) serverPortRef.current = effectivePort;
-
-        // If we have valid ASS content (main dialogue or top signs), initialize JASSUB with all fonts!
-        const hasValidAss = Boolean(
-          assContent &&
-          assContent.trim().length > 50 &&
-          /\[Events\]/i.test(assContent)
-        );
-
-        if (hasValidAss && video) {
-          try {
-            const uniqueFonts = [...new Set(assFonts)]
-              .filter((f) => !f.toLowerCase().includes('arialunicodems') && !f.toLowerCase().endsWith('.ttc'))
-              .slice(0, 32);
-
-            console.log(
-              `[VideoPlayer] Initializing JASSUB with ${uniqueFonts.length} fonts and combined ASS styles`
-            );
-
-            const jassub = new JASSUB({
-              video,
-              subContent: assContent, // CONTAINS BOTH MAIN AND 2ND SUBTITLES COMBINED!
-              fonts: uniqueFonts,
-              workerUrl,
-              wasmUrl,
-              modernWasmUrl,
-              timeOffset: streamStartTimeRef.current + syncOffsetRef.current,
-              debug: false,
-              prescaleFactor: 1.0,
-              maxRenderHeight: 1080,
-              libassMemoryLimit: 128,
-              libassGlyphLimit: 4096,
-            });
-            jassubRef.current = jassub;
-            setIsMainAssActive(mainIsAss);
-            setIsTopAssActive(topIsAss);
-
-            // Ensure timeOffset is 100% synchronized to the actual stream keyframe
-            jassub.timeOffset = streamStartTimeRef.current + syncOffsetRef.current;
-
-            try {
-              await jassub.ready;
-            } catch (err) {
-              console.warn('[VideoPlayer] JASSUB worker init failed, using HTML subtitle overlay fallback:', err);
-              if (jassubRef.current === jassub) {
-                try {
-                  jassub.destroy();
-                } catch {}
-                jassubRef.current = null;
-                setIsMainAssActive(false);
-                setIsTopAssActive(false);
-              }
-            }
-          } catch (err) {
-            console.warn('[VideoPlayer] Error creating JASSUB instance, falling back to HTML overlay:', err);
-            setIsMainAssActive(false);
-            setIsTopAssActive(false);
-          }
-        } else {
-          setIsMainAssActive(false);
-          setIsTopAssActive(false);
+        // Schedule full background extraction once after the initial window
+        if (hasPartial && !isRefresh && overridePosSec === undefined) {
+          refreshTimerId = window.setTimeout(() => {
+            if (!isCancelled) void loadSubtitles(true);
+          }, 1200);
         }
       } catch (err) {
         console.error('[VideoPlayer] Error loading subtitles:', err);
@@ -1065,10 +1105,28 @@ export const VideoPlayer: React.FC<VideoPlayerProps> = ({
       }
     }
 
-    loadSubtitles();
+    seekWindowHandlerRef.current = (seekSec: number) => {
+      if (isCancelled) return;
+      const bounds = partialWindowRef.current;
+      if (!bounds.main && !bounds.top) return;
+      const seekMs = seekSec * 1000;
+      const outsideMain = bounds.main && (seekMs < bounds.main.fromMs || seekMs > bounds.main.toMs);
+      const outsideTop = bounds.top && (seekMs < bounds.top.fromMs || seekMs > bounds.top.toMs);
+      if (outsideMain || outsideTop) {
+        void loadSubtitles(false, Math.max(0, Math.floor(seekSec)));
+      }
+    };
+
+    void loadSubtitles();
 
     return () => {
       isCancelled = true;
+      seekWindowHandlerRef.current = null;
+      partialWindowRef.current = {};
+      if (refreshTimerId !== null) {
+        clearTimeout(refreshTimerId);
+        refreshTimerId = null;
+      }
       if (jassubRef.current) {
         jassubRef.current.destroy().catch(() => {});
         jassubRef.current = null;
@@ -1280,6 +1338,7 @@ export const VideoPlayer: React.FC<VideoPlayerProps> = ({
       const clamped = Math.max(0, Math.min(targetTime, duration));
       timeRef.current = clamped;
       pendingSeekTargetRef.current = clamped;
+      seekWindowHandlerRef.current?.(clamped);
 
       try {
         const { url, actualStartTime } = await window.electronAPI.getStreamUrl(

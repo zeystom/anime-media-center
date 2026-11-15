@@ -99,55 +99,52 @@ const BG_OPTIONS: Array<{ id: 'none' | 'translucent' | 'semi' | 'solid'; label: 
   { id: 'solid', label: 'Solid Black', desc: 'Maximum Readability' },
 ];
 
+function normalizeSubtitleTitle(track: SubtitleTrack): string {
+  if (track.type === 'external') {
+    return 'External .srt (Whisper)';
+  }
+  const lang = track.languageName || 'English';
+  const rawTitle = (track.title || '').trim();
+  const isRawCodecOnly =
+    /^(?:ass|ssa|subrip|srt|hdmv_pgs_subtitle|pgssub|pgs|dvd_subtitle|dvdsub|vobsub)(?:\s*\([^)]*\))*$/i.test(
+      rawTitle
+    );
+
+  if (track.isDubtitle || /sdh|dubtitle|hearing impaired/i.test(rawTitle)) {
+    return `${lang} — Dubtitle / SDH`;
+  }
+  if (track.isSigns || track.isForced || /sign|song|forced/i.test(rawTitle)) {
+    return `${lang} — Signs / Forced`;
+  }
+  if (!isRawCodecOnly && rawTitle && !/^stream\s*#?\d+/i.test(rawTitle)) {
+    const cleaned = rawTitle
+      .replace(/\b(?:ass|ssa|subrip|srt|hdmv_pgs_subtitle|pgssub|dvd_subtitle|vobsub)\b/gi, '')
+      .replace(/\((default|pgssub|dvdsub)\)/gi, '')
+      .trim();
+    return cleaned || `${lang} — Full Dialogue`;
+  }
+  return `${lang} — Full Dialogue`;
+}
+
+function formatSubtitleCodecBadge(track: SubtitleTrack): string {
+  if (track.type === 'external') return 'SRT';
+  const codec = (track.codec || '').toUpperCase();
+  if (!codec) return 'SRT';
+  if (/PGS/.test(codec)) return 'PGS';
+  if (/DVD_SUBTITLE|DVDSUB|VOBSUB/.test(codec)) return 'VOBSUB';
+  if (/WEBVTT/.test(codec)) return 'VTT';
+  return codec.replace('SUBRIP', 'SRT');
+}
+
 function getSubTrackDisplay(track: SubtitleTrack, index: number, allTracks: SubtitleTrack[]) {
-  let badge = 'SRT';
-  if (track.type === 'external') {
-    badge = 'SRT';
-  } else if (track.codec) {
-    badge = track.codec.toUpperCase().replace('SUBRIP', 'SRT');
-  }
-
-  let title = '';
-  if (track.type === 'external') {
-    title = 'External .srt (Whisper)';
-  } else {
-    const lang = track.languageName || 'English';
-    const rawTitle = (track.title || '').trim();
-    const isRawCodecOnly = /^(ass|ssa|subrip|srt)(\s*\((default|forced|hearing impaired)\))?$/i.test(rawTitle);
-
-    if (track.isDubtitle || /sdh|dubtitle|hearing impaired/i.test(rawTitle)) {
-      title = `${lang} — Dubtitle / SDH`;
-    } else if (track.isSigns || track.isForced || /sign|song|forced/i.test(rawTitle)) {
-      title = `${lang} — Signs / Forced`;
-    } else if (!isRawCodecOnly && rawTitle && !/^stream\s*#?\d+/i.test(rawTitle)) {
-      const cleaned = rawTitle
-        .replace(/\b(ass|ssa|subrip|srt)\b/gi, '')
-        .replace(/\((default)\)/gi, '')
-        .trim();
-      title = cleaned || `${lang} — Full Dialogue`;
-    } else {
-      title = `${lang} — Full Dialogue`;
-    }
-  }
+  const badge = formatSubtitleCodecBadge(track);
+  let title = normalizeSubtitleTitle(track);
 
   const duplicates = allTracks.filter((t) => {
     if (t.id === track.id) return false;
     if (t.type === 'external' && track.type === 'external') return true;
     if (t.type === 'external' || track.type === 'external') return false;
-    const tLang = t.languageName || 'English';
-    const tRaw = (t.title || '').trim();
-    const tIsRaw = /^(ass|ssa|subrip|srt)(\s*\((default|forced|hearing impaired)\))?$/i.test(tRaw);
-    let tTitle = '';
-    if (t.isDubtitle || /sdh|dubtitle|hearing impaired/i.test(tRaw)) {
-      tTitle = `${tLang} — Dubtitle / SDH`;
-    } else if (t.isSigns || t.isForced || /sign|song|forced/i.test(tRaw)) {
-      tTitle = `${tLang} — Signs / Forced`;
-    } else if (!tIsRaw && tRaw && !/^stream\s*#?\d+/i.test(tRaw)) {
-      tTitle = tRaw.replace(/\b(ass|ssa|subrip|srt)\b/gi, '').replace(/\((default)\)/gi, '').trim() || `${tLang} — Full Dialogue`;
-    } else {
-      tTitle = `${tLang} — Full Dialogue`;
-    }
-    return tTitle.toLowerCase() === title.toLowerCase();
+    return normalizeSubtitleTitle(t).toLowerCase() === title.toLowerCase();
   });
 
   if (duplicates.length > 0 && track.type !== 'external') {

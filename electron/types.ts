@@ -29,15 +29,26 @@ export interface SubtitleTrack {
   isDubtitle: boolean;   // True if dubtitle / dialogue
 }
 
+export interface SubtitleBitmapItem {
+  url: string;
+  x: number;
+  y: number;
+  width: number;
+  height: number;
+  canvasWidth: number;
+  canvasHeight: number;
+}
+
 export interface SubtitleCue {
   id: number;
   start: number; // in seconds
   end: number;   // in seconds
   text: string;
+  bitmaps?: SubtitleBitmapItem[];
 }
 
 export interface SubtitleTrackPayload {
-  format: 'ass' | 'srt';
+  format: 'ass' | 'srt' | 'pgs';
   content?: string;
   fonts?: string[];
   port?: number;

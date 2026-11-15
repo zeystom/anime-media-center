@@ -7,6 +7,7 @@ import crypto from 'crypto';
 import { spawn, ChildProcess } from 'child_process';
 import { storage } from './storage';
 import { generateSingleThumbnail, readContainerDuration } from './ffmpeg';
+import { getPgsBitmapPng } from './pgs';
 import { isEpisodeDownloading } from './torrents';
 import { isPathInside } from './pathSafety.ts';
 
@@ -225,6 +226,8 @@ export class LocalStreamServer {
       this.handleThumb(req, res, parsedUrl.query);
     } else if (pathname?.startsWith('/font/')) {
       this.handleFont(req, res, pathname);
+    } else if (pathname === '/pgs') {
+      this.handlePgs(req, res, parsedUrl.query);
     } else if (pathname === '/status') {
       res.writeHead(200, { 'Content-Type': 'application/json' });
       res.end(JSON.stringify({ status: 'ok', port: this.port }));
@@ -641,6 +644,32 @@ export class LocalStreamServer {
 
     res.writeHead(404);
     res.end('Font not found');
+  }
+
+  private handlePgs(_req: http.IncomingMessage, res: http.ServerResponse, query: any) {
+    const key = typeof query?.key === 'string' ? query.key : '';
+    const cueIdx = Number.parseInt(typeof query?.cue === 'string' ? query.cue : '', 10);
+    const objIdx = Number.parseInt(typeof query?.obj === 'string' ? query.obj : '', 10);
+
+    if (!key || !Number.isInteger(cueIdx) || !Number.isInteger(objIdx) || cueIdx < 0 || objIdx < 0) {
+      res.writeHead(400);
+      res.end('Bad Request');
+      return;
+    }
+
+    const png = getPgsBitmapPng(key, cueIdx, objIdx);
+    if (!png) {
+      res.writeHead(404);
+      res.end('PGS bitmap not found');
+      return;
+    }
+
+    res.writeHead(200, {
+      'Content-Type': 'image/png',
+      'Content-Length': png.length,
+      'Cache-Control': 'public, max-age=86400',
+    });
+    res.end(png);
   }
 
   stopActiveStreams() {

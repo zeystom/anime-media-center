@@ -1,5 +1,11 @@
 # Changelog
 
+## 3.2.1 — Blu-ray PGS Bitmap Subtitles & Window Seek Timestamp Fix
+
+- **Native Blu-ray PGS Subtitle Decoder (`electron/pgs.ts`, `electron/server.ts`, `electron/ffmpeg.ts`, `electron/main.ts`):** added full `.sup` parser (`parsePgsSupBuffer`), RLE bitmap decoder, YCbCr-to-RGBA conversion, PNG encoder, and `/pgs` HTTP endpoint so `hdmv_pgs_subtitle` tracks (including `2ND SUB / SIGNS (TOP)` and `MAIN SUBTITLE (BOTTOM)`) display without failing FFmpeg SRT transcoding.
+- **Window Extraction & Seek Fixes (`electron/ffmpeg.ts`, `src/components/Player/VideoPlayer.tsx`):** added `-copyts` to windowed subtitle extraction (`win2-` cache prefix) so timestamps remain aligned with the full video, used absolute stream playback position, and re-extracted 2-minute subtitle windows on seeks outside cached bounds (`seekWindowHandlerRef`).
+- **Dual-Subtitle Overlay & UI (`src/components/Player/SubtitleOverlay.tsx`, `src/components/Player/TrackControls.tsx`):** centered top-slot PGS bitmaps cleanly to prevent bottom-authored signs from overlapping main subtitles, preloaded upcoming PGS PNGs, and added a clean `PGS` codec badge in `TrackControls`.
+
 ## 3.2.0 — Whisper Accuracy Overhaul, Movie Detection, Discover & Completion Prompt Fixes
 
 ### Whisper Studio & Subtitles

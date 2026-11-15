@@ -38,17 +38,12 @@ if (!token) {
   process.exit(1);
 }
 
-const RELEASE_BODY = `## Kaiko ${VERSION} — Whisper Accuracy Overhaul, Movie Detection, Discover & Completion Prompt Fixes
+const RELEASE_BODY = `## Kaiko ${VERSION} — Blu-ray PGS Bitmap Subtitles & Window Seek Timestamp Fix
 
-### Whisper Studio & Subtitles
-- **High & child voice preservation:** switched default VAD across dialogue presets to \`pyannote_v3\` so higher-pitched and quieter lines are no longer skipped.
-- **Cleaner prompting & context continuity:** stopped forcing synthetic default prompt prefixes unless customized, restored \`condition_on_previous_text\` and \`compression_ratio_threshold\` (\`2.4\`), and tuned \`--max_comma_cent 70\` to stop leaked foreign gibberish and dropped line openings.
-- **Line wrapping & post-processing:** filtered non-Latin gibberish and stutter-loop hallucinations, merged short 1-2 word spillover cues, and widened the player subtitle container (\`max-w-[92vw]\`) to prevent unintended 3-line wraps.
-
-### UI & Playback Fixes
-- **Movie detection (\`Movie\` / \`Resume Movie\`):** movies now display \`Movie\` badges and \`Resume Movie\` buttons instead of \`EP\` / \`Resume EP\` across the Home banner, Recent Episodes rail, player Episode Drawer, Anime Detail view, and Season Hero cards.
-- **Centered completion prompt:** fixed the post-anime completion/delete notification shifting off-center during its entrance animation.
-- **Discover filter dropdowns:** all single-select filter dropdowns (\`Season\`, \`Year\`, \`Format\`, \`Status\`, \`Minimum score\`, \`Sort by\`, \`Age rating\`) now close automatically upon choosing an option, while the multi-select \`Genre\` picker remains open.
+### Subtitle Playback Fixes
+- **Blu-ray PGS bitmap subtitles (\`hdmv_pgs_subtitle\`):** added a native \`.sup\` parser, RLE bitmap decoder, PNG encoder, and local \`/pgs\` HTTP server route so both \`2ND SUB / SIGNS (TOP)\` and \`MAIN SUBTITLE (BOTTOM)\` render Blu-ray bitmap signs and dialogue tracks instead of returning empty cues.
+- **Windowed seek timestamp preservation (\`-copyts\`):** fixed 2-minute windowed subtitle extraction resetting timestamps to \`0:00\`, and added automatic window re-extraction when seeking outside cached bounds before full-track extraction finishes.
+- **Dual-subtitle layout & UI:** centered top-slot PGS sign bitmaps in \`2ND SUB / SIGNS (TOP)\` to prevent overlap with bottom dialogue, preloaded upcoming bitmap cues, and added a \`PGS\` codec badge in the Audio & Subtitle Manager.
 
 ---
 ### Assets included
