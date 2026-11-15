@@ -11,6 +11,16 @@ contextBridge.exposeInMainWorld('electronAPI', {
     ipcRenderer.on('window:maximized-change', handler);
     return () => ipcRenderer.removeListener('window:maximized-change', handler);
   },
+  onStartupStatus: (callback: (data: { phase: string; detail?: string; progress: number }) => void) => {
+    const handler = (_event: Electron.IpcRendererEvent, data: { phase: string; detail?: string; progress: number }) => callback(data);
+    ipcRenderer.on('startup:status', handler);
+    return () => ipcRenderer.removeListener('startup:status', handler);
+  },
+  onStartupExit: (callback: () => void) => {
+    const handler = () => callback();
+    ipcRenderer.on('startup:exit', handler);
+    return () => ipcRenderer.removeListener('startup:exit', handler);
+  },
   getSettings: () => ipcRenderer.invoke('get-settings'),
   updateSettings: (settings: Partial<AppSettings>) => ipcRenderer.invoke('update-settings', settings),
   browseFolder: (defaultPath?: string) => ipcRenderer.invoke('browse-folder', defaultPath),

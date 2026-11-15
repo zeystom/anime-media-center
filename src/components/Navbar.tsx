@@ -353,7 +353,7 @@ const NavbarImpl: React.FC<NavbarProps> = ({
 
   return (
     <header
-      className={`isolate absolute inset-x-0 top-0 z-50 flex h-[72px] select-none items-center justify-between gap-6 border-b border-white/[0.06] pl-8 [-webkit-app-region:drag] [&>*]:[-webkit-app-region:no-drag] ${
+      className={`isolate absolute inset-x-0 top-0 z-50 flex h-[72px] select-none items-center justify-between gap-6 border-b border-white/[0.06] pl-8 [-webkit-app-region:drag] ${
         blurEnabled
           ? `backdrop-saturate-[1.5] ${backdropImage ? 'bg-[#0a070e]/55 backdrop-blur-[22px]' : 'bg-[#0a070e]/75 backdrop-blur-[22px]'}`
           : // No glass blur: the bar goes near-solid so the scrolled content
@@ -390,7 +390,7 @@ const NavbarImpl: React.FC<NavbarProps> = ({
         </div>
       )}
       {/* Brand Logo & Name */}
-      <div className="relative z-10 flex cursor-pointer items-center space-x-3" onClick={() => onSelectTab('home')}>
+      <div className="relative z-10 flex cursor-pointer items-center space-x-3 [-webkit-app-region:no-drag]" onClick={() => onSelectTab('home')}>
         <div className="flex h-11 w-11 items-center justify-center rounded-xl border border-rose-300/25 bg-gradient-to-br from-rose-500/40 via-plum-900/50 to-rose-500/20 shadow-lg shadow-black/40">
             <img src="./kaiko-mark.svg" alt="" draggable={false} className="h-full w-full object-cover" />
         </div>
@@ -401,7 +401,7 @@ const NavbarImpl: React.FC<NavbarProps> = ({
         </div>
       </div>
 
-      <div ref={searchBoxRef} className="relative z-10 hidden min-w-[220px] max-w-[440px] flex-1 xl:block 2xl:mx-3">
+      <div ref={searchBoxRef} className="relative z-10 hidden min-w-[220px] max-w-[440px] flex-1 xl:block 2xl:mx-3 [-webkit-app-region:no-drag]">
         <Search className="pointer-events-none absolute left-4 top-1/2 h-4 w-4 -translate-y-1/2 text-zinc-500" />
         <input
           value={query}
@@ -426,7 +426,7 @@ const NavbarImpl: React.FC<NavbarProps> = ({
       </div>
 
       {/* Main Navigation Tabs */}
-      <nav className="relative z-10 flex items-center gap-1 rounded-full border border-white/[0.08] bg-black/25 p-1.5 shadow-inner shadow-black/30">
+      <nav className="relative z-10 flex items-center gap-1 rounded-full border border-white/[0.08] bg-black/25 p-1.5 shadow-inner shadow-black/30 [-webkit-app-region:no-drag]">
         <button
           onClick={() => onSelectTab('home')}
           className={`flex items-center space-x-2 px-4 py-1.5 rounded-md rounded-l-full text-sm font-medium transition-all ${
@@ -512,7 +512,7 @@ const NavbarImpl: React.FC<NavbarProps> = ({
       </nav>
 
       {/* Right Action Icons */}
-      <div className="relative z-10 flex items-center space-x-3">
+      <div className="relative z-10 flex items-center space-x-3 [-webkit-app-region:no-drag]">
         {p2pIndicator?.enabled && !downloadsActive && p2pIndicator.status !== 'Idle' && (
           <div
             title={p2pIndicator.status}

@@ -265,13 +265,10 @@ export const MagneticEpisodePeek: React.FC<MagneticEpisodePeekProps> = ({
       <div
         ref={restingTabRef}
         onClick={() => onOpenRef.current()}
-        className="fixed right-0 top-1/2 -translate-y-1/2 z-40 pr-1 pl-2.5 py-4 rounded-l-2xl bg-zinc-900/60 hover:bg-zinc-800 text-zinc-400 hover:text-white border-y border-l border-white/10 shadow-xl backdrop-blur-md cursor-pointer transition-all duration-300 group flex items-center space-x-1.5 select-none opacity-0 pointer-events-none"
+        className="fixed right-0 top-1/2 -translate-y-1/2 z-40 pr-1.5 pl-2 py-3 rounded-l-full bg-white/[0.06] hover:bg-white/[0.14] text-zinc-300 hover:text-white border-y border-l border-white/[0.1] shadow-lg backdrop-blur-md cursor-pointer transition-all duration-300 group flex items-center select-none opacity-0 pointer-events-none"
         title="Episodes (or push cursor to right edge)"
       >
-        <ChevronLeft className="w-4 h-4 text-zinc-400 group-hover:text-red-400 transition-colors" />
-        <span className="text-[11px] font-semibold tracking-wider uppercase text-zinc-300 group-hover:text-white [writing-mode:vertical-lr] rotate-180">
-          Episodes
-        </span>
+        <ChevronLeft className="w-4 h-4 text-zinc-300 group-hover:text-rose-400 transition-colors" />
       </div>
 
       {/* 2. Dynamic Magnetic Peek Arc (Springs and curves out towards cursor) */}

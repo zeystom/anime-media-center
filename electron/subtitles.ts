@@ -16,20 +16,24 @@ export interface ExternalSubtitleMatch {
  * Matches <base>.srt or <base>.<suffix>.srt where suffix is a token without spaces.
  * Any other prefix (e.g. "Show - 10.srt" for "Show - 1.mkv") is strictly rejected.
  */
-export function findExternalSubtitles(videoPath: string): ExternalSubtitleMatch[] {
+export function findExternalSubtitles(videoPath: string, preloadedEntries?: string[]): ExternalSubtitleMatch[] {
   const dir = path.dirname(videoPath);
   const ext = path.extname(videoPath);
   const base = path.basename(videoPath, ext);
 
-  if (!fs.existsSync(dir)) {
-    return [];
-  }
-
   let entries: string[] = [];
-  try {
-    entries = fs.readdirSync(dir);
-  } catch {
-    return [];
+  if (Array.isArray(preloadedEntries)) {
+    entries = preloadedEntries;
+  } else {
+    if (!fs.existsSync(dir)) {
+      return [];
+    }
+
+    try {
+      entries = fs.readdirSync(dir);
+    } catch {
+      return [];
+    }
   }
 
   // Regex for <base>.(srt|ass|ssa|vtt) or <base>.<suffix>.(srt|ass|ssa|vtt)

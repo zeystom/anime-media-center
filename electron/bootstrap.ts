@@ -7,6 +7,7 @@ const __dirname = path.dirname(__filename);
 const startupApp = app as typeof app & {
   __kaikoStartupSplash?: BrowserWindow;
   __kaikoStartupShownAt?: number;
+  __kaikoUserMinimized?: boolean;
 };
 
 // These need to be registered before app readiness. Keep Chromium's startup
@@ -32,6 +33,7 @@ if (!app.requestSingleInstanceLock()) {
   app.on('second-instance', () => {
     const visibleWindow = BrowserWindow.getAllWindows().find((window) => !window.isDestroyed());
     if (!visibleWindow) return;
+    if (visibleWindow.isMinimized()) visibleWindow.restore();
     if (!visibleWindow.isVisible()) visibleWindow.show();
     visibleWindow.focus();
   });
@@ -43,20 +45,25 @@ if (!app.requestSingleInstanceLock()) {
 
     const icon = path.join(__dirname, '../app-icon.ico');
     const { x, y, width, height } = screen.getPrimaryDisplay().workArea;
+    const restoredWidth = Math.max(1024, Math.min(1400, Math.round(width * 0.82)));
+    const restoredHeight = Math.max(700, Math.min(900, Math.round(height * 0.84)));
+    const restoredX = Math.round(x + (width - restoredWidth) / 2);
+    const restoredY = Math.round(y + (height - restoredHeight) / 2);
     const splashPath = app.isPackaged
       ? path.join(__dirname, '../dist/kaiko-splash.html')
       : path.join(app.getAppPath(), 'public/kaiko-splash.html');
 
     const splash = new BrowserWindow({
-      x,
-      y,
-      width,
-      height,
+      x: restoredX,
+      y: restoredY,
+      width: restoredWidth,
+      height: restoredHeight,
       minWidth: 1024,
       minHeight: 700,
       show: false,
+      paintWhenInitiallyHidden: true,
       opacity: 0,
-      backgroundColor: '#09080f',
+      backgroundColor: '#07060a',
       title: 'Kaiko — Starting',
       icon,
       autoHideMenuBar: true,
@@ -79,14 +86,16 @@ if (!app.requestSingleInstanceLock()) {
     }
     splash.setMenu(null);
     splash.removeMenu();
-    // Opacity is zero from construction, so maximize can establish the final
-    // viewport before Chromium paints without exposing the native white frame.
-    // Avoid resizing between the splash's first frame and its animation.
+    // Establish the maximized geometry while opacity is 0 so Windows absorbs any
+    // initial WM_ERASEBKGND/frame expose invisibly before reveal.
     splash.maximize();
+
+    startupApp.__kaikoUserMinimized = false;
 
     // Register controls before loading the startup page so they remain live
     // even while the heavier application modules are still initializing.
     ipcMain.handle('window:minimize', () => {
+      startupApp.__kaikoUserMinimized = true;
       if (!splash.isDestroyed()) splash.minimize();
     });
     ipcMain.handle('window:toggle-maximize', () => {
@@ -102,29 +111,69 @@ if (!app.requestSingleInstanceLock()) {
     const emitMaximizeState = () => {
       if (!splash.isDestroyed()) splash.webContents.send('window:maximized-change', splash.isMaximized());
     };
-    splash.on('maximize', emitMaximizeState);
+    splash.on('minimize', () => {
+      startupApp.__kaikoUserMinimized = true;
+    });
+    splash.on('restore', () => {
+      startupApp.__kaikoUserMinimized = false;
+    });
+    splash.on('maximize', () => {
+      startupApp.__kaikoUserMinimized = false;
+      emitMaximizeState();
+    });
     splash.on('unmaximize', emitMaximizeState);
 
     startupApp.__kaikoStartupSplash = splash;
-    startupApp.__kaikoStartupShownAt = Date.now();
 
-    // Wait for the first composed splash frame. Maximizing a hidden HWND before
-    // Chromium paints can expose the native white frame on Windows.
-    splash.once('ready-to-show', () => {
-      if (splash.isDestroyed()) return;
+    let splashRevealed = false;
+    let resolveSplashShown!: () => void;
+    const splashShownPromise = new Promise<void>((resolve) => {
+      resolveSplashShown = resolve;
+    });
+
+    const revealSplash = () => {
+      if (splashRevealed) return;
+      splashRevealed = true;
+      if (splash.isDestroyed()) {
+        resolveSplashShown();
+        return;
+      }
+      // Show while still at opacity 0 so DWM/DirectComposition commits the dark
+      // painted frame to the HWND swapchain before becoming visible.
       splash.show();
       setTimeout(() => {
-        if (!splash.isDestroyed()) splash.setOpacity(1);
+        if (!splash.isDestroyed()) {
+          if (splash.isMinimized() && !startupApp.__kaikoUserMinimized) splash.restore();
+          splash.setOpacity(1);
+          if (process.platform === 'win32') {
+            splash.setAlwaysOnTop(true);
+            splash.focus();
+            splash.moveTop();
+            splash.setAlwaysOnTop(false);
+          }
+          startupApp.__kaikoStartupShownAt = Date.now();
+        }
+        resolveSplashShown();
       }, 100);
-    });
+    };
+
+    splash.once('ready-to-show', revealSplash);
+    splash.once('closed', resolveSplashShown);
+    const fallbackRevealTimer = setTimeout(revealSplash, 800);
 
     // This is the app's only native window. Reuse its WebContents for the UI
     // so startup cannot create a second visible window.
-    void splash.loadFile(splashPath).catch((error) => {
+    try {
+      await splash.loadFile(splashPath);
+    } catch (error) {
       console.error('[Electron] Could not load startup splash:', error);
-    });
+      revealSplash();
+    }
+    await splashShownPromise;
+    clearTimeout(fallbackRevealTimer);
+    await new Promise((resolve) => setTimeout(resolve, 50));
 
-    // Heavy application imports begin only after the dark native window exists.
+    // Heavy application imports begin only after the dark native window is visible.
     try {
       await import('./main');
     } catch (error) {

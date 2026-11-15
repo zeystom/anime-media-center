@@ -286,8 +286,8 @@ export const TimelineScrubber: React.FC<TimelineScrubberProps> = ({
       onMouseDown={handleMouseDown}
       className="relative w-full h-8 flex items-center cursor-pointer select-none group"
     >
-      {/* Background Track Bar: 4px resting, 7px on hover */}
-      <div className="relative w-full h-1 group-hover:h-[7px] bg-white/15 rounded-full overflow-hidden transition-all duration-200 ease-fluid">
+      {/* Background Track Bar: 4px resting, 6px on hover */}
+      <div className="relative w-full h-1 group-hover:h-[6px] bg-black/45 ring-1 ring-white/[0.16] backdrop-blur-sm rounded-full overflow-hidden shadow-[0_2px_10px_rgba(0,0,0,0.45)] transition-all duration-200 ease-fluid">
         {/* Instant Ghost Bar */}
         <div
           ref={ghostBarRef}
@@ -366,19 +366,17 @@ export const TimelineScrubber: React.FC<TimelineScrubberProps> = ({
         style={{ willChange: 'transform', width: `${BOX_WIDTH}px` }}
       >
         <div
-          className={`relative p-1.5 rounded-2xl border shadow-2xl shadow-black/90 backdrop-blur-2xl flex flex-col items-center transition-all duration-200 ease-fluid ${
+          className={`relative p-1 rounded-xl border border-white/[0.12] bg-[#0b0912]/75 backdrop-blur-xl shadow-[0_12px_32px_rgba(0,0,0,0.75)] flex flex-col items-center transition-all duration-200 ease-fluid ${
             isHovering && duration > 0
               ? 'opacity-100 scale-100 -translate-y-0'
               : 'opacity-0 scale-[0.92] translate-y-1.5'
           }`}
           style={{
-            background: 'rgba(15, 10, 22, 0.82)',
-            borderColor: 'rgba(255, 255, 255, 0.14)',
             transformOrigin: 'bottom center',
           }}
         >
-          {/* 16:9 Thumbnail Box */}
-          <div className="w-full aspect-video bg-black rounded-xl overflow-hidden relative border border-white/10 shadow-inner">
+          {/* 16:9 Thumbnail Box with integrated bottom gradient time overlay */}
+          <div className="w-full aspect-video bg-black rounded-lg overflow-hidden relative">
             {displayedThumbUrl ? (
               <img
                 src={displayedThumbUrl}
@@ -391,30 +389,30 @@ export const TimelineScrubber: React.FC<TimelineScrubberProps> = ({
                 Preview
               </div>
             )}
+
+            {/* Time Badge & Opening Pill integrated cleanly inside thumbnail bottom */}
+            <div className="absolute inset-x-0 bottom-0 pt-4 pb-1.5 px-2 bg-gradient-to-t from-black/85 via-black/35 to-transparent flex items-center justify-center space-x-1.5">
+              <span
+                ref={timestampRef}
+                className="text-xs font-mono font-bold text-white tracking-wider leading-none drop-shadow"
+              >
+                00:00
+              </span>
+              <span
+                ref={opBadgeRef}
+                style={{ display: 'none' }}
+                className="inline-flex items-center px-1.5 h-3.5 leading-none rounded text-[9px] font-bold font-mono tracking-wider bg-amber-500/25 text-amber-300 border border-amber-500/40 uppercase box-border"
+              >
+                Opening
+              </span>
+            </div>
           </div>
 
-          {/* Time Badge & Opening Pill (Fixed height to guarantee card size never jumps) */}
-          <div className="mt-1 px-2.5 h-[22px] rounded-lg bg-black/50 border border-white/5 flex items-center justify-center space-x-1.5 box-border">
-            <span
-              ref={timestampRef}
-              className="text-xs font-mono font-bold text-zinc-100 tracking-wider leading-none"
-            >
-              00:00
-            </span>
-            <span
-              ref={opBadgeRef}
-              style={{ display: 'none' }}
-              className="inline-flex items-center px-1.5 h-3.5 leading-none rounded text-[9px] font-bold font-mono tracking-wider bg-amber-500/20 text-amber-300 border border-amber-500/40 uppercase box-border"
-            >
-              Opening
-            </span>
-          </div>
-
-          {/* Precision Pointer Arrow (Aligns exactly to cursor position) */}
+          {/* Preserved arrowRef node for ref alignment without visual clutter */}
           <div
             ref={arrowRef}
-            className="absolute -bottom-1.5 w-3 h-3 -translate-x-1/2 rotate-45 border-r border-b"
-            style={{ left: `${HALF_WIDTH}px`, backgroundColor: 'rgba(15, 10, 22, 0.9)', borderColor: 'rgba(255, 255, 255, 0.14)' }}
+            className="opacity-0 pointer-events-none absolute -bottom-1 w-2 h-2 -translate-x-1/2"
+            style={{ left: `${HALF_WIDTH}px` }}
           />
         </div>
       </div>

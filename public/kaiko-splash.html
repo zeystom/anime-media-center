@@ -3,68 +3,877 @@
   <head>
     <meta charset="UTF-8" />
     <meta name="viewport" content="width=device-width, initial-scale=1.0" />
-    <meta name="theme-color" content="#09080f" />
+    <meta name="theme-color" content="#07060A" />
     <title>Kaiko — Starting</title>
     <style>
-      :root { color-scheme: dark; background: #09080f; }
-      * { box-sizing: border-box; }
-      html, body { width: 100%; height: 100%; margin: 0; overflow: hidden; }
+      :root {
+        --bg-void: #07060a;
+        --crimson: #ff1e6d;
+        --rose: #f45b9b;
+        --plum: #9c46a5;
+        --plum-deep: #4a154b;
+        --text-main: #f8f7fa;
+        --text-muted: #9b95a8;
+        --ease-fluid: cubic-bezier(0.22, 1, 0.36, 1);
+        color-scheme: dark;
+        background: var(--bg-void);
+      }
+
+      * {
+        box-sizing: border-box;
+      }
+
+      html,
       body {
+        width: 100%;
+        height: 100%;
+        margin: 0;
+        overflow: hidden;
+        background: var(--bg-void);
+      }
+
+      body {
+        position: relative;
         display: grid;
         place-items: center;
-        color: #fff;
-        font-family: system-ui, -apple-system, "Segoe UI", sans-serif;
-        background: radial-gradient(ellipse at 50% 44%, #211126 0%, #100d18 42%, #09080f 82%);
+        color: var(--text-main);
+        font-family: "Inter", system-ui, -apple-system, "Segoe UI", sans-serif;
+        user-select: none;
+        -webkit-user-select: none;
         -webkit-app-region: drag;
       }
-      .content { display: flex; flex-direction: column; align-items: center; text-align: center; padding: 24px; animation: arrive 500ms ease-out both; -webkit-app-region: no-drag; }
-      .window-controls { position: fixed; z-index: 2; top: 0; right: 0; display: flex; height: 40px; -webkit-app-region: no-drag; }
-      .window-controls button { display: grid; width: 46px; height: 40px; place-items: center; padding: 0; border: 0; background: transparent; color: #c9c3d2; cursor: pointer; transition: background 120ms ease, color 120ms ease; -webkit-app-region: no-drag; }
-      .window-controls button:hover { background: #ffffff12; color: #fff; }
-      .window-controls button.close:hover { background: #e5485d; }
-      .window-controls svg { width: 14px; height: 14px; fill: none; stroke: currentColor; stroke-width: 1.5; stroke-linecap: round; stroke-linejoin: round; }
-      .mark { width: clamp(170px, 25vmin, 290px); height: auto; filter: drop-shadow(0 16px 42px #e72a8540); animation: float 2.8s ease-in-out 650ms infinite both; will-change: transform; }
-      .title { margin-top: 12px; font-size: clamp(30px, 4vmin, 38px); font-weight: 760; line-height: 1.1; letter-spacing: .025em; animation: rise 500ms 120ms both; }
-      .title span { color: #f04a9a; }
-      .subtitle { margin-top: 9px; color: #a6a0b1; font-size: 11px; font-weight: 600; letter-spacing: .2em; text-transform: uppercase; animation: rise 500ms 220ms both; }
-      .dots { display: flex; gap: 7px; margin-top: 27px; }
-      .dots i { width: 5px; height: 5px; border-radius: 50%; background: #ef4b9a; animation: pulse 800ms ease-in-out infinite alternate; }
-      .dots i:nth-child(2) { animation-delay: 140ms; }
-      .dots i:nth-child(3) { animation-delay: 280ms; }
-      @keyframes arrive { from { opacity: 0; } to { opacity: 1; } }
-      @keyframes rise { from { opacity: 0; } to { opacity: 1; } }
-      @keyframes float { 0%,100% { transform: translateY(0) rotate(-.6deg); } 50% { transform: translateY(-7px) rotate(.6deg); } }
-      @keyframes pulse { from { opacity: .35; transform: scale(.75); } to { opacity: 1; transform: scale(1.18); } }
-      @media (prefers-reduced-motion: reduce) { *, *::before, *::after { animation-duration: .01ms !important; animation-iteration-count: 1 !important; } }
+
+      /* Atmospheric background layers */
+      .backdrop {
+        position: fixed;
+        inset: 0;
+        overflow: hidden;
+        pointer-events: none;
+        z-index: 0;
+        background:
+          radial-gradient(ellipse 68% 58% at 50% 44%, rgba(74, 21, 75, 0.34) 0%, rgba(20, 11, 28, 0.45) 45%, var(--bg-void) 82%);
+      }
+
+      .grid-layer {
+        position: absolute;
+        inset: -12%;
+        background-image:
+          linear-gradient(to right, rgba(255, 255, 255, 0.028) 1px, transparent 1px),
+          linear-gradient(to bottom, rgba(255, 255, 255, 0.028) 1px, transparent 1px);
+        background-size: 46px 46px;
+        mask-image: radial-gradient(circle at 50% 45%, rgba(0, 0, 0, 0.7) 0%, rgba(0, 0, 0, 0.18) 42%, transparent 72%);
+        -webkit-mask-image: radial-gradient(circle at 50% 45%, rgba(0, 0, 0, 0.7) 0%, rgba(0, 0, 0, 0.18) 42%, transparent 72%);
+        transform: perspective(700px) rotateX(18deg) scale(1.06);
+        opacity: 0;
+        animation: grid-fade 1100ms var(--ease-fluid) 120ms forwards;
+      }
+
+      .nebula {
+        position: absolute;
+        border-radius: 50%;
+        filter: blur(88px);
+        will-change: transform, opacity;
+      }
+
+      .nebula--crimson {
+        width: clamp(320px, 44vmin, 560px);
+        height: clamp(320px, 44vmin, 560px);
+        left: 50%;
+        top: 42%;
+        transform: translate(-50%, -50%);
+        background: radial-gradient(circle, rgba(255, 30, 109, 0.24) 0%, rgba(255, 30, 109, 0.06) 55%, transparent 75%);
+        animation: nebula-crimson 6.5s ease-in-out infinite alternate;
+      }
+
+      .nebula--plum {
+        width: clamp(380px, 54vmin, 680px);
+        height: clamp(380px, 54vmin, 680px);
+        left: 50%;
+        top: 48%;
+        transform: translate(-50%, -50%);
+        background: radial-gradient(circle, rgba(156, 70, 165, 0.2) 0%, rgba(74, 21, 75, 0.08) 58%, transparent 78%);
+        animation: nebula-plum 8s ease-in-out infinite alternate;
+      }
+
+      .vignette {
+        position: absolute;
+        inset: 0;
+        background: radial-gradient(circle at 50% 46%, transparent 38%, rgba(7, 6, 10, 0.55) 76%, rgba(7, 6, 10, 0.92) 100%);
+      }
+
+      #particles {
+        position: fixed;
+        inset: 0;
+        width: 100%;
+        height: 100%;
+        pointer-events: none;
+        z-index: 1;
+        transition: opacity 250ms ease;
+      }
+
+      /* Window controls */
+      .window-controls {
+        position: fixed;
+        z-index: 4;
+        top: 0;
+        right: 0;
+        display: flex;
+        height: 40px;
+        -webkit-app-region: no-drag;
+      }
+
+      .window-controls button {
+        display: grid;
+        width: 46px;
+        height: 40px;
+        place-items: center;
+        padding: 0;
+        border: 0;
+        background: transparent;
+        color: #c9c3d2;
+        cursor: pointer;
+        transition: background 120ms ease, color 120ms ease;
+        -webkit-app-region: no-drag;
+      }
+
+      .window-controls button:hover {
+        background: rgba(255, 255, 255, 0.075);
+        color: #fff;
+      }
+
+      .window-controls button.close:hover {
+        background: #e5485d;
+        color: #fff;
+      }
+
+      .window-controls svg {
+        width: 14px;
+        height: 14px;
+        fill: none;
+        stroke: currentColor;
+        stroke-width: 1.5;
+        stroke-linecap: round;
+        stroke-linejoin: round;
+      }
+
+      /* Main center stage */
+      .content {
+        position: relative;
+        z-index: 2;
+        display: flex;
+        flex-direction: column;
+        align-items: center;
+        text-align: center;
+        padding: 28px;
+        -webkit-app-region: no-drag;
+        transition: transform 250ms var(--ease-fluid), opacity 250ms var(--ease-fluid), filter 250ms var(--ease-fluid);
+        will-change: transform, opacity, filter;
+      }
+
+      /* Emblem stage & orbital geometry */
+      .emblem-stage {
+        position: relative;
+        display: grid;
+        place-items: center;
+        width: clamp(230px, 34vmin, 340px);
+        height: clamp(230px, 34vmin, 340px);
+      }
+
+      .shockwave {
+        position: absolute;
+        inset: 14%;
+        border-radius: 50%;
+        border: 1.5px solid rgba(255, 30, 109, 0.6);
+        box-shadow: 0 0 28px rgba(255, 30, 109, 0.35), inset 0 0 20px rgba(156, 70, 165, 0.2);
+        opacity: 0;
+        pointer-events: none;
+        animation: ring-expand 1350ms var(--ease-fluid) 80ms forwards;
+      }
+
+      .aura {
+        position: absolute;
+        border-radius: 50%;
+        pointer-events: none;
+      }
+
+      .aura--outer {
+        inset: 8%;
+        background: radial-gradient(circle, rgba(156, 70, 165, 0.22) 0%, rgba(74, 21, 75, 0.08) 54%, transparent 74%);
+        filter: blur(22px);
+        animation: aura-breathe 3.6s ease-in-out infinite alternate;
+      }
+
+      .aura--core {
+        inset: 20%;
+        background: radial-gradient(circle, rgba(255, 30, 109, 0.32) 0%, rgba(255, 30, 109, 0.08) 52%, transparent 76%);
+        filter: blur(18px);
+        animation: aura-breathe 2.8s ease-in-out 300ms infinite alternate-reverse;
+      }
+
+      .orbit {
+        position: absolute;
+        inset: 0;
+        width: 100%;
+        height: 100%;
+        pointer-events: none;
+        opacity: 0;
+      }
+
+      .orbit--outer {
+        animation:
+          fade-in 800ms var(--ease-fluid) 120ms forwards,
+          spin-cw 28s linear infinite;
+      }
+
+      .orbit--inner {
+        inset: 7%;
+        width: 86%;
+        height: 86%;
+        animation:
+          fade-in 800ms var(--ease-fluid) 200ms forwards,
+          spin-ccw 18s linear infinite;
+      }
+
+      .mark-wrap {
+        position: relative;
+        display: grid;
+        place-items: center;
+        width: clamp(160px, 23vmin, 250px);
+        height: clamp(160px, 23vmin, 250px);
+        animation:
+          mark-enter 760ms var(--ease-fluid) both,
+          float 3.4s ease-in-out 780ms infinite both;
+        will-change: transform, opacity;
+      }
+
+      .mark {
+        width: 100%;
+        height: 100%;
+        object-fit: contain;
+        filter:
+          drop-shadow(0 16px 38px rgba(255, 30, 109, 0.36))
+          drop-shadow(0 0 18px rgba(156, 70, 165, 0.24));
+      }
+
+      /* Diagonal sheen masked strictly to the vector emblem silhouette */
+      .mark-sheen {
+        position: absolute;
+        inset: 0;
+        pointer-events: none;
+        -webkit-mask-image: url("./kaiko-mark.svg");
+        mask-image: url("./kaiko-mark.svg");
+        -webkit-mask-size: contain;
+        mask-size: contain;
+        -webkit-mask-repeat: no-repeat;
+        mask-repeat: no-repeat;
+        -webkit-mask-position: center;
+        mask-position: center;
+        overflow: hidden;
+        mix-blend-mode: screen;
+      }
+
+      .mark-sheen::before {
+        content: "";
+        position: absolute;
+        top: -30%;
+        left: -95%;
+        width: 55%;
+        height: 160%;
+        transform: rotate(24deg);
+        background: linear-gradient(
+          90deg,
+          transparent 0%,
+          rgba(255, 255, 255, 0.06) 35%,
+          rgba(255, 255, 255, 0.42) 50%,
+          rgba(255, 160, 200, 0.14) 65%,
+          transparent 100%
+        );
+        animation: sheen-sweep 4.2s var(--ease-fluid) 650ms infinite;
+      }
+
+      /* Typography */
+      .title {
+        margin-top: 8px;
+        font-size: clamp(32px, 4.4vmin, 42px);
+        font-weight: 800;
+        line-height: 1.08;
+        letter-spacing: 0.03em;
+        color: #fff;
+        text-shadow: 0 8px 30px rgba(0, 0, 0, 0.55);
+        animation: wordmark-in 680ms var(--ease-fluid) 140ms both;
+      }
+
+      .title span {
+        background: linear-gradient(135deg, #ff347f 0%, #f45b9b 52%, #c964cf 100%);
+        -webkit-background-clip: text;
+        background-clip: text;
+        color: transparent;
+        filter: drop-shadow(0 0 18px rgba(255, 30, 109, 0.35));
+      }
+
+      .tagline {
+        display: flex;
+        align-items: center;
+        gap: 12px;
+        margin-top: 10px;
+        animation: rise-fade 620ms var(--ease-fluid) 240ms both;
+      }
+
+      .tagline__line {
+        width: 34px;
+        height: 1px;
+        transform-origin: center;
+        animation: line-grow 700ms var(--ease-fluid) 320ms both;
+      }
+
+      .tagline__line--left {
+        background: linear-gradient(90deg, transparent, rgba(255, 30, 109, 0.55));
+      }
+
+      .tagline__line--right {
+        background: linear-gradient(90deg, rgba(255, 30, 109, 0.55), transparent);
+      }
+
+      .subtitle {
+        color: var(--text-muted);
+        font-size: 10.5px;
+        font-weight: 600;
+        letter-spacing: 0.24em;
+        text-transform: uppercase;
+      }
+
+      /* Minimalist detailed progress bar */
+      .loader {
+        margin-top: 28px;
+        width: clamp(150px, 19vmin, 196px);
+        display: flex;
+        flex-direction: column;
+        align-items: center;
+        animation: rise-fade 640ms var(--ease-fluid) 320ms both;
+      }
+
+      .progress-track {
+        position: relative;
+        width: 100%;
+        height: 3px;
+        border-radius: 999px;
+        background: rgba(255, 255, 255, 0.065);
+        box-shadow:
+          inset 0 1px 1px rgba(0, 0, 0, 0.45),
+          0 0 22px rgba(255, 30, 109, 0.14);
+        overflow: visible;
+      }
+
+      .progress-fill {
+        position: relative;
+        width: 10%;
+        height: 100%;
+        border-radius: 999px;
+        background: linear-gradient(
+          90deg,
+          rgba(156, 70, 165, 0.45) 0%,
+          #b84592 40%,
+          var(--crimson) 86%,
+          #ff9ec2 100%
+        );
+        box-shadow: 0 0 14px rgba(255, 30, 109, 0.48);
+        transition: width 320ms var(--ease-fluid);
+      }
+
+      .progress-fill::before {
+        content: "";
+        position: absolute;
+        inset: 0;
+        border-radius: 999px;
+        overflow: hidden;
+        background: linear-gradient(
+          90deg,
+          transparent 0%,
+          rgba(255, 255, 255, 0.45) 50%,
+          transparent 100%
+        );
+        background-size: 65% 100%;
+        background-repeat: no-repeat;
+        animation: bar-shimmer 1.6s linear infinite;
+      }
+
+      .progress-fill::after {
+        content: "";
+        position: absolute;
+        right: -1px;
+        top: 50%;
+        width: 6px;
+        height: 6px;
+        border-radius: 50%;
+        transform: translateY(-50%);
+        background: #fff0f6;
+        box-shadow:
+          0 0 10px 2px rgba(255, 30, 109, 0.95),
+          0 0 20px 4px rgba(255, 30, 109, 0.45);
+      }
+
+      /* Exit transition into main UI */
+      body.is-exiting #particles,
+      body.is-exiting .window-controls {
+        opacity: 0;
+        transition: opacity 200ms ease;
+      }
+
+      body.is-exiting .content {
+        opacity: 0;
+        transform: scale(1.045);
+        filter: blur(4px);
+      }
+
+      body.is-exiting .nebula--crimson {
+        opacity: 0.9;
+        transform: translate(-50%, -50%) scale(1.22);
+        transition: transform 250ms var(--ease-fluid), opacity 250ms ease;
+      }
+
+      /* Keyframes */
+      @keyframes grid-fade {
+        from {
+          opacity: 0;
+          transform: perspective(700px) rotateX(22deg) scale(1.12);
+        }
+        to {
+          opacity: 0.85;
+          transform: perspective(700px) rotateX(18deg) scale(1.06);
+        }
+      }
+
+      @keyframes fade-in {
+        from {
+          opacity: 0;
+        }
+        to {
+          opacity: 1;
+        }
+      }
+
+      @keyframes nebula-crimson {
+        0% {
+          opacity: 0.65;
+          transform: translate(-52%, -52%) scale(0.95);
+        }
+        100% {
+          opacity: 0.98;
+          transform: translate(-48%, -48%) scale(1.08);
+        }
+      }
+
+      @keyframes nebula-plum {
+        0% {
+          opacity: 0.55;
+          transform: translate(-48%, -50%) scale(1.04);
+        }
+        100% {
+          opacity: 0.9;
+          transform: translate(-52%, -49%) scale(0.96);
+        }
+      }
+
+      @keyframes ring-expand {
+        0% {
+          opacity: 0.88;
+          transform: scale(0.45);
+        }
+        100% {
+          opacity: 0;
+          transform: scale(1.62);
+        }
+      }
+
+      @keyframes aura-breathe {
+        0% {
+          opacity: 0.62;
+          transform: scale(0.94);
+        }
+        100% {
+          opacity: 1;
+          transform: scale(1.06);
+        }
+      }
+
+      @keyframes spin-cw {
+        from {
+          transform: rotate(0deg);
+        }
+        to {
+          transform: rotate(360deg);
+        }
+      }
+
+      @keyframes spin-ccw {
+        from {
+          transform: rotate(360deg);
+        }
+        to {
+          transform: rotate(0deg);
+        }
+      }
+
+      @keyframes mark-enter {
+        0% {
+          opacity: 0;
+          transform: scale(0.84) translateY(10px);
+          filter: blur(8px);
+        }
+        100% {
+          opacity: 1;
+          transform: scale(1) translateY(0);
+          filter: blur(0);
+        }
+      }
+
+      @keyframes float {
+        0%,
+        100% {
+          transform: translateY(0) rotate(-0.5deg);
+        }
+        50% {
+          transform: translateY(-7px) rotate(0.5deg);
+        }
+      }
+
+      @keyframes sheen-sweep {
+        0% {
+          left: -95%;
+          opacity: 0;
+        }
+        12% {
+          opacity: 1;
+        }
+        38% {
+          left: 145%;
+          opacity: 0.9;
+        }
+        42%,
+        100% {
+          left: 145%;
+          opacity: 0;
+        }
+      }
+
+      @keyframes wordmark-in {
+        0% {
+          opacity: 0;
+          letter-spacing: 0.14em;
+          transform: translateY(10px);
+          filter: blur(4px);
+        }
+        100% {
+          opacity: 1;
+          letter-spacing: 0.03em;
+          transform: translateY(0);
+          filter: blur(0);
+        }
+      }
+
+      @keyframes rise-fade {
+        0% {
+          opacity: 0;
+          transform: translateY(10px);
+        }
+        100% {
+          opacity: 1;
+          transform: translateY(0);
+        }
+      }
+
+      @keyframes line-grow {
+        0% {
+          opacity: 0;
+          transform: scaleX(0);
+        }
+        100% {
+          opacity: 1;
+          transform: scaleX(1);
+        }
+      }
+
+      @keyframes bar-shimmer {
+        0% {
+          background-position: -140% 0;
+        }
+        100% {
+          background-position: 240% 0;
+        }
+      }
+
+      @media (prefers-reduced-motion: reduce) {
+        *,
+        *::before,
+        *::after {
+          animation-duration: 0.01ms !important;
+          animation-iteration-count: 1 !important;
+          transition-duration: 0.01ms !important;
+        }
+        #particles {
+          display: none;
+        }
+      }
     </style>
   </head>
   <body>
+    <div class="backdrop" aria-hidden="true">
+      <div class="grid-layer"></div>
+      <div class="nebula nebula--plum"></div>
+      <div class="nebula nebula--crimson"></div>
+      <div class="vignette"></div>
+    </div>
+
+    <canvas id="particles" aria-hidden="true"></canvas>
+
     <nav class="window-controls" aria-label="Window controls">
-      <button id="minimize" aria-label="Minimize window" title="Minimize"><svg viewBox="0 0 16 16"><path d="M3 8h10" /></svg></button>
-      <button id="maximize" aria-label="Maximize window" title="Maximize"><svg viewBox="0 0 16 16"><rect x="3.25" y="3.25" width="9.5" height="9.5" rx="1" /></svg></button>
-      <button id="close" class="close" aria-label="Close window" title="Close"><svg viewBox="0 0 16 16"><path d="m4 4 8 8M12 4l-8 8" /></svg></button>
+      <button id="minimize" aria-label="Minimize window" title="Minimize">
+        <svg viewBox="0 0 16 16"><path d="M3 8h10" /></svg>
+      </button>
+      <button id="maximize" aria-label="Maximize window" title="Maximize">
+        <svg viewBox="0 0 16 16"><rect x="3.25" y="3.25" width="9.5" height="9.5" rx="1" /></svg>
+      </button>
+      <button id="close" class="close" aria-label="Close window" title="Close">
+        <svg viewBox="0 0 16 16"><path d="m4 4 8 8M12 4l-8 8" /></svg>
+      </button>
     </nav>
+
     <main class="content" aria-label="Kaiko is starting">
-      <img class="mark" src="./kaiko-mark.svg" alt="" draggable="false" />
+      <div class="emblem-stage">
+        <div class="shockwave" aria-hidden="true"></div>
+        <div class="aura aura--outer" aria-hidden="true"></div>
+        <div class="aura aura--core" aria-hidden="true"></div>
+
+        <!-- Outer segmented orbital ring -->
+        <svg class="orbit orbit--outer" viewBox="0 0 320 320" fill="none" aria-hidden="true">
+          <defs>
+            <linearGradient id="outerArcGrad" x1="0" y1="0" x2="320" y2="320" gradientUnits="userSpaceOnUse">
+              <stop offset="0%" stop-color="#ff1e6d" stop-opacity="0.7" />
+              <stop offset="50%" stop-color="#9c46a5" stop-opacity="0.22" />
+              <stop offset="100%" stop-color="#ff1e6d" stop-opacity="0" />
+            </linearGradient>
+          </defs>
+          <circle
+            cx="160"
+            cy="160"
+            r="146"
+            stroke="rgba(255,255,255,0.06)"
+            stroke-width="1"
+            stroke-dasharray="4 10"
+          />
+          <circle
+            cx="160"
+            cy="160"
+            r="138"
+            stroke="url(#outerArcGrad)"
+            stroke-width="1.35"
+            stroke-linecap="round"
+            stroke-dasharray="110 75 28 95"
+          />
+          <circle cx="160" cy="22" r="2.6" fill="#ff1e6d" fill-opacity="0.9" />
+          <circle cx="298" cy="160" r="1.8" fill="#c964cf" fill-opacity="0.75" />
+        </svg>
+
+        <!-- Inner counter-rotating orbital ring -->
+        <svg class="orbit orbit--inner" viewBox="0 0 320 320" fill="none" aria-hidden="true">
+          <defs>
+            <linearGradient id="innerArcGrad" x1="320" y1="40" x2="20" y2="280" gradientUnits="userSpaceOnUse">
+              <stop offset="0%" stop-color="#f45b9b" stop-opacity="0.65" />
+              <stop offset="45%" stop-color="#9c46a5" stop-opacity="0.35" />
+              <stop offset="100%" stop-color="#4a154b" stop-opacity="0" />
+            </linearGradient>
+          </defs>
+          <circle
+            cx="160"
+            cy="160"
+            r="128"
+            stroke="url(#innerArcGrad)"
+            stroke-width="1.2"
+            stroke-linecap="round"
+            stroke-dasharray="76 118 40 160"
+          />
+          <circle cx="32" cy="160" r="2.2" fill="#f45b9b" fill-opacity="0.8" />
+          <circle cx="160" cy="288" r="1.6" fill="#ffffff" fill-opacity="0.45" />
+        </svg>
+
+        <div class="mark-wrap">
+          <img class="mark" src="./kaiko-mark.svg" alt="" draggable="false" />
+          <div class="mark-sheen" aria-hidden="true"></div>
+        </div>
+      </div>
+
       <div class="title">Kai<span>ko</span></div>
-      <div class="subtitle">Your anime, right at home</div>
-      <div class="dots" aria-hidden="true"><i></i><i></i><i></i></div>
+      <div class="tagline">
+        <span class="tagline__line tagline__line--left" aria-hidden="true"></span>
+        <span class="subtitle">Your anime, right at home</span>
+        <span class="tagline__line tagline__line--right" aria-hidden="true"></span>
+      </div>
+
+      <div class="loader" aria-hidden="true">
+        <div class="progress-track">
+          <div id="progress-fill" class="progress-fill"></div>
+        </div>
+      </div>
     </main>
+
     <script>
       const api = window.electronAPI;
-      const maximize = document.getElementById('maximize');
+      const maximize = document.getElementById("maximize");
       const setMaximizedIcon = (isMaximized) => {
-        maximize.title = isMaximized ? 'Restore' : 'Maximize';
-        maximize.setAttribute('aria-label', isMaximized ? 'Restore window' : 'Maximize window');
+        if (!maximize) return;
+        maximize.title = isMaximized ? "Restore" : "Maximize";
+        maximize.setAttribute("aria-label", isMaximized ? "Restore window" : "Maximize window");
         maximize.innerHTML = isMaximized
           ? '<svg viewBox="0 0 16 16"><path d="M5 3.25h7.75V11M3.25 5h7.75v7.75H3.25z" /></svg>'
           : '<svg viewBox="0 0 16 16"><rect x="3.25" y="3.25" width="9.5" height="9.5" rx="1" /></svg>';
       };
-      document.getElementById('minimize').addEventListener('click', () => api?.minimizeWindow());
-      maximize.addEventListener('click', async () => setMaximizedIcon(await api?.toggleMaximizeWindow()));
-      document.getElementById('close').addEventListener('click', () => api?.closeWindow());
-      api?.isWindowMaximized().then(setMaximizedIcon);
-      api?.onWindowMaximizedChange(setMaximizedIcon);
+
+      document.getElementById("minimize")?.addEventListener("click", () => api?.minimizeWindow?.());
+      maximize?.addEventListener("click", async () => {
+        if (api?.toggleMaximizeWindow) {
+          setMaximizedIcon(await api.toggleMaximizeWindow());
+        }
+      });
+      document.getElementById("close")?.addEventListener("click", () => api?.closeWindow?.());
+      api?.isWindowMaximized?.()?.then(setMaximizedIcon);
+      api?.onWindowMaximizedChange?.(setMaximizedIcon);
+
+      // Smooth monotonic progress line synchronized with startup lifecycle
+      const fillEl = document.getElementById("progress-fill");
+
+      let currentProgress = 8;
+      let targetProgress = 18;
+      let isExiting = false;
+
+      const renderProgress = (value) => {
+        const clamped = Math.max(0, Math.min(100, Math.round(value)));
+        if (fillEl) fillEl.style.width = `${clamped}%`;
+      };
+
+      const setTargetProgress = (next) => {
+        const clamped = Math.max(0, Math.min(100, Number(next) || 0));
+        if (clamped > targetProgress) {
+          targetProgress = clamped;
+        }
+      };
+
+      renderProgress(currentProgress);
+
+      const driftTimer = window.setInterval(() => {
+        if (isExiting) return;
+        if (targetProgress < 82) {
+          targetProgress = Math.min(82, targetProgress + (82 - targetProgress) * 0.045);
+        }
+        if (currentProgress < targetProgress) {
+          const step = Math.max(0.4, (targetProgress - currentProgress) * 0.25);
+          currentProgress = Math.min(targetProgress, currentProgress + step);
+          renderProgress(currentProgress);
+        }
+      }, 90);
+
+      api?.onStartupStatus?.((payload) => {
+        if (isExiting || !payload) return;
+        if (typeof payload.progress === "number") {
+          setTargetProgress(payload.progress);
+          if (payload.progress > currentProgress) {
+            currentProgress = Math.max(currentProgress, payload.progress);
+            renderProgress(currentProgress);
+          }
+        }
+      });
+
+      api?.onStartupExit?.(() => {
+        if (isExiting) return;
+        isExiting = true;
+        window.clearInterval(driftTimer);
+        currentProgress = 100;
+        targetProgress = 100;
+        renderProgress(100);
+        document.body.classList.add("is-exiting");
+      });
+
+      // Ambient crimson/plum ember particles
+      const prefersReducedMotion = window.matchMedia("(prefers-reduced-motion: reduce)").matches;
+      const canvas = document.getElementById("particles");
+      if (canvas && !prefersReducedMotion) {
+        const ctx = canvas.getContext("2d");
+        if (ctx) {
+          const palette = [
+            "rgba(255, 30, 109, 0.72)",
+            "rgba(244, 91, 155, 0.6)",
+            "rgba(156, 70, 165, 0.55)",
+            "rgba(255, 255, 255, 0.35)"
+          ];
+          const particleCount = 28;
+          let width = 0;
+          let height = 0;
+          let dpr = 1;
+          let rafId = 0;
+
+          const makeParticle = (randomY) => ({
+            x: Math.random() * width,
+            y: randomY ? Math.random() * height : height + Math.random() * 40,
+            radius: 0.9 + Math.random() * 2.1,
+            vy: -(0.18 + Math.random() * 0.42),
+            vx: (Math.random() - 0.5) * 0.22,
+            swayPhase: Math.random() * Math.PI * 2,
+            swaySpeed: 0.008 + Math.random() * 0.015,
+            alpha: 0.22 + Math.random() * 0.55,
+            color: palette[Math.floor(Math.random() * palette.length)]
+          });
+
+          const resize = () => {
+            dpr = Math.min(window.devicePixelRatio || 1, 2);
+            width = window.innerWidth;
+            height = window.innerHeight;
+            canvas.width = Math.floor(width * dpr);
+            canvas.height = Math.floor(height * dpr);
+            ctx.setTransform(dpr, 0, 0, dpr, 0, 0);
+          };
+
+          resize();
+          const particles = Array.from({ length: particleCount }, () => makeParticle(true));
+          window.addEventListener("resize", resize);
+
+          const draw = () => {
+            if (isExiting || document.hidden) {
+              rafId = 0;
+              return;
+            }
+            ctx.clearRect(0, 0, width, height);
+            for (let i = 0; i < particles.length; i++) {
+              const p = particles[i];
+              p.swayPhase += p.swaySpeed;
+              p.x += p.vx + Math.sin(p.swayPhase) * 0.2;
+              p.y += p.vy;
+
+              if (p.y < -20 || p.x < -20 || p.x > width + 20) {
+                particles[i] = makeParticle(false);
+                continue;
+              }
+
+              ctx.save();
+              ctx.globalAlpha = p.alpha;
+              ctx.fillStyle = p.color;
+              ctx.shadowColor = p.color;
+              ctx.shadowBlur = p.radius * 4.5;
+              ctx.beginPath();
+              ctx.arc(p.x, p.y, p.radius, 0, Math.PI * 2);
+              ctx.fill();
+              ctx.restore();
+            }
+            rafId = window.requestAnimationFrame(draw);
+          };
+
+          document.addEventListener("visibilitychange", () => {
+            if (!document.hidden && !isExiting && !rafId) {
+              rafId = window.requestAnimationFrame(draw);
+            }
+          });
+
+          rafId = window.requestAnimationFrame(draw);
+        }
+      }
     </script>
   </body>
 </html>

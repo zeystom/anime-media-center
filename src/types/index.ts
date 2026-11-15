@@ -46,6 +46,8 @@ export interface ElectronAPI {
   closeWindow: () => Promise<void>;
   isWindowMaximized: () => Promise<boolean>;
   onWindowMaximizedChange: (callback: (isMaximized: boolean) => void) => () => void;
+  onStartupStatus?: (callback: (data: { phase: string; detail?: string; progress: number }) => void) => () => void;
+  onStartupExit?: (callback: () => void) => () => void;
   getSettings: () => Promise<import('../../electron/types').AppSettings>;
   updateSettings: (settings: Partial<import('../../electron/types').AppSettings>) => Promise<import('../../electron/types').AppSettings>;
   browseFolder: (defaultPath?: string) => Promise<string | null>;

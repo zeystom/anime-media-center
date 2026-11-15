@@ -856,6 +856,522 @@ const FRIEREN_PAYLOAD = {
 }
 
 {
+  const haruhiChronological = Array.from({ length: 28 }, (_, i) => {
+    const num = i + 1;
+    let title = `Haruhi Chronological ${num}`;
+    if (num === 1) title = 'The Melancholy of Haruhi Suzumiya I';
+    else if (num === 8) title = 'Bamboo Leaf Rhapsody';
+    else if (num === 14) title = 'Endless Eight III';
+    else if (num === 28) title = 'Someday in the Rain';
+    return { title: `Episode ${num} - ${title}`, thumbnail: `https://img/chron-${num}.jpg` };
+  });
+  const haruhiS2OnlyKitsu = Array.from({ length: 14 }, (_, i) => {
+    const num = i + 1;
+    const title = num === 1 ? 'Bamboo Leaf Rhapsody' : `Season Two Ep ${num}`;
+    return {
+      attributes: {
+        number: num,
+        titles: { en: title },
+        canonicalTitle: title,
+        airdate: `2009-05-${String(num).padStart(2, '0')}`,
+        length: 24,
+        thumbnail: { large: `https://img/kitsu-s2-${num}.jpg` },
+      },
+    };
+  });
+
+  const aniZip = await freshAniZip();
+  fetchHandler = (url) => {
+    if (url.includes('anilist_id=4382')) {
+      return jsonResponse(200, { episodes: {}, mappings: { anilist_id: 4382, kitsu_id: 3579 } });
+    }
+    if (url.startsWith('https://graphql.anilist.co')) {
+      return jsonResponse(200, {
+        data: {
+          Media: {
+            episodes: 28,
+            status: 'FINISHED',
+            title: { english: 'The Melancholy of Haruhi Suzumiya (2009)', romaji: 'Suzumiya Haruhi no Yuuutsu (2009)', native: null },
+            synonyms: [],
+            streamingEpisodes: haruhiChronological,
+          },
+        },
+      });
+    }
+    if (url.endsWith('/anime/3579')) {
+      return jsonResponse(200, {
+        data: {
+          attributes: {
+            canonicalTitle: 'The Melancholy of Haruhi Suzumiya (2009)',
+            titles: { en: 'The Melancholy of Haruhi Suzumiya (2009)', en_jp: 'Suzumiya Haruhi no Yuuutsu (2009)' },
+            abbreviatedTitles: [],
+            episodeCount: 14,
+          },
+        },
+      });
+    }
+    if (url.includes('/anime/3579/episodes')) {
+      return jsonResponse(200, { data: haruhiS2OnlyKitsu, links: { next: null } });
+    }
+    return jsonResponse(404, {});
+  };
+  resetFetchCalls();
+  resetDiskCache();
+  fs.mkdirSync(METADATA_CACHE_DIR, { recursive: true });
+  // Simulate poisoned legacy caches (identityEpisodeCount: null and unversioned Kitsu cache).
+  fs.writeFileSync(diskCacheFile('anicontext_4382.json'), JSON.stringify({
+    airedThrough: null,
+    nextAiringAt: null,
+    seasonStartAt: null,
+    bannerUrl: null,
+    posterUrl: null,
+    identityTitles: ['The Melancholy of Haruhi Suzumiya (2009)'],
+    identitySeason: null,
+    identityEpisodeCount: null,
+    streamEpisodes: haruhiChronological.map((ep, idx) => ({
+      number: idx + 1,
+      title: ep.title.replace(/^Episode \d+ - /, ''),
+      thumbnailUrl: ep.thumbnail,
+    })),
+    schedule: [],
+    fetchedAt: Date.now(),
+  }, null, 2), 'utf-8');
+  fs.writeFileSync(diskCacheFile('kitsu_eps_3579.json'), JSON.stringify({
+    kitsuId: '3579',
+    fetchedAt: Date.now(),
+    episodes: haruhiS2OnlyKitsu.map((e) => ({
+      number: e.attributes.number,
+      title: e.attributes.canonicalTitle,
+      thumbnailUrl: e.attributes.thumbnail.large,
+      airDate: e.attributes.airdate,
+      runtime: 24,
+    })),
+  }, null, 2), 'utf-8');
+
+  await runTest('fetchRemoteEpisodes rejects 14-episode Kitsu mapping for 28-episode Haruhi 2009 without splicing', async () => {
+    const { episodes } = await aniZip.fetchRemoteEpisodes(4382);
+    assert.strictEqual(episodes.length, 28, 'all 28 chronological episodes must be preserved');
+    assert.strictEqual(episodes[0].title, 'The Melancholy of Haruhi Suzumiya I');
+    assert.strictEqual(episodes[0].thumbnailUrl, 'https://img/chron-1.jpg');
+    assert.strictEqual(episodes[7].title, 'Bamboo Leaf Rhapsody');
+    assert.strictEqual(episodes[13].title, 'Endless Eight III');
+    assert.strictEqual(episodes[27].title, 'Someday in the Rain');
+    assert.strictEqual(anilistCalls().length, 1, 'legacy context with identityEpisodeCount: null must refresh from AniList');
+    assert.strictEqual(fetchCalls.filter((c) => c.url.includes('/anime/3579/episodes')).length, 0, 'mismatched 14-ep Kitsu episodes must not be fetched');
+
+    // Even if another lookup wrote a v2 cache for 3579 with episodeCount: 14, it must not splice into 4382.
+    const aniZip2 = await freshAniZip();
+    fs.writeFileSync(diskCacheFile('kitsu_eps_3579.json'), JSON.stringify({
+      version: 2,
+      kitsuId: '3579',
+      fetchedAt: Date.now(),
+      episodeCount: 14,
+      episodes: haruhiS2OnlyKitsu.map((e) => ({
+        number: e.attributes.number,
+        title: e.attributes.canonicalTitle,
+        thumbnailUrl: e.attributes.thumbnail.large,
+        airDate: e.attributes.airdate,
+        runtime: 24,
+      })),
+    }, null, 2), 'utf-8');
+    fs.rmSync(diskCacheFile('anizip_4382.json'), { force: true });
+    const res2 = await aniZip2.fetchRemoteEpisodes(4382);
+    assert.strictEqual(res2.episodes.length, 28);
+    assert.strictEqual(res2.episodes[0].title, 'The Melancholy of Haruhi Suzumiya I');
+    assert.strictEqual(res2.episodes[0].thumbnailUrl, 'https://img/chron-1.jpg');
+  });
+}
+
+{
+  const aniZip = await freshAniZip();
+  const haruhi2009Stream = Array.from({ length: 28 }, (_, i) => ({
+    title: `Episode ${i + 1} - ${i === 0 ? 'The Melancholy of Haruhi Suzumiya I' : `Chron Ep ${i + 1}`}`,
+    thumbnail: `https://wrong-rebroadcast/ep-${i + 1}.jpg`,
+  }));
+  const haruhi2006AniZip = Object.fromEntries(
+    Array.from({ length: 14 }, (_, i) => {
+      const n = i + 1;
+      const title = n === 1 ? 'The Adventures of Mikuru Asahina Episode 00' : n === 4 ? 'The Boredom of Haruhi Suzumiya' : `Broadcast Ep ${n}`;
+      return [String(n), { episode: String(n), title: { en: title }, airDate: `2006-04-${String(n).padStart(2, '0')}`, runtime: 24, image: n === 4 ? null : `https://img/2006-${n}.jpg` }];
+    }),
+  );
+
+  fetchHandler = (url) => {
+    if (url.includes('anilist_id=849')) {
+      return jsonResponse(200, { episodeCount: 14, episodes: haruhi2006AniZip, mappings: { anilist_id: 849, kitsu_id: 751 } });
+    }
+    if (url.startsWith('https://graphql.anilist.co')) {
+      return jsonResponse(200, {
+        data: {
+          Media: {
+            episodes: 14,
+            status: 'FINISHED',
+            title: { english: 'The Melancholy of Haruhi Suzumiya', romaji: 'Suzumiya Haruhi no Yuuutsu', native: null },
+            synonyms: [],
+            streamingEpisodes: haruhi2009Stream,
+          },
+        },
+      });
+    }
+    if (url.endsWith('/anime/751')) {
+      return jsonResponse(200, {
+        data: {
+          attributes: {
+            canonicalTitle: 'The Melancholy of Haruhi Suzumiya',
+            titles: { en: 'The Melancholy of Haruhi Suzumiya', en_jp: 'Suzumiya Haruhi no Yuuutsu' },
+            abbreviatedTitles: [],
+            episodeCount: 14,
+          },
+        },
+      });
+    }
+    if (url.includes('/anime/751/episodes')) {
+      return jsonResponse(200, {
+        data: Array.from({ length: 14 }, (_, i) => {
+          const n = i + 1;
+          const title = n === 1 ? 'The Adventures of Mikuru Asahina Episode 00' : n === 4 ? 'The Boredom of Haruhi Suzumiya' : `Broadcast Ep ${n}`;
+          return {
+            attributes: {
+              number: n,
+              titles: { en: title },
+              canonicalTitle: title,
+              airdate: `2006-04-${String(n).padStart(2, '0')}`,
+              length: 24,
+              thumbnail: { large: `https://kitsu-2006/ep-${n}.jpg` },
+            },
+          };
+        }),
+        links: { next: null },
+      });
+    }
+    return jsonResponse(404, {});
+  };
+  resetFetchCalls();
+  resetDiskCache();
+
+  await runTest('fetchRemoteEpisodes shields 14-ep Haruhi 2006 from 28-ep rebroadcast streamingEpisodes overflow', async () => {
+    const { episodes } = await aniZip.fetchRemoteEpisodes(849);
+    assert.strictEqual(episodes.length, 14);
+    assert.strictEqual(episodes[0].title, 'The Adventures of Mikuru Asahina Episode 00');
+    assert.strictEqual(episodes[3].title, 'The Boredom of Haruhi Suzumiya');
+    assert.strictEqual(episodes[3].thumbnailUrl, 'https://kitsu-2006/ep-4.jpg', 'must refill from matching 2006 Kitsu rather than overflowing 2009 stream thumbnail');
+  });
+}
+
+{
+  const { getKitsuMetadata } = await import('./electron/kitsu.ts');
+  fetchHandler = (url) => {
+    if (url.startsWith('https://graphql.anilist.co')) {
+      return jsonResponse(200, {
+        data: {
+          Page: {
+            media: [
+              {
+                id: 4382,
+                idMal: 4382,
+                episodes: 28,
+                title: { romaji: 'Suzumiya Haruhi no Yuuutsu (2009)', english: 'The Melancholy of Haruhi Suzumiya (2009)' },
+                bannerImage: null,
+                coverImage: { extraLarge: 'https://img/cover.jpg', large: 'https://img/cover.jpg' },
+                description: 'Chronological 2009 broadcast',
+                genres: ['Comedy'],
+                averageScore: 72,
+                streamingEpisodes: Array.from({ length: 28 }, (_, i) => ({
+                  title: `Episode ${i + 1} - ${i === 0 ? 'The Melancholy of Haruhi Suzumiya I' : `Chron Ep ${i + 1}`}`,
+                  thumbnail: `https://img/al-${i + 1}.jpg`,
+                })),
+              },
+            ],
+          },
+        },
+      });
+    }
+    if (url.includes('filter[text]=Haruhi+Regression+2009') || url.includes('filter[text]=Haruhi%20Regression%202009')) {
+      return jsonResponse(200, {
+        data: [
+          { id: '3579', attributes: { canonicalTitle: 'Haruhi Regression 2009', titles: { en: 'Haruhi Regression 2009' }, episodeCount: 14 } },
+        ],
+      });
+    }
+    if (url.includes('/anime/3579/episodes')) {
+      if (url.includes('page[limit]=50')) {
+        return jsonResponse(400, { errors: [{ detail: 'Limit exceeds maximum page size of 20' }] });
+      }
+      return jsonResponse(200, {
+        data: Array.from({ length: 14 }, (_, i) => ({
+          attributes: {
+            number: i + 1,
+            titles: { en: i === 0 ? 'Bamboo Leaf Rhapsody' : `S2 Ep ${i + 1}` },
+            canonicalTitle: i === 0 ? 'Bamboo Leaf Rhapsody' : `S2 Ep ${i + 1}`,
+            synopsis: null,
+            thumbnail: { large: `https://img/kitsu-s2-${i + 1}.jpg` },
+          },
+        })),
+        links: {},
+      });
+    }
+    if (url.includes('filter[text]=Kitsu+400+Fallback') || url.includes('filter[text]=Kitsu%20400%20Fallback')) {
+      return jsonResponse(200, {
+        data: [
+          { id: '9901', attributes: { canonicalTitle: 'Kitsu 400 Fallback', titles: { en: 'Kitsu 400 Fallback' }, episodeCount: 25 } },
+        ],
+      });
+    }
+    if (url.includes('/anime/9901/episodes')) {
+      if (url.includes('page[limit]=50')) {
+        return jsonResponse(400, { errors: [{ detail: 'Limit exceeds maximum page size of 20' }] });
+      }
+      if (url.includes('page[offset]=0')) {
+        return jsonResponse(200, {
+          data: Array.from({ length: 20 }, (_, i) => ({
+            attributes: {
+              number: i + 1,
+              titles: { en: `Fallback Ep ${i + 1}` },
+              canonicalTitle: `Fallback Ep ${i + 1}`,
+              synopsis: null,
+              thumbnail: { large: `https://img/fb-${i + 1}.jpg` },
+            },
+          })),
+          links: { next: 'https://kitsu.io/api/edge/anime/9901/episodes?page[offset]=20' },
+        });
+      }
+      return jsonResponse(200, {
+        data: Array.from({ length: 5 }, (_, i) => ({
+          attributes: {
+            number: 21 + i,
+            titles: { en: `Fallback Ep ${21 + i}` },
+            canonicalTitle: `Fallback Ep ${21 + i}`,
+            synopsis: null,
+            thumbnail: { large: `https://img/fb-${21 + i}.jpg` },
+          },
+        })),
+        links: {},
+      });
+    }
+    return jsonResponse(404, {});
+  };
+  resetFetchCalls();
+  resetDiskCache();
+
+  await runTest('getKitsuMetadata falls back from page[limit]=50 HTTP 400 to limit=20 and skips mismatched Kitsu episode merges', async () => {
+    const res = await getKitsuMetadata('Haruhi Regression 2009', 28);
+    assert.ok(res);
+    assert.strictEqual(Object.keys(res.episodes).length, 28);
+    assert.strictEqual(res.episodes[1].title, 'The Melancholy of Haruhi Suzumiya I');
+    assert.strictEqual(res.episodes[1].thumbnailUrl, 'https://img/al-1.jpg', 'must not splice Kitsu 14-ep thumbnails onto 28-ep AniList entry');
+
+    // Verify 400 -> limit=20 pagination works across multiple pages (20 + 5 = 25 episodes)
+    fetchHandler = (url) => {
+      if (url.startsWith('https://graphql.anilist.co')) {
+        return jsonResponse(200, {
+          data: {
+            Page: {
+              media: [
+                {
+                  id: 999901,
+                  idMal: 999901,
+                  episodes: 25,
+                  title: { romaji: 'Kitsu 400 Fallback', english: 'Kitsu 400 Fallback' },
+                  bannerImage: null,
+                  coverImage: { extraLarge: 'https://img/cover.jpg', large: 'https://img/cover.jpg' },
+                  description: 'Fallback pagination test',
+                  genres: ['Action'],
+                  averageScore: 80,
+                  streamingEpisodes: [],
+                },
+              ],
+            },
+          },
+        });
+      }
+      if (url.includes('filter[text]=')) {
+        return jsonResponse(200, {
+          data: [
+            { id: '9901', attributes: { canonicalTitle: 'Kitsu 400 Fallback', titles: { en: 'Kitsu 400 Fallback' }, episodeCount: 25 } },
+          ],
+        });
+      }
+      if (url.includes('/anime/9901/episodes')) {
+        if (url.includes('page[limit]=50')) {
+          return jsonResponse(400, { errors: [{ detail: 'Limit exceeds maximum page size of 20' }] });
+        }
+        if (url.includes('page[offset]=0')) {
+          return jsonResponse(200, {
+            data: Array.from({ length: 20 }, (_, i) => ({
+              attributes: {
+                number: i + 1,
+                titles: { en: `Fallback Ep ${i + 1}` },
+                canonicalTitle: `Fallback Ep ${i + 1}`,
+                synopsis: null,
+                thumbnail: { large: `https://img/fb-${i + 1}.jpg` },
+              },
+            })),
+            links: { next: 'https://kitsu.io/api/edge/anime/9901/episodes?page[offset]=20' },
+          });
+        }
+        return jsonResponse(200, {
+          data: Array.from({ length: 5 }, (_, i) => ({
+            attributes: {
+              number: 21 + i,
+              titles: { en: `Fallback Ep ${21 + i}` },
+              canonicalTitle: `Fallback Ep ${21 + i}`,
+              synopsis: null,
+              thumbnail: { large: `https://img/fb-${21 + i}.jpg` },
+            },
+          })),
+          links: {},
+        });
+      }
+      return jsonResponse(404, {});
+    };
+    const fb = await getKitsuMetadata('Kitsu 400 Fallback', 25);
+    assert.ok(fb);
+    assert.strictEqual(Object.keys(fb.episodes).length, 25);
+    assert.strictEqual(fb.episodes[1].title, 'Fallback Ep 1');
+    assert.strictEqual(fb.episodes[25].title, 'Fallback Ep 25');
+
+    // Verify 14-ep Haruhi 2006 in getKitsuMetadata drops overflowing 28-ep AniList streamingEpisodes in favor of matching 14-ep Kitsu
+    fetchHandler = (url) => {
+      if (url.startsWith('https://graphql.anilist.co')) {
+        return jsonResponse(200, {
+          data: {
+            Page: {
+              media: [
+                {
+                  id: 849,
+                  idMal: 849,
+                  episodes: 14,
+                  title: { romaji: 'Suzumiya Haruhi no Yuuutsu', english: 'The Melancholy of Haruhi Suzumiya' },
+                  bannerImage: null,
+                  coverImage: { extraLarge: 'https://img/849.jpg', large: 'https://img/849.jpg' },
+                  description: 'Original 2006 broadcast',
+                  genres: ['Comedy'],
+                  averageScore: 76,
+                  streamingEpisodes: Array.from({ length: 28 }, (_, i) => ({
+                    title: `Episode ${i + 1} - ${i === 0 ? 'The Melancholy of Haruhi Suzumiya I' : `Chron Ep ${i + 1}`}`,
+                    thumbnail: `https://img/chron-${i + 1}.jpg`,
+                  })),
+                },
+              ],
+            },
+          },
+        });
+      }
+      if (url.includes('filter[text]=')) {
+        return jsonResponse(200, {
+          data: [
+            { id: '751', attributes: { canonicalTitle: 'Haruhi 2006 Kitsu Test', titles: { en: 'Haruhi 2006 Kitsu Test' }, episodeCount: 14 } },
+          ],
+        });
+      }
+      if (url.includes('/anime/751/episodes')) {
+        if (url.includes('page[limit]=50')) {
+          return jsonResponse(400, { errors: [{ detail: 'Limit exceeds maximum page size of 20' }] });
+        }
+        return jsonResponse(200, {
+          data: Array.from({ length: 14 }, (_, i) => ({
+            attributes: {
+              number: i + 1,
+              titles: { en: i === 0 ? 'The Adventures of Mikuru Asahina Episode 00' : `Broadcast Ep ${i + 1}` },
+              canonicalTitle: i === 0 ? 'The Adventures of Mikuru Asahina Episode 00' : `Broadcast Ep ${i + 1}`,
+              synopsis: null,
+              thumbnail: { large: `https://img/2006-kitsu-${i + 1}.jpg` },
+            },
+          })),
+          links: {},
+        });
+      }
+      return jsonResponse(404, {});
+    };
+    const orig2006 = await getKitsuMetadata('Haruhi 2006 Kitsu Test', 14);
+    assert.ok(orig2006);
+    assert.strictEqual(Object.keys(orig2006.episodes).length, 14, 'must drop overflowing 28-ep AniList stream when Kitsu matches 14 eps');
+    assert.strictEqual(orig2006.episodes[1].title, 'The Adventures of Mikuru Asahina Episode 00');
+    assert.strictEqual(orig2006.episodes[1].thumbnailUrl, 'https://img/2006-kitsu-1.jpg');
+  });
+}
+
+{
+  const aniZip = await freshAniZip();
+  resetFetchCalls();
+  resetDiskCache();
+  await runTest('fetchRemoteEpisodes resolves Metahub clearlogo, rejects /icons/, and falls back to TVDB Clearlogo', async () => {
+    fetchHandler = (url) => {
+      if (url.includes('anime-list-mini.json')) {
+        return jsonResponse(200, []);
+      }
+      if (url.includes('graphql.anilist.co')) {
+        return jsonResponse(200, {
+          data: {
+            Media: {
+              id: 999101,
+              title: { romaji: 'Logo Test', english: 'Logo Test', native: 'ロゴテスト' },
+              episodes: 12,
+              season: 'FALL',
+              seasonYear: 2025,
+              status: 'FINISHED',
+              nextAiringEpisode: null,
+              bannerImage: null,
+              coverImage: { extraLarge: 'https://img/poster.jpg', large: 'https://img/poster.jpg' },
+              streamingEpisodes: [],
+              airingSchedule: { nodes: [] },
+              relations: { edges: [] },
+            },
+          },
+        });
+      }
+      if (url.includes('anilist_id=999101')) {
+        return jsonResponse(200, {
+          mappings: { imdb_id: 'tt35769369' },
+          images: [
+            { coverType: 'Clearlogo', url: 'https://artworks.thetvdb.com/banners/v4/series/453057/clearlogo/logo.png' },
+          ],
+          episodes: {
+            '1': { episode: '1', title: { en: 'Ep 1' }, runtime: 24, image: 'https://img/e1.jpg', airdate: '2025-10-01' },
+          },
+        });
+      }
+      if (url.includes('anilist_id=999102')) {
+        return jsonResponse(200, {
+          mappings: {},
+          images: [
+            { coverType: 'Clearlogo', url: 'https://artworks.thetvdb.com/banners/v4/series/123/icons/icon.jpg' },
+            { coverType: 'ClearLogo', url: 'https://artworks.thetvdb.com/banners/v4/series/123/icons/square.png' },
+          ],
+          episodes: {
+            '1': { episode: '1', title: { en: 'Ep 1' }, runtime: 24, image: 'https://img/e1.jpg', airdate: '2025-10-01' },
+          },
+        });
+      }
+      if (url.includes('anilist_id=999103')) {
+        return jsonResponse(200, {
+          mappings: {},
+          images: [
+            { coverType: 'Clearlogo', url: 'https://artworks.thetvdb.com/banners/v4/series/777/clearlogo/67890.png' },
+          ],
+          episodes: {
+            '1': { episode: '1', title: { en: 'Ep 1' }, runtime: 24, image: 'https://img/e1.jpg', airdate: '2025-10-01' },
+          },
+        });
+      }
+      return jsonResponse(404, {});
+    };
+
+    const withImdb = await aniZip.fetchRemoteEpisodes(999101);
+    assert.strictEqual(withImdb.logoUrl, 'https://images.metahub.space/logo/medium/tt35769369/img');
+    assert.strictEqual(withImdb.fallbackLogoUrl, 'https://artworks.thetvdb.com/banners/v4/series/453057/clearlogo/logo.png');
+
+    const iconsOnly = await aniZip.fetchRemoteEpisodes(999102);
+    assert.strictEqual(iconsOnly.logoUrl, null);
+    assert.strictEqual(iconsOnly.fallbackLogoUrl, null);
+
+    const tvdbFallback = await aniZip.fetchRemoteEpisodes(999103);
+    assert.strictEqual(tvdbFallback.logoUrl, 'https://artworks.thetvdb.com/banners/v4/series/777/clearlogo/67890.png');
+    assert.strictEqual(tvdbFallback.fallbackLogoUrl, null);
+  });
+}
+
+{
   const aniZip = await freshAniZip();
   fetchHandler = (url) => {
     if (url.includes('anilist_id=888002')) {

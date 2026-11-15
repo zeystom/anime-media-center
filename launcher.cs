@@ -13,8 +13,6 @@ namespace Kaiko
             try
             {
                 string appDir = AppDomain.CurrentDomain.BaseDirectory.TrimEnd('\\', '/');
-                string exePath = Path.Combine(appDir, "Kaiko.exe");
-                string iconPath = Path.Combine(appDir, "app-icon.ico");
                 string electronExe = Path.Combine(appDir, @"node_modules\electron\dist\electron.exe");
 
                 // The root Kaiko.exe is a project launcher, so it relies on
@@ -77,18 +75,18 @@ namespace Kaiko
                     }
                 }
 
-                // Ensure Desktop and Start Menu shortcuts are created
-                EnsureShortcuts(appDir, exePath, iconPath);
-
-                // Launch Electron with appDir
+                // Launch Electron first while the foreground activation token is fresh.
                 ProcessStartInfo psi = new ProcessStartInfo(electronExe, "\"" + appDir + "\"")
                 {
                     WorkingDirectory = appDir,
                     UseShellExecute = false,
-                    CreateNoWindow = true
+                    CreateNoWindow = false
                 };
 
                 Process.Start(psi);
+
+                // Ensure Desktop and Start Menu shortcuts exist without delaying launch.
+                EnsureShortcuts(appDir);
             }
             catch (Exception ex)
             {
@@ -107,13 +105,22 @@ namespace Kaiko
             return true;
         }
 
-        static void EnsureShortcuts(string appDir, string exePath, string iconPath)
+        static void EnsureShortcuts(string appDir)
         {
             try
             {
-                // Refresh both links on launch so an older shortcut without the
-                // matching AppUserModelID cannot make Windows label the taskbar
-                // button as Electron.
+                string desktop = Environment.GetFolderPath(Environment.SpecialFolder.DesktopDirectory);
+                string startMenu = Environment.GetFolderPath(Environment.SpecialFolder.Programs);
+                string desktopLnk = string.IsNullOrEmpty(desktop) ? "" : Path.Combine(desktop, "Kaiko.lnk");
+                string startMenuLnk = string.IsNullOrEmpty(startMenu) ? "" : Path.Combine(startMenu, "Kaiko.lnk");
+                bool desktopExists = string.IsNullOrEmpty(desktopLnk) || File.Exists(desktopLnk);
+                bool startMenuExists = string.IsNullOrEmpty(startMenuLnk) || File.Exists(startMenuLnk);
+                if (desktopExists && startMenuExists)
+                {
+                    return;
+                }
+
+                // Create missing links asynchronously so Electron starts immediately with foreground focus.
                 string scriptPath = Path.Combine(appDir, "install-shortcuts.ps1");
                 if (File.Exists(scriptPath))
                 {
@@ -128,7 +135,6 @@ namespace Kaiko
                     };
                     using (Process shortcutProcess = Process.Start(shortcutInfo))
                     {
-                        if (shortcutProcess != null) shortcutProcess.WaitForExit(10000);
                     }
                 }
             }

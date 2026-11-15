@@ -8,7 +8,7 @@
  */
 import React, { useEffect, useLayoutEffect, useMemo, useRef, useState } from 'react'
 import { motion } from 'framer-motion'
-import { AlertTriangle, Bell, BellRing, Check, CheckCircle, ChevronDown, Compass, Download, Film, Heart, MoreHorizontal, Play, Plus, Star, Trash2, Wand2, X } from 'lucide-react'
+import { AlertTriangle, Bell, BellRing, Check, CheckCircle, ChevronDown, Compass, Copy, Download, Film, Heart, MoreHorizontal, Play, Plus, Star, Trash2, Wand2, X } from 'lucide-react'
 import type {
   AnimeFolder,
   AppSettings,
@@ -43,6 +43,8 @@ import { useAgeRatings } from '../../hooks/useAgeRatings'
 import { showGlobalToast } from '../Toast'
 
 export type DetailSource = { kind: 'catalog'; item: RailItem } | { kind: 'local'; folder: AnimeFolder }
+
+const remoteArtworkCache = new Map<number, { bannerUrl: string | null; posterUrl: string | null }>()
 
 export interface AnimeDetailViewProps {
   source: DetailSource
@@ -234,8 +236,11 @@ const AnimeDetailViewImpl: React.FC<AnimeDetailViewProps> = ({
   // when the separate details request fails or is still in flight.
   const [remoteAiredThrough, setRemoteAiredThrough] = useState<number | null>(null)
   // Series artwork from the episodes payload (ani.zip/TVDB) — AniList has no
-  // bannerImage for many airing seasons.
-  const [remoteArtwork, setRemoteArtwork] = useState<{ bannerUrl: string | null; posterUrl: string | null }>({ bannerUrl: null, posterUrl: null })
+  // bannerImage for many airing seasons. Scoped by anilistId + memory cached so
+  // switching titles never flashes stale artwork from a previous entry.
+  const [remoteArtworkState, setRemoteArtworkState] = useState<{ id: number | null; bannerUrl: string | null; posterUrl: string | null }>({ id: null, bannerUrl: null, posterUrl: null })
+  const [copiedTitleText, setCopiedTitleText] = useState<string | null>(null)
+  const copyResetTimerRef = useRef<number | null>(null)
   const [remoteEpisodesLoading, setRemoteEpisodesLoading] = useState(false)
   const [detailsLoading, setDetailsLoading] = useState(false)
   const [bgFailed, setBgFailed] = useState(false)
@@ -364,7 +369,8 @@ const AnimeDetailViewImpl: React.FC<AnimeDetailViewProps> = ({
       setFranchiseSeasonInfo(null)
       setRemoteEpisodes([])
       setRemoteAiredThrough(null)
-      setRemoteArtwork({ bannerUrl: null, posterUrl: null })
+      setRemoteArtworkState({ id: null, bannerUrl: null, posterUrl: null })
+      setCopiedTitleText(null)
       setDetailsLoading(false)
       setRelatedLoading(false)
       setEpisodePage(1)
@@ -372,12 +378,14 @@ const AnimeDetailViewImpl: React.FC<AnimeDetailViewProps> = ({
     }
     let cancelled = false
     let unsubscribeUpdates: (() => void) | undefined
+    const cachedArtwork = remoteArtworkCache.get(anilistId) ?? { bannerUrl: null, posterUrl: null }
     setDetails(null)
     setRelatedTitles([])
     setFranchiseSeasonInfo(null)
     setRemoteEpisodes([])
     setRemoteAiredThrough(null)
-    setRemoteArtwork({ bannerUrl: null, posterUrl: null })
+    setRemoteArtworkState({ id: anilistId, ...cachedArtwork })
+    setCopiedTitleText(null)
     setDetailsLoading(true)
     setRemoteEpisodesLoading(true)
     setRelatedLoading(true)
@@ -405,7 +413,11 @@ const AnimeDetailViewImpl: React.FC<AnimeDetailViewProps> = ({
         if (cancelled) return
         setRemoteEpisodes(Array.isArray(result?.episodes) ? result.episodes : [])
         setRemoteAiredThrough(typeof result?.airedThrough === 'number' ? result.airedThrough : null)
-        setRemoteArtwork({ bannerUrl: result?.bannerUrl ?? null, posterUrl: result?.posterUrl ?? null })
+        const artwork = { bannerUrl: result?.bannerUrl ?? null, posterUrl: result?.posterUrl ?? null }
+        if (artwork.bannerUrl || artwork.posterUrl) {
+          remoteArtworkCache.set(anilistId, artwork)
+          setRemoteArtworkState({ id: anilistId, ...artwork })
+        }
       }).catch((error) => {
         console.warn('[Anime overview] Episode metadata failed:', error)
       }).finally(() => {
@@ -418,7 +430,11 @@ const AnimeDetailViewImpl: React.FC<AnimeDetailViewProps> = ({
         if (cancelled || updatedId !== anilistId || !result) return
         setRemoteEpisodes(Array.isArray(result.episodes) ? result.episodes : [])
         setRemoteAiredThrough(typeof result.airedThrough === 'number' ? result.airedThrough : null)
-        setRemoteArtwork({ bannerUrl: result.bannerUrl ?? null, posterUrl: result.posterUrl ?? null })
+        const artwork = { bannerUrl: result.bannerUrl ?? null, posterUrl: result.posterUrl ?? null }
+        if (artwork.bannerUrl || artwork.posterUrl) {
+          remoteArtworkCache.set(anilistId, artwork)
+          setRemoteArtworkState({ id: anilistId, ...artwork })
+        }
       })
       void api.getCatalogFranchise(anilistId).then((result) => {
         if (!cancelled) setRelatedTitles(Array.isArray(result) ? result : [])
@@ -442,8 +458,31 @@ const AnimeDetailViewImpl: React.FC<AnimeDetailViewProps> = ({
     }
   }, [anilistId])
 
-  // Hero data: full CatalogItem preferred, RailItem/folder as fallback chain.
+  useEffect(() => {
+    return () => {
+      if (copyResetTimerRef.current != null) window.clearTimeout(copyResetTimerRef.current)
+    }
+  }, [])
+
+  const handleCopyTitle = (text: string, label: string) => {
+    const clean = text.trim()
+    if (!clean) return
+    navigator.clipboard?.writeText(clean)
+      .then(() => {
+        setCopiedTitleText(clean)
+        if (copyResetTimerRef.current != null) window.clearTimeout(copyResetTimerRef.current)
+        copyResetTimerRef.current = window.setTimeout(() => setCopiedTitleText(null), 1600)
+        showGlobalToast(`${label} copied to clipboard`, 'success', 1800)
+      })
+      .catch(() => {})
+  }
+
+  // Hero data: full CatalogItem preferred, RailItem/folder as fallback chain,
+  // with remote TVDB Fanart / Kitsu artwork filling titles that lack an
+  // AniList banner without ever swapping an already-shown AniList banner.
   const entryIdMal = anilistId != null ? userEntries[anilistId]?.idMal ?? null : null
+  const resolvedRemoteArtwork = (remoteArtworkState.id === anilistId ? remoteArtworkState : null) ??
+    (anilistId != null ? remoteArtworkCache.get(anilistId) ?? null : null)
   const hero = useMemo(() => {
     const fallbackTitle = railItem?.title || localFolder?.canonicalTitle || localFolder?.folderName || ''
     const titlePreference = settings?.animeTitleLanguage ?? 'english'
@@ -451,25 +490,31 @@ const AnimeDetailViewImpl: React.FC<AnimeDetailViewProps> = ({
       ? resolveAnimeTitle(details.title, details.synonyms, titlePreference) || fallbackTitle
       : fallbackTitle
 
-    let secondaryTitle: string | null = null
+    const secondaryTitles: string[] = []
     if (details?.title) {
-      if (titlePreference === 'english') {
-        const parts = [details.title.romaji, details.title.native].filter(Boolean).filter((t) => t !== title)
-        if (parts.length > 0) secondaryTitle = parts.join(' · ')
-      } else if (titlePreference === 'romaji') {
-        const parts = [details.title.english, details.title.native].filter(Boolean).filter((t) => t !== title)
-        if (parts.length > 0) secondaryTitle = parts.join(' · ')
-      } else {
-        const parts = [details.title.english, details.title.romaji].filter(Boolean).filter((t) => t !== title)
-        if (parts.length > 0) secondaryTitle = parts.join(' · ')
+      const ordered = titlePreference === 'english'
+        ? [details.title.romaji, details.title.native]
+        : titlePreference === 'romaji'
+          ? [details.title.english, details.title.native]
+          : [details.title.english, details.title.romaji]
+      const seen = new Set<string>([title.trim().toLowerCase()])
+      for (const candidate of ordered) {
+        const clean = candidate?.trim()
+        if (!clean) continue
+        const key = clean.toLowerCase()
+        if (seen.has(key)) continue
+        seen.add(key)
+        secondaryTitles.push(clean)
       }
     }
+    const secondaryTitle = secondaryTitles.length > 0 ? secondaryTitles.join(' · ') : null
 
     return {
       title,
       secondaryTitle,
-      bannerUrl: details?.bannerUrl ?? railItem?.bannerUrl ?? remoteArtwork.bannerUrl ?? localFolder?.bannerUrl ?? null,
-      posterUrl: details?.posterUrl ?? railItem?.posterUrl ?? remoteArtwork.posterUrl ?? localFolder?.posterUrl ?? null,
+      secondaryTitles,
+      bannerUrl: details?.bannerUrl ?? railItem?.bannerUrl ?? localFolder?.bannerUrl ?? resolvedRemoteArtwork?.bannerUrl ?? null,
+      posterUrl: details?.posterUrl ?? railItem?.posterUrl ?? localFolder?.posterUrl ?? resolvedRemoteArtwork?.posterUrl ?? null,
       averageScore: details?.averageScore ?? railItem?.averageScore ?? localFolder?.averageScore ?? null,
       episodesCount: details?.episodesCount ?? railItem?.episodesCount ?? null,
       totalEpisodes: localFolder?.totalEpisodes ?? 0,
@@ -481,7 +526,7 @@ const AnimeDetailViewImpl: React.FC<AnimeDetailViewProps> = ({
       description: stripHtml(details?.description ?? localFolder?.synopsis ?? null),
       idMal: details?.idMal ?? railItem?.idMal ?? entryIdMal ?? null,
     }
-  }, [details, railItem, localFolder, remoteArtwork, entryIdMal, settings?.animeTitleLanguage])
+  }, [details, railItem, localFolder, resolvedRemoteArtwork, entryIdMal, settings?.animeTitleLanguage])
   const posterAspectRatio = posterAspect?.url === hero.posterUrl ? posterAspect.ratio : 2 / 3
 
   // Read a tiny downsample of the banner when the image host permits canvas
@@ -1310,7 +1355,7 @@ const AnimeDetailViewImpl: React.FC<AnimeDetailViewProps> = ({
               loading="eager"
               decoding="async"
               onError={() => setBgFailed(true)}
-              className="absolute inset-0 h-full w-full object-cover object-[center_28%] opacity-85 saturate-[1.35]"
+              className="absolute inset-0 h-full w-full object-cover object-[center_28%] opacity-85 saturate-[1.15]"
             />
           ) : hero.posterUrl && !bgFailed ? (
             <img
@@ -1542,28 +1587,74 @@ const AnimeDetailViewImpl: React.FC<AnimeDetailViewProps> = ({
             >
               Anime overview
             </p>
-            {/* Click-to-copy title: no hover tooltip; the copy cursor signals
-                the affordance and a toast confirms the copy. */}
-            <h1
-              className="cursor-copy text-4xl font-black leading-tight tracking-tight text-white md:text-5xl"
-              onClick={() => {
-                navigator.clipboard?.writeText(hero.title)
-                  .then(() => showGlobalToast('Title copied to clipboard', 'success', 1800))
-                  .catch(() => {})
-              }}
-            >
-              {hero.title}
-            </h1>
-            {hero.secondaryTitle && (
-              <p
-                className="mt-1.5 text-xs font-medium"
-                style={{
-                  color: 'rgba(255, 255, 255, 0.88)',
-                  textShadow: '0 2px 10px rgba(0, 0, 0, 0.95), 0 0 24px rgba(0, 0, 0, 0.85)',
-                }}
+            {/* Aesthetic click-to-copy main title and per-language alternative chips */}
+            <h1 className="text-4xl font-black leading-tight tracking-tight text-white md:text-5xl [text-shadow:0_2px_16px_rgba(0,0,0,0.65)]">
+              <button
+                type="button"
+                onClick={() => handleCopyTitle(hero.title, 'Title')}
+                aria-label={`Copy title: ${hero.title}`}
+                title="Copy title"
+                className="group/title inline cursor-pointer text-left transition-colors hover:text-white/90 focus:outline-none"
               >
-                {hero.secondaryTitle}
-              </p>
+                <span>{hero.title}</span>
+                <span
+                  aria-hidden="true"
+                  className={`ml-2.5 inline-flex h-8 w-8 -translate-y-1 shrink-0 items-center justify-center rounded-xl border align-middle backdrop-blur-md transition-all duration-200 [text-shadow:none] ${
+                    copiedTitleText === hero.title.trim()
+                      ? 'scale-100 opacity-100 border-emerald-400/45 bg-emerald-500/20 text-emerald-300 shadow-[0_0_16px_rgba(16,185,129,0.28)]'
+                      : 'scale-90 opacity-0 group-hover/title:scale-100 group-hover/title:opacity-100 group-focus-visible/title:scale-100 group-focus-visible/title:opacity-100 border-white/[0.14] bg-black/45 text-zinc-200 group-hover/title:border-white/25'
+                  }`}
+                >
+                  {copiedTitleText === hero.title.trim() ? <Check className="h-4 w-4" /> : <Copy className="h-3.5 w-3.5" />}
+                </span>
+              </button>
+            </h1>
+            {hero.secondaryTitles.length > 0 && (
+              <div className="mt-1.5 flex flex-wrap items-center gap-y-1 text-xs font-medium">
+                {hero.secondaryTitles.map((altTitle, index) => {
+                  const isCopied = copiedTitleText === altTitle
+                  return (
+                    <React.Fragment key={altTitle}>
+                      {index > 0 && (
+                        <span
+                          aria-hidden="true"
+                          className="mx-1.5 select-none text-white/45 [text-shadow:0_2px_10px_rgba(0,0,0,0.95)]"
+                        >
+                          ·
+                        </span>
+                      )}
+                      <button
+                        type="button"
+                        onClick={() => handleCopyTitle(altTitle, 'Alternative title')}
+                        title={`Copy: ${altTitle}`}
+                        className={`group/alt inline-flex max-w-full cursor-pointer items-center rounded-lg border px-2 py-0.5 transition-all duration-150 focus:outline-none ${
+                          index === 0 ? '-ml-2' : ''
+                        } ${
+                          isCopied
+                            ? 'border-emerald-400/45 bg-emerald-500/20 text-emerald-200 backdrop-blur-md shadow-[0_0_14px_rgba(16,185,129,0.22)]'
+                            : 'border-transparent bg-transparent text-white/85 [text-shadow:0_2px_10px_rgba(0,0,0,0.95),0_0_24px_rgba(0,0,0,0.85)] hover:border-white/[0.16] hover:bg-black/45 hover:text-white hover:backdrop-blur-md'
+                        }`}
+                      >
+                        <span className="truncate">{altTitle}</span>
+                        <span
+                          aria-hidden="true"
+                          className={`inline-flex shrink-0 items-center justify-center overflow-hidden transition-all duration-150 ${
+                            isCopied
+                              ? 'ml-1.5 w-3.5 opacity-100 text-emerald-300'
+                              : 'ml-0 w-0 opacity-0 text-zinc-200 group-hover/alt:ml-1.5 group-hover/alt:w-3.5 group-hover/alt:opacity-100 group-focus-visible/alt:ml-1.5 group-focus-visible/alt:w-3.5 group-focus-visible/alt:opacity-100'
+                          }`}
+                        >
+                          {isCopied ? (
+                            <Check className="h-3 w-3 shrink-0" />
+                          ) : (
+                            <Copy className="h-3 w-3 shrink-0" />
+                          )}
+                        </span>
+                      </button>
+                    </React.Fragment>
+                  )
+                })}
+              </div>
             )}
 
             {/* Meta chips */}

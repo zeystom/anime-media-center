@@ -1453,7 +1453,7 @@ export const App: React.FC = () => {
 
   return (
     <ToastProvider>
-      <div className="relative flex h-screen w-screen flex-col overflow-hidden bg-[#07060A] font-sans text-zinc-100">
+      <div className="animate-app-enter relative flex h-screen w-screen flex-col overflow-hidden bg-[#07060A] font-sans text-zinc-100">
       {/* Top Navbar - Only rendered in Menu/Library/Whisper views */}
       {!activePlayerEpisode && (
         <>

@@ -15,7 +15,10 @@ export interface KitsuEpisodeInfo {
   thumbnailUrl: string | null;
 }
 
+const KITSU_CACHE_VERSION = 2;
+
 export interface KitsuAnimeCache {
+  cacheVersion?: number;
   animeId: string;
   malId?: number | null;
   anilistId?: number | null;
@@ -184,6 +187,7 @@ async function fetchAniListMetadata(
 ): Promise<{
   malId?: number | null;
   anilistId: number | null;
+  episodeCount: number | null;
   canonicalTitle: string;
   posterUrl: string | null;
   bannerUrl: string | null;
@@ -286,6 +290,7 @@ async function fetchAniListMetadata(
 
   const malId = media.idMal || null;
   const anilistId = typeof media.id === 'number' ? media.id : null;
+  const episodeCount = typeof media.episodes === 'number' && media.episodes > 0 ? media.episodes : null;
   const canonicalTitle = media.title?.english || media.title?.romaji || query;
   const posterUrl = media.coverImage?.extraLarge || media.coverImage?.large || null;
   const bannerUrl = media.bannerImage || null;
@@ -312,6 +317,7 @@ async function fetchAniListMetadata(
   return {
     malId,
     anilistId,
+    episodeCount,
     canonicalTitle,
     posterUrl,
     bannerUrl,
@@ -331,6 +337,7 @@ async function fetchAniListMetadataById(
 ): Promise<{
   malId?: number | null;
   anilistId: number | null;
+  episodeCount: number | null;
   canonicalTitle: string;
   posterUrl: string | null;
   bannerUrl: string | null;
@@ -421,6 +428,7 @@ async function fetchAniListMetadataById(
   return {
     malId: media.idMal || null,
     anilistId: media.id,
+    episodeCount: typeof media.episodes === 'number' && media.episodes > 0 ? media.episodes : null,
     canonicalTitle,
     posterUrl,
     bannerUrl,
@@ -436,11 +444,14 @@ async function fetchAniListMetadataById(
  */
 async function fetchKitsuMetadata(
   query: string,
-  targetSeason: number | 'final' | null = null
+  targetSeason: number | 'final' | null = null,
+  expectedEpisodes: number | null = null
 ): Promise<{
   animeId: string;
+  episodeCount: number | null;
   canonicalTitle: string;
   posterUrl: string | null;
+  bannerUrl: string | null;
   synopsis: string | null;
   episodes: Record<number, KitsuEpisodeInfo>;
 } | null> {
@@ -467,10 +478,18 @@ async function fetchKitsuMetadata(
   const searchJson = await searchRes.json();
   if (!searchJson.data || searchJson.data.length === 0) return null;
 
-  let animeItem = searchJson.data[0];
-  if (searchJson.data.length > 1) {
+  let candidates: any[] = searchJson.data;
+  if (expectedEpisodes != null && expectedEpisodes >= 2) {
+    const covered = candidates
+      .filter((item: any) => typeof item.attributes?.episodeCount === 'number' && item.attributes.episodeCount >= expectedEpisodes)
+      .sort((a: any, b: any) => a.attributes.episodeCount - b.attributes.episodeCount);
+    if (covered.length > 0) candidates = covered;
+  }
+
+  let animeItem = candidates[0];
+  if (candidates.length > 1) {
     if (targetSeason === 1 || targetSeason === null) {
-      const nonSequel = searchJson.data.find((item: any) => {
+      const nonSequel = candidates.find((item: any) => {
         const t =
           item.attributes?.titles?.en ||
           item.attributes?.titles?.en_jp ||
@@ -480,7 +499,7 @@ async function fetchKitsuMetadata(
       });
       if (nonSequel) animeItem = nonSequel;
     } else if (typeof targetSeason === 'number' && targetSeason >= 2) {
-      const matching = searchJson.data.find((item: any) => {
+      const matching = candidates.find((item: any) => {
         const t =
           item.attributes?.titles?.en ||
           item.attributes?.titles?.en_jp ||
@@ -498,6 +517,8 @@ async function fetchKitsuMetadata(
   }
 
   const animeId = animeItem.id;
+  const rawEpisodeCount = animeItem.attributes?.episodeCount;
+  const episodeCount = typeof rawEpisodeCount === 'number' && rawEpisodeCount > 0 ? rawEpisodeCount : null;
   const canonicalTitle =
     animeItem.attributes?.titles?.en ||
     animeItem.attributes?.canonicalTitle ||
@@ -511,11 +532,15 @@ async function fetchKitsuMetadata(
     animeItem.attributes?.posterImage?.large ||
     animeItem.attributes?.posterImage?.original ||
     null;
+  const bannerUrl =
+    animeItem.attributes?.coverImage?.original ||
+    animeItem.attributes?.coverImage?.large ||
+    null;
 
   // Fetch episodes from Kitsu with pagination loop (so series with >50 episodes get complete metadata)
   const episodes: Record<number, KitsuEpisodeInfo> = {};
   let offset = 0;
-  const limit = 50;
+  let limit = 50;
   const maxEpisodes = 1500;
 
   while (offset < maxEpisodes) {
@@ -529,6 +554,12 @@ async function fetchKitsuMetadata(
         signal: AbortSignal.timeout(6000),
       });
 
+      // Live Kitsu enforces a max page[limit] of 20 (HTTP 400 on 50), while
+      // pagination stress tests exercise limit=50. Fall back cleanly when 400.
+      if (epRes.status === 400 && limit > 20) {
+        limit = 20;
+        continue;
+      }
       if (!epRes.ok) break;
       const epJson = await epRes.json();
       if (!Array.isArray(epJson.data) || epJson.data.length === 0) break;
@@ -558,8 +589,10 @@ async function fetchKitsuMetadata(
 
   return {
     animeId,
+    episodeCount,
     canonicalTitle,
     posterUrl,
+    bannerUrl,
     synopsis,
     episodes,
   };
@@ -604,9 +637,9 @@ export async function getKitsuMetadata(rawSeriesName: string, expectedEpisodes: 
     try {
       const data = normalizeCachedEpisodeTitles(JSON.parse(fs.readFileSync(cacheFile, 'utf-8')) as KitsuAnimeCache);
       if (data.fetchedAt && Date.now() - data.fetchedAt < 14 * 24 * 60 * 60 * 1000) {
-        // Older partial cache records may have a poster but no overview or
-        // AniList identity. Revalidate those so the library can repair itself.
-        if (data.anilistId != null && data.synopsis?.trim()) {
+        // Older partial cache records may have a poster, no overview/AniList
+        // identity, or stale empty episodes from pre-limit-fallback runs.
+        if (data.cacheVersion === KITSU_CACHE_VERSION && data.anilistId != null && data.synopsis?.trim()) {
           memoryCache.set(cacheKey, data);
           return data;
         }
@@ -628,7 +661,7 @@ export async function getKitsuMetadata(rawSeriesName: string, expectedEpisodes: 
       // Primary query
       const [aniListResult, kitsuResult] = await Promise.allSettled([
         fetchAniListMetadata(primary, targetSeason, expectedEpisodes),
-        fetchKitsuMetadata(primary, targetSeason),
+        fetchKitsuMetadata(primary, targetSeason, expectedEpisodes),
       ]);
 
       let aniList = null;
@@ -647,7 +680,7 @@ export async function getKitsuMetadata(rawSeriesName: string, expectedEpisodes: 
       if (!aniList && !kitsu && fallback && fallback.toLowerCase() !== primary.toLowerCase()) {
         const [aniListFb, kitsuFb] = await Promise.allSettled([
           fetchAniListMetadata(fallback, targetSeason, expectedEpisodes),
-          fetchKitsuMetadata(fallback, targetSeason),
+          fetchKitsuMetadata(fallback, targetSeason, expectedEpisodes),
         ]);
         if (aniListFb.status === 'fulfilled') {
           aniList = aniListFb.value;
@@ -698,16 +731,36 @@ export async function getKitsuMetadata(rawSeriesName: string, expectedEpisodes: 
       const canonicalTitle = aniList?.canonicalTitle || kitsu?.canonicalTitle || primary;
       const posterUrl = aniList?.posterUrl || kitsu?.posterUrl || null;
 
+      const kitsuCompatibleWithAniList =
+        !aniList ||
+        !kitsu ||
+        aniList.episodeCount == null ||
+        kitsu.episodeCount == null ||
+        aniList.episodeCount === kitsu.episodeCount;
+      const usableKitsuEpisodes = kitsuCompatibleWithAniList ? (kitsu?.episodes || {}) : {};
+
+      const aniListEpisodeKeys = Object.keys(aniList?.episodes || {}).map(Number);
+      const kitsuEpisodeKeys = Object.keys(usableKitsuEpisodes).map(Number);
+      const aniListStreamOverflowsSeason =
+        aniList?.episodeCount != null &&
+        aniListEpisodeKeys.length > aniList.episodeCount &&
+        kitsuEpisodeKeys.length > 0 &&
+        kitsu?.episodeCount === aniList.episodeCount;
+      const usableAniListEpisodes = aniListStreamOverflowsSeason ? {} : (aniList?.episodes || {});
+
       // Merge episodes
       const mergedEpisodes: Record<number, KitsuEpisodeInfo> = {};
       const allEpNumbers = new Set<number>([
-        ...Object.keys(aniList?.episodes || {}).map(Number),
-        ...Object.keys(kitsu?.episodes || {}).map(Number),
+        ...Object.keys(usableAniListEpisodes).map(Number),
+        ...Object.keys(usableKitsuEpisodes).map(Number),
       ]);
 
       for (const epNum of allEpNumbers) {
-        const aniEp = aniList?.episodes[epNum];
-        const kitEp = kitsu?.episodes[epNum];
+        if (aniListStreamOverflowsSeason && aniList?.episodeCount != null && epNum > aniList.episodeCount) {
+          continue;
+        }
+        const aniEp = usableAniListEpisodes[epNum];
+        const kitEp = usableKitsuEpisodes[epNum];
 
         mergedEpisodes[epNum] = {
           number: epNum,
@@ -719,12 +772,13 @@ export async function getKitsuMetadata(rawSeriesName: string, expectedEpisodes: 
 
       const malId = aniList?.malId || null;
       const anilistId = aniList?.anilistId ?? null;
-      const bannerUrl = aniList?.bannerUrl || null;
+      const bannerUrl = aniList?.bannerUrl || kitsu?.bannerUrl || null;
       const synopsis = aniList?.synopsis || kitsu?.synopsis || null;
       const genres = aniList?.genres || [];
       const averageScore = aniList?.averageScore || null;
 
       const result: KitsuAnimeCache = {
+        cacheVersion: KITSU_CACHE_VERSION,
         animeId,
         malId,
         anilistId,

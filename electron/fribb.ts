@@ -13,10 +13,20 @@ const FRIBB_REFRESH_MS = 3 * 24 * 60 * 60 * 1000;
 const FRIBB_DOWNLOAD_TIMEOUT_MS = 30000;
 const FRIBB_RETRY_BACKOFF_MS = 60_000;
 
+const FRIBB_CACHE_VERSION = 2;
+
 export interface FribbIds {
   kitsuId: number | null;
   malId: number | null;
   tvdbId: number | null;
+  imdbId: string | null;
+}
+
+function normalizeImdbId(raw: unknown): string | null {
+  const candidate = Array.isArray(raw) ? raw[0] : raw;
+  if (typeof candidate !== 'string') return null;
+  const trimmed = candidate.trim();
+  return /^tt\d+$/i.test(trimmed) ? trimmed.toLowerCase() : null;
 }
 
 let indexById = new Map<number, FribbIds>();
@@ -35,7 +45,15 @@ function readDiskIndex(): { map: Map<number, FribbIds>; fetchedAt: number } | nu
     const file = cacheFile();
     if (!fs.existsSync(file)) return null;
     const parsed = JSON.parse(fs.readFileSync(file, 'utf-8'));
-    if (!parsed || typeof parsed.fetchedAt !== 'number' || !parsed.mappings || typeof parsed.mappings !== 'object') return null;
+    if (
+      !parsed ||
+      parsed.version !== FRIBB_CACHE_VERSION ||
+      typeof parsed.fetchedAt !== 'number' ||
+      !parsed.mappings ||
+      typeof parsed.mappings !== 'object'
+    ) {
+      return null;
+    }
     const map = new Map<number, FribbIds>();
     for (const [key, value] of Object.entries(parsed.mappings)) {
       const anilistId = Number(key);
@@ -45,6 +63,7 @@ function readDiskIndex(): { map: Map<number, FribbIds>; fetchedAt: number } | nu
         kitsuId: Number.isInteger(ids.kitsuId) ? Number(ids.kitsuId) : null,
         malId: Number.isInteger(ids.malId) ? Number(ids.malId) : null,
         tvdbId: Number.isInteger(ids.tvdbId) ? Number(ids.tvdbId) : null,
+        imdbId: normalizeImdbId(ids.imdbId),
       });
     }
     return { map, fetchedAt: parsed.fetchedAt };
@@ -57,7 +76,7 @@ function writeDiskIndex(map: Map<number, FribbIds>): void {
   try {
     const mappings: Record<string, FribbIds> = {};
     for (const [anilistId, ids] of map) mappings[String(anilistId)] = ids;
-    fs.writeFileSync(cacheFile(), JSON.stringify({ fetchedAt: Date.now(), mappings }), 'utf-8');
+    fs.writeFileSync(cacheFile(), JSON.stringify({ version: FRIBB_CACHE_VERSION, fetchedAt: Date.now(), mappings }), 'utf-8');
   } catch {}
 }
 
@@ -77,6 +96,7 @@ async function downloadIndex(): Promise<Map<number, FribbIds>> {
       kitsuId: Number.isInteger(row?.kitsu_id) ? Number(row.kitsu_id) : null,
       malId: Number.isInteger(row?.mal_id) ? Number(row.mal_id) : null,
       tvdbId: Number.isInteger(row?.tvdb_id) ? Number(row.tvdb_id) : null,
+      imdbId: normalizeImdbId(row?.imdb_id),
     });
   }
   return map;

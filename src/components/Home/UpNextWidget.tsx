@@ -1,7 +1,7 @@
 import React, { useEffect, useMemo, useRef, useState } from 'react';
 import { motion } from 'framer-motion';
 import { ArrowRight, Play, X } from 'lucide-react';
-import { Episode, PlaybackProgress } from '../../types';
+import { Episode, PlaybackProgress, RemoteEpisodesResult } from '../../types';
 import { formatTime, cleanSeriesTitle, cleanEpisodeTitle } from '../../utils/format';
 
 export interface UpNextData {
@@ -54,19 +54,52 @@ export const UpNextWidget: React.FC<UpNextWidgetProps> = ({ data, onPlay, onOpen
     return (hash >>> 0) % 360;
   }, [anilistId, seasonName]);
   const [apiEpisodeTitle, setApiEpisodeTitle] = useState<string | null>(null);
+  const [apiLogoUrls, setApiLogoUrls] = useState<string[]>([]);
+  const [logoIdx, setLogoIdx] = useState(0);
+  const [logoLoaded, setLogoLoaded] = useState(false);
+
   useEffect(() => {
     setApiEpisodeTitle(null);
-    if (!anilistId || !window.electronAPI?.getRemoteEpisodes) return;
+    setApiLogoUrls([]);
+    setLogoIdx(0);
+    setLogoLoaded(false);
+    if (!anilistId) return;
     let cancelled = false;
+    let lastLogosKey = '';
     const parsedNumber = cleanEpisodeTitle(episode.fileName).episodeNumber;
-    window.electronAPI.getRemoteEpisodes(anilistId)
-      .then((result) => {
-        if (cancelled) return;
-        const match = (result?.episodes ?? []).find((item) => item.number === parsedNumber);
-        if (match?.title) setApiEpisodeTitle(match.title);
-      })
-      .catch(() => {});
-    return () => { cancelled = true; };
+
+    const applyRemoteResult = (result?: RemoteEpisodesResult | null) => {
+      if (cancelled || !result) return;
+      const match = (result.episodes ?? []).find((item) => item.number === parsedNumber);
+      if (match?.title) setApiEpisodeTitle(match.title);
+      const nextLogos = Array.from(
+        new Set(
+          [result.logoUrl, result.fallbackLogoUrl].filter(
+            (url): url is string => typeof url === 'string' && url.length > 0
+          )
+        )
+      );
+      const nextKey = nextLogos.join('|');
+      if (nextLogos.length > 0 && nextKey !== lastLogosKey) {
+        lastLogosKey = nextKey;
+        setApiLogoUrls(nextLogos);
+        setLogoIdx(0);
+        setLogoLoaded(false);
+      }
+    };
+
+    if (window.electronAPI?.getRemoteEpisodes) {
+      window.electronAPI.getRemoteEpisodes(anilistId)
+        .then((result) => applyRemoteResult(result))
+        .catch(() => {});
+    }
+    const unsubscribe = window.electronAPI?.onRemoteEpisodesUpdated?.((updatedId, result) => {
+      if (updatedId === anilistId) applyRemoteResult(result);
+    });
+    return () => {
+      cancelled = true;
+      unsubscribe?.();
+    };
   }, [anilistId, episode.fileName]);
 
   // Anime description for the banner (AniList, cached 24 h on the main side).
@@ -160,6 +193,8 @@ export const UpNextWidget: React.FC<UpNextWidgetProps> = ({ data, onPlay, onOpen
   const episodeTitle = [apiEpisodeTitle, episode.kitsuTitle, episode.episodeTitle, parsedEpisodeTitle]
     .find((candidate) => !isReleaseText(candidate) && !/^episode\s*\d*$/i.test(candidate || ''))
     || `Episode ${progress.episodeNumber || episode.episodeNumber || ''}`.trim();
+  const activeLogoUrl = apiLogoUrls[logoIdx] ?? null;
+  const showLogo = Boolean(activeLogoUrl && logoLoaded);
 
   return (
     <>
@@ -218,7 +253,43 @@ export const UpNextWidget: React.FC<UpNextWidgetProps> = ({ data, onPlay, onOpen
           <span className="rounded-md border border-white/15 bg-black/35 px-2.5 py-1 font-mono text-[11px] text-zinc-300 backdrop-blur">{formatTime(progress.currentTime)} / {formatTime(progress.duration)}</span>
         </div>
 
-        <h2 className="max-w-3xl text-4xl font-black leading-[1.03] tracking-tight text-white drop-shadow-lg md:text-6xl 2xl:text-7xl" title={displayTitle}>{displayTitle}</h2>
+        {activeLogoUrl && (
+          <img
+            key={activeLogoUrl}
+            src={activeLogoUrl}
+            alt={displayTitle}
+            title={displayTitle}
+            decoding="async"
+            onLoad={(event) => {
+              const img = event.currentTarget;
+              if (img.naturalHeight > 0 && img.naturalWidth / img.naturalHeight < 1.25) {
+                setLogoLoaded(false);
+                setLogoIdx((i) => i + 1);
+                return;
+              }
+              setLogoLoaded(true);
+            }}
+            onError={() => {
+              setLogoLoaded(false);
+              setLogoIdx((i) => i + 1);
+            }}
+            className={
+              showLogo
+                ? 'mb-1 max-h-20 w-auto max-w-[min(100%,380px)] self-start object-contain object-left drop-shadow-[0_10px_28px_rgba(0,0,0,0.85)] transition-opacity duration-300 select-none md:max-h-28 md:max-w-[460px] 2xl:max-h-32 2xl:max-w-[520px]'
+                : 'pointer-events-none absolute h-0 w-0 overflow-hidden opacity-0'
+            }
+          />
+        )}
+        <h2
+          className={
+            showLogo
+              ? 'sr-only'
+              : 'max-w-3xl text-4xl font-black leading-[1.03] tracking-tight text-white drop-shadow-lg md:text-6xl 2xl:text-7xl'
+          }
+          title={displayTitle}
+        >
+          {displayTitle}
+        </h2>
         <p className="mt-2 text-lg font-semibold text-zinc-200 md:text-xl">{episodeTitle}</p>
         {description && (
           <>

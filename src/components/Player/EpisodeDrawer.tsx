@@ -1,5 +1,5 @@
 import React, { useState, useEffect, useRef, useMemo } from 'react';
-import { X, Play, CheckCircle2, ListVideo, Film, Sparkles } from 'lucide-react';
+import { X, Play, CheckCircle2, ListVideo, Film } from 'lucide-react';
 import { Episode, PlaybackProgress } from '../../types';
 import { formatTime, cleanEpisodeTitle, cleanSeriesTitle, formatEpisodeDisplayTitle } from '../../utils/format';
 import { parseReleaseCore } from '../../lib/releaseParser/regexEngine';
@@ -83,8 +83,8 @@ const EpisodeDrawerItem: React.FC<EpisodeItemProps> = ({
       onClick={onSelect}
       className={`group relative p-3 rounded-2xl cursor-pointer transition-all duration-200 border flex items-center space-x-3.5 ${
         isPlaying
-          ? 'bg-rose-500/10 border-rose-400/50 shadow-[0_0_22px_rgba(255,30,109,0.15)]'
-          : 'bg-white/[0.04] border-white/[0.07] hover:bg-white/[0.08] hover:border-white/20'
+          ? 'bg-rose-950/55 border-rose-400/55 shadow-[0_0_22px_rgba(255,30,109,0.18)]'
+          : 'bg-black/35 border-white/[0.08] hover:bg-black/50 hover:border-white/20'
       }`}
     >
       {/* Thumbnail Card (16:9 aspect) */}
@@ -146,8 +146,8 @@ const EpisodeDrawerItem: React.FC<EpisodeItemProps> = ({
         {/* Main Title Row */}
         <div className="flex items-center justify-between gap-1.5">
           <h4
-            className={`text-xs sm:text-sm font-semibold line-clamp-2 leading-tight ${
-              isPlaying ? 'text-red-400 font-bold' : 'text-zinc-100 group-hover:text-white'
+            className={`text-xs sm:text-sm font-semibold line-clamp-2 leading-tight [text-shadow:0_1px_2px_rgba(0,0,0,0.65)] ${
+              isPlaying ? 'text-rose-300 font-bold' : 'text-zinc-100 group-hover:text-white'
             }`}
             title={fullDisplayTitle}
           >
@@ -162,13 +162,13 @@ const EpisodeDrawerItem: React.FC<EpisodeItemProps> = ({
         </div>
 
         {/* Timestamp Footer */}
-        <div className="mt-1.5 text-[11px] text-zinc-400 font-mono">
+        <div className="mt-1.5 text-[11px] text-zinc-300/90 font-mono [text-shadow:0_1px_2px_rgba(0,0,0,0.65)]">
           {progress && progress.currentTime > 0 ? (
             <span>
               {formatTime(progress.currentTime)} / {formatTime(progress.duration || episode.duration || 0)}
             </span>
           ) : (
-            <span className="text-zinc-500">
+            <span className="text-zinc-300/75">
               {episode.duration && episode.duration > 0 ? formatTime(episode.duration) : 'Unwatched'}
             </span>
           )}
@@ -283,33 +283,42 @@ export const EpisodeDrawer: React.FC<EpisodeDrawerProps> = ({
 
   return (
     <div
-      className={`fixed inset-0 z-50 flex justify-end bg-black/80 backdrop-blur-sm transition-opacity duration-300 ease-out select-none ${
-        isOpen ? 'opacity-100 pointer-events-auto' : 'opacity-0 pointer-events-none'
+      className={`fixed inset-0 z-50 flex justify-end select-none ${
+        isOpen ? 'pointer-events-auto' : 'pointer-events-none'
       }`}
-      onClick={closeOnBackdrop ? onClose : undefined}
     >
       <div
-        className={`w-full sm:max-w-md md:max-w-[480px] h-full bg-[#0c0812]/80 backdrop-blur-[30px] backdrop-saturate-[1.8] border-l border-white/10 p-6 flex flex-col shadow-[-25px_0_60px_rgba(0,0,0,0.85)] transition-transform duration-400 ease-[cubic-bezier(0.16,1,0.3,1)] transform ${
+        className={`absolute inset-0 bg-black/35 transition-opacity duration-300 ease-out ${
+          isOpen ? 'opacity-100' : 'opacity-0'
+        }`}
+        onClick={closeOnBackdrop ? onClose : undefined}
+      />
+      <div
+        className={`relative z-10 w-full sm:max-w-md md:max-w-[480px] h-full bg-[#09070f]/80 backdrop-blur-2xl border-l border-white/[0.1] p-6 flex flex-col shadow-[-25px_0_60px_rgba(0,0,0,0.85)] transition-transform duration-400 ease-[cubic-bezier(0.16,1,0.3,1)] transform ${
           isOpen ? 'translate-x-0' : 'translate-x-full'
         }`}
+        style={{
+          backdropFilter: 'blur(40px) saturate(135%) brightness(0.75)',
+          WebkitBackdropFilter: 'blur(40px) saturate(135%) brightness(0.75)',
+        }}
         onClick={(e) => e.stopPropagation()}
         onPointerLeave={closeOnMouseLeave ? onClose : undefined}
       >
         {/* Header */}
-        <div className="flex items-center justify-between pb-4 border-b border-zinc-800/80">
+        <div className="flex items-center justify-between pb-4 border-b border-white/[0.08]">
           <div className="flex items-center space-x-3 min-w-0">
-            <div className="w-9 h-9 rounded-xl bg-red-600/15 border border-red-500/30 flex items-center justify-center shrink-0">
-              <ListVideo className="w-5 h-5 text-red-500" />
+            <div className="w-9 h-9 rounded-xl bg-red-600/20 border border-red-500/35 flex items-center justify-center shrink-0">
+              <ListVideo className="w-5 h-5 text-red-400" />
             </div>
             <div className="min-w-0">
               <div className="flex items-center space-x-2">
-                <h3 className="text-base font-bold text-white tracking-tight">Episodes</h3>
-                <span className="px-2 py-0.5 rounded-full text-xs bg-zinc-800 text-zinc-300 font-semibold border border-white/5">
+                <h3 className="text-base font-bold text-white tracking-tight [text-shadow:0_1px_2px_rgba(0,0,0,0.65)]">Episodes</h3>
+                <span className="px-2 py-0.5 rounded-full text-xs bg-black/40 text-zinc-200 font-semibold border border-white/10">
                   {episodes.length}
                 </span>
               </div>
               {seriesName && (
-                <p className="text-xs text-zinc-400 truncate mt-0.5" title={seriesName}>
+                <p className="text-xs text-zinc-300/85 truncate mt-0.5 [text-shadow:0_1px_2px_rgba(0,0,0,0.65)]" title={seriesName}>
                   {seriesName}
                 </p>
               )}
@@ -318,7 +327,7 @@ export const EpisodeDrawer: React.FC<EpisodeDrawerProps> = ({
 
           <button
             onClick={onClose}
-            className="p-2 rounded-xl text-zinc-400 hover:text-white hover:bg-zinc-800 transition-colors"
+            className="p-2 rounded-xl text-zinc-300 hover:text-white hover:bg-white/10 transition-colors"
             aria-label="Close Episodes Drawer"
           >
             <X className="w-5 h-5" />
@@ -326,24 +335,17 @@ export const EpisodeDrawer: React.FC<EpisodeDrawerProps> = ({
         </div>
 
         {/* Auto Play Next Toggle */}
-        <div className="py-3 px-3.5 my-3.5 rounded-2xl bg-zinc-900/90 border border-zinc-800 flex items-center justify-between shadow-inner">
-          <div className="flex items-center space-x-2.5">
-            <div className="w-7 h-7 rounded-lg bg-indigo-500/10 flex items-center justify-center">
-              <Sparkles className="w-4 h-4 text-indigo-400" />
-            </div>
-            <div>
-              <span className="text-xs font-semibold text-zinc-200">Auto-play Next Episode</span>
-              <p className="text-[10px] text-zinc-400">Play next episode seamlessly on end</p>
-            </div>
-          </div>
+        <div className="py-2.5 px-3.5 my-3 rounded-xl bg-black/30 border border-white/[0.08] flex items-center justify-between">
+          <span className="text-xs font-medium text-zinc-100 [text-shadow:0_1px_2px_rgba(0,0,0,0.65)]">Auto-play Next Episode</span>
           <button
             onClick={onToggleAutoPlayNext}
-            className={`w-11 h-6 rounded-full p-0.5 transition-colors duration-200 ${
-              autoPlayNext ? 'bg-[linear-gradient(135deg,#FF1E6D_0%,#A31246_100%)] shadow-glow-crimson-sm' : 'bg-zinc-700'
+            className={`w-10 h-5 rounded-full p-0.5 transition-colors duration-200 ${
+              autoPlayNext ? 'bg-[linear-gradient(135deg,#FF1E6D_0%,#A31246_100%)] shadow-glow-crimson-sm' : 'bg-white/15'
             }`}
+            aria-label="Toggle Auto-play Next Episode"
           >
             <div
-              className={`w-5 h-5 rounded-full bg-white shadow-md transition-transform duration-200 ${
+              className={`w-4 h-4 rounded-full bg-white shadow-md transition-transform duration-200 ${
                 autoPlayNext ? 'translate-x-5' : 'translate-x-0'
               }`}
             />

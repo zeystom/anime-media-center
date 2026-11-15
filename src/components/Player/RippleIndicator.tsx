@@ -35,9 +35,7 @@ export const RippleIndicator: React.FC<RippleIndicatorProps> = ({ type, text }) 
 
   return (
     <div className="absolute inset-0 flex items-center justify-center pointer-events-none z-30">
-      <div className="osd-badge flex h-[76px] w-[76px] flex-col items-center justify-center gap-0.5 rounded-full border bg-[#0F0A16]/65 text-white shadow-glow-crimson-sm backdrop-blur-[20px]"
-        style={{ borderColor: 'rgba(255, 30, 109, 0.3)' }}
-      >
+      <div className="osd-badge flex h-16 w-16 flex-col items-center justify-center gap-0.5 rounded-full border border-white/[0.14] bg-[#0b0912]/55 text-white shadow-2xl backdrop-blur-xl">
         <span className={nudgeClass}>
           {isSeekForward && <FastForward className="w-7 h-7 text-rose-500 fill-rose-500" />}
           {isSeekBackward && <Rewind className="w-7 h-7 text-rose-500 fill-rose-500" />}
@@ -55,7 +53,7 @@ export const RippleIndicator: React.FC<RippleIndicatorProps> = ({ type, text }) 
           {type === 'info' && <Info className="w-7 h-7 text-zinc-300" />}
         </span>
 
-        {text && (
+        {text && type !== 'play' && type !== 'pause' && (
           <span className="text-[10px] font-bold tracking-widest font-mono uppercase text-zinc-200">
             {text}
           </span>

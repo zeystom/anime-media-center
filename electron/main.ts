@@ -110,7 +110,7 @@ async function checkFolderSubtitles(
   if (folderSubtitleCache.has(folderPath)) {
     return folderSubtitleCache.get(folderPath)!;
   }
-  const sample = videoFiles.slice(0, 3);
+  const sample = videoFiles.slice(0, 2);
   let foundDub = false;
   let foundSub = false;
 
@@ -128,7 +128,9 @@ async function checkFolderSubtitles(
       ) {
         foundSub = true;
       }
-      if (foundDub && foundSub) break;
+      if (meta.audioTracks.length > 0 || meta.subtitleTracks.length > 0) {
+        break;
+      }
     } catch {}
   }
 
@@ -184,9 +186,19 @@ async function scanFolderForEpisodes(folderPath: string, port: number, targetRoo
   }
 }
 
+const cleanOfficialTitle = (value: string | null | undefined): string | null => {
+  const title = value?.trim();
+  if (!title || title.length > 120 || /[\[\]]/.test(title) || /[\u3040-\u30ff\u3400-\u9fff]/u.test(title)) return null;
+  // Container titles sometimes contain the raw release filename instead
+  // of an episode name (e.g. [NF WebRip 2160p H265 ...]). Never surface
+  // those technical tags as the official title in the library UI.
+  if (/\b(?:2160p|1080p|720p|480p|web[- ]?rip|web[- ]?dl|bluray|bdrip|h\.?265|x265|hevc|e[- ]?ac[- ]?3|multi[- ]audio|dual[- ]audio|netflix|repack|proper)\b/i.test(title)) return null;
+  return title;
+};
+
 async function scanFolderForEpisodesUncached(folderPath: string, port: number, targetRoot?: string): Promise<Episode[]> {
   try {
-    const files = fs.readdirSync(folderPath);
+    const files = await fs.promises.readdir(folderPath);
     const videoFiles = files.filter((f) =>
       VIDEO_EXTENSIONS.some((ext) => f.toLowerCase().endsWith(ext)) && !isBonusVideoFile(f)
     );
@@ -194,29 +206,36 @@ async function scanFolderForEpisodesUncached(folderPath: string, port: number, t
       return [];
     }
 
-    const srtFiles = new Set(files.filter((f) => f.toLowerCase().endsWith('.srt')));
     const allFilesLower = new Set(files.map((f) => f.toLowerCase()));
     videoFiles.sort((a, b) => a.localeCompare(b, undefined, { numeric: true, sensitivity: 'base' }));
 
-    const settings = storage.getSettings();
-    const { hasDubtitles, hasEmbeddedSubtitles } = await checkFolderSubtitles(
-      videoFiles,
-      folderPath,
-      settings.ffmpegPath
-    );
+    const parsedEpisodes = new Map<string, { episodeNum: number | null; label: string }>();
+    let maxEpisodeNumber = 0;
+    for (const file of videoFiles) {
+      const parsed = extractEpisodeNumber(file);
+      parsedEpisodes.set(file, parsed);
+      const n = parsed.episodeNum !== null && Number.isFinite(parsed.episodeNum) ? Math.floor(parsed.episodeNum) : 0;
+      if (n > maxEpisodeNumber) maxEpisodeNumber = n;
+    }
+    const expectedEpisodes = maxEpisodeNumber > 0 ? maxEpisodeNumber : videoFiles.length || null;
 
+    const settings = storage.getSettings();
     // Resolve canonical anime folder name (e.g. "Frieren Season 1" instead of "Season 1")
     const folderName = getEffectiveAnimeFolderName(folderPath, targetRoot);
-    const kitsuData = await getKitsuMetadata(folderName);
+
+    const [{ hasDubtitles, hasEmbeddedSubtitles }, kitsuData] = await Promise.all([
+      checkFolderSubtitles(videoFiles, folderPath, settings.ffmpegPath),
+      getKitsuMetadata(folderName, expectedEpisodes),
+    ]);
 
     const history = storage.getAllPlaybackProgress();
     const episodes: Episode[] = [];
 
     for (const file of videoFiles) {
       const fullPath = path.join(folderPath, file);
-      const stat = fs.statSync(fullPath);
+      const stat = await fs.promises.stat(fullPath);
       const baseName = path.parse(file).name;
-      const { episodeNum, label: epNum } = extractEpisodeNumber(file);
+      const { episodeNum, label: epNum } = parsedEpisodes.get(file) || extractEpisodeNumber(file);
       const dlStatus = checkEpisodeDownloading(fullPath, allFilesLower, stat);
 
       // Populate episode duration: history cached, or instant container duration
@@ -233,8 +252,8 @@ async function scanFolderForEpisodesUncached(folderPath: string, port: number, t
         }
       }
 
-      // Check external subtitles using unified finder
-      const extSubs = findExternalSubtitles(fullPath);
+      // Check external subtitles using unified finder without re-reading the directory
+      const extSubs = findExternalSubtitles(fullPath, files);
       const hasExternalSrt = extSubs.length > 0;
       const hasWhisperSrt = extSubs.some((s) => s.isWhisper);
       const hasExternalDub = extSubs.some((s) => s.isDubtitle);
@@ -243,18 +262,10 @@ async function scanFolderForEpisodesUncached(folderPath: string, port: number, t
       // Match numeric episode index for Kitsu metadata
       const kitsuEp = episodeNum !== null && kitsuData ? kitsuData.episodes[episodeNum] : null;
 
-      // Extract official embedded MKV container title in <1ms as local fallback
-      const embeddedTitle = readMkvEmbeddedTitle(fullPath);
-      const cleanOfficialTitle = (value: string | null | undefined): string | null => {
-        const title = value?.trim();
-        if (!title || title.length > 120 || /[\[\]]/.test(title) || /[\u3040-\u30ff\u3400-\u9fff]/u.test(title)) return null;
-        // Container titles sometimes contain the raw release filename instead
-        // of an episode name (e.g. [NF WebRip 2160p H265 ...]). Never surface
-        // those technical tags as the official title in the library UI.
-        if (/\b(?:2160p|1080p|720p|480p|web[- ]?rip|web[- ]?dl|bluray|bdrip|h\.?265|x265|hevc|e[- ]?ac[- ]?3|multi[- ]audio|dual[- ]audio|netflix|repack|proper)\b/i.test(title)) return null;
-        return title;
-      };
-      const officialTitle = cleanOfficialTitle(kitsuEp?.title) || cleanOfficialTitle(embeddedTitle);
+      // Extract official embedded MKV container title lazily only if Kitsu/AniList has no title
+      const officialTitle =
+        cleanOfficialTitle(kitsuEp?.title) ||
+        cleanOfficialTitle(readMkvEmbeddedTitle(fullPath));
 
       // Episode stills stay episode-specific. A single file may be an
       // incomplete season download, so never substitute the series poster.
@@ -291,18 +302,18 @@ async function scanFolderForEpisodesUncached(folderPath: string, port: number, t
   }
 }
 
-function findMediaFolders(rootDir: string, maxDepth = 4): string[] {
+async function findMediaFolders(rootDir: string, maxDepth = 4): Promise<string[]> {
   const mediaDirs: string[] = [];
   const visited = new Set<string>();
-  const ignoredPatterns = /^(?:\.anime-center-staging|\$recycle\.bin|system volume information|\.git|\.cache|node_modules|temp|tmp|\.idea|\.vscode)$/i;
+  const ignoredPatterns = /^(?:\.anime-center-staging|\$recycle\.bin|system volume information|\.git|\.cache|node_modules|temp|tmp|\.idea|\.vscode|appdata|program files|program files \(x86\)|windows|perflogs|recovery|documents and settings)$/i;
 
-  function traverse(currentDir: string, depth: number) {
+  async function traverse(currentDir: string, depth: number): Promise<void> {
     if (depth > maxDepth || visited.has(currentDir)) return;
     visited.add(currentDir);
 
     let entries: fs.Dirent[] = [];
     try {
-      entries = fs.readdirSync(currentDir, { withFileTypes: true });
+      entries = await fs.promises.readdir(currentDir, { withFileTypes: true });
     } catch {
       return;
     }
@@ -319,14 +330,154 @@ function findMediaFolders(rootDir: string, maxDepth = 4): string[] {
     if (depth < maxDepth) {
       for (const entry of entries) {
         if (entry.isDirectory() && !ignoredPatterns.test(entry.name)) {
-          traverse(path.join(currentDir, entry.name), depth + 1);
+          await traverse(path.join(currentDir, entry.name), depth + 1);
         }
       }
     }
   }
 
-  traverse(rootDir, 0);
+  await traverse(rootDir, 0);
   return mediaDirs;
+}
+
+let streamServerStartPromise: Promise<number | void> | null = null;
+let inFlightScan: { rootsKey: string; promise: Promise<AnimeFolder[]> } | null = null;
+
+function emitStartupStatus(payload: { phase: string; detail?: string; progress: number }): void {
+  if (mainWindow && !mainWindow.isDestroyed()) {
+    mainWindow.webContents.send('startup:status', payload);
+  }
+}
+
+function resolveScanRoots(rootPath?: string | string[]): string[] {
+  const settings = storage.getSettings();
+  let targetRoots: string[] = [];
+
+  if (Array.isArray(rootPath) && rootPath.length > 0) {
+    targetRoots = rootPath;
+  } else if (typeof rootPath === 'string' && rootPath.trim().length > 0) {
+    targetRoots = [rootPath.trim()];
+  } else if (Array.isArray(settings.libraryFolders) && settings.libraryFolders.length > 0) {
+    targetRoots = settings.libraryFolders;
+  } else if (settings.defaultLibraryRoot) {
+    targetRoots = [settings.defaultLibraryRoot];
+  }
+
+  return Array.from(new Set(targetRoots.map((r) => path.resolve(r))));
+}
+
+async function performLibraryScan(
+  rootPath?: string | string[],
+  onProgress?: (done: number, total: number, folderName: string) => void
+): Promise<AnimeFolder[]> {
+  const uniqueRoots = resolveScanRoots(rootPath);
+  const rootsKey = uniqueRoots.map((r) => r.toLowerCase()).sort().join('|');
+  if (inFlightScan && inFlightScan.rootsKey === rootsKey) {
+    return inFlightScan.promise;
+  }
+
+  const scanPromise = (async () => {
+    if (streamServer.getPort() === 0 && streamServerStartPromise) {
+      await streamServerStartPromise;
+    }
+    const port = streamServer.getPort();
+    const animeFolders: AnimeFolder[] = [];
+    const visitedPaths = new Set<string>();
+    const rootFolderPairs: Array<{ targetRoot: string; folderPath: string }> = [];
+
+    for (const targetRoot of uniqueRoots) {
+      if (!fs.existsSync(targetRoot)) continue;
+      try {
+        // Recursively find all media directories containing video files up to 4 levels deep
+        const discoveredMediaDirs = await findMediaFolders(targetRoot, 4);
+        for (const folderPath of discoveredMediaDirs) {
+          if (visitedPaths.has(folderPath)) continue;
+          visitedPaths.add(folderPath);
+          rootFolderPairs.push({ targetRoot, folderPath });
+        }
+      } catch (err) {
+        console.error(`Error scanning library at ${targetRoot}:`, err);
+      }
+    }
+
+    const total = rootFolderPairs.length;
+    let completed = 0;
+    onProgress?.(0, total, '');
+
+    const resolved = await asyncPool(3, rootFolderPairs, async ({ targetRoot, folderPath }) => {
+      const effectiveName = getEffectiveAnimeFolderName(folderPath, targetRoot);
+      try {
+        const episodes = await scanFolderForEpisodes(folderPath, port, targetRoot);
+        if (episodes.length === 0) return null;
+
+        const folderFiles = await fs.promises.readdir(folderPath);
+        const folderDl = isFolderDownloading(folderPath, folderFiles, episodes);
+        const hasDubtitlesCount = episodes.filter((e) => e.hasEmbeddedDubtitles).length;
+        const hasEmbSubCount = episodes.filter((e) => e.hasEmbeddedSubtitles).length;
+
+        // Bind folder metadata to an AniList entry that can hold every
+        // scanned file: rebroadcast/extended editions share their title
+        // with shorter originals (Haruhi 2006 14-ep vs the 2009 28-ep).
+        const maxEpisodeNumber = episodes.reduce((max, ep) => {
+          const parsedNum = extractEpisodeNumber(ep.fileName).episodeNum;
+          const n = parsedNum !== null && Number.isFinite(parsedNum)
+            ? Math.floor(parsedNum)
+            : parseInt(String(ep?.episodeNumber ?? ''), 10);
+          return Number.isFinite(n) && n > max ? n : max;
+        }, 0);
+        const kitsuData = await getKitsuMetadata(
+          effectiveName,
+          maxEpisodeNumber > 0 ? maxEpisodeNumber : episodes.length || null
+        );
+
+        return {
+          folderPath,
+          folderName: effectiveName,
+          episodes,
+          isDownloading: folderDl.isDownloading,
+          downloadProgress: folderDl.downloadProgress,
+          hasSubtitlesCount: episodes.filter((e) => e.hasExternalSrt).length,
+          hasWhisperCount: episodes.filter((e) => e.hasWhisperSrt).length,
+          hasExtSubCount: episodes.filter((e) => e.hasExternalSrt && !e.hasWhisperSrt).length,
+          hasDubtitlesCount,
+          hasEmbeddedDubtitles: hasDubtitlesCount > 0,
+          hasEmbeddedSubtitles: hasEmbSubCount > 0,
+          totalEpisodes: episodes.length,
+          posterUrl: kitsuData?.posterUrl || null,
+          bannerUrl: kitsuData?.bannerUrl || null,
+          canonicalTitle: kitsuData?.canonicalTitle || null,
+          anilistId: kitsuData?.anilistId ?? null,
+          synopsis: kitsuData?.synopsis || null,
+          genres: kitsuData?.genres || [],
+          averageScore: kitsuData?.averageScore || null,
+        } as AnimeFolder;
+      } finally {
+        completed++;
+        onProgress?.(completed, total, effectiveName);
+      }
+    });
+
+    for (const item of resolved) {
+      if (item) animeFolders.push(item);
+    }
+
+    // Sort folders naturally so titles across different drives display cleanly
+    animeFolders.sort((a, b) =>
+      a.folderName.localeCompare(b.folderName, undefined, { sensitivity: 'base', numeric: true })
+    );
+
+    storage.saveLibraryCache(uniqueRoots, animeFolders);
+    return animeFolders;
+  })();
+
+  inFlightScan = { rootsKey, promise: scanPromise };
+  try {
+    return await scanPromise;
+  } finally {
+    if (inFlightScan?.promise === scanPromise) {
+      inFlightScan = null;
+    }
+  }
 }
 
 async function createWindow() {
@@ -342,7 +493,7 @@ async function createWindow() {
     const appIcon = fs.existsSync(iconIco) ? iconIco : fs.existsSync(iconPng) ? iconPng : undefined;
 
     // Start the local server in the background while the bootstrap window is visible.
-    void streamServer.start().catch((error) => {
+    streamServerStartPromise = streamServer.start().catch((error) => {
       console.error('[Electron] Failed to start local streaming server:', error);
     });
 
@@ -352,6 +503,7 @@ async function createWindow() {
     const startup = app as typeof app & {
       __kaikoStartupSplash?: BrowserWindow;
       __kaikoStartupShownAt?: number;
+      __kaikoUserMinimized?: boolean;
     };
     mainWindow = startup.__kaikoStartupSplash || new BrowserWindow({
       width: 1400,
@@ -360,7 +512,7 @@ async function createWindow() {
       minHeight: 700,
       show: false,
       paintWhenInitiallyHidden: true,
-      backgroundColor: '#09080f',
+      backgroundColor: '#07060a',
       title: 'Kaiko',
       icon: appIcon,
       autoHideMenuBar: true, // Auto-hide menu bar on Windows/Linux
@@ -409,6 +561,12 @@ async function createWindow() {
     initUpdater(() => mainWindow);
     initWhisperEngineDownloader(() => mainWindow);
 
+    emitStartupStatus({
+      phase: 'Initializing media engine',
+      detail: 'Starting local stream server',
+      progress: 22,
+    });
+
     // Background 60-day cleanup of old thumbnails & subtitles
     setTimeout(() => {
       try {
@@ -438,10 +596,70 @@ async function createWindow() {
       console.error(`[Electron] Page failed to load: (${errorCode}) ${errorDescription}`);
     });
 
+    emitStartupStatus({
+      phase: 'Loading profile & preferences',
+      detail: 'Reading local settings and watch history',
+      progress: 34,
+    });
+    storage.getSettings();
+    storage.getAllPlaybackProgress();
+    userLibrary.getAll();
+
+    const roots = resolveScanRoots();
+    const cachedLibrary = roots.length > 0 ? storage.getLibraryCache(roots) : [];
+    let startupScanPromise: Promise<AnimeFolder[]> | null = null;
+    if (cachedLibrary) {
+      emitStartupStatus({
+        phase: 'Restoring library cache',
+        detail: cachedLibrary.length > 0 ? `${cachedLibrary.length} anime series ready` : 'Library ready',
+        progress: 78,
+      });
+    } else if (roots.length > 0) {
+      emitStartupStatus({
+        phase: 'Scanning anime library',
+        detail: 'Discovering media folders…',
+        progress: 40,
+      });
+      startupScanPromise = performLibraryScan(roots, (done, total, folderName) => {
+        if (total === 0) return;
+        const progress = Math.min(92, 42 + Math.round((done / total) * 50));
+        emitStartupStatus({
+          phase: 'Scanning anime library',
+          detail: folderName ? `${done}/${total} · ${folderName}` : `Indexed ${done}/${total} folders`,
+          progress,
+        });
+      });
+    } else {
+      emitStartupStatus({
+        phase: 'Preparing workspace',
+        detail: 'Catalog and media services ready',
+        progress: 78,
+      });
+    }
+
     // Keep this single native window on the animated startup page for at least
-    // 2.3 seconds, then navigate the same WebContents to the app UI.
-    const elapsed = startup.__kaikoStartupShownAt ? Date.now() - startup.__kaikoStartupShownAt : 2300;
-    await new Promise((resolve) => setTimeout(resolve, Math.max(0, 2300 - elapsed)));
+    // 2.5 seconds, plus up to 1.2s extra if a first-launch scan is finishing.
+    const minSplashMs = 2500;
+    const elapsed = startup.__kaikoStartupShownAt ? Date.now() - startup.__kaikoStartupShownAt : minSplashMs;
+    await new Promise((resolve) => setTimeout(resolve, Math.max(0, minSplashMs - elapsed)));
+    if (startupScanPromise) {
+      await Promise.race([
+        startupScanPromise.catch(() => []),
+        new Promise<void>((resolve) => setTimeout(resolve, 1200)),
+      ]);
+    }
+
+    emitStartupStatus({
+      phase: 'Ready',
+      detail: 'Launching interface',
+      progress: 100,
+    });
+    if (!mainWindow.isDestroyed()) {
+      mainWindow.webContents.send('startup:exit');
+      await new Promise((resolve) => setTimeout(resolve, 260));
+    }
+    if (mainWindow.isDestroyed()) return;
+
     if (process.env.VITE_DEV_SERVER_URL) {
       await mainWindow.loadURL(process.env.VITE_DEV_SERVER_URL);
     } else {
@@ -453,6 +671,13 @@ async function createWindow() {
     // stack, otherwise a mouse Back click can restore the splash page and
     // leave the user staring at a loading screen instead of the app.
     if (!mainWindow.isDestroyed()) mainWindow.webContents.navigationHistory.clear();
+    if (!startup.__kaikoUserMinimized && !mainWindow.isDestroyed()) {
+      if (mainWindow.isMinimized()) mainWindow.restore();
+      if (!mainWindow.isVisible()) {
+        mainWindow.show();
+        mainWindow.focus();
+      }
+    }
 
     // Note: Chromium's 'swipe' webContents event is macOS-only, so touchpad
     // back-swipe on Windows is handled in the renderer (wheel-based fallback
@@ -1016,98 +1241,7 @@ function setupIpcHandlers() {
   });
 
   ipcMain.handle('scan-library', async (_event, rootPath?: string | string[]) => {
-    const settings = storage.getSettings();
-    let targetRoots: string[] = [];
-
-    if (Array.isArray(rootPath) && rootPath.length > 0) {
-      targetRoots = rootPath;
-    } else if (typeof rootPath === 'string' && rootPath.trim().length > 0) {
-      targetRoots = [rootPath.trim()];
-    } else if (Array.isArray(settings.libraryFolders) && settings.libraryFolders.length > 0) {
-      targetRoots = settings.libraryFolders;
-    } else if (settings.defaultLibraryRoot) {
-      targetRoots = [settings.defaultLibraryRoot];
-    } else {
-      targetRoots = [];
-    }
-
-    const uniqueRoots = Array.from(new Set(targetRoots.map((r) => path.resolve(r))));
-    const port = streamServer.getPort();
-    const animeFolders: AnimeFolder[] = [];
-    const visitedPaths = new Set<string>();
-
-    for (const targetRoot of uniqueRoots) {
-      if (!fs.existsSync(targetRoot)) {
-        continue;
-      }
-
-      try {
-        // Recursively find all media directories containing .mkv files up to 4 levels deep
-        const discoveredMediaDirs = findMediaFolders(targetRoot, 4);
-
-        const resolved = await asyncPool(3, discoveredMediaDirs, async (folderPath) => {
-          if (visitedPaths.has(folderPath)) return null;
-          visitedPaths.add(folderPath);
-
-          const episodes = await scanFolderForEpisodes(folderPath, port, targetRoot);
-          if (episodes.length === 0) return null;
-
-          const folderFiles = fs.readdirSync(folderPath);
-          const folderDl = isFolderDownloading(folderPath, folderFiles, episodes);
-          const hasDubtitlesCount = episodes.filter((e) => e.hasEmbeddedDubtitles).length;
-          const hasEmbSubCount = episodes.filter((e) => e.hasEmbeddedSubtitles).length;
-
-          const effectiveName = getEffectiveAnimeFolderName(folderPath, targetRoot);
-          // Bind folder metadata to an AniList entry that can hold every
-          // scanned file: rebroadcast/extended editions share their title
-          // with shorter originals (Haruhi 2006 14-ep vs the 2009 28-ep).
-          const maxEpisodeNumber = episodes.reduce((max, ep) => {
-            const n = parseInt(String(ep?.episodeNumber ?? ''), 10);
-            return Number.isFinite(n) && n > max ? n : max;
-          }, 0);
-          const kitsuData = await getKitsuMetadata(
-            effectiveName,
-            maxEpisodeNumber > 0 ? maxEpisodeNumber : episodes.length || null
-          );
-
-          return {
-            folderPath,
-            folderName: effectiveName,
-            episodes,
-            isDownloading: folderDl.isDownloading,
-            downloadProgress: folderDl.downloadProgress,
-            hasSubtitlesCount: episodes.filter((e) => e.hasExternalSrt).length,
-            hasWhisperCount: episodes.filter((e) => e.hasWhisperSrt).length,
-            hasExtSubCount: episodes.filter((e) => e.hasExternalSrt && !e.hasWhisperSrt).length,
-            hasDubtitlesCount,
-            hasEmbeddedDubtitles: hasDubtitlesCount > 0,
-            hasEmbeddedSubtitles: hasEmbSubCount > 0,
-            totalEpisodes: episodes.length,
-            posterUrl: kitsuData?.posterUrl || null,
-            bannerUrl: kitsuData?.bannerUrl || null,
-            canonicalTitle: kitsuData?.canonicalTitle || null,
-            anilistId: kitsuData?.anilistId ?? null,
-            synopsis: kitsuData?.synopsis || null,
-            genres: kitsuData?.genres || [],
-            averageScore: kitsuData?.averageScore || null,
-          } as AnimeFolder;
-        });
-
-        for (const item of resolved) {
-          if (item) animeFolders.push(item);
-        }
-      } catch (err) {
-        console.error(`Error scanning library at ${targetRoot}:`, err);
-      }
-    }
-
-    // Sort folders naturally so titles across different drives display cleanly
-    animeFolders.sort((a, b) =>
-      a.folderName.localeCompare(b.folderName, undefined, { sensitivity: 'base', numeric: true })
-    );
-
-    storage.saveLibraryCache(uniqueRoots, animeFolders);
-    return animeFolders;
+    return performLibraryScan(rootPath);
   });
 
   ipcMain.handle('get-folder-episodes', async (_event, folderPath) => {

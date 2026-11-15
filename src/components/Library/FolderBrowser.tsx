@@ -337,7 +337,7 @@ export const FolderBrowser: React.FC<FolderBrowserProps> = ({
       {(folders.length > 0 || libraryFolders.length > 0) && (
         <div className="space-y-4">
           {/* Header: collection title, stats chips, sort + live filter */}
-          <div className="flex flex-wrap items-end justify-between gap-5 rounded-2xl border border-white/[0.08] bg-white/[0.025] p-6 shadow-[0_20px_60px_rgba(0,0,0,0.18)] backdrop-blur-xl">
+          <div className="relative z-30 flex flex-wrap items-end justify-between gap-5 rounded-2xl border border-white/[0.08] bg-white/[0.025] p-6 shadow-[0_20px_60px_rgba(0,0,0,0.18)] backdrop-blur-xl">
             <div className="space-y-3">
               <div className="flex items-center space-x-3">
                 <h3 className="flex items-center space-x-2 text-2xl font-bold tracking-tight text-zinc-100">

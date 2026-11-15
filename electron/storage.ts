@@ -1,6 +1,5 @@
 import fs from 'fs';
 import path from 'path';
-import { execSync } from 'child_process';
 import { app } from 'electron';
 import { AnimeFolder, AppSettings, PlaybackProgress, SeasonPreference } from './types';
 import { registerMainServices } from './userDataBackup';
@@ -23,15 +22,28 @@ const exePathCache = new Map<string, { path: string | null; time: number }>();
 
 export function findExecutableInPath(exeName: string): string | null {
   const cached = exePathCache.get(exeName);
-  if (cached && Date.now() - cached.time < 60000) {
+  if (cached && Date.now() - cached.time < 300000) {
     return cached.path;
   }
   let result: string | null = null;
   try {
-    const out = execSync(`where.exe ${exeName}`, { encoding: 'utf-8', stdio: ['pipe', 'pipe', 'ignore'] });
-    const lines = out.split(/\r?\n/).map((l) => l.trim()).filter(Boolean);
-    if (lines.length > 0 && fs.existsSync(lines[0])) {
-      result = lines[0];
+    const pathEntries = (process.env.PATH || '').split(path.delimiter);
+    const hasExt = path.extname(exeName).length > 0;
+    for (const rawDir of pathEntries) {
+      const dir = rawDir.trim().replace(/^"+|"+$/g, '');
+      if (!dir) continue;
+      const candidate = path.join(dir, exeName);
+      if (fs.existsSync(candidate)) {
+        result = candidate;
+        break;
+      }
+      if (!hasExt) {
+        const exeCandidate = `${candidate}.exe`;
+        if (fs.existsSync(exeCandidate)) {
+          result = exeCandidate;
+          break;
+        }
+      }
     }
   } catch {}
   exePathCache.set(exeName, { path: result, time: Date.now() });

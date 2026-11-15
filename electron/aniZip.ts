@@ -23,7 +23,7 @@ import { runAniListQuery } from './anilist.ts';
 import { getFribbIndex, lookupFribbIds } from './fribb.ts';
 import { resolveSlotRow, findLateNumberedExtras } from './episodeSlots.ts';
 
-const ANI_ZIP_CACHE_NORMALIZER_VERSION = 3;
+const ANI_ZIP_CACHE_NORMALIZER_VERSION = 6;
 
 export interface RemoteEpisodeInfo {
   number: number;
@@ -45,6 +45,9 @@ export interface RemoteEpisodesResult {
    *  airing seasons; this powers the hero backdrop fallback. */
   bannerUrl: string | null;
   posterUrl: string | null;
+  /** Preferred transparent title logo (Metahub clearlogo) and optional TVDB clearlogo fallback. */
+  logoUrl: string | null;
+  fallbackLogoUrl: string | null;
 }
 
 const ANIZIP_ENDPOINT = 'https://api.ani.zip/mappings';
@@ -191,6 +194,18 @@ function readDiskCache(anilistId: number): { episodes: RemoteEpisodeInfo[]; fetc
       : null;
     const episodeCount = Number.isInteger(parsed.episodeCount) && parsed.episodeCount > 0 ? parsed.episodeCount : null;
     const nextAiringAt = typeof parsed.nextAiringAt === 'number' && parsed.nextAiringAt > 0 ? parsed.nextAiringAt : null;
+    const bannerUrl = typeof parsed.bannerUrl === 'string' && parsed.bannerUrl && !isLowResTvdbGraphicalBanner(parsed.bannerUrl)
+      ? parsed.bannerUrl
+      : null;
+    const posterUrl = typeof parsed.posterUrl === 'string' && parsed.posterUrl ? parsed.posterUrl : null;
+    const clearLogoUrl = isValidClearLogoUrl(parsed.clearLogoUrl) ? parsed.clearLogoUrl : null;
+    const imdbId = normalizeImdbId(parsed.imdbId);
+    if (bannerUrl || posterUrl || clearLogoUrl || imdbId) {
+      artworkMemoryCache.set(
+        anilistId,
+        mergeArtwork({ bannerUrl, posterUrl, clearLogoUrl, imdbId }, artworkMemoryCache.get(anilistId)),
+      );
+    }
     if (episodeCount) aniZipEpisodeCountCache.set(anilistId, episodeCount);
     return { episodes, fetchedAt: parsed.fetchedAt, kitsuId, episodeCount, normalizerVersion: Number.isInteger(parsed.normalizerVersion) ? parsed.normalizerVersion : 0, nextAiringAt };
   } catch {
@@ -202,20 +217,63 @@ function readDiskCache(anilistId: number): { episodes: RemoteEpisodeInfo[]; fetc
 interface AniZipArtwork {
   bannerUrl: string | null;
   posterUrl: string | null;
+  clearLogoUrl: string | null;
+  imdbId: string | null;
 }
 
 const artworkMemoryCache = new Map<number, AniZipArtwork>();
+const LOW_RES_TVDB_BANNER_RE = /\/banners\/(?:graphical\/|(?:v4\/)?series\/\d+\/banners\/)/i;
+const TVDB_ICON_PATH_RE = /\/icons\//i;
+const CLEARLOGO_EXT_RE = /\.(?:png|webp)(?:$|\?)/i;
 
-function normalizeArtwork(images: any): AniZipArtwork {
+function isLowResTvdbGraphicalBanner(url: unknown): boolean {
+  return typeof url === 'string' && LOW_RES_TVDB_BANNER_RE.test(url);
+}
+
+function isValidClearLogoUrl(url: unknown): url is string {
+  return (
+    typeof url === 'string' &&
+    url.length > 0 &&
+    !TVDB_ICON_PATH_RE.test(url) &&
+    (CLEARLOGO_EXT_RE.test(url) || /\/clearlogos?\//i.test(url))
+  );
+}
+
+function normalizeImdbId(raw: unknown): string | null {
+  const candidate = Array.isArray(raw) ? raw[0] : raw;
+  if (typeof candidate !== 'string') return null;
+  const trimmed = candidate.trim();
+  return /^tt\d+$/i.test(trimmed) ? trimmed.toLowerCase() : null;
+}
+
+function metahubLogoUrl(imdbId: string | null | undefined): string | null {
+  return imdbId && /^tt\d+$/i.test(imdbId)
+    ? `https://images.metahub.space/logo/medium/${imdbId.toLowerCase()}/img`
+    : null;
+}
+
+function normalizeArtwork(images: any, mappings?: any): AniZipArtwork {
   const list = Array.isArray(images) ? images : [];
-  const pick = (coverTypes: string[]): string | null => {
+  const pick = (coverTypes: string[], filter?: (url: string) => boolean): string | null => {
     for (const coverType of coverTypes) {
-      const hit = list.find((image: any) => image?.coverType === coverType && typeof image?.url === 'string' && image.url);
+      const hit = list.find(
+        (image: any) =>
+          image?.coverType === coverType
+          && typeof image?.url === 'string'
+          && image.url
+          && (!filter || filter(image.url)),
+      );
       if (hit) return hit.url as string;
     }
     return null;
   };
-  return { bannerUrl: pick(['Banner', 'Fanart']), posterUrl: pick(['Poster']) };
+  // Prefer clean Full HD 16:9 TVDB Fanart/Background over legacy 758x140 graphical banners.
+  return {
+    bannerUrl: pick(['Fanart', 'Background', 'Banner'], (url) => !isLowResTvdbGraphicalBanner(url)),
+    posterUrl: pick(['Poster']),
+    clearLogoUrl: pick(['Clearlogo', 'ClearLogo'], (url) => isValidClearLogoUrl(url)),
+    imdbId: normalizeImdbId(mappings?.imdb_id),
+  };
 }
 
 /** Artwork is monotonic: an empty or wrong-show payload must not erase a
@@ -224,6 +282,8 @@ function mergeArtwork(next: AniZipArtwork, prev: AniZipArtwork | undefined | nul
   return {
     bannerUrl: next.bannerUrl ?? prev?.bannerUrl ?? null,
     posterUrl: next.posterUrl ?? prev?.posterUrl ?? null,
+    clearLogoUrl: next.clearLogoUrl ?? prev?.clearLogoUrl ?? null,
+    imdbId: next.imdbId ?? prev?.imdbId ?? null,
   };
 }
 
@@ -279,27 +339,43 @@ function isAnthologyShortTitle(title: string | null | undefined): boolean {
 /** Marks how the last fetchAniZipMappings call for an id obtained its rows. */
 const serveSourceById = new Map<number, 'network' | 'cache'>();
 
+const KITSU_EPISODES_CACHE_VERSION = 2;
+
+interface KitsuEpisodesCacheEntry {
+  episodes: RemoteEpisodeInfo[];
+  fetchedAt: number;
+  episodeCount: number | null;
+}
+
 /** Kitsu fallback results — 20-per-page pagination means a long season costs
  *  up to 20 sequential requests; they must never repeat per view open. */
-const kitsuEpisodesMemoryCache = new Map<string, { episodes: RemoteEpisodeInfo[]; fetchedAt: number }>();
+const kitsuEpisodesMemoryCache = new Map<string, KitsuEpisodesCacheEntry>();
 
-function readKitsuEpisodesCache(kitsuId: string): { episodes: RemoteEpisodeInfo[]; fetchedAt: number } | null {
+function readKitsuEpisodesCache(kitsuId: string): KitsuEpisodesCacheEntry | null {
   try {
     const file = path.join(storage.getMetadataCacheDir(), `kitsu_eps_${kitsuId}.json`);
     if (!fs.existsSync(file)) return null;
     const parsed = JSON.parse(fs.readFileSync(file, 'utf-8'));
-    if (!parsed || !Array.isArray(parsed.episodes) || typeof parsed.fetchedAt !== 'number') return null;
-    return { episodes: parsed.episodes, fetchedAt: parsed.fetchedAt };
+    if (
+      !parsed ||
+      parsed.version !== KITSU_EPISODES_CACHE_VERSION ||
+      !Array.isArray(parsed.episodes) ||
+      typeof parsed.fetchedAt !== 'number'
+    ) {
+      return null;
+    }
+    const episodeCount = Number.isInteger(parsed.episodeCount) && parsed.episodeCount > 0 ? parsed.episodeCount : null;
+    return { episodes: parsed.episodes, fetchedAt: parsed.fetchedAt, episodeCount };
   } catch {
     return null;
   }
 }
 
-function writeKitsuEpisodesCache(kitsuId: string, episodes: RemoteEpisodeInfo[]): void {
+function writeKitsuEpisodesCache(kitsuId: string, episodes: RemoteEpisodeInfo[], episodeCount: number | null): void {
   try {
     fs.writeFileSync(
       path.join(storage.getMetadataCacheDir(), `kitsu_eps_${kitsuId}.json`),
-      JSON.stringify({ kitsuId, fetchedAt: Date.now(), episodes }, null, 2),
+      JSON.stringify({ version: KITSU_EPISODES_CACHE_VERSION, kitsuId, fetchedAt: Date.now(), episodeCount, episodes }, null, 2),
       'utf-8',
     );
   } catch {}
@@ -323,6 +399,9 @@ interface AiringContextSnapshot {
   schedule: { episode: number; airingAt: number }[];
   bannerUrl: string | null;
   posterUrl: string | null;
+  clearLogoUrl: string | null;
+  imdbId: string | null;
+  relatedAnimeIds: number[];
   /** Series titles + season for the Kitsu identity check — stable data, so a
    *  served-from-cache context can still validate a Kitsu mapping. */
   identityTitles: string[];
@@ -354,8 +433,15 @@ function readAiringContext(anilistId: number): (AiringContextSnapshot & { fetche
       airedThrough: typeof parsed.airedThrough === 'number' ? parsed.airedThrough : null,
       nextAiringAt: typeof parsed.nextAiringAt === 'number' && parsed.nextAiringAt > 0 ? parsed.nextAiringAt : null,
       seasonStartAt: typeof parsed.seasonStartAt === 'number' && parsed.seasonStartAt > 0 ? parsed.seasonStartAt : null,
-      bannerUrl: typeof parsed.bannerUrl === 'string' && parsed.bannerUrl ? parsed.bannerUrl : null,
+      bannerUrl: typeof parsed.bannerUrl === 'string' && parsed.bannerUrl && !isLowResTvdbGraphicalBanner(parsed.bannerUrl)
+        ? parsed.bannerUrl
+        : null,
       posterUrl: typeof parsed.posterUrl === 'string' && parsed.posterUrl ? parsed.posterUrl : null,
+      clearLogoUrl: isValidClearLogoUrl(parsed.clearLogoUrl) ? parsed.clearLogoUrl : null,
+      imdbId: normalizeImdbId(parsed.imdbId),
+      relatedAnimeIds: Array.isArray(parsed.relatedAnimeIds)
+        ? parsed.relatedAnimeIds.map(Number).filter((relId: number) => Number.isInteger(relId) && relId > 0)
+        : [],
       identityTitles: Array.isArray(parsed.identityTitles) ? parsed.identityTitles.filter((t: unknown): t is string => typeof t === 'string' && !!t) : [],
       identitySeason: Number.isInteger(parsed.identitySeason) ? Number(parsed.identitySeason) : null,
       identityEpisodeCount: Number.isInteger(parsed.identityEpisodeCount) && parsed.identityEpisodeCount > 0 ? Number(parsed.identityEpisodeCount) : null,
@@ -443,7 +529,8 @@ export async function fetchAniZipMappings(anilistId: number, options: { bypassCa
       const rawEpisodeCount = Number(json?.episodeCount);
       const episodeCount = Number.isInteger(rawEpisodeCount) && rawEpisodeCount > 0 ? rawEpisodeCount : null;
       aniZipEpisodeCountCache.set(id, episodeCount);
-      artworkMemoryCache.set(id, mergeArtwork(normalizeArtwork(json?.images), artworkMemoryCache.get(id)));
+      const mergedArtwork = mergeArtwork(normalizeArtwork(json?.images, json?.mappings), artworkMemoryCache.get(id));
+      artworkMemoryCache.set(id, mergedArtwork);
       const rawKitsuId = json?.mappings?.kitsu_id;
       const kitsuId = typeof rawKitsuId === 'string' || typeof rawKitsuId === 'number'
         ? String(rawKitsuId).trim()
@@ -455,7 +542,19 @@ export async function fetchAniZipMappings(anilistId: number, options: { bypassCa
       try {
         fs.writeFileSync(
           path.join(storage.getMetadataCacheDir(), `anizip_${id}.json`),
-          JSON.stringify({ anilistId: id, fetchedAt: Date.now(), normalizerVersion: ANI_ZIP_CACHE_NORMALIZER_VERSION, kitsuId: kitsuId || null, episodeCount, nextAiringAt: disk?.nextAiringAt ?? null, episodes }, null, 2),
+          JSON.stringify({
+            anilistId: id,
+            fetchedAt: Date.now(),
+            normalizerVersion: ANI_ZIP_CACHE_NORMALIZER_VERSION,
+            kitsuId: kitsuId || null,
+            episodeCount,
+            nextAiringAt: disk?.nextAiringAt ?? null,
+            bannerUrl: mergedArtwork.bannerUrl,
+            posterUrl: mergedArtwork.posterUrl,
+            clearLogoUrl: mergedArtwork.clearLogoUrl,
+            imdbId: mergedArtwork.imdbId,
+            episodes,
+          }, null, 2),
           'utf-8'
         );
       } catch {}
@@ -498,6 +597,7 @@ async function fetchKitsuEpisodes(
   kitsuId: string,
   identity: { titles: string[]; episodeCount: number | null; season: number | null },
   maxPages: number = 20,
+  anilistId?: number,
 ): Promise<RemoteEpisodeInfo[]> {
   // ani.zip's Kitsu crosswalk is not guaranteed to identify the same season.
   // Verify its title/count first so a short/spinoff series cannot be joined by
@@ -516,11 +616,26 @@ async function fetchKitsuEpisodes(
     return normalized && (title === normalized || (title.length >= 10 && normalized.length >= 10 && (title.includes(normalized) || normalized.includes(title))));
   }));
   const kitsuCount = Number(attrs?.episodeCount);
+  const validKitsuCount = Number.isInteger(kitsuCount) && kitsuCount > 0 ? kitsuCount : null;
   const kitsuSeason = explicitSeason([attrs?.canonicalTitle, attrs?.titles?.en, attrs?.titles?.en_jp].filter(Boolean).join(' '));
-  if (!matchingTitle || (identity.episodeCount && Number.isInteger(kitsuCount) && kitsuCount !== identity.episodeCount) ||
+  if (!matchingTitle || (identity.episodeCount != null && validKitsuCount != null && validKitsuCount !== identity.episodeCount) ||
       (identity.season != null && identity.season !== kitsuSeason)) {
     console.info(`[Episodes] Rejecting Kitsu mapping ${kitsuId}: series/season metadata does not match the AniList title.`);
     return [];
+  }
+
+  if (typeof anilistId === 'number' && Number.isFinite(anilistId)) {
+    const kitsuBanner = attrs?.coverImage?.original ?? attrs?.coverImage?.large ?? null;
+    const kitsuPoster = attrs?.posterImage?.large ?? attrs?.posterImage?.original ?? null;
+    if (kitsuBanner || kitsuPoster) {
+      const prevArtwork = artworkMemoryCache.get(anilistId);
+      artworkMemoryCache.set(anilistId, {
+        bannerUrl: prevArtwork?.bannerUrl ?? (typeof kitsuBanner === 'string' && kitsuBanner ? kitsuBanner : null),
+        posterUrl: prevArtwork?.posterUrl ?? (typeof kitsuPoster === 'string' && kitsuPoster ? kitsuPoster : null),
+        clearLogoUrl: prevArtwork?.clearLogoUrl ?? null,
+        imdbId: prevArtwork?.imdbId ?? null,
+      });
+    }
   }
 
   // Kitsu caps page[limit] at 20 (verified 2026-11: larger values return
@@ -573,6 +688,10 @@ async function fetchKitsuEpisodes(
   }
 
   const episodes = Array.from(byNumber.values()).sort((a, b) => a.number - b.number);
+  if (identity.episodeCount != null && validKitsuCount == null && episodes.length > 0 && episodes.length < identity.episodeCount && maxPages > 1) {
+    console.info(`[Episodes] Rejecting Kitsu mapping ${kitsuId}: returned ${episodes.length} episodes, expected ${identity.episodeCount}.`);
+    return [];
+  }
   console.info(`[Episodes] Kitsu ${kitsuId}: ${episodes.length} usable episodes (${episodes.filter((episode) => !!episode.title).length} English titles, ${episodes.filter((episode) => !!episode.thumbnailUrl).length} previews)`);
   return episodes;
 }
@@ -621,13 +740,13 @@ async function raceEpisodesPipeline(id: number, pipeline: Promise<RemoteEpisodes
     .finally(() => {
       inFlightEpisodesPipeline.delete(id);
     });
-  return { episodes: [], airedThrough: null, nextAiringAt: null, bannerUrl: null, posterUrl: null };
+  return { episodes: [], airedThrough: null, nextAiringAt: null, bannerUrl: null, posterUrl: null, logoUrl: null, fallbackLogoUrl: null };
 }
 
 export async function fetchRemoteEpisodes(anilistId: number): Promise<RemoteEpisodesResult> {
   const id = Math.trunc(Number(anilistId));
   if (!Number.isFinite(id) || id <= 0) {
-    return { episodes: [], airedThrough: null, nextAiringAt: null, bannerUrl: null, posterUrl: null };
+    return { episodes: [], airedThrough: null, nextAiringAt: null, bannerUrl: null, posterUrl: null, logoUrl: null, fallbackLogoUrl: null };
   }
   const existing = inFlightEpisodesPipeline.get(id);
   if (existing) return raceEpisodesPipeline(id, existing);
@@ -650,7 +769,7 @@ export function isAniZipCacheFresh(anilistId: number): boolean {
 async function runRemoteEpisodesPipeline(anilistId: number, notify: (payload: RemoteEpisodesResult) => void): Promise<RemoteEpisodesResult> {
   const id = Math.trunc(Number(anilistId));
   const aniZipCacheAtStart = memoryCache.get(id) ?? readDiskCache(id);
-  void getFribbIndex(); // self-heal the local ID index when the startup warm missed
+  const fribbPromise = getFribbIndex().catch(() => new Map()); // self-heal the local ID index when the startup warm missed
 
   // Stage 1 — start the ani.zip fetch immediately and race it against the
   // hedge timer. The FIRST usable snapshot is pushed to the UI even when it
@@ -692,17 +811,21 @@ async function runRemoteEpisodesPipeline(anilistId: number, notify: (payload: Re
     scheduleByNumber.set(node.episode, node.airingAt);
   }
   let identity: { titles: string[]; episodeCount: number | null; season: number | null } = { titles: [], episodeCount: null, season: null };
+  let relatedAnimeIds: number[] = cachedContext?.relatedAnimeIds || [];
   // Skip the live context query while the persisted one still stands: the
   // schedule and airing pointer are stable until the next airing event, and a
   // context query on every view open trips AniList's rate limit when browsing
   // (429 storms made every page crawl). Finished titles hold for the full TTL;
   // airing ones refresh exactly at the next airing slot (+ grace).
   const nowMs = Date.now();
-  const contextStands = !!cachedContext && cachedContext.streamEpisodes !== null && (
-    cachedContext.nextAiringAt != null
-      ? nowMs < cachedContext.nextAiringAt + AIRING_GRACE_MS
-      : nowMs - cachedContext.fetchedAt < CACHE_TTL_MS
-  );
+  const contextStands = !!cachedContext
+    && cachedContext.streamEpisodes !== null
+    && (cachedContext.identityEpisodeCount !== null || cachedContext.airedThrough !== null || cachedContext.nextAiringAt !== null)
+    && (
+      cachedContext.nextAiringAt != null
+        ? nowMs < cachedContext.nextAiringAt + AIRING_GRACE_MS
+        : nowMs - cachedContext.fetchedAt < CACHE_TTL_MS
+    );
   if (contextStands && cachedContext!.airedThrough != null) {
     airedThrough = cachedContext!.airedThrough;
   }
@@ -716,8 +839,9 @@ async function runRemoteEpisodesPipeline(anilistId: number, notify: (payload: Re
       title?: { english?: string | null; romaji?: string | null; native?: string | null } | null;
       synonyms?: string[] | null;
       streamingEpisodes?: { title?: string | null; thumbnail?: string | null }[] | null;
+      relations?: { edges?: { relationType?: string | null; node?: { id?: number | null; type?: string | null } | null }[] | null } | null;
     } | null;
-  }>(`query ($id: Int) { Media(id: $id, type: ANIME) { episodes status startDate { year month day } nextAiringEpisode { episode airingAt } airingSchedule(page: 1, perPage: 50) { nodes { episode airingAt } } title { english romaji native } synonyms streamingEpisodes { title thumbnail } } }`, { id });
+  }>(`query ($id: Int) { Media(id: $id, type: ANIME) { episodes status startDate { year month day } nextAiringEpisode { episode airingAt } airingSchedule(page: 1, perPage: 50) { nodes { episode airingAt } } title { english romaji native } synonyms streamingEpisodes { title thumbnail } relations { edges { relationType node { id type } } } } }`, { id });
   let contextFailed = false;
   if (!contextStands) {
     try {
@@ -752,6 +876,13 @@ async function runRemoteEpisodesPipeline(anilistId: number, notify: (payload: Re
       episodeCount: aniListCount,
       season: identityTitles.map(explicitSeason).find((season) => season != null) ?? null,
     };
+    const extractedRelated = (media?.relations?.edges || [])
+      .filter((edge) => edge?.node?.type === 'ANIME' && ['PREQUEL', 'PARENT', 'MAIN_STORY'].includes(String(edge?.relationType || '')))
+      .map((edge) => Number(edge?.node?.id))
+      .filter((relId) => Number.isInteger(relId) && relId > 0);
+    if (extractedRelated.length > 0 || media?.relations) {
+      relatedAnimeIds = Array.from(new Set(extractedRelated));
+    }
     for (const item of media?.streamingEpisodes || []) {
       // AniList often provides only "Episode 15" with a perfectly usable
       // thumbnail. Keep that image even without an episode-specific title.
@@ -798,6 +929,13 @@ async function runRemoteEpisodesPipeline(anilistId: number, notify: (payload: Re
     // leak into the grid as phantom slots.
     if (aniListCount == null && cachedContext?.identityEpisodeCount != null) {
       aniListCount = cachedContext.identityEpisodeCount;
+    }
+  }
+
+  if (identity.episodeCount == null) {
+    const inferredCount = aniListCount ?? (airedThrough == null && nextAiringAt == null && streamEpisodes.size > 0 ? streamEpisodes.size : null);
+    if (inferredCount != null) {
+      identity = { ...identity, episodeCount: inferredCount };
     }
   }
 
@@ -877,6 +1015,29 @@ async function runRemoteEpisodesPipeline(anilistId: number, notify: (payload: Re
     }
   };
 
+  const isAlternateCompatible = (rows: RemoteEpisodeInfo[], kitsuCount: number | null = null): boolean => {
+    if (rows.length === 0) return false;
+    const expectedCount = identity.episodeCount ?? aniListCount ?? (airedThrough == null && nextAiringAt == null && streamEpisodes.size > 0 ? streamEpisodes.size : null);
+    if (expectedCount != null && kitsuCount != null && kitsuCount !== expectedCount) return false;
+    // For a finished season, a shorter Kitsu list (e.g. Kitsu 3579's 14 S2-only
+    // episodes vs AniList 4382's 28 chronological episodes) is a different cut
+    // and must not overwrite slots 1..14.
+    if (airedThrough == null && nextAiringAt == null && expectedCount != null && rows.length < expectedCount && (streamEpisodes.size >= expectedCount || scopedAniZip.length >= expectedCount)) {
+      return false;
+    }
+    return true;
+  };
+
+  const isStreamRebroadcastMismatch = (usableAlternate: RemoteEpisodeInfo[]): boolean => {
+    if (aniListCount == null || streamEpisodes.size <= aniListCount) return false;
+    const refEp1 = scopedAniZip.find((e) => e.number === 1)?.title ?? usableAlternate.find((e) => e.number === 1)?.title ?? null;
+    const streamEp1 = streamEpisodes.get(1)?.title ?? null;
+    if (refEp1 && streamEp1 && normalizedSeriesTitle(refEp1) !== normalizedSeriesTitle(streamEp1)) {
+      return true;
+    }
+    return false;
+  };
+
   // Slot-based merge (Hayase-style): every slot 1..count renders; AniList
   // supplies the schedule spine and the planned count, ani.zip/Kitsu/streaming
   // enrich the slots. Rows resolve onto slots via resolveSlotRow — air dates
@@ -887,21 +1048,25 @@ async function runRemoteEpisodesPipeline(anilistId: number, notify: (payload: Re
     const aniZipCount = aniZipEpisodeCountCache.get(id) ?? null;
     const rowPool = [...scopedAniZip];
     const consumed = new Set<RemoteEpisodeInfo>();
+    const usableAlternate = isAlternateCompatible(alternateEpisodes) ? alternateEpisodes : [];
+    const usableStream = isStreamRebroadcastMismatch(usableAlternate)
+      ? new Map<number, { title: string | null; thumbnailUrl: string | null }>()
+      : streamEpisodes;
 
     const slotCount = Math.max(
       aniListCount ?? 0,
       aniZipCount ?? 0,
       scopedAniZip.length > 0 ? scopedAniZip[scopedAniZip.length - 1].number : 0,
       scheduleByNumber.size > 0 ? Math.max(...scheduleByNumber.keys()) : 0,
-      streamEpisodes.size > 0 ? Math.max(...streamEpisodes.keys()) : 0,
+      usableStream.size > 0 ? Math.max(...usableStream.keys()) : 0,
     );
     const mergedByNumber = new Map<number, RemoteEpisodeInfo>();
     let datedSlotMissingTitle = false;
     for (let number = 1; number <= slotCount; number += 1) {
       if (maxEpisode != null && number > maxEpisode) break;
       const row = resolveSlotRow(number, rowPool, consumed, scheduleByNumber);
-      const alternate = alternateEpisodes.find((episode) => episode.number === number);
-      const stream = streamEpisodes.get(number);
+      const alternate = usableAlternate.find((episode) => episode.number === number);
+      const stream = usableStream.get(number);
       const slotTime = scheduleByNumber.get(number);
       const slotIso = slotTime != null ? new Date(slotTime).toISOString() : null;
       const title = [row?.title, alternate?.title, stream?.title]
@@ -936,14 +1101,35 @@ async function runRemoteEpisodesPipeline(anilistId: number, notify: (payload: Re
 
     // Series artwork travels with the same payload as the rows — a wrong-show
     // crosswalk poisons both, so only trust it when the rows are not poisoned.
-    const artworkTrusted = scopedAniZip.length > 0 || droppedWrong === 0;
-    const liveArtwork = artworkTrusted ? artworkMemoryCache.get(id) ?? null : null;
+    const artwork = resolveArtworkAndLogo();
     return {
       episodes: sorted,
       airedThrough,
       nextAiringAt,
+      bannerUrl: artwork.bannerUrl,
+      posterUrl: artwork.posterUrl,
+      logoUrl: artwork.logoUrl,
+      fallbackLogoUrl: artwork.fallbackLogoUrl,
+    };
+  };
+
+  const resolveArtworkAndLogo = () => {
+    const artworkTrusted = scopedAniZip.length > 0 || droppedWrong === 0;
+    const liveArtwork = artworkTrusted ? artworkMemoryCache.get(id) ?? null : null;
+    const ownFribb = lookupFribbIds(id);
+    const relatedFribbImdb = relatedAnimeIds
+      .map((relId) => lookupFribbIds(relId)?.imdbId)
+      .find((candidate): candidate is string => !!candidate) ?? null;
+    const imdbId = liveArtwork?.imdbId ?? cachedContext?.imdbId ?? ownFribb?.imdbId ?? relatedFribbImdb ?? null;
+    const clearLogoUrl = liveArtwork?.clearLogoUrl ?? cachedContext?.clearLogoUrl ?? null;
+    const metahubUrl = metahubLogoUrl(imdbId);
+    return {
       bannerUrl: liveArtwork?.bannerUrl ?? cachedContext?.bannerUrl ?? null,
       posterUrl: liveArtwork?.posterUrl ?? cachedContext?.posterUrl ?? null,
+      imdbId,
+      clearLogoUrl,
+      logoUrl: metahubUrl ?? clearLogoUrl ?? null,
+      fallbackLogoUrl: metahubUrl && clearLogoUrl ? clearLogoUrl : null,
     };
   };
 
@@ -974,7 +1160,7 @@ async function runRemoteEpisodesPipeline(anilistId: number, notify: (payload: Re
     const hedgeKitsuId = hedgeKitsuIdRaw == null ? null : String(hedgeKitsuIdRaw);
     if (hedgeKitsuId) {
       try {
-        alternateEpisodes = (await fetchKitsuEpisodes(hedgeKitsuId, identity, 1)).filter(withinTitle);
+        alternateEpisodes = (await fetchKitsuEpisodes(hedgeKitsuId, identity, 1, id)).filter(withinTitle);
         pushBest();
       } catch (err: any) {
         console.warn(`[Episodes] Kitsu hedge page failed for AniList ${id}:`, err?.message || err);
@@ -1026,18 +1212,21 @@ async function runRemoteEpisodesPipeline(anilistId: number, notify: (payload: Re
   const kitsuId = kitsuIdRaw == null ? null : String(kitsuIdRaw);
   if (kitsuId && (scopedAniZip.length === 0 || droppedJunk > 0 || droppedWrong > 0 || lastBuiltDatedMissingTitle || scopedAniZip.some((episode) => !episode.title || !episode.thumbnailUrl))) {
     const cachedKitsu = kitsuEpisodesMemoryCache.get(kitsuId) ?? readKitsuEpisodesCache(kitsuId);
+    const cachedWithin = cachedKitsu ? cachedKitsu.episodes.filter(withinTitle) : [];
     if (cachedKitsu && kitsuCacheFresh(cachedKitsu.fetchedAt, cachedKitsu.episodes)) {
       kitsuEpisodesMemoryCache.set(kitsuId, cachedKitsu);
-      alternateEpisodes = cachedKitsu.episodes.filter(withinTitle);
-      pushBest();
+      if (isAlternateCompatible(cachedWithin, cachedKitsu.episodeCount)) {
+        alternateEpisodes = cachedWithin;
+        pushBest();
+      }
     } else {
       try {
-        const full = (await fetchKitsuEpisodes(kitsuId, identity)).filter(withinTitle);
-        if (full.length > 0) {
+        const full = (await fetchKitsuEpisodes(kitsuId, identity, 20, id)).filter(withinTitle);
+        if (full.length > 0 && isAlternateCompatible(full, identity.episodeCount)) {
           alternateEpisodes = full;
-          const kitsuCacheEntry = { episodes: full, fetchedAt: Date.now() };
+          const kitsuCacheEntry = { episodes: full, fetchedAt: Date.now(), episodeCount: identity.episodeCount };
           kitsuEpisodesMemoryCache.set(kitsuId, kitsuCacheEntry);
-          writeKitsuEpisodesCache(kitsuId, full);
+          writeKitsuEpisodesCache(kitsuId, full, identity.episodeCount);
           pushBest();
         }
       } catch (err: any) {
@@ -1046,6 +1235,8 @@ async function runRemoteEpisodesPipeline(anilistId: number, notify: (payload: Re
     }
   }
 
+  await fribbPromise;
+  const resolvedArtwork = resolveArtworkAndLogo();
   const final = buildCurrentPayload();
   if (final.episodes.length > 0) {
     // Preserve the age of an incomplete cache across opens; otherwise writing
@@ -1070,6 +1261,10 @@ async function runRemoteEpisodesPipeline(anilistId: number, notify: (payload: Re
           kitsuId: kitsuId ?? null,
           episodeCount: maxEpisode,
           nextAiringAt,
+          bannerUrl: final.bannerUrl ?? null,
+          posterUrl: final.posterUrl ?? null,
+          clearLogoUrl: resolvedArtwork.clearLogoUrl ?? null,
+          imdbId: resolvedArtwork.imdbId ?? null,
           episodes: final.episodes,
         }, null, 2),
         'utf-8',
@@ -1082,6 +1277,9 @@ async function runRemoteEpisodesPipeline(anilistId: number, notify: (payload: Re
     seasonStartAt,
     bannerUrl: final.bannerUrl,
     posterUrl: final.posterUrl,
+    clearLogoUrl: resolvedArtwork.clearLogoUrl,
+    imdbId: resolvedArtwork.imdbId,
+    relatedAnimeIds,
     identityTitles: identity.titles,
     identitySeason: identity.season,
     identityEpisodeCount: identity.episodeCount,
