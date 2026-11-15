@@ -1,4 +1,4 @@
-import React, { useState, useEffect, useMemo } from 'react';
+import React, { useState, useEffect, useMemo, useRef } from 'react';
 import { createPortal } from 'react-dom';
 import { Sparkles, Download, RefreshCw, X, ArrowUpCircle } from 'lucide-react';
 import { UpdateInfoPayload, UpdateProgressPayload, UpdaterState } from '../types';
@@ -30,6 +30,23 @@ export const UpdatePromptModal: React.FC<UpdatePromptModalProps> = ({
   const [displayPercent, setDisplayPercent] = useState<number>(0);
   const [error, setError] = useState<string | null>(null);
   const [asyncReleaseNotes, setAsyncReleaseNotes] = useState<string | null>(updateInfo.releaseNotes || null);
+  const lastPhaseRef = useRef<string | null>(null);
+  const lastTransferredRef = useRef<number>(0);
+
+  const applyProgress = (nextProgress: UpdateProgressPayload) => {
+    setProgress(nextProgress);
+    const phase = nextProgress.phase ?? null;
+    const transferred = nextProgress.transferred ?? 0;
+    const phaseChanged = phase !== lastPhaseRef.current;
+    const transferredReset = transferred < lastTransferredRef.current;
+    lastPhaseRef.current = phase;
+    lastTransferredRef.current = transferred;
+
+    if (typeof nextProgress.percent === 'number') {
+      const rounded = Math.round(nextProgress.percent);
+      setDisplayPercent((prev) => (phaseChanged || transferredReset ? rounded : Math.max(prev, rounded)));
+    }
+  };
 
   // The modal doubles as a plain "What's New" release-notes viewer for the current
   // version; when the offered version isn't newer there is nothing to update to.
@@ -76,56 +93,32 @@ export const UpdatePromptModal: React.FC<UpdatePromptModalProps> = ({
   };
 
   useEffect(() => {
-    if (progress?.percent !== undefined && progress.percent !== null) {
-      setDisplayPercent((prev) => Math.max(prev, Math.round(progress.percent)));
-    }
-  }, [progress]);
-
-  useEffect(() => {
     if (!isOpen) return;
     const api = window.electronAPI;
     if (!api) return;
 
-    if (typeof api.getUpdaterState === 'function') {
-      api.getUpdaterState().then((state) => {
-        if (!state) return;
-        if (state.status === 'downloading') {
-          setIsDownloading(true);
-          if (state.downloadProgress) {
-            setProgress(state.downloadProgress);
-            if (typeof state.downloadProgress.percent === 'number') {
-              setDisplayPercent(Math.round(state.downloadProgress.percent));
-            }
-          }
-        } else if (state.status === 'downloaded') {
-          setIsDownloading(false);
-          setIsDownloaded(true);
-        } else if (state.status === 'error') {
-          setIsDownloading(false);
-          setError(state.error || 'Failed to download update');
+    const applyUpdaterState = (state: UpdaterState | null | undefined) => {
+      if (!state) return;
+      if (state.status === 'downloading') {
+        setIsDownloading(true);
+        if (state.downloadProgress) {
+          applyProgress(state.downloadProgress);
         }
-      }).catch(() => {});
+      } else if (state.status === 'downloaded') {
+        setIsDownloading(false);
+        setIsDownloaded(true);
+      } else if (state.status === 'error') {
+        setIsDownloading(false);
+        setError(state.error || 'Failed to download update');
+      }
+    };
+
+    if (typeof api.getUpdaterState === 'function') {
+      api.getUpdaterState().then(applyUpdaterState).catch(() => {});
     }
 
     if (typeof api.onUpdaterStateChanged === 'function') {
-      const unsub = api.onUpdaterStateChanged((state: UpdaterState) => {
-        if (state.status === 'downloading') {
-          setIsDownloading(true);
-          if (state.downloadProgress) {
-            setProgress(state.downloadProgress);
-            if (typeof state.downloadProgress.percent === 'number') {
-              setDisplayPercent((prev) => Math.max(prev, Math.round(state.downloadProgress!.percent)));
-            }
-          }
-        } else if (state.status === 'downloaded') {
-          setIsDownloading(false);
-          setIsDownloaded(true);
-        } else if (state.status === 'error') {
-          setIsDownloading(false);
-          setError(state.error || 'Failed to download update');
-        }
-      });
-
+      const unsub = api.onUpdaterStateChanged(applyUpdaterState);
       return () => {
         unsub();
       };
@@ -182,6 +175,8 @@ export const UpdatePromptModal: React.FC<UpdatePromptModalProps> = ({
       }
     }
 
+    lastPhaseRef.current = null;
+    lastTransferredRef.current = 0;
     setDisplayPercent(0);
     setIsDownloading(true);
     setError(null);

@@ -7,7 +7,7 @@
 <p align="center"><strong>Your anime library, player, and subtitle studio — on your PC.</strong></p>
 
 <p align="center">
-  <img src="https://img.shields.io/badge/Version-3.0.0-ec4899?style=flat-square" alt="Version 3.0.0" />
+  <img src="https://img.shields.io/badge/Version-3.1.0-ec4899?style=flat-square" alt="Version 3.1.0" />
   <img src="https://img.shields.io/badge/Platform-Windows%2010%20%2F%2011-blue?style=flat-square" alt="Windows 10 and 11" />
   <img src="https://img.shields.io/badge/Electron-33-47848F?style=flat-square&logo=electron" alt="Electron 33" />
   <img src="https://img.shields.io/badge/License-MIT-green?style=flat-square" alt="MIT License" />
@@ -70,13 +70,13 @@ Kaiko organizes anime files already on your drives, fetches catalog metadata, an
 
 ## Features
 
-- **Home & catalog navigation:** hero resume banner with official series clearlogos, recent playback rail, weekly airing radar, and horizontal rails with full-strip hover arrows, click-and-drag scrolling with a magnetic wrap-around indicator at the edges, and `See all` links that open Discover in the selected category or genre.
+- **Home & catalog navigation:** hero resume banner with official series clearlogos and current-episode synopses, recent playback rail, weekly airing radar, and horizontal rails with full-strip hover arrows, click-and-drag and two-finger touchpad edge wrap-around with a magnetic progress indicator, and `See all` links that open Discover in the selected category or genre.
 - **Anime discovery & overview:** seasonal, trending, popular, and personalized ("For you") modes; filter by season/year, genre, format, airing status, minimum score, sort order, and age rating. Detailed series pages show clearlogos, synopsis, franchise relations, watchlist status/score controls, and episode lists with 16:9 stills and air dates.
 - **Airing schedule:** switch between a full 7-day board and single-day views, step across weeks (`Last week`, `This week`, `Today`, `Next week`) or jump to any date with the calendar picker, search titles directly inside the schedule, and filter by `Followed only`.
 - **Library & playback:** scan multiple local folders, track progress and watch status without full disk rescans on list edits, and play 10-bit HEVC/MKV files with bundled FFmpeg, styled ASS/SRT subtitles, chapter/intro skip support, and an episode/subtitle drawer.
 - **Downloads & storage management:** view library disk usage, free drive space, and active transfer speeds; manage P2P episode/season downloads from user-configured RSS/Torznab indexers; delete local series or episodes to free disk space while keeping watch history intact.
 - **Whisper Studio:** batch-generate synchronized English SRT subtitles locally with Faster-Whisper-XXL, automatic English audio track selection, dialogue tuning presets, AniList character name prompts, and 1-click in-app engine and model installation.
-- **Windows integration:** animated startup splash screen, native `Kaiko.exe` process identity in Windows Task Manager, differential auto-updates with in-app release notes, and desktop/Start Menu shortcuts.
+- **Windows integration:** animated startup splash screen, native `Kaiko.exe` process identity in Windows Task Manager, fast single-pass parallel auto-updates with in-app release notes, and desktop/Start Menu shortcuts.
 
 ## Torrent and indexer model
 
@@ -86,7 +86,7 @@ For a magnet link that contains no tracker address, the engine appends a small l
 
 ## Install the Windows app
 
-Download the `Kaiko-Setup-3.0.0.exe` installer from the project’s GitHub Releases page, run it, and choose an install folder. The installer creates Desktop and Start Menu shortcuts. Updates can also be installed directly from within the app via **Settings -> Application Updates** or the startup update prompt (with rendered GitHub release notes). During a normal uninstall, Kaiko asks separately whether to remove saved settings, anime lists, and watch history, and whether to clear the contents of configured media-library folders. Both choices default to **No**; deleting library contents requires a second confirmation listing the folders. Clearing a library folder removes every file inside it, not just Kaiko downloads, and leaves the folder itself in place. Silent uninstall and app upgrades preserve personal data.
+Download the `Kaiko-Setup-3.1.0.exe` installer from the project’s GitHub Releases page, run it, and choose an install folder. The installer creates Desktop and Start Menu shortcuts. Updates can also be installed directly from within the app via **Settings -> Application Updates** or the startup update prompt (with rendered GitHub release notes). During a normal uninstall, Kaiko asks separately whether to remove saved settings, anime lists, and watch history, and whether to clear the contents of configured media-library folders. Both choices default to **No**; deleting library contents requires a second confirmation listing the folders. Clearing a library folder removes every file inside it, not just Kaiko downloads, and leaves the folder itself in place. Silent uninstall and app upgrades preserve personal data.
 
 FFmpeg and a lightweight 7-Zip decompression engine (`7z.exe` + `7z.dll`) are bundled directly into Kaiko for playback, extraction, and automated setup on Windows 10 and Windows 11. The Faster-Whisper-XXL engine can be downloaded and configured in 1 click directly inside Kaiko (or auto-detected from Subtitle Edit / custom paths), along with AI models (`large-v3-turbo`, `medium`, and `small`).
 

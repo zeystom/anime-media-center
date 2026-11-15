@@ -138,6 +138,10 @@ export function initUpdater(mainWindowGetter: () => BrowserWindow | null): void 
 
   updater.autoDownload = false;
   updater.autoInstallOnAppQuit = false;
+  // Disable differential blockmap downloads: GitHub Releases single-range requests run
+  // sequentially with 1s pauses and frequently fail SHA-512 verification against solid NSIS
+  // installers, forcing a slow second full download.
+  (updater as any).disableDifferentialDownload = true;
 
   try {
     if (app && !app.isPackaged) {
@@ -283,6 +287,7 @@ export async function checkForUpdates(isStartup = false): Promise<UpdaterState> 
       if (app && !app.isPackaged) {
         updater.forceDevUpdateConfig = true;
       }
+      (updater as any).disableDifferentialDownload = true;
       updater.setFeedURL({
         provider: 'github',
         owner: GITHUB_OWNER,
@@ -307,10 +312,15 @@ export async function checkForUpdates(isStartup = false): Promise<UpdaterState> 
           notes = await fetchReleaseNotesForVersion(tag);
         }
 
+        const dlUrl = tag
+          ? `https://github.com/${GITHUB_OWNER}/${GITHUB_REPO}/releases/download/v${tag}/Kaiko-Setup-${tag}.exe`
+          : null;
         const payload: UpdateInfoPayload = {
           version: tag,
           releaseDate: info.releaseDate,
           releaseNotes: notes,
+          downloadUrl: dlUrl,
+          fileName: tag ? `Kaiko-Setup-${tag}.exe` : null,
         };
 
         if (tag && isNewerVersion(tag, cur)) {
@@ -403,14 +413,166 @@ export async function checkForUpdates(isStartup = false): Promise<UpdaterState> 
   return { ...updaterState };
 }
 
+const PARALLEL_DOWNLOAD_CONNECTIONS = 6;
+const PARALLEL_MIN_SIZE_BYTES = 4 * 1024 * 1024;
+
+function publishFullProgress(transferred: number, total: number, bytesPerSecond: number) {
+  phaseMaxTransferred = Math.max(phaseMaxTransferred, transferred);
+  lastProgressTotal = total;
+  const currentPercent = total > 0 ? Math.min(100, Math.max(1, Math.round((transferred / total) * 100))) : 0;
+  phaseMaxPercent = Math.max(phaseMaxPercent, currentPercent);
+  updaterState.downloadProgress = {
+    percent: phaseMaxPercent,
+    bytesPerSecond: Math.max(0, bytesPerSecond),
+    transferred,
+    total,
+    phase: 'full',
+  };
+  broadcastState();
+}
+
+async function tryParallelRangeDownload(
+  url: string,
+  targetPath: string,
+  userAgent: string,
+  expectedSize?: number | null
+): Promise<boolean> {
+  const fs = require('fs');
+  let probeResp: Response;
+  try {
+    probeResp = await fetch(url, {
+      headers: { 'User-Agent': userAgent, Range: 'bytes=0-0' },
+    });
+  } catch (err: any) {
+    console.warn('[Updater] Range probe failed, using single-stream download:', err?.message || err);
+    return false;
+  }
+
+  try {
+    await probeResp.body?.cancel();
+  } catch {}
+
+  if (probeResp.status !== 206) {
+    return false;
+  }
+
+  const contentRange = probeResp.headers.get('content-range') || '';
+  const match = contentRange.match(/\/(\d+)$/);
+  const rangeTotal = match ? parseInt(match[1], 10) : (expectedSize && expectedSize > 0 ? expectedSize : 0);
+  if (!Number.isFinite(rangeTotal) || rangeTotal < PARALLEL_MIN_SIZE_BYTES) {
+    return false;
+  }
+
+  const resolvedUrl = probeResp.url || url;
+  const partCount = PARALLEL_DOWNLOAD_CONNECTIONS;
+  const chunkSize = Math.ceil(rangeTotal / partCount);
+  const ranges: Array<{ start: number; end: number }> = [];
+  for (let i = 0; i < partCount; i++) {
+    const start = i * chunkSize;
+    if (start >= rangeTotal) break;
+    const end = Math.min(rangeTotal - 1, (i + 1) * chunkSize - 1);
+    ranges.push({ start, end });
+  }
+
+  resetProgressWindow(rangeTotal, 'full');
+  updaterState.downloadProgress = {
+    percent: 1,
+    bytesPerSecond: 0,
+    transferred: 0,
+    total: rangeTotal,
+    phase: 'full',
+  };
+  broadcastState();
+
+  const fileHandle = await fs.promises.open(targetPath, 'w');
+  const abortCtrl = new AbortController();
+  let transferred = 0;
+  let lastTime = Date.now();
+  let lastBytes = 0;
+
+  const downloadRange = async (start: number, end: number) => {
+    const segResp = await fetch(resolvedUrl, {
+      headers: { 'User-Agent': userAgent, Range: `bytes=${start}-${end}` },
+      signal: abortCtrl.signal,
+    });
+    if (segResp.status !== 206 || !segResp.body) {
+      throw new Error(`Segment HTTP ${segResp.status} for range ${start}-${end}`);
+    }
+
+    const reader = segResp.body.getReader();
+    const expectedLen = end - start + 1;
+    let writeOffset = start;
+    let segTransferred = 0;
+
+    while (true) {
+      const { done, value } = await reader.read();
+      if (done) break;
+      await fileHandle.write(value, 0, value.length, writeOffset);
+      writeOffset += value.length;
+      segTransferred += value.length;
+      transferred += value.length;
+
+      const now = Date.now();
+      if (now - lastTime >= 150) {
+        const elapsed = Math.max(1, now - lastTime);
+        const bps = Math.round(((transferred - lastBytes) / elapsed) * 1000);
+        lastTime = now;
+        lastBytes = transferred;
+        publishFullProgress(transferred, rangeTotal, bps);
+      }
+    }
+
+    if (segTransferred !== expectedLen) {
+      throw new Error(`Truncated segment ${start}-${end}: got ${segTransferred} of ${expectedLen} bytes`);
+    }
+  };
+
+  const workerPromises = ranges.map(({ start, end }) =>
+    downloadRange(start, end).catch((err) => {
+      abortCtrl.abort();
+      throw err;
+    })
+  );
+
+  try {
+    try {
+      await Promise.all(workerPromises);
+    } finally {
+      await Promise.allSettled(workerPromises);
+      await fileHandle.close().catch(() => {});
+    }
+
+    if (transferred !== rangeTotal) {
+      throw new Error(`Incomplete parallel download: got ${transferred} of ${rangeTotal} bytes`);
+    }
+
+    downloadedInstallerPath = targetPath;
+    updaterState.status = 'downloaded';
+    updaterState.downloadProgress = null;
+    updaterState.error = null;
+    broadcastState();
+    return true;
+  } catch (err: any) {
+    console.warn('[Updater] Parallel range download failed, falling back to single-stream:', err?.message || err);
+    try { fs.unlinkSync(targetPath); } catch {}
+    return false;
+  }
+}
+
 async function downloadDirectAsset(url: string, fileName?: string | null, expectedSize?: number | null): Promise<void> {
   const fs = require('fs');
   const path = require('path');
   const tempDir = (app && typeof app.getPath === 'function') ? app.getPath('temp') : process.cwd();
   const targetName = fileName || `Kaiko-Setup-${updaterState.updateInfo?.version || 'update'}.exe`;
   const targetPath = path.join(tempDir, targetName);
+  const userAgent = `Kaiko/${updaterState.currentVersion}`;
 
-  const resp = await fetch(url, { headers: { 'User-Agent': `Kaiko/${updaterState.currentVersion}` } });
+  const parallelDone = await tryParallelRangeDownload(url, targetPath, userAgent, expectedSize);
+  if (parallelDone) {
+    return;
+  }
+
+  const resp = await fetch(url, { headers: { 'User-Agent': userAgent } });
   if (!resp.ok) {
     throw new Error(`HTTP ${resp.status} while downloading installer`);
   }
@@ -419,19 +581,16 @@ async function downloadDirectAsset(url: string, fileName?: string | null, expect
   const total = (headerLen && headerLen > 0)
     ? headerLen
     : (expectedSize && expectedSize > 0 ? expectedSize : 0);
-  const fileStream = fs.createWriteStream(targetPath);
-
   if (!resp.body) {
     throw new Error('Response body is empty');
   }
 
+  const fileStream = fs.createWriteStream(targetPath);
   const reader = resp.body.getReader();
   let transferred = 0;
   let lastTime = Date.now();
   let lastBytes = 0;
 
-  // Fresh progress window for the full-installer phase (the differential phase may have
-  // run before us and left its maxima behind).
   resetProgressWindow(total, 'full');
 
   // Immediate initial progress tick so the UI progress bar wakes up at 1%
@@ -454,20 +613,11 @@ async function downloadDirectAsset(url: string, fileName?: string | null, expect
 
       const now = Date.now();
       if (now - lastTime >= 150) {
-        const bps = Math.round(((transferred - lastBytes) / (now - lastTime)) * 1000);
+        const elapsed = Math.max(1, now - lastTime);
+        const bps = Math.round(((transferred - lastBytes) / elapsed) * 1000);
         lastTime = now;
         lastBytes = transferred;
-        const currentPercent = total > 0 ? Math.min(100, Math.max(1, Math.round((transferred / total) * 100))) : 0;
-        phaseMaxPercent = Math.max(phaseMaxPercent, currentPercent);
-        lastProgressTotal = total;
-        updaterState.downloadProgress = {
-          percent: phaseMaxPercent,
-          bytesPerSecond: Math.max(0, bps),
-          transferred,
-          total,
-          phase: 'full',
-        };
-        broadcastState();
+        publishFullProgress(transferred, total, bps);
       }
     }
     await new Promise<void>((resolve, reject) => {
@@ -479,6 +629,10 @@ async function downloadDirectAsset(url: string, fileName?: string | null, expect
       fileStream.once('error', (err: any) => reject(err));
       fileStream.end();
     });
+
+    if (total > 0 && transferred !== total) {
+      throw new Error(`Incomplete installer download: got ${transferred} of ${total} bytes`);
+    }
 
     downloadedInstallerPath = targetPath;
     updaterState.status = 'downloaded';
@@ -509,31 +663,17 @@ export async function downloadUpdate(): Promise<{ success: boolean; error?: stri
     return { success: false, error: 'You are already running the latest version' };
   }
 
-  resetProgressWindow(updaterState.updateInfo?.fileSize || 0, 'delta');
+  resetProgressWindow(updaterState.updateInfo?.fileSize || 0, 'full');
 
   activeDownloadPromise = (async () => {
     try {
       updaterState.status = 'downloading';
-      // Initial tick: show the real installer size from the GitHub API when known instead
-      // of a hardcoded placeholder; the differential phase's own total replaces it.
       const initialTotal = updaterState.updateInfo?.fileSize || 0;
-      updaterState.downloadProgress = { percent: 1, bytesPerSecond: 0, transferred: 0, total: initialTotal, phase: 'delta' };
+      updaterState.downloadProgress = { percent: 1, bytesPerSecond: 0, transferred: 0, total: initialTotal, phase: 'full' };
       broadcastState();
 
-      // 1. In packaged app, try electron-updater differential download first (uses blockmap to download only changed delta)
-      const updater = getAutoUpdater();
-      if (updater && app && app.isPackaged) {
-        try {
-          console.log('[Updater] Attempting differential update via electron-updater...');
-          resetProgressWindow(0, 'delta');
-          await updater.downloadUpdate();
-          return { success: true };
-        } catch (diffErr: any) {
-          console.warn('[Updater] Differential download via autoUpdater failed, falling back to full installer:', diffErr?.message || diffErr);
-        }
-      }
-
-      // 2. Direct streaming asset download fallback (downloads full installer with live progress tracking)
+      // 1. Direct multi-connection download first (avoids slow sequential blockmap requests
+      // and double-download fallbacks in electron-updater).
       let dlUrl = updaterState.updateInfo?.downloadUrl;
       const targetVersion = updaterState.updateInfo?.version;
       if (!dlUrl && targetVersion) {
@@ -546,11 +686,25 @@ export async function downloadUpdate(): Promise<{ success: boolean; error?: stri
 
       if (dlUrl) {
         try {
-          console.log('[Updater] Downloading full installer asset with live progress tracking:', dlUrl);
+          console.log('[Updater] Downloading installer via direct multi-connection transfer:', dlUrl);
           await downloadDirectAsset(dlUrl, updaterState.updateInfo?.fileName, updaterState.updateInfo?.fileSize);
           return { success: true };
         } catch (directErr: any) {
-          console.warn('[Updater] Direct streaming download failed:', directErr?.message || directErr);
+          console.warn('[Updater] Direct download failed, falling back to electron-updater:', directErr?.message || directErr);
+        }
+      }
+
+      // 2. Fallback to electron-updater with differential blockmap disabled (single full pass)
+      const updater = getAutoUpdater();
+      if (updater && app && app.isPackaged) {
+        try {
+          (updater as any).disableDifferentialDownload = true;
+          console.log('[Updater] Attempting single-pass fallback via electron-updater...');
+          resetProgressWindow(initialTotal, 'full');
+          await updater.downloadUpdate();
+          return { success: true };
+        } catch (updaterErr: any) {
+          console.warn('[Updater] autoUpdater fallback failed:', updaterErr?.message || updaterErr);
         }
       }
 

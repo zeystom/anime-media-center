@@ -286,6 +286,7 @@ async function scanFolderForEpisodesUncached(folderPath: string, port: number, t
         thumbnailUrl: `http://127.0.0.1:${port}/thumb?file=${encodeURIComponent(fullPath)}&type=card${duration ? `&duration=${duration}` : ''}`,
         kitsuThumbnail: kitsuThumb,
         kitsuTitle: officialTitle,
+        kitsuSynopsis: kitsuEp?.synopsis || null,
         episodeTitle: officialTitle,
         isDownloading: dlStatus.isDownloading,
         downloadProgress: dlStatus.downloadProgress,

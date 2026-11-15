@@ -1,5 +1,16 @@
 # Changelog
 
+## 3.1.0 — Fast Multi-Connection Updater, Touchpad Magnetic Rail Scroll, Flush Card Badges & Episode Synopses
+
+### Auto-Updater & Progress UI
+- **Fast single-pass updater (`electron/updater.ts`):** disabled `electron-updater`'s sequential differential blockmap pass that triggered a slow second download from scratch on checksum mismatch, and upgraded `downloadDirectAsset` to stream installers directly over 6 parallel HTTP Range connections with automatic single-stream fallback.
+- **Reliable download progress (`UpdatePromptModal.tsx`):** reset `displayPercent` cleanly when a phase changes or transfer restarts so the percentage indicator never stalls at `100%`.
+
+### Home, Touchpad Gestures & Cards
+- **Touchpad two-finger magnetic wrap-around (`HorizontalScroller.tsx`, `App.tsx`):** two-finger horizontal trackpad swipes at either end of a Home rail now activate the magnetic overscroll indicator and smoothly wrap back to the beginning or end upon gesture release instead of handing off to back navigation.
+- **Episode synopsis in Continue Watching / Up Next (`UpNextWidget.tsx`, `aniZip.ts`, `main.ts`):** the Home resume banner now displays the current episode's synopsis (sourced from ani.zip / Kitsu) and falls back to the series overview when no episode summary is available.
+- **Flush bottom badge backdrop (`AnimeCard.tsx`):** anchored the dark gradient behind status and download badges directly to the bottom and side edges of poster cards.
+
 ## 3.0.0 — Schedule Overhaul, Unified Hero Banners, Whisper Loading State & Windows Identity
 
 ### Schedule & Discovery

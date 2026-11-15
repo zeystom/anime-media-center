@@ -18,6 +18,22 @@ const EMPTY_OVERSCROLL: OverscrollState = { side: null, progress: 0, pullPx: 0, 
 const PULL_THRESHOLD = 110
 const RING_RADIUS = 20
 const RING_CIRCUMFERENCE = 2 * Math.PI * RING_RADIUS
+const WHEEL_RELEASE_MS = 150
+const WHEEL_COOLDOWN_MS = 450
+
+function computeOverscrollState(side: 'left' | 'right', rawOverscroll: number, deadzone: number): OverscrollState {
+  const effectivePull = Math.max(0, rawOverscroll - deadzone)
+  const progress = Math.min(1, effectivePull / PULL_THRESHOLD)
+  const pullPx = effectivePull > 0 ? Math.min(44, Math.pow(effectivePull, 0.72) * 1.45) : 0
+  const railShiftPx = effectivePull > 0 ? Math.min(18, Math.pow(effectivePull, 0.65) * 0.75) : 0
+  return { side, progress, pullPx, railShiftPx }
+}
+
+function wrapScrollToEdge(element: HTMLDivElement, side: 'left' | 'right') {
+  const maxScroll = element.scrollWidth - element.clientWidth
+  if (maxScroll <= 2) return
+  element.scrollTo({ left: side === 'right' ? 0 : maxScroll, behavior: 'smooth' })
+}
 
 export const HorizontalScroller: React.FC<HorizontalScrollerProps> = ({ children, className = '', label = 'Scrollable items' }) => {
   const scrollRef = useRef<HTMLDivElement>(null)
@@ -26,8 +42,15 @@ export const HorizontalScroller: React.FC<HorizontalScrollerProps> = ({ children
   const suppressClickRef = useRef(false)
   const pointerInsideRef = useRef(false)
   const edgeUpdateFrameRef = useRef<number | null>(null)
+  const wheelPullRef = useRef(0)
+  const wheelSideRef = useRef<'left' | 'right' | null>(null)
+  const wheelStartedAtEdgeRef = useRef(false)
+  const wheelActiveRef = useRef(false)
+  const wheelReleaseTimerRef = useRef<number | null>(null)
+  const wheelCooldownUntilRef = useRef(0)
   const [edges, setEdges] = useState({ left: false, right: false })
   const [dragging, setDragging] = useState(false)
+  const [wheelPulling, setWheelPulling] = useState(false)
   const [overscroll, setOverscroll] = useState<OverscrollState>(EMPTY_OVERSCROLL)
 
   const updateOverscroll = useCallback((next: OverscrollState) => {
@@ -111,12 +134,7 @@ export const HorizontalScroller: React.FC<HorizontalScrollerProps> = ({ children
             const side: 'left' | 'right' = targetScroll > maxScroll ? 'right' : 'left'
             const rawOverscroll = side === 'right' ? targetScroll - maxScroll : -targetScroll
             const startedAtEdge = side === 'right' ? drag.startScroll >= maxScroll - 8 : drag.startScroll <= 8
-            const deadzone = startedAtEdge ? 10 : 32
-            const effectivePull = Math.max(0, rawOverscroll - deadzone)
-            const progress = Math.min(1, effectivePull / PULL_THRESHOLD)
-            const pullPx = effectivePull > 0 ? Math.min(44, Math.pow(effectivePull, 0.72) * 1.45) : 0
-            const railShiftPx = effectivePull > 0 ? Math.min(18, Math.pow(effectivePull, 0.65) * 0.75) : 0
-            updateOverscroll({ side, progress, pullPx, railShiftPx })
+            updateOverscroll(computeOverscrollState(side, rawOverscroll, startedAtEdge ? 10 : 32))
           } else {
             updateOverscroll(EMPTY_OVERSCROLL)
           }
@@ -134,15 +152,8 @@ export const HorizontalScroller: React.FC<HorizontalScrollerProps> = ({ children
         const currentOverscroll = overscrollRef.current
         updateOverscroll(EMPTY_OVERSCROLL)
 
-        if (event.type === 'pointerup' && currentOverscroll.progress >= 1 && element) {
-          const maxScroll = element.scrollWidth - element.clientWidth
-          if (maxScroll > 2) {
-            if (currentOverscroll.side === 'right') {
-              element.scrollTo({ left: 0, behavior: 'smooth' })
-            } else if (currentOverscroll.side === 'left') {
-              element.scrollTo({ left: maxScroll, behavior: 'smooth' })
-            }
-          }
+        if (event.type === 'pointerup' && currentOverscroll.progress >= 1 && currentOverscroll.side && element) {
+          wrapScrollToEdge(element, currentOverscroll.side)
         }
 
         if (drag.moved) {
@@ -163,6 +174,93 @@ export const HorizontalScroller: React.FC<HorizontalScrollerProps> = ({ children
       window.removeEventListener('pointerup', endDrag)
       window.removeEventListener('pointercancel', endDrag)
       if (edgeUpdateFrameRef.current != null) window.cancelAnimationFrame(edgeUpdateFrameRef.current)
+    }
+  }, [scheduleEdgeUpdate, updateOverscroll])
+
+  useEffect(() => {
+    const element = scrollRef.current
+    if (!element) return
+
+    const finishWheelGesture = () => {
+      wheelReleaseTimerRef.current = null
+      const currentOverscroll = overscrollRef.current
+      wheelPullRef.current = 0
+      wheelSideRef.current = null
+      wheelActiveRef.current = false
+      setWheelPulling(false)
+      updateOverscroll(EMPTY_OVERSCROLL)
+
+      if (currentOverscroll.progress >= 1 && currentOverscroll.side) {
+        wheelCooldownUntilRef.current = Date.now() + WHEEL_COOLDOWN_MS
+        wrapScrollToEdge(element, currentOverscroll.side)
+      }
+      scheduleEdgeUpdate()
+    }
+
+    const onWheel = (event: WheelEvent) => {
+      if (dragRef.current) return
+      const scale = event.deltaMode === 1 ? 16 : 1
+      const rawDx = (event.deltaX * scale) || (event.shiftKey ? event.deltaY * scale : 0)
+      const effectiveDy = event.shiftKey && event.deltaX === 0 ? 0 : event.deltaY * scale
+      if (Math.abs(rawDx) < 0.5 || Math.abs(rawDx) <= Math.abs(effectiveDy)) return
+
+      if (Date.now() < wheelCooldownUntilRef.current) {
+        event.preventDefault()
+        return
+      }
+
+      const maxScroll = element.scrollWidth - element.clientWidth
+      if (maxScroll <= 2) return
+
+      if (!wheelActiveRef.current) {
+        wheelActiveRef.current = true
+        wheelStartedAtEdgeRef.current =
+          (rawDx > 0 && element.scrollLeft >= maxScroll - 2) ||
+          (rawDx < 0 && element.scrollLeft <= 2)
+      }
+
+      const activeSide = wheelSideRef.current
+      const deadzone = wheelStartedAtEdgeRef.current ? 8 : 30
+
+      if (activeSide !== null && wheelPullRef.current > 0 && ((activeSide === 'right' && rawDx < 0) || (activeSide === 'left' && rawDx > 0))) {
+        event.preventDefault()
+        wheelPullRef.current = Math.max(0, wheelPullRef.current - Math.abs(rawDx) * 1.15)
+        if (wheelPullRef.current > 0) {
+          updateOverscroll(computeOverscrollState(activeSide, wheelPullRef.current, deadzone))
+        } else {
+          wheelSideRef.current = null
+          setWheelPulling(false)
+          updateOverscroll(EMPTY_OVERSCROLL)
+        }
+      } else {
+        const atRightEdge = element.scrollLeft >= maxScroll - 2 && rawDx > 0
+        const atLeftEdge = element.scrollLeft <= 2 && rawDx < 0
+        if (atRightEdge || atLeftEdge) {
+          event.preventDefault()
+          const side: 'left' | 'right' = atRightEdge ? 'right' : 'left'
+          if (wheelSideRef.current !== side) {
+            wheelSideRef.current = side
+            wheelPullRef.current = 0
+          }
+          wheelPullRef.current += Math.min(48, Math.abs(rawDx) * 1.15)
+          setWheelPulling(true)
+          updateOverscroll(computeOverscrollState(side, wheelPullRef.current, deadzone))
+        }
+      }
+
+      if (wheelReleaseTimerRef.current == null || overscrollRef.current.progress < 1 || Math.abs(rawDx) >= 4) {
+        if (wheelReleaseTimerRef.current != null) window.clearTimeout(wheelReleaseTimerRef.current)
+        wheelReleaseTimerRef.current = window.setTimeout(finishWheelGesture, WHEEL_RELEASE_MS)
+      }
+    }
+
+    element.addEventListener('wheel', onWheel, { passive: false })
+    return () => {
+      element.removeEventListener('wheel', onWheel)
+      if (wheelReleaseTimerRef.current != null) {
+        window.clearTimeout(wheelReleaseTimerRef.current)
+        wheelReleaseTimerRef.current = null
+      }
     }
   }, [scheduleEdgeUpdate, updateOverscroll])
 
@@ -204,7 +302,7 @@ export const HorizontalScroller: React.FC<HorizontalScrollerProps> = ({ children
         onScroll={scheduleEdgeUpdate}
         style={{
           transform: overscroll.railShiftPx > 0 ? `translate3d(${isRightOverscroll ? -overscroll.railShiftPx : overscroll.railShiftPx}px, 0, 0)` : undefined,
-          transition: dragging ? 'none' : 'transform 220ms cubic-bezier(0.22, 1, 0.36, 1)',
+          transition: dragging || wheelPulling ? 'none' : 'transform 220ms cubic-bezier(0.22, 1, 0.36, 1)',
         }}
         className={`horizontal-rail ${className} ${dragging ? 'cursor-grabbing select-none' : 'cursor-grab'} scrollbar-none touch-pan-x`}
       >

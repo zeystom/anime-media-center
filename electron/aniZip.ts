@@ -23,14 +23,25 @@ import { runAniListQuery } from './anilist.ts';
 import { getFribbIndex, lookupFribbIds } from './fribb.ts';
 import { resolveSlotRow, findLateNumberedExtras } from './episodeSlots.ts';
 
-const ANI_ZIP_CACHE_NORMALIZER_VERSION = 6;
+const ANI_ZIP_CACHE_NORMALIZER_VERSION = 7;
 
 export interface RemoteEpisodeInfo {
   number: number;
   title: string | null;
+  synopsis?: string | null;
   thumbnailUrl: string | null;
   airDate: string | null;
   runtime: number | null;
+}
+
+function cleanEpisodeSynopsis(raw: unknown): string | null {
+  if (typeof raw !== 'string') return null;
+  const cleaned = raw
+    .replace(/<[^>]*>/g, ' ')
+    .replace(/\s*\(Source:[^)]+\)\s*$/i, '')
+    .replace(/\s+/g, ' ')
+    .trim();
+  return cleaned || null;
 }
 
 /** Episode list plus the airing context the detail page renders it against. */
@@ -160,10 +171,12 @@ export function normalizeAniZipEpisodes(payload: any): RemoteEpisodeInfo[] {
 
     const runtimeRaw = ep.runtime ?? ep.length;
     const runtime = Number(runtimeRaw);
+    const synopsis = cleanEpisodeSynopsis(ep.overview ?? ep.summary ?? ep.description ?? ep.synopsis);
 
     byNumber.set(number, {
       number,
       title: pickEpisodeTitle(ep),
+      ...(synopsis ? { synopsis } : {}),
       thumbnailUrl: typeof ep.image === 'string' && ep.image ? ep.image : null,
       // Prefer the precise UTC timestamp: a date-only airDate parses as UTC
       // midnight and skews relative "aired X ago" labels by up to a day.
@@ -674,9 +687,11 @@ async function fetchKitsuEpisodes(
       // aired rows (or entries that already have real metadata), not blanks.
       if (!aired && !title && !thumbnailUrl) continue;
       const runtime = Number(attrs.length);
+      const synopsis = cleanEpisodeSynopsis(attrs.synopsis ?? attrs.description);
       byNumber.set(number, {
         number,
         title,
+        ...(synopsis ? { synopsis } : {}),
         thumbnailUrl,
         airDate,
         runtime: Number.isFinite(runtime) && runtime > 0 ? runtime : null,
@@ -1077,9 +1092,11 @@ async function runRemoteEpisodesPipeline(anilistId: number, notify: (payload: Re
       // usually shorts the platform interleaved into the season listing.
       if (!row && !alternate && stream && JUNK_TITLE_RE.test(title || '')) continue;
       if (slotIso && !title) datedSlotMissingTitle = true;
+      const synopsis = cleanEpisodeSynopsis(row?.synopsis) || cleanEpisodeSynopsis(alternate?.synopsis);
       mergedByNumber.set(number, {
         number,
         title,
+        ...(synopsis ? { synopsis } : {}),
         thumbnailUrl: row?.thumbnailUrl || alternate?.thumbnailUrl || stream?.thumbnailUrl || null,
         airDate: row?.airDate || alternate?.airDate || slotIso,
         runtime: row?.runtime || alternate?.runtime || null,

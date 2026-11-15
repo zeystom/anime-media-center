@@ -1377,6 +1377,10 @@ export const App: React.FC = () => {
         const style = window.getComputedStyle(el);
         const scrollableX = style.overflowX === 'auto' || style.overflowX === 'scroll' || style.overflowX === 'overlay';
         if (scrollableX && el.scrollWidth > el.clientWidth + 1) {
+          // Horizontal rails handle their own edge overscroll & wrap-around on touchpad swipes.
+          if (el.classList.contains('horizontal-rail') && el.scrollWidth > el.clientWidth + 2) {
+            return true;
+          }
           const atStart = el.scrollLeft <= 0;
           const atEnd = el.scrollLeft >= el.scrollWidth - el.clientWidth - 1;
           if (!(direction < 0 ? atEnd : atStart)) return true;

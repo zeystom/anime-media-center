@@ -54,12 +54,14 @@ export const UpNextWidget: React.FC<UpNextWidgetProps> = ({ data, onPlay, onOpen
     return (hash >>> 0) % 360;
   }, [anilistId, seasonName]);
   const [apiEpisodeTitle, setApiEpisodeTitle] = useState<string | null>(null);
+  const [apiEpisodeSynopsis, setApiEpisodeSynopsis] = useState<string | null>(null);
   const [apiLogoUrls, setApiLogoUrls] = useState<string[]>([]);
   const [logoIdx, setLogoIdx] = useState(0);
   const [logoLoaded, setLogoLoaded] = useState(false);
 
   useEffect(() => {
     setApiEpisodeTitle(null);
+    setApiEpisodeSynopsis(null);
     setApiLogoUrls([]);
     setLogoIdx(0);
     setLogoLoaded(false);
@@ -72,6 +74,7 @@ export const UpNextWidget: React.FC<UpNextWidgetProps> = ({ data, onPlay, onOpen
       if (cancelled || !result) return;
       const match = (result.episodes ?? []).find((item) => item.number === parsedNumber);
       if (match?.title) setApiEpisodeTitle(match.title);
+      if (match?.synopsis) setApiEpisodeSynopsis(match.synopsis);
       const nextLogos = Array.from(
         new Set(
           [result.logoUrl, result.fallbackLogoUrl].filter(
@@ -102,13 +105,27 @@ export const UpNextWidget: React.FC<UpNextWidgetProps> = ({ data, onPlay, onOpen
     };
   }, [anilistId, episode.fileName]);
 
-  // Anime description for the banner (AniList, cached 24 h on the main side).
+  // Episode synopsis takes priority over the series overview when available,
+  // falling back to the AniList anime description (cached 24 h on main).
   // The Show more/less marker lives OUTSIDE the clamped paragraph — an inline
   // "…more" span sits past the clamp cut and would never be visible.
-  const [description, setDescription] = useState<string | null>(null);
+  const [animeDescription, setAnimeDescription] = useState<string | null>(null);
   const descriptionRef = useRef<HTMLParagraphElement | null>(null);
   const [descriptionClamped, setDescriptionClamped] = useState(false);
   const [descriptionReaderOpen, setDescriptionReaderOpen] = useState(false);
+
+  const description = useMemo(() => {
+    const epRaw = apiEpisodeSynopsis || episode.kitsuSynopsis || null;
+    if (epRaw) {
+      const cleaned = epRaw
+        .replace(/<[^>]*>/g, ' ')
+        .replace(/\s*\(Source:[^)]+\)\s*$/i, '')
+        .replace(/\s+/g, ' ')
+        .trim();
+      if (cleaned) return cleaned;
+    }
+    return animeDescription;
+  }, [apiEpisodeSynopsis, episode.kitsuSynopsis, animeDescription]);
 
   // Full-description reader modal (mirrors the anime overview reader) — the
   // banner no longer reflows to fit the whole text.
@@ -125,7 +142,7 @@ export const UpNextWidget: React.FC<UpNextWidgetProps> = ({ data, onPlay, onOpen
   }, [descriptionReaderOpen]);
 
   useEffect(() => {
-    setDescription(null);
+    setAnimeDescription(null);
     setDescriptionReaderOpen(false);
     if (!anilistId || !window.electronAPI?.getCatalogDetails) return;
     let cancelled = false;
@@ -136,7 +153,7 @@ export const UpNextWidget: React.FC<UpNextWidgetProps> = ({ data, onPlay, onOpen
           .replace(/<[^>]*>/g, ' ')
           .replace(/\s+/g, ' ')
           .trim();
-        if (text) setDescription(text);
+        if (text) setAnimeDescription(text);
       })
       .catch(() => {});
     return () => { cancelled = true; };

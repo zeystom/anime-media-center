@@ -38,29 +38,25 @@ if (!token) {
   process.exit(1);
 }
 
-const RELEASE_BODY = `## Kaiko ${VERSION} — Schedule Overhaul, Unified Hero Banners, Whisper Loading State & Windows Identity
+const RELEASE_BODY = `## Kaiko ${VERSION} — Fast Multi-Connection Updater, Touchpad Magnetic Scroll & Episode Synopses
 
-### Schedule & Navigation
-- **Airing schedule overhaul:** full 7-day board and single-day views, week steppers (\`Last week\`, \`This week\`, \`Today\`, \`Next week\`), a calendar date picker, instant schedule search, and a \`Followed only\` filter.
-- **Home rails & Discover integration:** rail arrows now appear across the entire strip on hover; dragging past either end shows a magnetic ring indicator that wraps around on release; \`See all\` links open Discover in the matching category or genre.
+### Auto-Updater & Download Speed
+- **Fast single-pass installer download:** eliminated the slow sequential blockmap pass that could fall back to a second full download, and enabled 6-connection parallel HTTP Range transfers with automatic single-stream fallback.
+- **Accurate progress bar:** fixed the update modal percentage display so it never remains stuck at \`100%\` if a transfer resets.
 
-### Interface, Player & Library
-- **Unified hero banners & Navbar layout:** added official series clearlogos on Home and detail pages, unified headers across Discover, Library, Schedule, and Downloads, and fixed Navbar resize behavior.
-- **Downloads & storage view:** updated storage usage overview alongside P2P transfer status and downloaded title cleanup.
-- **Episode metadata & library performance:** improved Kitsu/AniList/ani.zip episode metadata and preview matching, refined the video player drawer and timeline scrubber, and stopped triggering full disk rescans when updating watchlist status or scores.
+### Home, Touchpad & Cards
+- **Two-finger touchpad magnetic wrap-around:** horizontal touchpad scrolling past the start or end of a Home rail now drives the same magnetic progress circle as mouse dragging and wraps smoothly on release.
+- **Episode synopses on the Home banner:** the Continue Watching / Up Next hero now displays the episode's own synopsis (from ani.zip / Kitsu) and falls back to the anime description when unavailable.
+- **Flush badge backdrop on poster cards:** aligned the bottom gradient behind local status and download pills flush against the poster edges across Discover and Home.
 
-### Whisper Studio
-- **Loading state when switching anime:** switching to a different series now clears the previous anime's episodes immediately and displays a scanning indicator and skeleton cards while loading.
-
-### Startup & Windows Integration
-- **Clean startup splash:** updated startup screen and eliminated the brief centered black rectangle flash on launch.
-- **Native Task Manager identity:** branded the launcher and Electron runtime so Windows Task Manager shows **Kaiko** (\`Kaiko.exe\`) instead of **Electron**.
+### Included from 3.0.0
+- Schedule 7-day board overhaul with week controls, date picker, search, and \`Followed only\` filter; Whisper Studio episode loading skeletons; clearlogos; native \`Kaiko.exe\` Windows Task Manager identity; clean launch splash.
 
 ---
 ### Assets included
 - \`Kaiko-Setup-${VERSION}.exe\` — Windows NSIS installer
-- \`Kaiko-Setup-${VERSION}.exe.blockmap\` — Differential update blockmap
-- \`latest.yml\` — Auto-update metadata for electron-updater
+- \`Kaiko-Setup-${VERSION}.exe.blockmap\` — Blockmap metadata
+- \`latest.yml\` — Auto-update metadata for Kaiko
 `;
 
 const ASSETS = [

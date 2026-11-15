@@ -13,6 +13,7 @@
 export interface SlotEpisodeRow {
   number: number;
   title?: string | null;
+  synopsis?: string | null;
   thumbnailUrl?: string | null;
   airDate?: string | null;
   runtime?: number | null;

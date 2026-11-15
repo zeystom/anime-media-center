@@ -155,7 +155,7 @@ const AnimeCardImpl: React.FC<AnimeCardProps> = ({ item, badgeState = null, show
         )}
 
         {hasBadges && (
-          <div className="absolute bottom-1 left-1 right-1 rounded-lg bg-gradient-to-t from-black/80 via-black/40 to-transparent px-1 pb-0.5 pt-4">
+          <div className="pointer-events-none absolute inset-x-0 bottom-0 bg-gradient-to-t from-black/90 via-black/55 to-transparent px-2 pb-2 pt-6">
             <StatusBadges state={badgeState} size="sm" />
           </div>
         )}

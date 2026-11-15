@@ -85,6 +85,7 @@ export interface Episode {
   thumbnailUrl?: string;
   kitsuThumbnail?: string | null;
   kitsuTitle?: string | null;
+  kitsuSynopsis?: string | null;
   episodeTitle?: string | null;
   isDownloading?: boolean;
   downloadProgress?: number;
