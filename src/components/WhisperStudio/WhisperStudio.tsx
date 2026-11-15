@@ -191,6 +191,10 @@ const WhisperStudioImpl: React.FC<WhisperStudioProps> = ({
     return () => window.removeEventListener('keydown', handleKeyDown, true);
   }, [showAnimePicker]);
   const [episodes, setEpisodes] = useState<Episode[]>(initialFolder?.episodes || []);
+  const [loadingEpisodes, setLoadingEpisodes] = useState<boolean>(false);
+  const loadedFolderRef = useRef<string>(
+    initialFolder?.episodes?.length ? (initialFolder?.folderPath || '') : ''
+  );
   const [sampleAudioTracks, setSampleAudioTracks] = useState<AudioTrack[]>([]);
   const [selectedAudioTrackNum, setSelectedAudioTrackNum] = useState<number>(1);
   const [isAudioTracksExpanded, setIsAudioTracksExpanded] = useState<boolean>(false);
@@ -340,6 +344,14 @@ const WhisperStudioImpl: React.FC<WhisperStudioProps> = ({
   // Synchronize initialFolder when user opens Whisper from library (unless job is running)
   useEffect(() => {
     if (initialFolder?.folderPath && !isProcessing) {
+      const nextNorm = initialFolder.folderPath.replace(/[/\\]+$/, '').toLowerCase();
+      const prevNorm = selectedFolderRef.current.replace(/[/\\]+$/, '').toLowerCase();
+      if (nextNorm !== prevNorm) {
+        setLoadingEpisodes(true);
+        setEpisodes([]);
+        setSelectedEpisodePaths(new Set());
+        setSampleAudioTracks([]);
+      }
       setSelectedFolder(initialFolder.folderPath);
     }
   }, [initialFolder, isProcessing]);
@@ -379,12 +391,23 @@ const WhisperStudioImpl: React.FC<WhisperStudioProps> = ({
 
     let isMounted = true;
     setProbing(true);
+    setLoadingEpisodes(true);
+
+    const normTarget = selectedFolder.replace(/[/\\]+$/, '').toLowerCase();
+    const normLoaded = loadedFolderRef.current.replace(/[/\\]+$/, '').toLowerCase();
+    if (normLoaded !== normTarget) {
+      setEpisodes([]);
+      setSelectedEpisodePaths(new Set());
+      setSampleAudioTracks([]);
+    }
 
     (async () => {
       try {
         const eps = await window.electronAPI.getFolderEpisodes(selectedFolder);
         if (!isMounted) return;
+        loadedFolderRef.current = selectedFolder;
         setEpisodes(eps);
+        setLoadingEpisodes(false);
 
         // Pre-select all episodes that do not have AI-generated subtitles (.whisper.srt) yet
         const episodesNeedingAiSubs = eps.filter((e) => !e.hasWhisperSrt);
@@ -424,7 +447,10 @@ const WhisperStudioImpl: React.FC<WhisperStudioProps> = ({
       } catch (err) {
         console.error('Failed to probe folder for whisper:', err);
       } finally {
-        if (isMounted) setProbing(false);
+        if (isMounted) {
+          setLoadingEpisodes(false);
+          setProbing(false);
+        }
       }
     })();
 
@@ -1065,36 +1091,45 @@ const WhisperStudioImpl: React.FC<WhisperStudioProps> = ({
                     {cleanSeriesTitle(currentAnime?.canonicalTitle || currentAnime?.folderName || selectedFolder)}
                   </h3>
                   <div className="flex items-center space-x-2 flex-wrap gap-y-1 text-[11px]">
-                    <span className="text-zinc-400 font-medium">
-                      {episodes.length} episode{episodes.length === 1 ? '' : 's'}
-                    </span>
-                    {existingWhisperCount > 0 && (
-                      <span className="px-1.5 py-0.2 rounded text-[10px] font-semibold bg-emerald-500/20 text-emerald-300 border border-emerald-500/30">
-                        {existingWhisperCount} AI Sub{existingWhisperCount === 1 ? '' : 's'}
+                    {loadingEpisodes ? (
+                      <span className="inline-flex items-center space-x-1.5 text-indigo-300 font-medium animate-pulse">
+                        <span className="w-2 h-2 rounded-full bg-indigo-400 animate-ping" />
+                        <span>Scanning episodes...</span>
                       </span>
-                    )}
-                    {episodes.filter((e) => e.hasEmbeddedDubtitles).length > 0 && (
-                      <span
-                        className="px-1.5 py-0.2 rounded text-[10px] font-medium bg-purple-500/15 text-purple-300 border border-purple-500/30"
-                        title="Embedded English Dubtitles (SDH)"
-                      >
-                        {episodes.filter((e) => e.hasEmbeddedDubtitles).length} Dubtitles
-                      </span>
-                    )}
-                    {episodes.filter((e) => !e.hasWhisperSrt && !e.hasEmbeddedDubtitles && e.hasExternalSrt).length > 0 && (
-                      <span className="px-1.5 py-0.2 rounded text-[10px] font-medium bg-blue-500/15 text-blue-300 border border-blue-500/30">
-                        {episodes.filter((e) => !e.hasWhisperSrt && !e.hasEmbeddedDubtitles && e.hasExternalSrt).length} Ext Subs
-                      </span>
-                    )}
-                    {episodes.filter((e) => !e.hasWhisperSrt && !e.hasEmbeddedDubtitles && !e.hasExternalSrt && e.hasEmbeddedSubtitles).length > 0 && (
-                      <span className="px-1.5 py-0.2 rounded text-[10px] font-medium bg-emerald-500/15 text-emerald-300 border border-emerald-500/30">
-                        {episodes.filter((e) => !e.hasWhisperSrt && !e.hasEmbeddedDubtitles && !e.hasExternalSrt && e.hasEmbeddedSubtitles).length} Subtitles
-                      </span>
-                    )}
-                    {missingAnySubCount > 0 && (
-                      <span className="px-1.5 py-0.2 rounded text-[10px] font-medium bg-amber-500/10 text-amber-400 border border-amber-500/20">
-                        {missingAnySubCount} need subs
-                      </span>
+                    ) : (
+                      <>
+                        <span className="text-zinc-400 font-medium">
+                          {episodes.length} episode{episodes.length === 1 ? '' : 's'}
+                        </span>
+                        {existingWhisperCount > 0 && (
+                          <span className="px-1.5 py-0.2 rounded text-[10px] font-semibold bg-emerald-500/20 text-emerald-300 border border-emerald-500/30">
+                            {existingWhisperCount} AI Sub{existingWhisperCount === 1 ? '' : 's'}
+                          </span>
+                        )}
+                        {episodes.filter((e) => e.hasEmbeddedDubtitles).length > 0 && (
+                          <span
+                            className="px-1.5 py-0.2 rounded text-[10px] font-medium bg-purple-500/15 text-purple-300 border border-purple-500/30"
+                            title="Embedded English Dubtitles (SDH)"
+                          >
+                            {episodes.filter((e) => e.hasEmbeddedDubtitles).length} Dubtitles
+                          </span>
+                        )}
+                        {episodes.filter((e) => !e.hasWhisperSrt && !e.hasEmbeddedDubtitles && e.hasExternalSrt).length > 0 && (
+                          <span className="px-1.5 py-0.2 rounded text-[10px] font-medium bg-blue-500/15 text-blue-300 border border-blue-500/30">
+                            {episodes.filter((e) => !e.hasWhisperSrt && !e.hasEmbeddedDubtitles && e.hasExternalSrt).length} Ext Subs
+                          </span>
+                        )}
+                        {episodes.filter((e) => !e.hasWhisperSrt && !e.hasEmbeddedDubtitles && !e.hasExternalSrt && e.hasEmbeddedSubtitles).length > 0 && (
+                          <span className="px-1.5 py-0.2 rounded text-[10px] font-medium bg-emerald-500/15 text-emerald-300 border border-emerald-500/30">
+                            {episodes.filter((e) => !e.hasWhisperSrt && !e.hasEmbeddedDubtitles && !e.hasExternalSrt && e.hasEmbeddedSubtitles).length} Subtitles
+                          </span>
+                        )}
+                        {missingAnySubCount > 0 && (
+                          <span className="px-1.5 py-0.2 rounded text-[10px] font-medium bg-amber-500/10 text-amber-400 border border-amber-500/20">
+                            {missingAnySubCount} need subs
+                          </span>
+                        )}
+                      </>
                     )}
                   </div>
                   <p className="text-[10px] font-mono text-zinc-500 truncate" title={selectedFolder}>
@@ -1653,7 +1688,28 @@ const WhisperStudioImpl: React.FC<WhisperStudioProps> = ({
               onPointerUp={endEpisodeDrag}
               onPointerCancel={endEpisodeDrag}
             >
-              {episodes.length === 0 ? (
+              {loadingEpisodes ? (
+                <div className="space-y-3">
+                  <div className="flex items-center space-x-2.5 px-1 py-1 text-xs text-zinc-400">
+                    <div className="h-4 w-4 rounded-full border-2 border-indigo-500/30 border-t-indigo-400 animate-spin shrink-0" />
+                    <span>Scanning episodes for selected anime...</span>
+                  </div>
+                  <div className="grid grid-cols-[repeat(auto-fill,minmax(170px,1fr))] gap-3">
+                    {Array.from({ length: 8 }).map((_, idx) => (
+                      <div
+                        key={idx}
+                        className="overflow-hidden rounded-xl border border-zinc-800/60 bg-zinc-900/40"
+                      >
+                        <div className="aspect-video bg-zinc-900/90 animate-pulse" />
+                        <div className="p-2 space-y-2">
+                          <div className="h-3 w-3/4 rounded bg-zinc-800/80 animate-pulse" />
+                          <div className="h-2.5 w-1/2 rounded bg-zinc-800/50 animate-pulse" />
+                        </div>
+                      </div>
+                    ))}
+                  </div>
+                </div>
+              ) : episodes.length === 0 ? (
                 <div className="h-full flex flex-col items-center justify-center text-zinc-500 text-xs p-6 text-center">
                   <span>No episodes loaded. Select an anime folder to view episodes.</span>
                 </div>
@@ -1927,6 +1983,14 @@ const WhisperStudioImpl: React.FC<WhisperStudioProps> = ({
                         key={folder.folderPath}
                         onClick={() => {
                           if (isProcessing) return;
+                          const nextNorm = folder.folderPath.replace(/[/\\]+$/, '').toLowerCase();
+                          const prevNorm = selectedFolder.replace(/[/\\]+$/, '').toLowerCase();
+                          if (nextNorm !== prevNorm) {
+                            setLoadingEpisodes(true);
+                            setEpisodes([]);
+                            setSelectedEpisodePaths(new Set());
+                            setSampleAudioTracks([]);
+                          }
                           setSelectedFolder(folder.folderPath);
                           setUserPromptOverride(null);
                           setDetectedCharacters([]);
@@ -2042,6 +2106,14 @@ const WhisperStudioImpl: React.FC<WhisperStudioProps> = ({
                   if (isProcessing) return;
                   const folder = await window.electronAPI.browseFolder(selectedFolder);
                   if (folder) {
+                    const nextNorm = folder.replace(/[/\\]+$/, '').toLowerCase();
+                    const prevNorm = selectedFolder.replace(/[/\\]+$/, '').toLowerCase();
+                    if (nextNorm !== prevNorm) {
+                      setLoadingEpisodes(true);
+                      setEpisodes([]);
+                      setSelectedEpisodePaths(new Set());
+                      setSampleAudioTracks([]);
+                    }
                     setSelectedFolder(folder);
                     setUserPromptOverride(null);
                     setDetectedCharacters([]);

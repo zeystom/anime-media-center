@@ -1,7 +1,16 @@
 using System;
 using System.Diagnostics;
 using System.IO;
+using System.Reflection;
 using System.Windows.Forms;
+
+[assembly: AssemblyTitle("Kaiko")]
+[assembly: AssemblyDescription("Kaiko")]
+[assembly: AssemblyProduct("Kaiko")]
+[assembly: AssemblyCompany("Kaiko")]
+[assembly: AssemblyCopyright("Copyright © 2026 Kaiko")]
+[assembly: AssemblyVersion("3.0.0.0")]
+[assembly: AssemblyFileVersion("3.0.0.0")]
 
 namespace Kaiko
 {
@@ -13,14 +22,16 @@ namespace Kaiko
             try
             {
                 string appDir = AppDomain.CurrentDomain.BaseDirectory.TrimEnd('\\', '/');
-                string electronExe = Path.Combine(appDir, @"node_modules\electron\dist\electron.exe");
+                string electronDistDir = Path.Combine(appDir, @"node_modules\electron\dist");
+                string electronExe = Path.Combine(electronDistDir, "electron.exe");
+                string brandedElectronExe = Path.Combine(electronDistDir, "Kaiko.exe");
 
                 // The root Kaiko.exe is a project launcher, so it relies on
                 // the local Electron runtime and external main-process modules.
                 // electron.exe alone is not enough: a pruned node_modules can
                 // open the splash and then fail while importing the main app.
                 bool hasRuntimeDependencies = HasRuntimeDependencies(appDir);
-                if (!File.Exists(electronExe) || !hasRuntimeDependencies)
+                if ((!File.Exists(brandedElectronExe) && !File.Exists(electronExe)) || !hasRuntimeDependencies)
                 {
                     DialogResult res = MessageBox.Show(
                         "Не найдены все зависимости Kaiko. Возможно, папка node_modules неполная.\n\nВосстановить зависимости автоматически (npm install)?",
@@ -48,7 +59,7 @@ namespace Kaiko
                     }
                 }
 
-                if (!File.Exists(electronExe) || !HasRuntimeDependencies(appDir))
+                if ((!File.Exists(brandedElectronExe) && !File.Exists(electronExe)) || !HasRuntimeDependencies(appDir))
                 {
                     MessageBox.Show(
                         "Не удалось восстановить зависимости Kaiko.\nПроверьте подключение к интернету и выполните 'npm install' в папке проекта.",
@@ -75,8 +86,14 @@ namespace Kaiko
                     }
                 }
 
-                // Launch Electron first while the foreground activation token is fresh.
-                ProcessStartInfo psi = new ProcessStartInfo(electronExe, "\"" + appDir + "\"")
+                if (!File.Exists(brandedElectronExe) && File.Exists(electronExe))
+                {
+                    try { File.Copy(electronExe, brandedElectronExe, false); } catch { }
+                }
+                string launchExe = File.Exists(brandedElectronExe) ? brandedElectronExe : electronExe;
+
+                // Launch Kaiko runtime first while the foreground activation token is fresh.
+                ProcessStartInfo psi = new ProcessStartInfo(launchExe, "\"" + appDir + "\"")
                 {
                     WorkingDirectory = appDir,
                     UseShellExecute = false,

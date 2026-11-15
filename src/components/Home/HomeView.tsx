@@ -1,11 +1,16 @@
 import React, { useMemo } from 'react';
-import { AnimeFolder, Episode, PlaybackProgress, UserLibraryEntry } from '../../types';
+import { AnimeFolder, DiscoverMode, Episode, PlaybackProgress, UserLibraryEntry } from '../../types';
 import { RailItem, useCatalogSection, useGenrePicks } from '../../hooks/useCatalog';
 import { useLocalStatus } from '../../hooks/useLocalStatus';
 import { UpNextWidget, UpNextData } from './UpNextWidget';
 import { CatalogRail } from './CatalogRail';
 import { HomeSchedulePreview } from './HomeSchedulePreview';
 import { RecentEpisodesRail } from './RecentEpisodesRail';
+
+export interface DiscoverNavigationTarget {
+  mode?: Exclude<DiscoverMode, 'search'>;
+  genre?: string;
+}
 
 interface HomeViewProps {
   upNext: UpNextData | null;
@@ -16,7 +21,7 @@ interface HomeViewProps {
   onSelectCatalogItem: (item: RailItem) => void;
   onSelectLocalFolder: (folder: AnimeFolder) => void;
   onOpenSchedule: () => void;
-  onOpenDiscover: () => void;
+  onOpenDiscover: (target?: DiscoverNavigationTarget) => void;
 }
 
 const HomeViewImpl: React.FC<HomeViewProps> = ({
@@ -110,7 +115,7 @@ const HomeViewImpl: React.FC<HomeViewProps> = ({
         emptyHint="Nothing popular this season yet"
         onSelect={onSelectCatalogItem}
         statusFor={statusFor}
-        onSeeMore={onOpenDiscover}
+        onSeeMore={() => onOpenDiscover({ mode: 'season' })}
       />
 
       <CatalogRail
@@ -120,7 +125,7 @@ const HomeViewImpl: React.FC<HomeViewProps> = ({
         emptyHint="Nothing trending right now"
         onSelect={onSelectCatalogItem}
         statusFor={statusFor}
-        onSeeMore={onOpenDiscover}
+        onSeeMore={() => onOpenDiscover({ mode: 'trending' })}
       />
 
       {visibleGenreRails.map((rail) => (genrePicks.loading || rail.items.length > 0) && (
@@ -132,7 +137,7 @@ const HomeViewImpl: React.FC<HomeViewProps> = ({
           emptyHint={`No ${rail.genre.toLowerCase()} anime to show`}
           onSelect={onSelectCatalogItem}
           statusFor={statusFor}
-          onSeeMore={onOpenDiscover}
+          onSeeMore={() => onOpenDiscover({ genre: rail.genre })}
         />
       ))}
 
@@ -143,7 +148,7 @@ const HomeViewImpl: React.FC<HomeViewProps> = ({
         emptyHint="Nothing to show yet"
         onSelect={onSelectCatalogItem}
         statusFor={statusFor}
-        onSeeMore={onOpenDiscover}
+        onSeeMore={() => onOpenDiscover({ mode: 'popular' })}
       />
     </div>
   );

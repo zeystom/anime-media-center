@@ -27,6 +27,8 @@ interface DiscoverViewProps {
   userEntries: Record<number, UserLibraryEntry>
   folders: Parameters<typeof useLocalStatus>[0]
   onSelectItem: (item: RailItem) => void
+  initialMode?: Exclude<DiscoverMode, 'search'> | null
+  onClearInitialMode?: () => void
   initialGenre?: string | null
   onClearInitialGenre?: () => void
   settings?: AppSettings
@@ -164,6 +166,8 @@ const DiscoverViewImpl: React.FC<DiscoverViewProps> = ({
   userEntries,
   folders,
   onSelectItem,
+  initialMode,
+  onClearInitialMode,
   initialGenre,
   onClearInitialGenre,
   settings,
@@ -201,8 +205,28 @@ const DiscoverViewImpl: React.FC<DiscoverViewProps> = ({
   const statusResolver = useLocalStatus(folders, history, userEntries)
 
   useEffect(() => {
+    if (initialMode) {
+      setMode(initialMode)
+      setSort(defaultSortForMode(initialMode))
+      setQuery('')
+      setDebouncedQuery('')
+      if (!initialGenre) {
+        setSelectedGenres([])
+      }
+      if (initialMode === 'season') {
+        setSeasonFilterEnabled(true)
+        setSeason(current.season)
+        setYear(current.year)
+      }
+      onClearInitialMode?.()
+    }
+  }, [initialMode, initialGenre, current.season, current.year, onClearInitialMode])
+
+  useEffect(() => {
     if (initialGenre) {
       setSelectedGenres([initialGenre])
+      setQuery('')
+      setDebouncedQuery('')
       onClearInitialGenre?.()
     }
   }, [initialGenre, onClearInitialGenre])

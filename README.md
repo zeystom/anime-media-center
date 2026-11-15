@@ -7,37 +7,88 @@
 <p align="center"><strong>Your anime library, player, and subtitle studio — on your PC.</strong></p>
 
 <p align="center">
-  <img src="https://img.shields.io/badge/Version-2.0.1-ec4899?style=flat-square" alt="Version 2.0.1" />
+  <img src="https://img.shields.io/badge/Version-3.0.0-ec4899?style=flat-square" alt="Version 3.0.0" />
   <img src="https://img.shields.io/badge/Platform-Windows%2010%20%2F%2011-blue?style=flat-square" alt="Windows 10 and 11" />
   <img src="https://img.shields.io/badge/Electron-33-47848F?style=flat-square&logo=electron" alt="Electron 33" />
   <img src="https://img.shields.io/badge/License-MIT-green?style=flat-square" alt="MIT License" />
 </p>
 
-Kaiko organizes anime files already on your drives, finds catalog information, and plays episodes locally with built-in FFmpeg support. Optional features include AI subtitle generation with Faster-Whisper and torrent downloads from indexers that you configure yourself.
+Kaiko organizes anime files already on your drives, fetches catalog metadata, and plays episodes locally with built-in FFmpeg support. Optional features include local AI subtitle generation with Faster-Whisper and torrent downloads from RSS/Torznab indexers that you configure yourself.
 
-> **Kaiko 2.0.1 — hotfix release on top of the 2.0.0 design overhaul:** honest update-download progress, the What's New dialog no longer offers a same-version update, two-finger touchpad swipe back works on Windows laptops, and failed provider searches are retried instead of replaying a cached error. The shell overhaul, OVA torrent pipeline and episode-list integrity work of 2.0.0 are all included — the full 2.0.0 feature list is in the [changelog](CHANGELOG.md).
+## Screenshots
+
+<table>
+  <tr>
+    <td align="center" width="50%">
+      <img src="docs/screenshots/home.jpg" alt="Home view" />
+      <br />
+      <sub><strong>Home</strong> — Continue watching hero banner, recent episodes rail, and airing radar</sub>
+    </td>
+    <td align="center" width="50%">
+      <img src="docs/screenshots/discover.jpg" alt="Discover view" />
+      <br />
+      <sub><strong>Discover</strong> — Seasonal catalog, trending/popular feeds, and multi-criteria filtering</sub>
+    </td>
+  </tr>
+  <tr>
+    <td align="center" width="50%">
+      <img src="docs/screenshots/anime-overview.jpg" alt="Anime overview" />
+      <br />
+      <sub><strong>Anime Overview</strong> — Clearlogo header, synopsis, watchlist status, and episode list</sub>
+    </td>
+    <td align="center" width="50%">
+      <img src="docs/screenshots/library.jpg" alt="Library view" />
+      <br />
+      <sub><strong>Library</strong> — Local collection browser with status filters, badges, and progress tracking</sub>
+    </td>
+  </tr>
+  <tr>
+    <td align="center" width="50%">
+      <img src="docs/screenshots/schedule.jpg" alt="Airing schedule" />
+      <br />
+      <sub><strong>Airing Schedule</strong> — 7-day board, week/date navigation, live search, and followed filter</sub>
+    </td>
+    <td align="center" width="50%">
+      <img src="docs/screenshots/downloads.jpg" alt="Downloads and storage" />
+      <br />
+      <sub><strong>Downloads & Storage</strong> — Disk usage overview, transfer activity, and downloaded titles</sub>
+    </td>
+  </tr>
+  <tr>
+    <td align="center" width="50%">
+      <img src="docs/screenshots/whisper-studio.jpg" alt="Whisper Studio" />
+      <br />
+      <sub><strong>Whisper Studio</strong> — Batch episode selection, dialogue presets, and Faster-Whisper setup</sub>
+    </td>
+    <td align="center" width="50%">
+      <img src="docs/screenshots/player.jpg" alt="Video player" />
+      <br />
+      <sub><strong>Video Player</strong> — Local MKV playback with styled subtitles and quick drawers</sub>
+    </td>
+  </tr>
+</table>
 
 ## Features
 
-- **Library and playback:** scan multiple media folders, identify episodes and movies, resume viewing, track watched state, and browse recent activity. Built-in FFmpeg enables out-of-the-box support for 10-bit HEVC, MKV audio/subtitle extraction, and audio transcoding with zero manual setup.
-- **Anime discovery:** browse seasonal, popular, and trending titles; filter by genre, format, status, score, and age rating. Age ratings use a bundled index and refresh in the background every three days.
-- **Personal tracking:** favourite any title, follow airing anime for new-episode alerts, manage a watchlist, and filter your local collection by favourites, followed titles, or currently watching.
-- **Subtitles:** play common external and embedded subtitle formats, customize their appearance, and show dialogue and styled signs together where available.
-- **Whisper Studio & In-App Engine Setup:** visual anime selection from library, automated character name detection via AniList, and subtitle generation locally with Faster-Whisper. 1-click in-app download and setup for both the **Faster-Whisper-XXL engine** and AI models (`large-v3-turbo`, `medium`, and `small`) with zero manual file extraction. Subtitle progress routes to the in-app notification center and native desktop notifications; during playback, generation events stay silent in the notification center instead of popping toasts over the video.
-- **Optional P2P:** the integrated WebTorrent engine is off by default and requires explicit consent. It searches RSS/Torznab feeds that you configure. Kaiko does not bundle indexer accounts, feeds, torrent files, or anime video files.
-- **Windows integration:** themed app icon, installer, desktop and Start menu shortcuts, and a small launcher.
+- **Home & catalog navigation:** hero resume banner with official series clearlogos, recent playback rail, weekly airing radar, and horizontal rails with full-strip hover arrows, click-and-drag scrolling with a magnetic wrap-around indicator at the edges, and `See all` links that open Discover in the selected category or genre.
+- **Anime discovery & overview:** seasonal, trending, popular, and personalized ("For you") modes; filter by season/year, genre, format, airing status, minimum score, sort order, and age rating. Detailed series pages show clearlogos, synopsis, franchise relations, watchlist status/score controls, and episode lists with 16:9 stills and air dates.
+- **Airing schedule:** switch between a full 7-day board and single-day views, step across weeks (`Last week`, `This week`, `Today`, `Next week`) or jump to any date with the calendar picker, search titles directly inside the schedule, and filter by `Followed only`.
+- **Library & playback:** scan multiple local folders, track progress and watch status without full disk rescans on list edits, and play 10-bit HEVC/MKV files with bundled FFmpeg, styled ASS/SRT subtitles, chapter/intro skip support, and an episode/subtitle drawer.
+- **Downloads & storage management:** view library disk usage, free drive space, and active transfer speeds; manage P2P episode/season downloads from user-configured RSS/Torznab indexers; delete local series or episodes to free disk space while keeping watch history intact.
+- **Whisper Studio:** batch-generate synchronized English SRT subtitles locally with Faster-Whisper-XXL, automatic English audio track selection, dialogue tuning presets, AniList character name prompts, and 1-click in-app engine and model installation.
+- **Windows integration:** animated startup splash screen, native `Kaiko.exe` process identity in Windows Task Manager, differential auto-updates with in-app release notes, and desktop/Start Menu shortcuts.
 
 ## Torrent and indexer model
 
-Torrent downloads are an optional feature. The application includes the WebTorrent client; it is **not** a front end for an external qBittorrent or Transmission installation. You provide and configure your own RSS/Torznab indexer endpoints in **Settings → P2P & Downloads**. No indexer feeds or credentials are shipped in the repository, and the engine will not start until you enable it and accept the in-app notice.
+Torrent downloads are an optional feature. The application includes a built-in WebTorrent client; it is **not** a front end for an external qBittorrent or Transmission installation. You provide and configure your own RSS/Torznab indexer endpoints in **Settings -> P2P & Downloads**. No indexer feeds or credentials are shipped in the repository, and the engine will not start until you enable it and accept the in-app notice.
 
 For a magnet link that contains no tracker address, the engine appends a small list of public tracker addresses bundled with the app to improve peer discovery. Magnets that already contain trackers keep their own tracker list. Trackers only help peers find each other; they do not provide search results or host download content. You are responsible for the sources you configure and the material you download or share; check the laws that apply where you live.
 
 ## Install the Windows app
 
-Download the `Kaiko Setup 2.0.1.exe` installer from the project’s GitHub Releases page, run it, and choose an install folder. The installer creates shortcuts. Updates can also be installed directly from within the app via **Settings → Application Updates** or the startup update prompt (featuring rich GitHub-formatted release notes). During a normal uninstall, Kaiko asks separately whether to remove saved settings, anime lists, and watch history, and whether to clear the contents of configured media-library folders. Both choices default to **No**; deleting library contents requires a second confirmation listing the folders. Clearing a library folder removes every file inside it, not just Kaiko downloads, and leaves the folder itself in place. Silent uninstall and app upgrades preserve personal data. The first launch may take a little longer while Windows initializes Electron.
+Download the `Kaiko-Setup-3.0.0.exe` installer from the project’s GitHub Releases page, run it, and choose an install folder. The installer creates Desktop and Start Menu shortcuts. Updates can also be installed directly from within the app via **Settings -> Application Updates** or the startup update prompt (with rendered GitHub release notes). During a normal uninstall, Kaiko asks separately whether to remove saved settings, anime lists, and watch history, and whether to clear the contents of configured media-library folders. Both choices default to **No**; deleting library contents requires a second confirmation listing the folders. Clearing a library folder removes every file inside it, not just Kaiko downloads, and leaves the folder itself in place. Silent uninstall and app upgrades preserve personal data.
 
-FFmpeg and a lightweight 7-Zip decompression engine (`7z.exe` + `7z.dll`) are bundled directly into Kaiko for seamless playback, extraction, and automated engine setup out-of-the-box across all Windows versions (Windows 10 & 11). The Faster-Whisper-XXL engine can be downloaded and configured automatically in 1-click directly inside Kaiko (or auto-detected from Subtitle Edit / custom paths). Recommended AI models (`large-v3-turbo`, `medium`, `small`) can also be downloaded in 1-click directly from the Settings menu or Whisper Studio.
+FFmpeg and a lightweight 7-Zip decompression engine (`7z.exe` + `7z.dll`) are bundled directly into Kaiko for playback, extraction, and automated setup on Windows 10 and Windows 11. The Faster-Whisper-XXL engine can be downloaded and configured in 1 click directly inside Kaiko (or auto-detected from Subtitle Edit / custom paths), along with AI models (`large-v3-turbo`, `medium`, and `small`).
 
 ## Build from source
 
@@ -78,7 +129,7 @@ npm run test:all
 
 ## Network services and local data
 
-Kaiko contacts third-party services for catalog and episode metadata, image assets, intro skip data, and age-rating updates. Your library paths, playback history, settings, and watchlist are stored locally in the app’s user-data folder. Torrent indexer requests use the feeds you configure; there are no bundled feeds or indexer credentials. Whisper transcription runs locally with the separately installed tool.
+Kaiko contacts third-party services for catalog and episode metadata, image assets, intro skip data, and age-rating updates. Your library paths, playback history, settings, and watchlist are stored locally in the app’s user-data folder. Torrent indexer requests use the feeds you configure; there are no bundled feeds or indexer credentials. Whisper transcription runs locally with Faster-Whisper-XXL.
 
 The bundled age-rating index is derived from the [anime-mapper project](https://github.com/subhajeetch-fl/anime-mapper). Source and refresh details are in [`src/data/AGE-RATINGS-SOURCE.md`](src/data/AGE-RATINGS-SOURCE.md). To refresh the bundled copy during development, run `npm run update:age-ratings`.
 

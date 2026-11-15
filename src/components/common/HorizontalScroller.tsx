@@ -1,5 +1,5 @@
 import React, { useCallback, useEffect, useRef, useState } from 'react'
-import { ChevronLeft, ChevronRight } from 'lucide-react'
+import { ChevronLeft, ChevronRight, RotateCcw } from 'lucide-react'
 
 interface HorizontalScrollerProps {
   children: React.ReactNode
@@ -7,38 +7,65 @@ interface HorizontalScrollerProps {
   label?: string
 }
 
+interface OverscrollState {
+  side: 'left' | 'right' | null
+  progress: number
+  pullPx: number
+  railShiftPx: number
+}
+
+const EMPTY_OVERSCROLL: OverscrollState = { side: null, progress: 0, pullPx: 0, railShiftPx: 0 }
+const PULL_THRESHOLD = 110
+const RING_RADIUS = 20
+const RING_CIRCUMFERENCE = 2 * Math.PI * RING_RADIUS
+
 export const HorizontalScroller: React.FC<HorizontalScrollerProps> = ({ children, className = '', label = 'Scrollable items' }) => {
   const scrollRef = useRef<HTMLDivElement>(null)
   const dragRef = useRef<{ pointerId: number; startX: number; startScroll: number; moved: boolean } | null>(null)
+  const overscrollRef = useRef<OverscrollState>(EMPTY_OVERSCROLL)
   const suppressClickRef = useRef(false)
   const pointerInsideRef = useRef(false)
-  const pointerPositionRef = useRef({ x: 0, y: 0 })
   const edgeUpdateFrameRef = useRef<number | null>(null)
   const [edges, setEdges] = useState({ left: false, right: false })
   const [dragging, setDragging] = useState(false)
+  const [overscroll, setOverscroll] = useState<OverscrollState>(EMPTY_OVERSCROLL)
 
-  const updateEdges = useCallback((clientX?: number, clientY?: number) => {
+  const updateOverscroll = useCallback((next: OverscrollState) => {
+    const prev = overscrollRef.current
+    if (
+      prev.side === next.side &&
+      (prev.progress >= 1) === (next.progress >= 1) &&
+      (prev.progress === 0) === (next.progress === 0) &&
+      Math.abs(prev.progress - next.progress) < 0.005 &&
+      Math.abs(prev.pullPx - next.pullPx) < 0.2 &&
+      Math.abs(prev.railShiftPx - next.railShiftPx) < 0.2
+    ) {
+      return
+    }
+    overscrollRef.current = next
+    setOverscroll(next)
+  }, [])
+
+  const updateEdges = useCallback(() => {
     const element = scrollRef.current
-    if (!element || clientX === undefined || clientY === undefined || !pointerInsideRef.current) {
+    if (!element || !pointerInsideRef.current) {
       setEdges((previous) => previous.left || previous.right ? { left: false, right: false } : previous)
       return
     }
-    const rect = element.getBoundingClientRect()
     const maxScroll = element.scrollWidth - element.clientWidth
     const canScroll = maxScroll > 2
-    const withinRail = clientY >= rect.top && clientY <= rect.bottom
-    const next = {
-      left: canScroll && withinRail && clientX >= rect.left && clientX - rect.left < 56,
-      right: canScroll && withinRail && clientX <= rect.right && rect.right - clientX < 56,
-    }
-    setEdges((previous) => previous.left === next.left && previous.right === next.right ? previous : next)
+    setEdges((previous) => previous.left === canScroll && previous.right === canScroll ? previous : { left: canScroll, right: canScroll })
   }, [])
+
+  useEffect(() => {
+    updateEdges()
+  }, [children, updateEdges])
 
   const scheduleEdgeUpdate = useCallback(() => {
     if (edgeUpdateFrameRef.current != null) return
     edgeUpdateFrameRef.current = window.requestAnimationFrame(() => {
       edgeUpdateFrameRef.current = null
-      updateEdges(pointerPositionRef.current.x, pointerPositionRef.current.y)
+      updateEdges()
     })
   }, [updateEdges])
 
@@ -75,7 +102,25 @@ export const HorizontalScroller: React.FC<HorizontalScrollerProps> = ({ children
           setDragging(true)
         }
         if (drag.moved) {
-          element.scrollLeft = drag.startScroll - delta
+          const maxScroll = element.scrollWidth - element.clientWidth
+          const targetScroll = drag.startScroll - delta
+          const clampedScroll = Math.max(0, Math.min(maxScroll, targetScroll))
+          element.scrollLeft = clampedScroll
+
+          if (maxScroll > 2 && (targetScroll > maxScroll || targetScroll < 0)) {
+            const side: 'left' | 'right' = targetScroll > maxScroll ? 'right' : 'left'
+            const rawOverscroll = side === 'right' ? targetScroll - maxScroll : -targetScroll
+            const startedAtEdge = side === 'right' ? drag.startScroll >= maxScroll - 8 : drag.startScroll <= 8
+            const deadzone = startedAtEdge ? 10 : 32
+            const effectivePull = Math.max(0, rawOverscroll - deadzone)
+            const progress = Math.min(1, effectivePull / PULL_THRESHOLD)
+            const pullPx = effectivePull > 0 ? Math.min(44, Math.pow(effectivePull, 0.72) * 1.45) : 0
+            const railShiftPx = effectivePull > 0 ? Math.min(18, Math.pow(effectivePull, 0.65) * 0.75) : 0
+            updateOverscroll({ side, progress, pullPx, railShiftPx })
+          } else {
+            updateOverscroll(EMPTY_OVERSCROLL)
+          }
+
           scheduleEdgeUpdate()
           event.preventDefault()
         }
@@ -84,7 +129,22 @@ export const HorizontalScroller: React.FC<HorizontalScrollerProps> = ({ children
 
     const endDrag = (event: PointerEvent) => {
       const drag = dragRef.current
+      const element = scrollRef.current
       if (drag && drag.pointerId === event.pointerId) {
+        const currentOverscroll = overscrollRef.current
+        updateOverscroll(EMPTY_OVERSCROLL)
+
+        if (event.type === 'pointerup' && currentOverscroll.progress >= 1 && element) {
+          const maxScroll = element.scrollWidth - element.clientWidth
+          if (maxScroll > 2) {
+            if (currentOverscroll.side === 'right') {
+              element.scrollTo({ left: 0, behavior: 'smooth' })
+            } else if (currentOverscroll.side === 'left') {
+              element.scrollTo({ left: maxScroll, behavior: 'smooth' })
+            }
+          }
+        }
+
         if (drag.moved) {
           suppressClickRef.current = true
           window.setTimeout(() => { suppressClickRef.current = false }, 120)
@@ -104,19 +164,25 @@ export const HorizontalScroller: React.FC<HorizontalScrollerProps> = ({ children
       window.removeEventListener('pointercancel', endDrag)
       if (edgeUpdateFrameRef.current != null) window.cancelAnimationFrame(edgeUpdateFrameRef.current)
     }
-  }, [scheduleEdgeUpdate])
+  }, [scheduleEdgeUpdate, updateOverscroll])
+
+  const isRightOverscroll = overscroll.side === 'right'
+  const isOverscrollArmed = overscroll.progress >= 1
+  const overscrollScale = isOverscrollArmed ? 1.1 : 0.55 + overscroll.progress * 0.45
+  const overscrollTranslateX = isRightOverscroll ? -overscroll.pullPx : overscroll.pullPx
 
   return (
     <div
       className="group/scroll relative"
-      onPointerEnter={(event) => {
+      onPointerEnter={() => {
         pointerInsideRef.current = true
-        pointerPositionRef.current = { x: event.clientX, y: event.clientY }
-        updateEdges(event.clientX, event.clientY)
+        updateEdges()
       }}
-      onPointerMove={(event) => {
-        pointerPositionRef.current = { x: event.clientX, y: event.clientY }
-        updateEdges(event.clientX, event.clientY)
+      onPointerMove={() => {
+        if (!pointerInsideRef.current) {
+          pointerInsideRef.current = true
+          updateEdges()
+        }
       }}
       onPointerLeave={() => {
         pointerInsideRef.current = false
@@ -136,12 +202,63 @@ export const HorizontalScroller: React.FC<HorizontalScrollerProps> = ({ children
           }
         }}
         onScroll={scheduleEdgeUpdate}
+        style={{
+          transform: overscroll.railShiftPx > 0 ? `translate3d(${isRightOverscroll ? -overscroll.railShiftPx : overscroll.railShiftPx}px, 0, 0)` : undefined,
+          transition: dragging ? 'none' : 'transform 220ms cubic-bezier(0.22, 1, 0.36, 1)',
+        }}
         className={`horizontal-rail ${className} ${dragging ? 'cursor-grabbing select-none' : 'cursor-grab'} scrollbar-none touch-pan-x`}
       >
         {children}
       </div>
-      <button type="button" aria-label="Scroll left" onPointerDown={(e) => e.stopPropagation()} onClick={() => scrollByPage(-1)} className={`absolute left-1 top-1/2 z-20 flex h-10 w-10 -translate-y-1/2 items-center justify-center rounded-full border border-white/15 bg-[#0F0B15]/90 text-zinc-100 shadow-lg backdrop-blur transition-all hover:border-white/30 hover:bg-[#1D1826] ${edges.left ? 'scale-100 opacity-100' : 'pointer-events-none scale-90 opacity-0'}`}><ChevronLeft className="h-5 w-5" /></button>
-      <button type="button" aria-label="Scroll right" onPointerDown={(e) => e.stopPropagation()} onClick={() => scrollByPage(1)} className={`absolute right-1 top-1/2 z-20 flex h-10 w-10 -translate-y-1/2 items-center justify-center rounded-full border border-white/15 bg-[#0F0B15]/90 text-zinc-100 shadow-lg backdrop-blur transition-all hover:border-white/30 hover:bg-[#1D1826] ${edges.right ? 'scale-100 opacity-100' : 'pointer-events-none scale-90 opacity-0'}`}><ChevronRight className="h-5 w-5" /></button>
+      {overscroll.side !== null && overscroll.progress > 0.02 && (
+        <div
+          aria-hidden="true"
+          className={`pointer-events-none absolute top-1/2 z-30 flex h-12 w-12 items-center justify-center rounded-full border backdrop-blur-md transition-[border-color,background-color,box-shadow] duration-150 ${
+            isRightOverscroll ? 'right-2' : 'left-2'
+          } ${
+            isOverscrollArmed
+              ? 'border-rose-400/70 bg-rose-500/20 text-rose-200'
+              : 'border-white/15 bg-[#0F0B15]/90 text-zinc-200'
+          }`}
+          style={{
+            opacity: Math.min(1, overscroll.progress * 2.2),
+            transform: `translate3d(${overscrollTranslateX}px, -50%, 0) scale(${overscrollScale})`,
+            boxShadow: isOverscrollArmed
+              ? '0 0 26px rgba(255, 30, 109, 0.55)'
+              : `0 0 ${Math.round(8 + overscroll.progress * 14)}px rgba(255, 30, 109, ${0.12 + overscroll.progress * 0.25})`,
+          }}
+        >
+          <svg className="absolute inset-0 h-12 w-12 -rotate-90" viewBox="0 0 48 48">
+            <circle
+              cx="24"
+              cy="24"
+              r={RING_RADIUS}
+              fill="none"
+              stroke="rgba(255,255,255,0.12)"
+              strokeWidth="2.5"
+            />
+            <circle
+              cx="24"
+              cy="24"
+              r={RING_RADIUS}
+              fill="none"
+              stroke={isOverscrollArmed ? '#FF1E6D' : 'rgba(251, 113, 133, 0.85)'}
+              strokeWidth="2.5"
+              strokeLinecap="round"
+              strokeDasharray={RING_CIRCUMFERENCE}
+              strokeDashoffset={RING_CIRCUMFERENCE * (1 - overscroll.progress)}
+            />
+          </svg>
+          <RotateCcw
+            className="relative h-4 w-4"
+            style={{
+              transform: `${isRightOverscroll ? '' : 'scaleX(-1) '}rotate(${-overscroll.progress * 220}deg)`,
+            }}
+          />
+        </div>
+      )}
+      <button type="button" aria-label="Scroll left" onPointerDown={(e) => e.stopPropagation()} onClick={() => scrollByPage(-1)} className={`absolute left-1 top-1/2 z-20 flex h-10 w-10 -translate-y-1/2 items-center justify-center rounded-full border border-white/15 bg-[#0F0B15]/90 text-zinc-100 shadow-lg backdrop-blur transition-all hover:border-white/30 hover:bg-[#1D1826] ${edges.left && !dragging ? 'scale-100 opacity-100' : 'pointer-events-none scale-90 opacity-0'}`}><ChevronLeft className="h-5 w-5" /></button>
+      <button type="button" aria-label="Scroll right" onPointerDown={(e) => e.stopPropagation()} onClick={() => scrollByPage(1)} className={`absolute right-1 top-1/2 z-20 flex h-10 w-10 -translate-y-1/2 items-center justify-center rounded-full border border-white/15 bg-[#0F0B15]/90 text-zinc-100 shadow-lg backdrop-blur transition-all hover:border-white/30 hover:bg-[#1D1826] ${edges.right && !dragging ? 'scale-100 opacity-100' : 'pointer-events-none scale-90 opacity-0'}`}><ChevronRight className="h-5 w-5" /></button>
     </div>
   )
 }

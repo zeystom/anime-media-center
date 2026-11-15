@@ -1,5 +1,23 @@
 # Changelog
 
+## 3.0.0 — Schedule Overhaul, Unified Hero Banners, Whisper Loading State & Windows Identity
+
+### Schedule & Discovery
+- **Airing schedule overhaul (`ScheduleView`):** switched to a 7-day board alongside focused single-day filtering, added week navigation controls (`Last week`, `This week`, `Today`, `Next week`), a calendar date picker to jump to any week or day, inline title search within the schedule, and a `Followed only` toggle.
+- **Horizontal rails & Discover navigation (`HomeView`, `HorizontalScroller`):** rail scroll arrows now appear on hover across the entire row width; dragging past the edge engages a magnetic progress indicator that wraps to the beginning or end only upon cursor release; `See all` links on Home rails open Discover filtered to the matching category or genre.
+
+### Interface, Player & Metadata
+- **Unified hero banners & Navbar layout:** added official series clearlogos to Home resume banners and anime detail pages, aligned header banners across Discover, Library, Schedule, and Downloads, and fixed Navbar wrapping/resize geometry.
+- **Downloads & storage view:** combined disk usage metrics, available drive space, active P2P transfer stats, and downloaded series cleanup into a cohesive layout.
+- **Episode metadata & player polish:** improved Kitsu/AniList/ani.zip/Fribb episode title and 16:9 thumbnail matching, refined `VideoPlayer`, `EpisodeDrawer`, and `TimelineScrubber`, and avoided full disk library rescans when changing watchlist status or score.
+
+### Whisper Studio
+- **Clean anime switching state:** changing the active anime or browsing a different folder immediately clears the previous series' episodes, resets stale selection and audio tracks, and displays an episode scanning indicator and card skeletons while probing.
+
+### Startup & Windows Integration
+- **Startup splash window & black-flash fix:** redesigned the startup splash screen (`kaiko-splash.html`) and initialized `BrowserWindow` directly at full `workArea` dimensions before maximize/reveal so Chromium never exposes an intermediate centered black surface during launch.
+- **Task Manager process identity:** compiled assembly metadata into the root `Kaiko.exe` launcher and branded the Electron runtime executable with `Kaiko` version info and icon so Windows Task Manager displays **Kaiko** (`Kaiko.exe`) instead of **Electron**.
+
 ## 2.0.1 — Hotfix: Update Flow & Provider Retry
 
 ### 🔄 Update Flow

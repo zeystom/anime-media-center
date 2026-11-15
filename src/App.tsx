@@ -1,10 +1,10 @@
 import React, { lazy, Suspense, useState, useEffect, useCallback, useMemo, useRef } from 'react';
 import { AlertCircle, X } from 'lucide-react';
 import { Navbar } from './components/Navbar';
-import { HomeView } from './components/Home/HomeView';
+import { HomeView, DiscoverNavigationTarget } from './components/Home/HomeView';
 import type { DetailSource } from './components/AnimeDetail/AnimeDetailView';
 import { CompletionPrompt, CompletionPromptData } from './components/common/CompletionPrompt';
-import { AnimeFolder, Episode, AppSettings, PlaybackProgress, UserLibraryEntry, P2pState, UpdateInfoPayload } from './types';
+import { AnimeFolder, DiscoverMode, Episode, AppSettings, PlaybackProgress, UserLibraryEntry, P2pState, UpdateInfoPayload } from './types';
 import type { CatalogRelatedTitle } from './types';
 import { useLocalStatus } from './hooks/useLocalStatus';
 import { ToastProvider, showGlobalToast } from './components/Toast';
@@ -112,6 +112,7 @@ export const App: React.FC = () => {
   // Navigation & View state
   const [currentTab, setCurrentTab] = useState<'home' | 'discover' | 'library' | 'schedule' | 'downloads' | 'whisper'>('home');
   const [visitedTabs, setVisitedTabs] = useState<Set<string>>(() => new Set(['home']));
+  const [discoverInitialMode, setDiscoverInitialMode] = useState<Exclude<DiscoverMode, 'search'> | null>(null);
   const [discoverInitialGenre, setDiscoverInitialGenre] = useState<string | null>(null);
   const [activePlayerEpisode, setActivePlayerEpisode] = useState<Episode | null>(null);
   // Mirrors `activePlayerEpisode` for non-reactive readers (toast gating in
@@ -209,12 +210,23 @@ export const App: React.FC = () => {
     setDetailSource(null);
   }, []);
   const handleOpenSchedule = useCallback(() => setCurrentTab('schedule'), []);
-  const handleOpenDiscover = useCallback(() => setCurrentTab('discover'), []);
+  const handleOpenDiscover = useCallback((target?: DiscoverNavigationTarget) => {
+    setDetailSource(null);
+    if (target?.genre) {
+      setDiscoverInitialGenre(target.genre);
+      setDiscoverInitialMode(target.mode ?? null);
+    } else if (target?.mode) {
+      setDiscoverInitialGenre(null);
+      setDiscoverInitialMode(target.mode);
+    }
+    setCurrentTab('discover');
+  }, []);
   const handleSelectGenre = useCallback((genre: string) => {
     setDetailSource(null);
     setDiscoverInitialGenre(genre);
     setCurrentTab('discover');
   }, []);
+  const handleClearDiscoverMode = useCallback(() => setDiscoverInitialMode(null), []);
   const handleClearDiscoverGenre = useCallback(() => setDiscoverInitialGenre(null), []);
   const handleOpenRelated = useCallback((item: CatalogRelatedTitle) => {
     setDetailSource({
@@ -1543,6 +1555,8 @@ export const App: React.FC = () => {
               history={history}
               userEntries={userEntries}
               settings={settings}
+              initialMode={discoverInitialMode}
+              onClearInitialMode={handleClearDiscoverMode}
               initialGenre={discoverInitialGenre}
               onClearInitialGenre={handleClearDiscoverGenre}
               onSelectItem={handleSelectCatalogItem}

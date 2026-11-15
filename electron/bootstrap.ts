@@ -54,10 +54,10 @@ if (!app.requestSingleInstanceLock()) {
       : path.join(app.getAppPath(), 'public/kaiko-splash.html');
 
     const splash = new BrowserWindow({
-      x: restoredX,
-      y: restoredY,
-      width: restoredWidth,
-      height: restoredHeight,
+      x,
+      y,
+      width,
+      height,
       minWidth: 1024,
       minHeight: 700,
       show: false,
@@ -86,11 +86,22 @@ if (!app.requestSingleInstanceLock()) {
     }
     splash.setMenu(null);
     splash.removeMenu();
-    // Establish the maximized geometry while opacity is 0 so Windows absorbs any
-    // initial WM_ERASEBKGND/frame expose invisibly before reveal.
+    // Establish the maximized geometry while opacity is 0 and bounds already match
+    // workArea so Chromium never allocates an intermediate 1400x900 DComp surface.
     splash.maximize();
 
     startupApp.__kaikoUserMinimized = false;
+    let hasRestoredBounds = false;
+    const applyInitialRestoredBounds = () => {
+      if (hasRestoredBounds || splash.isDestroyed() || splash.isMaximized() || splash.isMinimized()) return;
+      hasRestoredBounds = true;
+      splash.setBounds({
+        x: restoredX,
+        y: restoredY,
+        width: restoredWidth,
+        height: restoredHeight,
+      });
+    };
 
     // Register controls before loading the startup page so they remain live
     // even while the heavier application modules are still initializing.
@@ -100,8 +111,12 @@ if (!app.requestSingleInstanceLock()) {
     });
     ipcMain.handle('window:toggle-maximize', () => {
       if (splash.isDestroyed()) return false;
-      if (splash.isMaximized()) splash.unmaximize();
-      else splash.maximize();
+      if (splash.isMaximized()) {
+        splash.unmaximize();
+        applyInitialRestoredBounds();
+      } else {
+        splash.maximize();
+      }
       return splash.isMaximized();
     });
     ipcMain.handle('window:close', () => {
@@ -121,7 +136,10 @@ if (!app.requestSingleInstanceLock()) {
       startupApp.__kaikoUserMinimized = false;
       emitMaximizeState();
     });
-    splash.on('unmaximize', emitMaximizeState);
+    splash.on('unmaximize', () => {
+      applyInitialRestoredBounds();
+      emitMaximizeState();
+    });
 
     startupApp.__kaikoStartupSplash = splash;
 
@@ -154,17 +172,17 @@ if (!app.requestSingleInstanceLock()) {
           startupApp.__kaikoStartupShownAt = Date.now();
         }
         resolveSplashShown();
-      }, 100);
+      }, 120);
     };
 
-    splash.once('ready-to-show', revealSplash);
     splash.once('closed', resolveSplashShown);
-    const fallbackRevealTimer = setTimeout(revealSplash, 800);
+    const fallbackRevealTimer = setTimeout(revealSplash, 900);
 
     // This is the app's only native window. Reuse its WebContents for the UI
     // so startup cannot create a second visible window.
     try {
       await splash.loadFile(splashPath);
+      revealSplash();
     } catch (error) {
       console.error('[Electron] Could not load startup splash:', error);
       revealSplash();

@@ -8,7 +8,7 @@ const __dirname = path.dirname(__filename);
 const rootDir = path.resolve(__dirname, '..');
 
 const pkg = JSON.parse(fs.readFileSync(path.join(rootDir, 'package.json'), 'utf8'));
-const VERSION = pkg.version || '1.0.9';
+const VERSION = pkg.version || '3.0.0';
 const OWNER = 'zeystom';
 const REPO = 'anime-media-center';
 const TAG = `v${VERSION}`;
@@ -38,22 +38,26 @@ if (!token) {
   process.exit(1);
 }
 
-const RELEASE_BODY = `## Kaiko 2.0.1 — Hotfix: Update Flow, Touchpad Swipe Back & Provider Retry
+const RELEASE_BODY = `## Kaiko ${VERSION} — Schedule Overhaul, Unified Hero Banners, Whisper Loading State & Windows Identity
 
-A hotfix on top of the 2.0.0 design overhaul: honest update-download progress, no more fake same-version update prompts, two-finger touchpad swipe back working on Windows laptops, and provider errors that actually retry instead of replaying a cached failure.
+### Schedule & Navigation
+- **Airing schedule overhaul:** full 7-day board and single-day views, week steppers (\`Last week\`, \`This week\`, \`Today\`, \`Next week\`), a calendar date picker, instant schedule search, and a \`Followed only\` filter.
+- **Home rails & Discover integration:** rail arrows now appear across the entire strip on hover; dragging past either end shows a magnetic ring indicator that wraps around on release; \`See all\` links open Discover in the matching category or genre.
 
-### 🔄 Update Flow
-- **Honest download progress:** the update progress bar no longer starts with a hardcoded 160 MB total followed by jumpy delta/full phases. The differential (blockmap) phase is labeled \`(delta)\`, a silent fallback from the delta to the full installer restarts the progress window instead of keeping a stuck monotonic percent, and the real installer size from the GitHub release API replaces the placeholder.
-- **"What's New" no longer offers a fake update:** viewing release notes for the current version renders the dialog as a plain notes viewer (Close button, no "Update Now"), and the main process refuses to re-download the same version. "Check for Updates" on the latest release only confirms you are up to date.
+### Interface, Player & Library
+- **Unified hero banners & Navbar layout:** added official series clearlogos on Home and detail pages, unified headers across Discover, Library, Schedule, and Downloads, and fixed Navbar resize behavior.
+- **Downloads & storage view:** updated storage usage overview alongside P2P transfer status and downloaded title cleanup.
+- **Episode metadata & library performance:** improved Kitsu/AniList/ani.zip episode metadata and preview matching, refined the video player drawer and timeline scrubber, and stopped triggering full disk rescans when updating watchlist status or scores.
 
-### 🖥 Touchpad Swipe Back
-- **Two-finger swipe back works on Windows laptops:** the app now tracks mostly-horizontal touchpad swipes at the wheel level (the Chromium overscroll gesture often never fires there). Swiping left returns to the previous screen — over horizontally scrollable rails the swipe scrolls them instead, and at end-of-scroll it hands off to back navigation. Direction flips reset the gesture and a cooldown absorbs trackpad inertia.
+### Whisper Studio
+- **Loading state when switching anime:** switching to a different series now clears the previous anime's episodes immediately and displays a scanning indicator and skeleton cards while loading.
 
-### 🌐 Provider Errors & Retries
-- **Failed provider searches are no longer cached:** when all providers fail (timeout, offline, 5xx) the empty result is not written into the search cache, so retrying the download immediately re-queries the providers instead of replaying the cached error for two minutes. Partial failures that still found usable releases stay cached so a season queue drain doesn't hammer providers per episode.
+### Startup & Windows Integration
+- **Clean startup splash:** updated startup screen and eliminated the brief centered black rectangle flash on launch.
+- **Native Task Manager identity:** branded the launcher and Electron runtime so Windows Task Manager shows **Kaiko** (\`Kaiko.exe\`) instead of **Electron**.
 
 ---
-### Assets included:
+### Assets included
 - \`Kaiko-Setup-${VERSION}.exe\` — Windows NSIS installer
 - \`Kaiko-Setup-${VERSION}.exe.blockmap\` — Differential update blockmap
 - \`latest.yml\` — Auto-update metadata for electron-updater

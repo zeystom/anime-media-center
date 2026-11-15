@@ -1,12 +1,13 @@
 {
   "name": "anime-media-center",
-  "version": "2.0.1",
+  "version": "3.0.0",
   "description": "Kaiko — your anime library and home media center",
+  "author": "Kaiko",
   "type": "module",
   "main": "dist-electron/bootstrap.js",
   "scripts": {
     "dev": "vite",
-    "build": "tsc && vite build",
+    "build": "tsc && vite build && node scripts/brand-electron.mjs",
     "start": "electron .",
     "package": "node scripts/ensure-ffmpeg.mjs && npm run build && electron-builder",
     "test": "node test-episodes.js && node test-release-parser.js && node test-path-security.js && node test-torrents.js && node test-whisper-queue.js && node test-catalog-cache.js && node test-library-manager.js && node test-watchlist-io.js && node test-indexers.js && node test-torrent-engine.js && node test-milestone1.js && node test-milestone2.js && node test-milestone3.js && node test-milestone4.js && node test-updater.js && node test-whisper-prompt.js",
