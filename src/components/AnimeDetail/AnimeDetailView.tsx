@@ -443,6 +443,7 @@ const AnimeDetailViewImpl: React.FC<AnimeDetailViewProps> = ({
   }, [anilistId])
 
   // Hero data: full CatalogItem preferred, RailItem/folder as fallback chain.
+  const entryIdMal = anilistId != null ? userEntries[anilistId]?.idMal ?? null : null
   const hero = useMemo(() => {
     const fallbackTitle = railItem?.title || localFolder?.canonicalTitle || localFolder?.folderName || ''
     const titlePreference = settings?.animeTitleLanguage ?? 'english'
@@ -478,9 +479,9 @@ const AnimeDetailViewImpl: React.FC<AnimeDetailViewProps> = ({
       nextAiringEpisodeNumber: details?.nextAiringEpisode?.episode ?? railItem?.airingEpisode ?? null,
       genres: details?.genres ?? localFolder?.genres ?? [],
       description: stripHtml(details?.description ?? localFolder?.synopsis ?? null),
-      idMal: details?.idMal ?? railItem?.idMal ?? (anilistId != null ? userEntries[anilistId]?.idMal : null) ?? null,
+      idMal: details?.idMal ?? railItem?.idMal ?? entryIdMal ?? null,
     }
-  }, [details, railItem, localFolder, remoteArtwork, anilistId, userEntries, settings?.animeTitleLanguage])
+  }, [details, railItem, localFolder, remoteArtwork, entryIdMal, settings?.animeTitleLanguage])
   const posterAspectRatio = posterAspect?.url === hero.posterUrl ? posterAspect.ratio : 2 / 3
 
   // Read a tiny downsample of the banner when the image host permits canvas
@@ -876,9 +877,8 @@ const AnimeDetailViewImpl: React.FC<AnimeDetailViewProps> = ({
   const handleStatusSelect = async (status: UserListStatus | '') => {
     if (anilistId == null) return
     if (!status) {
-      await userLibrary.remove(anilistId)
       onUserEntryRemove?.(anilistId)
-      onLibraryChanged?.()
+      await userLibrary.remove(anilistId)
       return
     }
     const updated = await userLibrary.setStatus(
@@ -892,7 +892,6 @@ const AnimeDetailViewImpl: React.FC<AnimeDetailViewProps> = ({
     if (updated) {
       onUserEntryChange?.(updated)
     }
-    onLibraryChanged?.()
 
     // Suggest freeing the downloaded files once per session when the user
     // marks a locally downloaded title as Completed.
@@ -913,7 +912,6 @@ const AnimeDetailViewImpl: React.FC<AnimeDetailViewProps> = ({
     if (updated) {
       onUserEntryChange?.(updated)
     }
-    onLibraryChanged?.()
   }
 
   // Deletes every remaining local file of this title. History and list

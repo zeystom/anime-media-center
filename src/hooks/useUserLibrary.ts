@@ -1,4 +1,4 @@
-import { useCallback, useEffect, useState } from 'react'
+import { useCallback, useEffect, useRef, useState } from 'react'
 import type { UserLibraryEntry, UserListStatus } from '../types'
 
 interface UserLibraryState {
@@ -29,24 +29,28 @@ export function useUserLibrary(): UserLibraryState {
   const [entries, setEntries] = useState<Record<number, UserLibraryEntry>>({})
   const [loading, setLoading] = useState(true)
   const [refreshTick, setRefreshTick] = useState(0)
+  const mutationVersionRef = useRef(0)
 
   useEffect(() => {
     let cancelled = false
     const load = async () => {
+      const loadVersion = mutationVersionRef.current
       setLoading(true)
       try {
         if (!window.electronAPI) {
-          if (!cancelled) {
+          if (!cancelled && mutationVersionRef.current === loadVersion) {
             setEntries({})
             setLoading(false)
           }
           return
         }
         const data = await window.electronAPI.getUserLibrary()
-        if (!cancelled) setEntries(data && typeof data === 'object' ? data : {})
+        if (!cancelled && mutationVersionRef.current === loadVersion) {
+          setEntries(data && typeof data === 'object' ? data : {})
+        }
       } catch (err) {
         console.error('useUserLibrary: failed to load user library:', err)
-        if (!cancelled) setEntries({})
+        if (!cancelled && mutationVersionRef.current === loadVersion) setEntries({})
       } finally {
         if (!cancelled) setLoading(false)
       }
@@ -66,6 +70,7 @@ export function useUserLibrary(): UserLibraryState {
       posterUrl?: string | null,
       totalEpisodes?: number | null
     ): Promise<UserLibraryEntry | null> => {
+      mutationVersionRef.current += 1
       let optimisticEntry: UserLibraryEntry | null = null
       setEntries((prev) => {
         const existing = prev[anilistId]
@@ -115,6 +120,7 @@ export function useUserLibrary(): UserLibraryState {
   )
 
   const setScore = useCallback(async (anilistId: number, score: number | null): Promise<UserLibraryEntry | null> => {
+    mutationVersionRef.current += 1
     let resultEntry: UserLibraryEntry | null = null
     setEntries((prev) => {
       const existing = prev[anilistId]
@@ -137,6 +143,7 @@ export function useUserLibrary(): UserLibraryState {
   }, [])
 
   const remove = useCallback(async (anilistId: number): Promise<boolean> => {
+    mutationVersionRef.current += 1
     setEntries((prev) => {
       const next = { ...prev }
       delete next[anilistId]
