@@ -353,7 +353,7 @@ const NavbarImpl: React.FC<NavbarProps> = ({
 
   return (
     <header
-      className={`isolate absolute inset-x-0 top-0 z-50 flex h-[72px] select-none items-center justify-between gap-6 border-b border-white/[0.06] pl-8 [-webkit-app-region:drag] ${
+      className={`isolate absolute inset-x-0 top-0 z-50 flex h-[72px] select-none items-center justify-between gap-2 xl:gap-4 2xl:gap-6 border-b border-white/[0.06] pl-4 xl:pl-6 2xl:pl-8 [-webkit-app-region:drag] ${
         blurEnabled
           ? `backdrop-saturate-[1.5] ${backdropImage ? 'bg-[#0a070e]/55 backdrop-blur-[22px]' : 'bg-[#0a070e]/75 backdrop-blur-[22px]'}`
           : // No glass blur: the bar goes near-solid so the scrolled content
@@ -390,7 +390,7 @@ const NavbarImpl: React.FC<NavbarProps> = ({
         </div>
       )}
       {/* Brand Logo & Name */}
-      <div className="relative z-10 flex cursor-pointer items-center space-x-3 [-webkit-app-region:no-drag]" onClick={() => onSelectTab('home')}>
+      <div className="relative z-10 flex shrink-0 cursor-pointer items-center space-x-3 [-webkit-app-region:no-drag]" onClick={() => onSelectTab('home')}>
         <div className="flex h-11 w-11 items-center justify-center rounded-xl border border-rose-300/25 bg-gradient-to-br from-rose-500/40 via-plum-900/50 to-rose-500/20 shadow-lg shadow-black/40">
             <img src="./kaiko-mark.svg" alt="" draggable={false} className="h-full w-full object-cover" />
         </div>
@@ -401,7 +401,7 @@ const NavbarImpl: React.FC<NavbarProps> = ({
         </div>
       </div>
 
-      <div ref={searchBoxRef} className="relative z-10 hidden min-w-[220px] max-w-[440px] flex-1 xl:block 2xl:mx-3 [-webkit-app-region:no-drag]">
+      <div ref={searchBoxRef} className="relative z-10 hidden min-w-[140px] max-w-[420px] flex-1 xl:block 2xl:mx-2 [-webkit-app-region:no-drag]">
         <Search className="pointer-events-none absolute left-4 top-1/2 h-4 w-4 -translate-y-1/2 text-zinc-500" />
         <input
           value={query}
@@ -426,58 +426,58 @@ const NavbarImpl: React.FC<NavbarProps> = ({
       </div>
 
       {/* Main Navigation Tabs */}
-      <nav className="relative z-10 flex items-center gap-1 rounded-full border border-white/[0.08] bg-black/25 p-1.5 shadow-inner shadow-black/30 [-webkit-app-region:no-drag]">
+      <nav className="relative z-10 flex h-[46px] shrink-0 items-center gap-0.5 xl:gap-1 whitespace-nowrap rounded-full border border-white/[0.08] bg-black/25 p-1.5 shadow-inner shadow-black/30 [-webkit-app-region:no-drag]">
         <button
           onClick={() => onSelectTab('home')}
-          className={`flex items-center space-x-2 px-4 py-1.5 rounded-md rounded-l-full text-sm font-medium transition-all ${
+          className={`flex h-8 shrink-0 items-center space-x-1.5 xl:space-x-2 whitespace-nowrap px-2.5 xl:px-3 2xl:px-4 py-1.5 rounded-md rounded-l-full text-xs xl:text-[13px] 2xl:text-sm font-medium transition-all ${
             currentTab === 'home'
               ? 'bg-[linear-gradient(135deg,#FF1E6D_0%,#A31246_100%)] text-white shadow-[0_0_22px_rgba(255,30,109,0.38)]'
               : 'text-zinc-400 hover:bg-white/5 hover:text-zinc-100'
           }`}
         >
-          <House className="w-4 h-4" />
+          <House className="w-4 h-4 shrink-0" />
           <span>Home</span>
         </button>
 
         <button
           onClick={() => onSelectTab('discover')}
-          className={`flex items-center space-x-2 rounded-md px-4 py-1.5 text-sm font-medium transition-all ${
+          className={`flex h-8 shrink-0 items-center space-x-1.5 xl:space-x-2 whitespace-nowrap rounded-md px-2.5 xl:px-3 2xl:px-4 py-1.5 text-xs xl:text-[13px] 2xl:text-sm font-medium transition-all ${
             currentTab === 'discover'
               ? 'bg-[linear-gradient(135deg,#FF1E6D_0%,#A31246_100%)] text-white shadow-[0_0_22px_rgba(255,30,109,0.38)]'
               : 'text-zinc-400 hover:bg-white/5 hover:text-zinc-100'
           }`}
         >
-          <Compass className="h-4 w-4" />
+          <Compass className="h-4 w-4 shrink-0" />
           <span>Discover</span>
         </button>
 
         <button
           onClick={() => onSelectTab('library')}
-          className={`flex items-center space-x-2 px-4 py-1.5 rounded-md text-sm font-medium transition-all ${
+          className={`flex h-8 shrink-0 items-center space-x-1.5 xl:space-x-2 whitespace-nowrap px-2.5 xl:px-3 2xl:px-4 py-1.5 rounded-md text-xs xl:text-[13px] 2xl:text-sm font-medium transition-all ${
             currentTab === 'library'
               ? 'bg-[linear-gradient(135deg,#FF1E6D_0%,#A31246_100%)] text-white shadow-[0_0_22px_rgba(255,30,109,0.38)]'
               : 'text-zinc-400 hover:bg-white/5 hover:text-zinc-100'
           }`}
         >
-          <Film className="w-4 h-4" />
+          <Film className="w-4 h-4 shrink-0" />
           <span>Library</span>
         </button>
 
         <button
           onClick={() => onSelectTab('schedule')}
-          className={`flex items-center space-x-2 px-4 py-1.5 rounded-md text-sm font-medium transition-all ${
+          className={`flex h-8 shrink-0 items-center space-x-1.5 xl:space-x-2 whitespace-nowrap px-2.5 xl:px-3 2xl:px-4 py-1.5 rounded-md text-xs xl:text-[13px] 2xl:text-sm font-medium transition-all ${
             currentTab === 'schedule'
               ? 'bg-[linear-gradient(135deg,#FF1E6D_0%,#A31246_100%)] text-white shadow-[0_0_22px_rgba(255,30,109,0.38)]'
               : 'text-zinc-400 hover:bg-white/5 hover:text-zinc-100'
           }`}
         >
-          <CalendarDays className="w-4 h-4" />
+          <CalendarDays className="w-4 h-4 shrink-0" />
           <span>Schedule</span>
         </button>
 
         <button
           onClick={() => onSelectTab('downloads')}
-          className={`relative flex items-center space-x-2 px-4 py-1.5 rounded-md text-sm font-medium transition-all ${
+          className={`relative flex h-8 shrink-0 items-center space-x-1.5 xl:space-x-2 whitespace-nowrap px-2.5 xl:px-3 2xl:px-4 py-1.5 rounded-md text-xs xl:text-[13px] 2xl:text-sm font-medium transition-all ${
             currentTab === 'downloads'
               ? 'bg-[linear-gradient(135deg,#FF1E6D_0%,#A31246_100%)] text-white shadow-[0_0_22px_rgba(255,30,109,0.38)]'
               : 'text-zinc-400 hover:bg-white/5 hover:text-zinc-100'
@@ -488,22 +488,22 @@ const NavbarImpl: React.FC<NavbarProps> = ({
               <span className="download-beam-arc" />
             </span>
           )}
-          <HardDrive className="w-4 h-4" />
+          <HardDrive className="w-4 h-4 shrink-0" />
           <span>Downloads</span>
         </button>
 
         <button
           onClick={() => onSelectTab('whisper')}
-          className={`relative flex items-center space-x-2 px-4 py-1.5 rounded-md rounded-r-full text-sm font-medium transition-all ${
+          className={`relative flex h-8 shrink-0 items-center space-x-1.5 xl:space-x-2 whitespace-nowrap px-2.5 xl:px-3 2xl:px-4 py-1.5 rounded-md rounded-r-full text-xs xl:text-[13px] 2xl:text-sm font-medium transition-all ${
             currentTab === 'whisper'
               ? 'bg-[linear-gradient(135deg,#FF1E6D_0%,#A31246_100%)] text-white shadow-[0_0_22px_rgba(255,30,109,0.38)]'
               : 'text-zinc-400 hover:bg-white/5 hover:text-zinc-100'
           }`}
         >
-          <Sparkles className="w-4 h-4 text-rose-300" />
+          <Sparkles className="w-4 h-4 shrink-0 text-rose-300" />
           <span>Whisper Studio</span>
           {isWhisperActive && (
-            <span className="flex h-2 w-2 relative">
+            <span className="flex h-2 w-2 shrink-0 relative">
               <span className="animate-ping absolute inline-flex h-full w-full rounded-full bg-red-400 opacity-75"></span>
               <span className="relative inline-flex rounded-full h-2 w-2 bg-red-500"></span>
             </span>
@@ -512,11 +512,11 @@ const NavbarImpl: React.FC<NavbarProps> = ({
       </nav>
 
       {/* Right Action Icons */}
-      <div className="relative z-10 flex items-center space-x-3 [-webkit-app-region:no-drag]">
+      <div className="relative z-10 flex shrink-0 items-center space-x-1.5 sm:space-x-2.5 [-webkit-app-region:no-drag]">
         {p2pIndicator?.enabled && !downloadsActive && p2pIndicator.status !== 'Idle' && (
           <div
             title={p2pIndicator.status}
-            className={`hidden sm:flex items-center space-x-1.5 px-2.5 py-1 rounded-full border text-xs font-medium transition-colors ${p2pIndicator.bgColor} ${p2pIndicator.textColor}`}
+            className={`hidden 2xl:flex shrink-0 whitespace-nowrap items-center space-x-1.5 px-2.5 py-1 rounded-full border text-xs font-medium transition-colors ${p2pIndicator.bgColor} ${p2pIndicator.textColor}`}
           >
             {p2pIndicator.icon === 'ShieldCheck' ? (
               <ShieldCheck className="w-3.5 h-3.5" />

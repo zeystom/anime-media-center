@@ -6,7 +6,20 @@
  * onP2pStateChanged).
  */
 import React, { useCallback, useEffect, useMemo, useRef, useState } from 'react'
-import { AlertTriangle, Check, Film, FileText, FolderOpen, HardDrive, Pause, Play, RefreshCw, Trash2, X } from 'lucide-react'
+import {
+  AlertTriangle,
+  Check,
+  Download,
+  FileText,
+  Film,
+  FolderOpen,
+  HardDrive,
+  Pause,
+  Play,
+  RefreshCw,
+  Trash2,
+  X,
+} from 'lucide-react'
 import type { AnimeFolder, P2pState, StorageOverview, StorageTitleUsage, TorrentJob, TorrentJobStatus } from '../../types'
 import { formatFileSize } from '../../utils/format'
 import { showGlobalToast } from '../Toast'
@@ -41,21 +54,21 @@ const STATUS_ACTIVE: Record<TorrentJobStatus, boolean> = {
 function jobStatusChip(status: TorrentJobStatus): { label: string; className: string } {
   switch (status) {
     case 'queued':
-      return { label: 'Queued', className: 'bg-zinc-800 text-zinc-300' }
+      return { label: 'Queued', className: 'border border-white/10 bg-white/[0.06] text-zinc-300' }
     case 'connecting':
-      return { label: 'Connecting', className: 'bg-sky-500/15 text-sky-300' }
+      return { label: 'Connecting', className: 'border border-violet-400/35 bg-violet-500/15 text-violet-200' }
     case 'downloading':
-      return { label: 'Downloading', className: 'animate-pulse bg-indigo-600/90 text-white' }
+      return { label: 'Downloading', className: 'animate-pulse border border-rose-400/40 bg-rose-500/20 text-rose-200' }
     case 'paused':
-      return { label: 'Paused', className: 'bg-amber-500/15 text-amber-300' }
+      return { label: 'Paused', className: 'border border-amber-400/35 bg-amber-500/15 text-amber-200' }
     case 'seeding':
-      return { label: 'Seeding', className: 'bg-emerald-500/15 text-emerald-300' }
+      return { label: 'Seeding', className: 'border border-emerald-400/35 bg-emerald-500/15 text-emerald-200' }
     case 'completed':
-      return { label: 'Completed', className: 'bg-emerald-500/15 text-emerald-300' }
+      return { label: 'Completed', className: 'border border-emerald-400/35 bg-emerald-500/15 text-emerald-200' }
     case 'error':
-      return { label: 'Error', className: 'bg-red-500/15 text-red-300' }
+      return { label: 'Error', className: 'border border-red-500/40 bg-red-500/15 text-red-200' }
     default:
-      return { label: status, className: 'bg-zinc-800 text-zinc-300' }
+      return { label: status, className: 'border border-white/10 bg-white/[0.06] text-zinc-300' }
   }
 }
 
@@ -268,102 +281,150 @@ export const DownloadsView: React.FC<DownloadsViewProps> = ({ onRefreshLibrary, 
   // Queue-card covers: match a scanned library folder by anilistId; for jobs
   // of titles not yet in the library, fetch the poster via catalog details
   // (cached 24 h on the main side). One fetch per unique anilistId.
-  const [jobPosters, setJobPosters] = useState<Map<number, string>>(new Map());
-  const jobPosterFetchedRef = useRef<Set<number>>(new Set());
+  const [jobPosters, setJobPosters] = useState<Map<number, string>>(new Map())
+  const jobPosterFetchedRef = useRef<Set<number>>(new Set())
   useEffect(() => {
     const wanted = [...new Set((p2pState?.jobs ?? [])
       .map((job) => job.anilistId)
-      .filter((id): id is number => id != null && !jobPosterFetchedRef.current.has(id) && !folders.some((f) => f.anilistId === id)))];
-    if (wanted.length === 0) return;
-    for (const id of wanted) jobPosterFetchedRef.current.add(id);
+      .filter((id): id is number => id != null && !jobPosterFetchedRef.current.has(id) && !folders.some((f) => f.anilistId === id)))]
+    if (wanted.length === 0) return
+    for (const id of wanted) jobPosterFetchedRef.current.add(id)
     void (async () => {
-      const api = window.electronAPI;
-      if (!api?.getCatalogDetails) return;
+      const api = window.electronAPI
+      if (!api?.getCatalogDetails) return
       for (const anilistId of wanted) {
         try {
-          const details = await api.getCatalogDetails(anilistId);
+          const details = await api.getCatalogDetails(anilistId)
           if (details?.posterUrl) {
-            setJobPosters((prev) => { const m = new Map(prev); m.set(anilistId, details.posterUrl as string); return m; });
+            setJobPosters((prev) => { const m = new Map(prev); m.set(anilistId, details.posterUrl as string); return m })
           }
         } catch {}
       }
-    })();
-  }, [p2pState, folders]);
+    })()
+  }, [p2pState, folders])
 
   const jobCover = (job: TorrentJob): string | null => {
-    const folder = folders.find((f) => f.anilistId === job.anilistId);
-    return folder?.posterUrl || (job.anilistId != null ? jobPosters.get(job.anilistId) || null : null);
-  };
+    const folder = folders.find((f) => f.anilistId === job.anilistId)
+    return folder?.posterUrl || (job.anilistId != null ? jobPosters.get(job.anilistId) || null : null)
+  }
+
   const hasP2pApi =
     typeof window.electronAPI?.getP2pState === 'function' &&
     typeof window.electronAPI?.onP2pStateChanged === 'function'
 
   return (
-    <div className="mx-auto w-full max-w-[1800px] px-4 py-6 sm:px-6 2xl:px-8">
-      {/* Header */}
-      <div className="flex flex-wrap items-center justify-between gap-3">
-        <div>
-          <h1 className="flex items-center gap-2 text-xl font-black tracking-tight text-white">
-            <HardDrive className="h-5 w-5 text-zinc-400" />
-            Downloads
-          </h1>
-          <p className="mt-0.5 text-xs text-zinc-500">
-            Storage used by your downloaded anime. Deleting files never touches watch history.
+    <div className="mx-auto min-h-full w-full max-w-[1800px] px-6 py-7 2xl:px-12">
+      {/* Symmetrical hero banner matching Discover, Library & Schedule */}
+      <section className="relative mb-6 flex h-[160px] flex-col justify-center overflow-hidden rounded-[26px] border border-white/[0.08] bg-[#0F0B15] px-6 shadow-2xl shadow-black/20 md:h-[168px] md:px-9">
+        <div className="pointer-events-none absolute -right-20 -top-32 h-80 w-80 rounded-full bg-rose-500/[0.08] blur-3xl" />
+        <div className="pointer-events-none absolute -bottom-36 left-1/3 h-72 w-72 rounded-full bg-violet-500/[0.07] blur-3xl" />
+        <div className="relative">
+          <div className="flex items-center gap-2 text-rose-300">
+            <HardDrive className="h-4 w-4" />
+            <span className="text-[10px] font-bold uppercase tracking-[0.22em]">Kaiko / Downloads</span>
+          </div>
+          <h1 className="mt-2.5 text-3xl font-black leading-tight tracking-tight text-white md:text-4xl">Downloads &amp; storage</h1>
+          <p className="mt-2 max-w-3xl truncate text-sm leading-normal text-zinc-400">
+            Manage active P2P transfers, inspect local disk usage, and free up space without losing your watch history.
           </p>
         </div>
+      </section>
 
-        <button
-          type="button"
-          onClick={loadOverview}
-          disabled={loading || !hasOverviewApi}
-          className="flex select-none items-center gap-1.5 rounded-lg border border-white/10 bg-zinc-800 px-3 py-1.5 text-xs font-medium text-zinc-200 shadow-sm transition-colors hover:bg-zinc-700 disabled:opacity-50"
-          title="Rescan storage usage"
-        >
-          <RefreshCw className={`h-3.5 w-3.5 ${loading ? 'animate-spin text-zinc-400' : 'text-zinc-400'}`} />
-          <span>Refresh</span>
-        </button>
-      </div>
+      {/* Top summary & control panel */}
+      <section className="mb-6 rounded-2xl border border-white/[0.08] bg-white/[0.025] p-4 shadow-xl shadow-black/10 md:p-5">
+        <div className="grid grid-cols-1 gap-3.5 md:grid-cols-3">
+          <div className="flex items-center gap-4 rounded-2xl border border-white/[0.07] bg-[#0F0B15]/80 px-5 py-4">
+            <span className="flex h-10 w-10 shrink-0 items-center justify-center rounded-xl border border-rose-400/20 bg-rose-500/10 text-rose-300">
+              <HardDrive className="h-4 w-4" />
+            </span>
+            <div className="min-w-0">
+              <p className="text-[10px] font-bold uppercase tracking-[0.18em] text-zinc-500">Used by library</p>
+              <p className="mt-0.5 text-xl font-black text-white">{formatFileSize(overview?.totalBytes ?? 0)}</p>
+              <p className="text-xs text-zinc-400">
+                {sortedTitles.length} {sortedTitles.length === 1 ? 'title' : 'titles'} on this PC
+              </p>
+            </div>
+          </div>
 
-      {/* Summary cards */}
-      <div className="mt-4 grid grid-cols-1 gap-3 sm:grid-cols-2">
-        <div className="rounded-xl border border-white/10 bg-zinc-900/60 px-4 py-3">
-          <p className="text-[10px] font-bold uppercase tracking-widest text-zinc-500">Used by library</p>
-          <p className="mt-1 text-lg font-black text-white">{formatFileSize(overview?.totalBytes ?? 0)}</p>
-          <p className="text-[11px] text-zinc-500">
-            {sortedTitles.length} {sortedTitles.length === 1 ? 'title' : 'titles'} on this PC
-          </p>
+          <div className="flex items-center gap-4 rounded-2xl border border-white/[0.07] bg-[#0F0B15]/80 px-5 py-4">
+            <span className="flex h-10 w-10 shrink-0 items-center justify-center rounded-xl border border-violet-400/20 bg-violet-500/10 text-violet-300">
+              <FolderOpen className="h-4 w-4" />
+            </span>
+            <div className="min-w-0">
+              <p className="text-[10px] font-bold uppercase tracking-[0.18em] text-zinc-500">Free disk space</p>
+              <p className="mt-0.5 text-xl font-black text-white">
+                {overview?.freeBytes != null ? formatFileSize(overview.freeBytes) : 'Unknown'}
+              </p>
+              <p className="text-xs text-zinc-400">Across your library drives</p>
+            </div>
+          </div>
+
+          <div className="flex items-center justify-between gap-3 rounded-2xl border border-white/[0.07] bg-[#0F0B15]/80 px-5 py-4">
+            <div className="flex min-w-0 items-center gap-4">
+              <span className="flex h-10 w-10 shrink-0 items-center justify-center rounded-xl border border-white/[0.08] bg-white/[0.04] text-zinc-300">
+                <Download className="h-4 w-4" />
+              </span>
+              <div className="min-w-0">
+                <p className="text-[10px] font-bold uppercase tracking-[0.18em] text-zinc-500">Transfer activity</p>
+                <p className="mt-0.5 truncate text-xl font-black text-white">
+                  {!hasP2pApi
+                    ? 'Unavailable'
+                    : p2pState && !p2pState.enabled
+                      ? 'P2P off'
+                      : `${activeJobCount} active`}
+                </p>
+                <p className="truncate text-xs text-zinc-400">
+                  {p2pState?.enabled
+                    ? `↓ ${formatSpeedMBs(totalDownloadSpeed)} · ↑ ${formatSpeedMBs(totalUploadSpeed)}`
+                    : 'Enable P2P in Settings'}
+                </p>
+              </div>
+            </div>
+
+            <button
+              type="button"
+              onClick={loadOverview}
+              disabled={loading || !hasOverviewApi}
+              className="inline-flex shrink-0 select-none items-center gap-1.5 rounded-xl border border-white/[0.08] bg-white/[0.05] px-3.5 py-2 text-xs font-bold text-zinc-200 transition hover:border-rose-400/35 hover:bg-rose-500/15 hover:text-white disabled:opacity-50"
+              title="Rescan storage usage"
+            >
+              <RefreshCw className={`h-3.5 w-3.5 ${loading ? 'animate-spin text-rose-300' : 'text-zinc-300'}`} />
+              <span>Refresh</span>
+            </button>
+          </div>
         </div>
-        <div className="rounded-xl border border-white/10 bg-zinc-900/60 px-4 py-3">
-          <p className="text-[10px] font-bold uppercase tracking-widest text-zinc-500">Free disk space</p>
-          <p className="mt-1 text-lg font-black text-white">
-            {overview?.freeBytes != null ? formatFileSize(overview.freeBytes) : 'Unknown'}
-          </p>
-          <p className="text-[11px] text-zinc-500">Across your library drives</p>
-        </div>
-      </div>
+      </section>
 
-      {/* Title rows */}
-      <section className="mt-6">
-        <h2 className="mb-2 text-xs font-bold uppercase tracking-widest text-zinc-500">Downloaded titles</h2>
+      {/* Downloaded titles */}
+      <section className="mb-6 rounded-2xl border border-white/[0.07] bg-white/[0.02] p-5">
+        <div className="mb-4 flex flex-wrap items-center justify-between gap-2">
+          <div className="flex items-center gap-2.5">
+            <h2 className="text-sm font-extrabold uppercase tracking-wider text-zinc-200">Downloaded titles</h2>
+            <span className="rounded-full border border-rose-400/25 bg-rose-500/15 px-2.5 py-0.5 font-mono text-xs font-bold text-rose-200">
+              {sortedTitles.length}
+            </span>
+          </div>
+          <p className="text-xs text-zinc-500">Deleting files never touches watch history</p>
+        </div>
 
         {!hasOverviewApi ? (
-          <div className="rounded-xl border border-dashed border-zinc-800 bg-zinc-900/40 px-4 py-10 text-center">
+          <div className="rounded-2xl border border-white/[0.06] bg-[#0F0B15]/50 px-6 py-12 text-center">
             <Film className="mx-auto h-8 w-8 text-zinc-700" />
-            <p className="mt-2 text-sm font-semibold text-zinc-400">Storage overview unavailable</p>
-            <p className="mt-1 text-xs text-zinc-600">
+            <p className="mt-2.5 text-sm font-semibold text-zinc-300">Storage overview unavailable</p>
+            <p className="mt-1 text-xs text-zinc-500">
               This build of the app does not expose library storage management.
             </p>
           </div>
         ) : sortedTitles.length === 0 ? (
-          <div className="rounded-xl border border-dashed border-zinc-800 bg-zinc-900/40 px-4 py-10 text-center">
+          <div className="rounded-2xl border border-white/[0.06] bg-[#0F0B15]/50 px-6 py-12 text-center">
             <Film className="mx-auto h-8 w-8 text-zinc-700" />
-            <p className="mt-2 text-sm font-semibold text-zinc-400">Nothing downloaded yet</p>
-            <p className="mt-1 text-xs text-zinc-600">
+            <p className="mt-2.5 text-sm font-semibold text-zinc-300">Nothing downloaded yet</p>
+            <p className="mt-1 text-xs text-zinc-500">
               Files you add to your library folders will show up here with their disk usage.
             </p>
           </div>
         ) : (
-          <div className="grid grid-cols-1 gap-3 2xl:grid-cols-2 2xl:gap-4">
+          <div className="grid grid-cols-1 gap-3 2xl:grid-cols-2 2xl:gap-3.5">
             {sortedTitles.map((title) => {
               // The storage overview carries no artwork — match the scanned
               // library folder (same path) for the poster and canonical name.
@@ -371,48 +432,63 @@ export const DownloadsView: React.FC<DownloadsViewProps> = ({ onRefreshLibrary, 
               const poster = libraryFolder?.posterUrl || null
               const displayTitle = libraryFolder?.canonicalTitle || title.folderName
               return (
-              <div
-                key={title.folderPath}
-                className="group flex items-center gap-3 rounded-xl border border-white/10 bg-zinc-900/70 px-3 py-3 transition-colors hover:border-zinc-700/80 2xl:gap-4 2xl:px-4 2xl:py-4"
-              >
-                {poster ? (
-                  <img src={poster} alt="" loading="lazy" className="h-16 w-11 shrink-0 rounded-md object-cover 2xl:h-20 2xl:w-14" />
-                ) : (
-                  <div className="flex h-16 w-11 shrink-0 items-center justify-center rounded-md bg-gradient-to-br from-zinc-800 to-zinc-950 2xl:h-20 2xl:w-14">
-                    <Film className="h-5 w-5 text-zinc-700" />
-                  </div>
-                )}
-
-                <div className="min-w-0 flex-1">
-                  <p className="truncate text-sm font-semibold text-zinc-100 2xl:text-base" title={title.folderName}>
-                    {displayTitle}
-                  </p>
-                  <p className="mt-0.5 text-[11px] text-zinc-500">
-                    {title.episodeCount} video files · {formatFileSize(title.totalBytes)}
-                  </p>
-                </div>
-
-                <button
-                  type="button"
-                  onClick={() => setConfirmTarget(title)}
-                  title="Delete files from PC"
-                  className="flex h-9 w-9 shrink-0 items-center justify-center rounded-full border border-red-500/30 bg-red-500/5 text-red-400 transition-colors hover:bg-red-500/20 hover:text-red-300 2xl:h-10 2xl:w-10"
+                <div
+                  key={title.folderPath}
+                  className="group flex items-center gap-3.5 rounded-2xl border border-white/[0.07] bg-[#0F0B15]/75 px-3.5 py-3 transition-all hover:border-rose-400/30 hover:bg-[#161020]/90 2xl:gap-4 2xl:px-4 2xl:py-3.5"
                 >
-                  <Trash2 className="h-4 w-4" />
-                </button>
-              </div>
-              );
+                  {poster ? (
+                    <img
+                      src={poster}
+                      alt=""
+                      loading="lazy"
+                      className="h-16 w-11 shrink-0 rounded-lg object-cover ring-1 ring-white/10 2xl:h-20 2xl:w-14"
+                    />
+                  ) : (
+                    <div className="flex h-16 w-11 shrink-0 items-center justify-center rounded-lg border border-white/[0.06] bg-[#07060A] 2xl:h-20 2xl:w-14">
+                      <Film className="h-5 w-5 text-zinc-700" />
+                    </div>
+                  )}
+
+                  <div className="min-w-0 flex-1">
+                    <p className="truncate text-sm font-semibold text-zinc-100 2xl:text-base" title={title.folderName}>
+                      {displayTitle}
+                    </p>
+                    <div className="mt-1.5 flex flex-wrap items-center gap-1.5">
+                      <span className="rounded-md border border-white/[0.07] bg-white/[0.04] px-2 py-0.5 text-[11px] font-medium text-zinc-300">
+                        {title.episodeCount} video {title.episodeCount === 1 ? 'file' : 'files'}
+                      </span>
+                      <span className="rounded-md border border-rose-500/20 bg-rose-500/10 px-2 py-0.5 font-mono text-[11px] font-bold text-rose-200">
+                        {formatFileSize(title.totalBytes)}
+                      </span>
+                    </div>
+                  </div>
+
+                  <button
+                    type="button"
+                    onClick={() => setConfirmTarget(title)}
+                    title="Delete files from PC"
+                    className="flex h-9 w-9 shrink-0 items-center justify-center rounded-xl border border-rose-500/25 bg-rose-500/10 text-rose-300 transition-all hover:border-rose-400/50 hover:bg-rose-500/20 hover:text-rose-100 2xl:h-10 2xl:w-10"
+                  >
+                    <Trash2 className="h-4 w-4" />
+                  </button>
+                </div>
+              )
             })}
           </div>
         )}
       </section>
 
       {/* P2P download queue */}
-      <section className="mt-6">
-        <div className="mb-2 flex flex-wrap items-baseline justify-between gap-2">
-          <h2 className="text-xs font-bold uppercase tracking-widest text-zinc-500">Queue</h2>
+      <section className="rounded-2xl border border-white/[0.07] bg-white/[0.02] p-5">
+        <div className="mb-4 flex flex-wrap items-center justify-between gap-2">
+          <div className="flex items-center gap-2.5">
+            <h2 className="text-sm font-extrabold uppercase tracking-wider text-zinc-200">Queue</h2>
+            <span className="rounded-full border border-violet-400/25 bg-violet-500/15 px-2.5 py-0.5 font-mono text-xs font-bold text-violet-200">
+              {sortedJobs.length}
+            </span>
+          </div>
           {p2pState?.enabled && sortedJobs.length > 0 && (
-            <p className="text-[11px] text-zinc-500">
+            <p className="text-xs text-zinc-400">
               {activeJobCount} active · ↓ {formatSpeedMBs(totalDownloadSpeed)} · ↑{' '}
               {formatSpeedMBs(totalUploadSpeed)}
             </p>
@@ -420,34 +496,34 @@ export const DownloadsView: React.FC<DownloadsViewProps> = ({ onRefreshLibrary, 
         </div>
 
         {!hasP2pApi ? (
-          <div className="rounded-xl border border-dashed border-zinc-800 bg-zinc-900/40 px-4 py-8 text-center">
-            <p className="text-sm font-medium text-zinc-500">P2P download queue is unavailable</p>
-            <p className="mt-1 text-xs text-zinc-600">
+          <div className="rounded-2xl border border-white/[0.06] bg-[#0F0B15]/50 px-6 py-10 text-center">
+            <p className="text-sm font-semibold text-zinc-300">P2P download queue is unavailable</p>
+            <p className="mt-1 text-xs text-zinc-500">
               This build of the app does not expose the torrent engine.
             </p>
           </div>
         ) : p2pState && !p2pState.enabled ? (
-          <div className="rounded-xl border border-dashed border-zinc-800 bg-zinc-900/40 px-4 py-8 text-center">
-            <p className="text-sm font-medium text-zinc-500">
+          <div className="rounded-2xl border border-white/[0.06] bg-[#0F0B15]/50 px-6 py-10 text-center">
+            <p className="text-sm font-semibold text-zinc-300">
               P2P is disabled — enable it in Settings (P2P &amp; Downloads).
             </p>
-            <p className="mt-1 text-xs text-zinc-600">
+            <p className="mt-1 text-xs text-zinc-500">
               Downloads you queue will show up here with live progress.
             </p>
           </div>
         ) : !p2pState ? (
-          <div className="rounded-xl border border-dashed border-zinc-800 bg-zinc-900/40 px-4 py-8 text-center">
-            <p className="text-sm font-medium text-zinc-500">Loading queue…</p>
+          <div className="rounded-2xl border border-white/[0.06] bg-[#0F0B15]/50 px-6 py-10 text-center">
+            <p className="text-sm font-medium text-zinc-400">Loading queue…</p>
           </div>
         ) : sortedJobs.length === 0 ? (
-          <div className="rounded-xl border border-dashed border-zinc-800 bg-zinc-900/40 px-4 py-8 text-center">
-            <p className="text-sm font-medium text-zinc-500">Queue is empty</p>
-            <p className="mt-1 text-xs text-zinc-600">
+          <div className="rounded-2xl border border-white/[0.06] bg-[#0F0B15]/50 px-6 py-10 text-center">
+            <p className="text-sm font-semibold text-zinc-300">Queue is empty</p>
+            <p className="mt-1 text-xs text-zinc-500">
               Use the Download button on any title page to search your indexers and queue a release.
             </p>
           </div>
         ) : (
-          <div className="grid grid-cols-1 gap-3 2xl:grid-cols-2 2xl:gap-4">
+          <div className="grid grid-cols-1 gap-3 2xl:grid-cols-2 2xl:gap-3.5">
             {sortedJobs.map((job) => {
               const chip = jobStatusChip(job.status)
               const canPause =
@@ -460,23 +536,26 @@ export const DownloadsView: React.FC<DownloadsViewProps> = ({ onRefreshLibrary, 
               const confirming = confirmCancelHash === job.infoHash
               const progressPct = Math.max(0, Math.min(100, job.progress || 0))
               const showSpeeds = (job.downloadSpeed || 0) > 0 || (job.uploadSpeed || 0) > 0
+              const cover = jobCover(job)
 
               return (
                 <div
                   key={job.infoHash}
-                  className="rounded-xl border border-white/10 bg-zinc-900/70 px-3 py-3 2xl:px-4 2xl:py-4"
+                  className="rounded-2xl border border-white/[0.08] bg-[#0F0B15]/80 px-4 py-3.5 transition-colors hover:border-white/[0.14]"
                 >
-                  <div className="flex items-center gap-3">
-                    {(() => {
-                      const cover = jobCover(job);
-                      return cover ? (
-                        <img src={cover} alt="" loading="lazy" className="h-20 w-14 shrink-0 rounded-md object-cover 2xl:h-24 2xl:w-[4.25rem]" />
-                      ) : (
-                        <div className="flex h-20 w-14 shrink-0 items-center justify-center rounded-md bg-gradient-to-br from-zinc-800 to-zinc-950 2xl:h-24 2xl:w-[4.25rem]">
-                          <Film className="h-5 w-5 text-zinc-700" />
-                        </div>
-                      );
-                    })()}
+                  <div className="flex items-center gap-3.5">
+                    {cover ? (
+                      <img
+                        src={cover}
+                        alt=""
+                        loading="lazy"
+                        className="h-20 w-14 shrink-0 rounded-lg object-cover ring-1 ring-white/10 2xl:h-24 2xl:w-[4.25rem]"
+                      />
+                    ) : (
+                      <div className="flex h-20 w-14 shrink-0 items-center justify-center rounded-lg border border-white/[0.06] bg-[#07060A] 2xl:h-24 2xl:w-[4.25rem]">
+                        <Film className="h-5 w-5 text-zinc-700" />
+                      </div>
+                    )}
                     <div className="min-w-0 flex-1">
                       <div className="flex items-center gap-1.5">
                         <p
@@ -486,24 +565,24 @@ export const DownloadsView: React.FC<DownloadsViewProps> = ({ onRefreshLibrary, 
                           {job.title || job.name}
                         </p>
                         {job.episode != null && (
-                          <span className="shrink-0 rounded bg-zinc-800 px-1.5 py-0.5 text-[10px] font-bold text-zinc-300">
+                          <span className="shrink-0 rounded-md border border-white/10 bg-white/[0.06] px-1.5 py-0.5 text-[10px] font-bold text-zinc-200">
                             EP {job.episode}
                           </span>
                         )}
                         {job.episode == null && job.season != null && (
-                          <span className="shrink-0 rounded bg-zinc-800 px-1.5 py-0.5 text-[10px] font-bold text-zinc-300">
+                          <span className="shrink-0 rounded-md border border-white/10 bg-white/[0.06] px-1.5 py-0.5 text-[10px] font-bold text-zinc-200">
                             SEASON {job.season}
                           </span>
                         )}
                         <span
                           title={job.status === 'error' && job.error ? job.error : chip.label}
-                          className={`shrink-0 rounded px-1.5 py-0.5 text-[10px] font-bold ${chip.className}`}
+                          className={`shrink-0 rounded-md px-1.5 py-0.5 text-[10px] font-bold ${chip.className}`}
                         >
                           {isCompleted && <Check className="mr-0.5 inline h-3 w-3" />}
                           {chip.label}
                         </span>
                       </div>
-                      <p className="mt-1 text-[11px] text-zinc-500 2xl:text-xs">
+                      <p className="mt-1 text-[11px] text-zinc-400 2xl:text-xs">
                         {formatFileSize(job.downloadedBytes)} / {formatFileSize(job.totalBytes)} ·{' '}
                         {job.peers} peers
                         {showSpeeds && (
@@ -519,7 +598,7 @@ export const DownloadsView: React.FC<DownloadsViewProps> = ({ onRefreshLibrary, 
                         </p>
                       )}
                       {!!job.selectedFiles?.length && (
-                        <p className="mt-1 line-clamp-2 text-[10px] text-cyan-200/80 2xl:text-xs" title={job.selectedFiles.join('\n')}>
+                        <p className="mt-1 line-clamp-2 text-[10px] text-violet-200/80 2xl:text-xs" title={job.selectedFiles.join('\n')}>
                           Selected: {job.selectedFiles.slice(0, 2).join(', ')}{job.selectedFiles.length > 2 ? ` +${job.selectedFiles.length - 2} more` : ''}
                         </p>
                       )}
@@ -531,7 +610,7 @@ export const DownloadsView: React.FC<DownloadsViewProps> = ({ onRefreshLibrary, 
                           type="button"
                           onClick={() => handleCopyDiagnostics(job.infoHash)}
                           title="Copy diagnostic history to clipboard"
-                          className="flex h-8 w-8 items-center justify-center rounded-full border border-white/10 bg-zinc-800/60 text-zinc-400 transition-colors hover:bg-zinc-700/60 hover:text-white"
+                          className="flex h-8 w-8 items-center justify-center rounded-xl border border-white/10 bg-white/[0.05] text-zinc-300 transition-colors hover:bg-white/[0.12] hover:text-white"
                         >
                           <FileText className="h-4 w-4" />
                         </button>
@@ -541,7 +620,7 @@ export const DownloadsView: React.FC<DownloadsViewProps> = ({ onRefreshLibrary, 
                           type="button"
                           onClick={() => handlePauseResume(job)}
                           title={canResume ? 'Resume download' : 'Pause download'}
-                          className="flex h-8 w-8 items-center justify-center rounded-full border border-white/10 bg-zinc-800/60 text-zinc-300 transition-colors hover:bg-zinc-700/60 hover:text-white"
+                          className="flex h-8 w-8 items-center justify-center rounded-xl border border-white/10 bg-white/[0.05] text-zinc-200 transition-colors hover:bg-white/[0.12] hover:text-white"
                         >
                           {canResume ? <Play className="h-4 w-4" /> : <Pause className="h-4 w-4" />}
                         </button>
@@ -552,7 +631,7 @@ export const DownloadsView: React.FC<DownloadsViewProps> = ({ onRefreshLibrary, 
                             type="button"
                             onClick={() => handleShowInFolder(job)}
                             title="Show in folder"
-                            className="flex h-8 w-8 items-center justify-center rounded-full border border-white/10 bg-zinc-800/60 text-zinc-300 transition-colors hover:bg-zinc-700/60 hover:text-white"
+                            className="flex h-8 w-8 items-center justify-center rounded-xl border border-white/10 bg-white/[0.05] text-zinc-200 transition-colors hover:bg-white/[0.12] hover:text-white"
                           >
                             <FolderOpen className="h-4 w-4" />
                           </button>
@@ -561,7 +640,7 @@ export const DownloadsView: React.FC<DownloadsViewProps> = ({ onRefreshLibrary, 
                             onClick={() => handleRemoveJob(job.infoHash)}
                             disabled={cancellingHash === job.infoHash}
                             title="Clear from queue (files stay on disk)"
-                            className="flex h-8 w-8 items-center justify-center rounded-full border border-white/10 bg-zinc-800/60 text-zinc-400 transition-colors hover:bg-zinc-700/60 hover:text-white disabled:opacity-50"
+                            className="flex h-8 w-8 items-center justify-center rounded-xl border border-white/10 bg-white/[0.05] text-zinc-400 transition-colors hover:bg-white/[0.12] hover:text-white disabled:opacity-50"
                           >
                             <X className="h-4 w-4" />
                           </button>
@@ -572,7 +651,7 @@ export const DownloadsView: React.FC<DownloadsViewProps> = ({ onRefreshLibrary, 
                           type="button"
                           onClick={() => { setDiscardPartial(false); setConfirmCancelHash(job.infoHash) }}
                           title="Remove from queue (files stay on disk)"
-                          className="flex h-8 w-8 items-center justify-center rounded-full border border-red-500/30 bg-red-500/5 text-red-400 transition-colors hover:bg-red-500/20 hover:text-red-300"
+                          className="flex h-8 w-8 items-center justify-center rounded-xl border border-rose-500/25 bg-rose-500/10 text-rose-300 transition-colors hover:border-rose-400/50 hover:bg-rose-500/20 hover:text-rose-100"
                         >
                           <X className="h-4 w-4" />
                         </button>
@@ -580,26 +659,26 @@ export const DownloadsView: React.FC<DownloadsViewProps> = ({ onRefreshLibrary, 
                     </div>
                   </div>
 
-                  {/* Thin progress bar */}
-                  <div className="mt-3 h-1.5 w-full overflow-hidden rounded-full bg-zinc-800">
+                  {/* Thin crimson progress bar */}
+                  <div className="mt-3 h-1.5 w-full overflow-hidden rounded-full bg-white/[0.07]">
                     <div
-                      className="h-full rounded-full bg-red-500 transition-[width] duration-500"
+                      className="h-full rounded-full bg-[linear-gradient(90deg,#FF1E6D_0%,#FF5E92_100%)] transition-[width] duration-500"
                       style={{ width: `${progressPct}%` }}
                     />
                   </div>
 
                   {/* Inline cancel confirmation strip */}
                   {confirming && (
-                    <div className="mt-2 flex flex-wrap items-center justify-between gap-2 rounded-lg border border-red-500/30 bg-red-500/10 px-3 py-2">
-                      <p className="text-[11px] font-semibold text-red-200">
+                    <div className="mt-3 flex flex-wrap items-center justify-between gap-2 rounded-xl border border-rose-500/30 bg-rose-500/10 px-3.5 py-2.5">
+                      <p className="text-[11px] font-semibold text-rose-200">
                         Remove this release from the queue?
                       </p>
-                      <label className="flex items-center gap-2 text-[11px] text-zinc-300">
+                      <label className="flex items-center gap-2 text-[11px] text-zinc-200">
                         <input
                           type="checkbox"
                           checked={discardPartial}
                           onChange={(event) => setDiscardPartial(event.target.checked)}
-                          className="accent-red-500"
+                          className="accent-rose-500"
                         />
                         Delete this release’s partial download data
                       </label>
@@ -607,7 +686,7 @@ export const DownloadsView: React.FC<DownloadsViewProps> = ({ onRefreshLibrary, 
                         <button
                           type="button"
                           onClick={() => { setConfirmCancelHash(null); setDiscardPartial(false) }}
-                          className="rounded-lg bg-zinc-800 px-2.5 py-1 text-[11px] font-semibold text-zinc-300 transition-colors hover:bg-zinc-700 hover:text-white"
+                          className="rounded-lg bg-white/[0.08] px-2.5 py-1 text-[11px] font-semibold text-zinc-200 transition-colors hover:bg-white/[0.15] hover:text-white"
                         >
                           Keep
                         </button>
@@ -615,7 +694,7 @@ export const DownloadsView: React.FC<DownloadsViewProps> = ({ onRefreshLibrary, 
                           type="button"
                           onClick={() => handleRemoveJob(job.infoHash, discardPartial)}
                           disabled={cancellingHash === job.infoHash}
-                          className="rounded-lg bg-red-600 px-2.5 py-1 text-[11px] font-bold text-white transition-colors hover:bg-red-500 disabled:opacity-60"
+                          className="rounded-lg bg-rose-600 px-2.5 py-1 text-[11px] font-bold text-white transition-colors hover:bg-rose-500 disabled:opacity-60"
                         >
                           {cancellingHash === job.infoHash ? 'Removing…' : discardPartial ? 'Delete data & remove' : 'Remove, keep data'}
                         </button>
@@ -643,8 +722,8 @@ export const DownloadsView: React.FC<DownloadsViewProps> = ({ onRefreshLibrary, 
             onClick={(e) => e.stopPropagation()}
           >
             <div className="flex items-start gap-3">
-              <div className="flex h-9 w-9 shrink-0 items-center justify-center rounded-full bg-red-500/10">
-                <AlertTriangle className="h-5 w-5 text-red-400" />
+              <div className="flex h-9 w-9 shrink-0 items-center justify-center rounded-full border border-rose-500/25 bg-rose-500/15 text-rose-400">
+                <AlertTriangle className="h-5 w-5" />
               </div>
               <div className="min-w-0">
                 <h3 className="text-sm font-bold text-white">Delete anime folder from PC</h3>
@@ -660,7 +739,7 @@ export const DownloadsView: React.FC<DownloadsViewProps> = ({ onRefreshLibrary, 
                 type="button"
                 onClick={() => setConfirmTarget(null)}
                 disabled={deleting}
-                className="rounded-lg bg-zinc-800 px-3 py-1.5 text-xs font-medium text-zinc-300 transition-colors hover:bg-zinc-700 hover:text-white disabled:opacity-50"
+                className="rounded-xl border border-white/10 bg-white/[0.06] px-3.5 py-2 text-xs font-semibold text-zinc-200 transition-colors hover:bg-white/[0.12] hover:text-white disabled:opacity-50"
               >
                 Cancel
               </button>
@@ -668,7 +747,7 @@ export const DownloadsView: React.FC<DownloadsViewProps> = ({ onRefreshLibrary, 
                 type="button"
                 onClick={handleDeleteConfirmed}
                 disabled={deleting}
-                className="flex select-none items-center gap-1.5 rounded-lg bg-red-600 px-3 py-1.5 text-xs font-bold text-white shadow-sm transition-colors hover:bg-red-500 disabled:opacity-60 active:scale-[0.98]"
+                className="flex select-none items-center gap-1.5 rounded-xl bg-rose-600 px-3.5 py-2 text-xs font-bold text-white shadow-sm transition-colors hover:bg-rose-500 disabled:opacity-60 active:scale-[0.98]"
               >
                 <Trash2 className="h-3.5 w-3.5" />
                 <span>{deleting ? 'Deleting…' : 'Delete files'}</span>

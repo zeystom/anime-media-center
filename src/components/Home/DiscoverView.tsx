@@ -403,15 +403,16 @@ const DiscoverViewImpl: React.FC<DiscoverViewProps> = ({
 
   return (
     <div className="mx-auto min-h-full w-full max-w-[1800px] px-6 py-7 2xl:px-12">
-      <section className="relative mb-6 overflow-hidden rounded-[26px] border border-white/[0.08] bg-[#0F0B15] px-6 py-7 shadow-2xl shadow-black/20 md:px-9 md:py-8">
+      <section className="relative mb-6 flex h-[160px] flex-col justify-center overflow-hidden rounded-[26px] border border-white/[0.08] bg-[#0F0B15] px-6 shadow-2xl shadow-black/20 md:h-[168px] md:px-9">
         <div className="pointer-events-none absolute -right-20 -top-32 h-80 w-80 rounded-full bg-rose-500/[0.08] blur-3xl" />
         <div className="pointer-events-none absolute -bottom-36 left-1/3 h-72 w-72 rounded-full bg-violet-500/[0.07] blur-3xl" />
         <div className="relative">
-          <div>
-            <div className="flex items-center gap-2 text-rose-300"><Compass className="h-4 w-4" /><span className="text-[10px] font-bold uppercase tracking-[0.22em]">Kaiko / Discover</span></div>
-            <h1 className="mt-3 text-3xl font-black tracking-tight text-white md:text-4xl">Find your next anime</h1>
-            <p className="mt-2 max-w-xl text-sm leading-relaxed text-zinc-400">Browse seasonal lineups, follow what’s trending, and filter the catalog down to exactly what you want.</p>
+          <div className="flex items-center gap-2 text-rose-300">
+            <Compass className="h-4 w-4" />
+            <span className="text-[10px] font-bold uppercase tracking-[0.22em]">Kaiko / Discover</span>
           </div>
+          <h1 className="mt-2.5 text-3xl font-black leading-tight tracking-tight text-white md:text-4xl">Find your next anime</h1>
+          <p className="mt-2 max-w-3xl truncate text-sm leading-normal text-zinc-400">Browse seasonal lineups, follow what’s trending, and filter the catalog down to exactly what you want.</p>
         </div>
       </section>
 
