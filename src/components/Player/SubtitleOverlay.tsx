@@ -181,7 +181,7 @@ export const SubtitleOverlay: React.FC<SubtitleOverlayProps> = ({
       >
         {activeTopCues.length > 0 && (
           <div
-            className="max-w-4xl text-center px-4 py-1 rounded bg-black/60 transition-opacity duration-150 subtitles-overlay-top flex flex-col space-y-1"
+            className="max-w-[92vw] text-center px-4 py-1 rounded bg-black/60 transition-opacity duration-150 subtitles-overlay-top flex flex-col space-y-1"
             style={{
               fontSize: `${Math.round(fontSize * 0.85)}px`,
               color: '#fef08a', // High-visibility soft yellow for signs/forced
@@ -209,7 +209,7 @@ export const SubtitleOverlay: React.FC<SubtitleOverlayProps> = ({
       >
         {activeMainCues.length > 0 && (
           <div
-            className={`max-w-4xl text-center transition-opacity duration-100 flex flex-col space-y-1.5 subtitles-overlay-main ${bgClass}`}
+            className={`max-w-[92vw] text-center transition-opacity duration-100 flex flex-col space-y-1.5 subtitles-overlay-main ${bgClass}`}
             style={{
               fontSize: `${fontSize}px`,
               color: textColor,

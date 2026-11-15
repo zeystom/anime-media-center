@@ -60,6 +60,7 @@ export interface CleanSubtitleOptions {
   hallucinationList?: string[];
   maxLineWidth?: number;
   maxLineCount?: number;
+  mergeSingleWords?: boolean;
   onCorrection?: (orig: string, repl: string, similarity: number, segmentId?: number | string) => void;
 }
 
@@ -116,12 +117,14 @@ export function cleanSubtitleSrt(
       text = text.replace(/^[♪♫#\s*]+$/g, '').trim();
       if (!text) continue;
 
-      // Filter out Japanese song lyrics/kanji in English subtitles
+      // Filter out Japanese song lyrics/kanji and leaked prompt artifacts in English subtitles
       if (isEnglish) {
         if (containsJapaneseLyrics(text)) {
           continue;
         }
-        text = cleanJapaneseArtifacts(text);
+        text = cleanJapaneseArtifacts(text)
+          .replace(/^(?:Dialogue|Characters)\s+from\s+an\s+anime\s+episode[.!,:\s-]*/i, '')
+          .trim();
         if (!text) continue;
       }
 
@@ -136,8 +139,8 @@ export function cleanSubtitleSrt(
 
     if (cues.length === 0) return srtContent;
 
-    // 1. Filter known silence/music hallucinations
-    cues = filterHallucinations(cues, options?.hallucinationList);
+    // 1. Filter known silence/music/script hallucinations
+    cues = filterHallucinations(cues, options?.hallucinationList, { isEnglish });
 
     // 2. Fuzzy spelling correction for anime character names (runs before merge to establish proper names)
     if (options?.characterNames && options.characterNames.length > 0) {
@@ -155,10 +158,14 @@ export function cleanSubtitleSrt(
       });
     }
 
-    // 3. Merge isolated single-word fragments (strictly capped to max 2 lines with proper casing)
-    const maxLineWidth = options?.maxLineWidth ?? 44;
-    const maxLineCount = options?.maxLineCount ?? 2;
-    cues = mergeIsolatedSingleWords(cues, maxLineWidth, maxLineCount, options?.characterNames);
+    // 3. Merge isolated single-word / short trailing fragments (strictly capped to max 2 lines)
+    if (options?.mergeSingleWords !== false) {
+      const maxLineWidth = options?.maxLineWidth ?? 44;
+      const maxLineCount = options?.maxLineCount ?? 2;
+      cues = mergeIsolatedSingleWords(cues, maxLineWidth, maxLineCount, options?.characterNames, {
+        maxOrphanLineWidth: Math.min(50, maxLineWidth + 4),
+      });
+    }
 
     // 4. Format sequential 1-based subtitle indices and clean output
     let out = '';
@@ -564,30 +571,28 @@ export class WhisperManager {
         const opts = this.activeOptions;
         const preset = opts.preset || 'anime';
 
-        // Tuned smart defaults by preset
+        // Tuned smart defaults by preset. pyannote_v3 avoids Silero dropping high-pitched / child voices,
+        // leaving --initial_prompt unset lets faster-whisper-xxl use its native 'auto' handling without
+        // leaking prompt text or skipping chunk starts, and compression_ratio_threshold=2.4 rejects loops.
+        const defaultVadMethod = 'pyannote_v3' as const;
         let defaultVadThreshold = 0.35;
         let defaultVadMinDuration = 150;
         let defaultVadPad = 900;
         let defaultNoSpeech = 0.6;
-        let defaultCompressionRatio = 2.8;
-        let defaultPrompt = 'Dialogue from an anime episode.';
+        const defaultCompressionRatio = 2.4;
         let defaultSpeechNorm = false;
 
         if (preset === 'bgm') {
           defaultVadThreshold = 0.28;
-          defaultVadMinDuration = 150;
+          defaultVadMinDuration = 100;
           defaultVadPad = 1000;
           defaultNoSpeech = 0.7;
-          defaultCompressionRatio = 2.8;
-          defaultPrompt = 'Dialogue from an anime episode.';
           defaultSpeechNorm = true;
         } else if (preset === 'fast') {
           defaultVadThreshold = 0.45;
           defaultVadMinDuration = 250;
           defaultVadPad = 900;
           defaultNoSpeech = 0.6;
-          defaultCompressionRatio = 2.4;
-          defaultPrompt = 'Dialogue from an anime episode.';
         }
 
         const settings = storage.getSettings();
@@ -600,16 +605,17 @@ export class WhisperManager {
         }
         const task = opts.task || 'transcribe';
         const language = opts.language || 'en';
-        const condition = opts.conditionOnPreviousText ?? false;
+        const condition = opts.conditionOnPreviousText ?? true;
+        const vadMethod = opts.vadMethod || defaultVadMethod;
         const vadThreshold = opts.vadThreshold ?? defaultVadThreshold;
         const vadMinDuration = opts.vadMinSpeechDurationMs ?? defaultVadMinDuration;
         const vadPad = opts.vadSpeechPadMs ?? defaultVadPad;
         const compressionRatio = opts.compressionRatioThreshold ?? defaultCompressionRatio;
         const noSpeech = opts.noSpeechThreshold ?? defaultNoSpeech;
-        const prompt = opts.initialPrompt !== undefined ? opts.initialPrompt : defaultPrompt;
+        const prompt = opts.initialPrompt ? opts.initialPrompt.trim() : '';
         const maxLineWidth = opts.maxLineWidth ?? 46;
         const maxLineCount = opts.maxLineCount ?? 2;
-        const maxCommaCent = opts.maxCommaCent ?? 100;
+        const maxCommaCent = opts.maxCommaCent ?? 70;
         const minDistToEnd = opts.minDistToEnd ?? 8;
         const speechNorm = opts.speechNorm ?? defaultSpeechNorm;
 
@@ -619,7 +625,7 @@ export class WhisperManager {
           '--task', task,
           '--language', language,
           '--vad_filter', 'True',
-          '--vad_threshold', vadThreshold.toString(),
+          '--vad_method', vadMethod,
           '--vad_min_speech_duration_ms', vadMinDuration.toString(),
           '--vad_speech_pad_ms', vadPad.toString(),
           '--condition_on_previous_text', condition ? 'True' : 'False',
@@ -627,8 +633,16 @@ export class WhisperManager {
           '--no_speech_threshold', noSpeech.toString(),
         ];
 
-        if (prompt && prompt.trim() && prompt !== 'None') {
-          args.push('--initial_prompt', prompt.trim());
+        if (vadMethod.startsWith('silero')) {
+          args.push('--vad_threshold', vadThreshold.toString());
+        }
+
+        if (!condition) {
+          args.push('--reprompt', 'False');
+        }
+
+        if (prompt && prompt !== 'None') {
+          args.push('--initial_prompt', prompt);
         }
 
         args.push(
@@ -730,8 +744,9 @@ export class WhisperManager {
         const cleaned = cleanSubtitleSrt(rawSrt, isEnglish, {
           characterNames: this.activeOptions.characterNamesForCorrection,
           hallucinationList: this.activeOptions.hallucinationList,
-          maxLineWidth: this.activeOptions.maxLineWidth ?? 44,
+          maxLineWidth: this.activeOptions.maxLineWidth ?? 46,
           maxLineCount: this.activeOptions.maxLineCount ?? 2,
+          mergeSingleWords: this.activeOptions.mergeSingleWords ?? true,
           onCorrection: (orig, repl, sim, seg) => {
             this.sendLog(
               mainWindow,

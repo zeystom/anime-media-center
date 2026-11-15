@@ -164,7 +164,7 @@ export const SeasonHero: React.FC<SeasonHeroProps> = ({ items, loading, onSelect
                     <span>{item.format}</span>
                   </MetaChip>
                 )}
-                {item.episodesCount != null && item.episodesCount > 0 && (
+                {item.episodesCount != null && item.episodesCount > 0 && !(item.format === 'MOVIE' && item.episodesCount === 1) && (
                   <MetaChip>
                     <span>{item.episodesCount} EP</span>
                   </MetaChip>

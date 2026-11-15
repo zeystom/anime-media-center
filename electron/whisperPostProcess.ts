@@ -65,7 +65,48 @@ export const DEFAULT_HALLUCINATIONS: RegExp[] = [
   /^\s*(?:amara\.org|subtitlestools\.com|opensubtitles|addic7ed)\b/i,
   /^\s*(?:watching|watching\.|bye\.|see\s+you\s+next\s+time[.]?)\s*$/i,
   /^\s*(?:mbc|nhk|tbs|tv\s+tokyo)\s*$/i,
+  /^\s*(?:dialogue|characters)\s+from\s+an\s+anime\s+episode[.!,:\s-]*$/i,
 ];
+
+const NON_LATIN_GIBBERISH_REGEX = /[\u0400-\u04ff\u0590-\u05ff\u0600-\u06ff\u0e00-\u0e7f\uac00-\ud7af]/u;
+
+function isRepetitiveLoop(cleanText: string): boolean {
+  const tokens = cleanText
+    .split(/\s+/)
+    .map((w) => w.replace(/^[^\w']+|[^\w']+$/g, '').toLowerCase())
+    .filter(Boolean);
+
+  if (tokens.length === 0) return false;
+
+  // Catch single-token stutter loops ("hope, hope, hope...", "Nia, Nia, Nia...")
+  // while sparing natural 2-3x dramatic repetition ("cold, cold, cold", "no, no, no").
+  let run = 1;
+  const counts = new Map<string, number>();
+  counts.set(tokens[0], 1);
+  for (let i = 1; i < tokens.length; i++) {
+    run = tokens[i] === tokens[i - 1] ? run + 1 : 1;
+    if (run >= 5) return true;
+    const nextCount = (counts.get(tokens[i]) || 0) + 1;
+    counts.set(tokens[i], nextCount);
+    if (nextCount >= 6 && nextCount / tokens.length > 0.55) {
+      return true;
+    }
+  }
+
+  // Catch repeated multi-word phrases ("Thank you. Thank you. Thank you.").
+  if (tokens.length >= 6) {
+    const firstTwo = `${tokens[0]} ${tokens[1]}`;
+    const normJoined = tokens.join(' ');
+    if (normJoined.split(firstTwo).length - 1 >= 3) {
+      return true;
+    }
+    if (/\b([a-z0-9']+(?:\s+[a-z0-9']+){1,4})\b(?:[,\s.!?]+\1\b){2,}/i.test(cleanText)) {
+      return true;
+    }
+  }
+
+  return false;
+}
 
 /**
  * Computes Levenshtein distance between two strings.
@@ -212,7 +253,8 @@ export function correctCharacterSpellings(
  */
 export function filterHallucinations(
   cues: CueBlock[],
-  customPatterns?: string[]
+  customPatterns?: string[],
+  options?: { isEnglish?: boolean }
 ): CueBlock[] {
   const extraRegexes: RegExp[] = (customPatterns || []).map((pat) => new RegExp(pat, 'i'));
   const allPatterns = [...DEFAULT_HALLUCINATIONS, ...extraRegexes];
@@ -221,6 +263,10 @@ export function filterHallucinations(
     const cleanText = cue.text.replace(/[\n\r]+/g, ' ').trim();
     if (!cleanText) return false;
 
+    if (options?.isEnglish && NON_LATIN_GIBBERISH_REGEX.test(cleanText)) {
+      return false;
+    }
+
     // Check known hallucination patterns
     for (const pat of allPatterns) {
       if (pat.test(cleanText)) {
@@ -228,14 +274,8 @@ export function filterHallucinations(
       }
     }
 
-    // Check for repetitive loops (e.g. "Thank you. Thank you. Thank you." or the exact same phrase repeated 3+ times)
-    const words = cleanText.split(/\s+/);
-    if (words.length >= 6) {
-      const firstTwo = words.slice(0, 2).join(' ').toLowerCase();
-      const occurrences = cleanText.toLowerCase().split(firstTwo).length - 1;
-      if (occurrences >= 3) {
-        return false;
-      }
+    if (isRepetitiveLoop(cleanText)) {
+      return false;
     }
 
     return true;
@@ -279,10 +319,11 @@ export function balanceSubtitleLines(
 
     // Both lines must be within maxLineWidth
     if (line1Len <= maxLineWidth && line2Len <= maxLineWidth) {
-      // Prioritize natural punctuation breaks (comma, semicolon, period)
+      // Prioritize natural punctuation breaks and avoid leaving 1 short word alone on line 2
       const endsWithPunct = /[,;:.!?]$/.test(words[i]);
+      const singleWordLine2 = words.length - 1 - i === 1 && line2Len <= 10 && words.length >= 4;
       const diffFromMid = Math.abs(line1Len - mid);
-      const score = diffFromMid - (endsWithPunct ? 12 : 0);
+      const score = diffFromMid - (endsWithPunct ? 12 : 0) + (singleWordLine2 ? 10 : 0);
 
       if (score < bestScore) {
         bestScore = score;
@@ -317,7 +358,8 @@ export function mergeIsolatedSingleWords(
   cues: CueBlock[],
   maxLineWidth: number = 44,
   maxLineCount: number = 2,
-  characterNames?: string[]
+  characterNames?: string[],
+  options?: { maxOrphanLineWidth?: number }
 ): CueBlock[] {
   if (cues.length <= 1) return cues;
 
@@ -328,91 +370,103 @@ export function mergeIsolatedSingleWords(
     }
   }
 
+  // Lowercases a word if it's not "I", a character name, or an acronym
+  const fixMidSentenceWord = (w: string): string => {
+    const cleanW = w.replace(/^[^\w]+|[^\w]+$/g, '');
+    if (/^I(?:['’](?:m|ll|ve|d))?$/i.test(cleanW)) {
+      return w.replace(/^i/i, 'I');
+    }
+    if (/^[A-Z]{2,}$/.test(cleanW)) {
+      return w;
+    }
+    if (charNameSet.has(cleanW.toLowerCase())) {
+      return w;
+    }
+    return w.charAt(0).toLowerCase() + w.slice(1);
+  };
+
+  const fixStartSentenceWord = (w: string): string => {
+    return w.charAt(0).toUpperCase() + w.slice(1);
+  };
+
   const merged: CueBlock[] = [];
 
   for (let i = 0; i < cues.length; i++) {
     const cur = cues[i];
-    const words = cur.text.trim().split(/\s+/);
-    const isSingleWord = words.length === 1 && cur.text.length < 22;
+    const curTrimmed = cur.text.replace(/[\n\r]+/g, ' ').trim();
+    const words = curTrimmed ? curTrimmed.split(/\s+/) : [];
+    const curDuration = cur.endMs - cur.startMs;
+    const curEndsSentence = /[.!?…]["'”’]?\s*$/.test(curTrimmed);
+    const isSingleWord = words.length === 1 && curTrimmed.length < 22;
+    const isShortTwoWordTail =
+      curEndsSentence && words.length === 2 && curTrimmed.length <= 16 && curDuration <= 1100;
 
     // Sound effects or parenthesized cues like "(groans)" / "[sighs]" are not spoken dialogue words
-    const isParenthesized = /^[([].*[)\]]$/.test(cur.text.trim());
-    if (isParenthesized) {
+    const isParenthesized = /^[([].*[)\]]$/.test(curTrimmed);
+    if (isParenthesized || words.length === 0) {
       merged.push(cur);
       continue;
     }
 
-    if (isSingleWord) {
-      const curEndsSentence = /[.!?…]["'”’]?\s*$/.test(cur.text.trim());
+    // Priority 1: If cur is a non-sentence-ending single word and next cue is very close (< 500ms),
+    // try prepending to next cue
+    if (isSingleWord && i + 1 < cues.length && !curEndsSentence) {
+      const next = cues[i + 1];
+      const gap = next.startMs - cur.endMs;
 
-      // Helper: lowercases a word if it's not "I", a character name, or an acronym
-      const fixMidSentenceWord = (w: string): string => {
-        const cleanW = w.replace(/^[^\w]+|[^\w]+$/g, '');
-        if (/^I(?:['’](?:m|ll|ve|d))?$/i.test(cleanW)) {
-          return w.replace(/^i/i, 'I');
+      if (gap >= 0 && gap < 500) {
+        const cleanCur = fixStartSentenceWord(curTrimmed);
+        const nextLines = next.text.trim().split(/\s+/);
+        if (nextLines.length > 0) {
+          nextLines[0] = fixMidSentenceWord(nextLines[0]);
         }
-        // Acronyms (e.g. "FBI", "USA", "TV") keep uppercase
-        if (/^[A-Z]{2,}$/.test(cleanW)) {
-          return w;
-        }
-        // Known character name / proper noun: preserve uppercase
-        if (charNameSet.has(cleanW.toLowerCase())) {
-          return w;
-        }
-        // Lowercase initial letter for ordinary words
-        return w.charAt(0).toLowerCase() + w.slice(1);
-      };
+        const combinedCandidate = `${cleanCur} ${nextLines.join(' ')}`;
 
-      // Helper: capitalizes the first letter of a word/phrase
-      const fixStartSentenceWord = (w: string): string => {
-        return w.charAt(0).toUpperCase() + w.slice(1);
-      };
-
-      // Priority 1: If cur does NOT end sentence and next cue is very close (< 500ms),
-      // try prepending to next cue
-      if (i + 1 < cues.length && !curEndsSentence) {
-        const next = cues[i + 1];
-        const gap = next.startMs - cur.endMs;
-
-        if (gap >= 0 && gap < 500) {
-          const cleanCur = fixStartSentenceWord(cur.text.trim());
-          // In next cue, lower-case its first word since it now continues cur's thought
-          const nextLines = next.text.trim().split(/\s+/);
-          if (nextLines.length > 0) {
-            nextLines[0] = fixMidSentenceWord(nextLines[0]);
-          }
-          const cleanNext = nextLines.join(' ');
-          const combinedCandidate = `${cleanCur} ${cleanNext}`;
-
-          const balanced = balanceSubtitleLines(combinedCandidate, maxLineWidth);
-          if (balanced.ok && balanced.lines.length <= maxLineCount) {
-            next.text = balanced.lines.join('\n');
-            next.start = cur.start;
-            next.startMs = cur.startMs;
-            continue; // successfully merged into next
-          }
+        const balanced = balanceSubtitleLines(combinedCandidate, maxLineWidth);
+        if (balanced.ok && balanced.lines.length <= maxLineCount) {
+          next.text = balanced.lines.join('\n');
+          next.start = cur.start;
+          next.startMs = cur.startMs;
+          continue;
         }
       }
+    }
 
-      // Priority 2: Try appending to previous cue
-      if (merged.length > 0) {
-        const prev = merged[merged.length - 1];
-        const gap = cur.startMs - prev.endMs;
-        const prevEndsSentence = /[.!?…]["'”’]?\s*$/.test(prev.text.trim());
+    // Priority 2: Try appending isolated 1-word or short 2-word sentence-ending overflow fragments
+    // back onto an incomplete previous cue so words like "a while." / "with joy." / "things."
+    // do not flash briefly as their own cue.
+    if ((isSingleWord || isShortTwoWordTail) && merged.length > 0) {
+      const prev = merged[merged.length - 1];
+      const gap = cur.startMs - prev.endMs;
+      const prevEndsSentence = /[.!?…]["'”’]?\s*$/.test(prev.text.trim());
+      const maxGapMs = isShortTwoWordTail ? 300 : 450;
 
-        if (gap >= 0 && gap < 450 && !prevEndsSentence) {
-          // Mid-sentence append: lowercase the isolated word if not a character name/proper noun
-          const cleanCur = fixMidSentenceWord(cur.text.trim());
-          const cleanPrev = prev.text.replace(/[\n\r]+/g, ' ').trim();
-          const combinedCandidate = `${cleanPrev} ${cleanCur}`;
+      if (gap >= 0 && gap < maxGapMs && !prevEndsSentence) {
+        const fixedCur =
+          words.length === 1
+            ? fixMidSentenceWord(words[0])
+            : `${fixMidSentenceWord(words[0])} ${words.slice(1).join(' ')}`;
+        const cleanPrev = prev.text.replace(/[\n\r]+/g, ' ').trim();
+        const combinedCandidate = `${cleanPrev} ${fixedCur}`;
 
-          const balanced = balanceSubtitleLines(combinedCandidate, maxLineWidth);
-          if (balanced.ok && balanced.lines.length <= maxLineCount) {
-            prev.text = balanced.lines.join('\n');
-            prev.end = cur.end;
-            prev.endMs = cur.endMs;
-            continue; // successfully merged into prev
-          }
+        let balanced = balanceSubtitleLines(combinedCandidate, maxLineWidth);
+        const orphanMax = options?.maxOrphanLineWidth;
+        if (
+          !balanced.ok &&
+          orphanMax &&
+          orphanMax > maxLineWidth &&
+          curEndsSentence &&
+          gap < 250 &&
+          curDuration <= 1100
+        ) {
+          balanced = balanceSubtitleLines(combinedCandidate, orphanMax);
+        }
+
+        if (balanced.ok && balanced.lines.length <= maxLineCount) {
+          prev.text = balanced.lines.join('\n');
+          prev.end = cur.end;
+          prev.endMs = cur.endMs;
+          continue;
         }
       }
     }

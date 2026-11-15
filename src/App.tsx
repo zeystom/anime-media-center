@@ -8,7 +8,7 @@ import { AnimeFolder, DiscoverMode, Episode, AppSettings, PlaybackProgress, User
 import type { CatalogRelatedTitle } from './types';
 import { useLocalStatus } from './hooks/useLocalStatus';
 import { ToastProvider, showGlobalToast } from './components/Toast';
-import { getPathBasename, getPathDirname, formatFileSize, cleanSeriesTitle, cleanEpisodeTitle } from './utils/format';
+import { getPathBasename, getPathDirname, formatFileSize, cleanSeriesTitle, cleanEpisodeTitle, isFolderMovie } from './utils/format';
 import { toRailItem } from './hooks/useCatalog';
 import type { RailItem } from './hooks/useCatalog';
 import type { AppNotification, FavouriteAnime, FollowedAnime } from './types/notifications';
@@ -1537,6 +1537,7 @@ export const App: React.FC = () => {
                     bannerUrl: mostRecentWatched.folder?.bannerUrl,
                     anilistId: mostRecentWatched.folder?.anilistId,
                     isUpNext: mostRecentWatched.isUpNext,
+                    isMovie: mostRecentWatched.folder ? isFolderMovie(mostRecentWatched.folder) : false,
                   }
                 : null
             }

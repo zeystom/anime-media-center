@@ -38,19 +38,17 @@ if (!token) {
   process.exit(1);
 }
 
-const RELEASE_BODY = `## Kaiko ${VERSION} — Fast Multi-Connection Updater, Touchpad Magnetic Scroll & Episode Synopses
+const RELEASE_BODY = `## Kaiko ${VERSION} — Whisper Accuracy Overhaul, Movie Detection, Discover & Completion Prompt Fixes
 
-### Auto-Updater & Download Speed
-- **Fast single-pass installer download:** eliminated the slow sequential blockmap pass that could fall back to a second full download, and enabled 6-connection parallel HTTP Range transfers with automatic single-stream fallback.
-- **Accurate progress bar:** fixed the update modal percentage display so it never remains stuck at \`100%\` if a transfer resets.
+### Whisper Studio & Subtitles
+- **High & child voice preservation:** switched default VAD across dialogue presets to \`pyannote_v3\` so higher-pitched and quieter lines are no longer skipped.
+- **Cleaner prompting & context continuity:** stopped forcing synthetic default prompt prefixes unless customized, restored \`condition_on_previous_text\` and \`compression_ratio_threshold\` (\`2.4\`), and tuned \`--max_comma_cent 70\` to stop leaked foreign gibberish and dropped line openings.
+- **Line wrapping & post-processing:** filtered non-Latin gibberish and stutter-loop hallucinations, merged short 1-2 word spillover cues, and widened the player subtitle container (\`max-w-[92vw]\`) to prevent unintended 3-line wraps.
 
-### Home, Touchpad & Cards
-- **Two-finger touchpad magnetic wrap-around:** horizontal touchpad scrolling past the start or end of a Home rail now drives the same magnetic progress circle as mouse dragging and wraps smoothly on release.
-- **Episode synopses on the Home banner:** the Continue Watching / Up Next hero now displays the episode's own synopsis (from ani.zip / Kitsu) and falls back to the anime description when unavailable.
-- **Flush badge backdrop on poster cards:** aligned the bottom gradient behind local status and download pills flush against the poster edges across Discover and Home.
-
-### Included from 3.0.0
-- Schedule 7-day board overhaul with week controls, date picker, search, and \`Followed only\` filter; Whisper Studio episode loading skeletons; clearlogos; native \`Kaiko.exe\` Windows Task Manager identity; clean launch splash.
+### UI & Playback Fixes
+- **Movie detection (\`Movie\` / \`Resume Movie\`):** movies now display \`Movie\` badges and \`Resume Movie\` buttons instead of \`EP\` / \`Resume EP\` across the Home banner, Recent Episodes rail, player Episode Drawer, Anime Detail view, and Season Hero cards.
+- **Centered completion prompt:** fixed the post-anime completion/delete notification shifting off-center during its entrance animation.
+- **Discover filter dropdowns:** all single-select filter dropdowns (\`Season\`, \`Year\`, \`Format\`, \`Status\`, \`Minimum score\`, \`Sort by\`, \`Age rating\`) now close automatically upon choosing an option, while the multi-select \`Genre\` picker remains open.
 
 ---
 ### Assets included

@@ -146,6 +146,32 @@ export function isFolderMovie(folder: {
   return true;
 }
 
+/**
+ * Resolves a human-readable media unit badge ("Movie" for feature films without
+ * a numeric episode tag instead of generic "EP").
+ */
+export function resolveEpisodeBadgeLabel(label?: string | number | null, isMovie?: boolean): string {
+  const trimmed = String(label ?? '').trim();
+  const isGenericEp = !trimmed || trimmed.toUpperCase() === 'EP';
+  if (isMovie && isGenericEp) {
+    return 'Movie';
+  }
+  return trimmed || 'EP';
+}
+
+/**
+ * Resolves the unit label used in Resume action buttons ("Movie" for films,
+ * exact episode tag for numbered episodes, or lowercase "episode" fallback).
+ */
+export function resolveResumeUnitLabel(label?: string | number | null, isMovie?: boolean): string {
+  const trimmed = String(label ?? '').trim();
+  const isGenericEp = !trimmed || trimmed.toUpperCase() === 'EP';
+  if (isGenericEp) {
+    return isMovie ? 'Movie' : 'episode';
+  }
+  return trimmed;
+}
+
 export interface ParsedEpisode {
   seriesTitle: string;
   episodeNumber: number | null;

@@ -456,6 +456,77 @@ We should go now.
   assert.ok(cleaned.startsWith('1\n00:00:01,000 --> 00:00:02,600\nI talked with Suzumiya.'));
 });
 
+// ================================================================
+// SUITE 7: Regression Fixes (Gibberish, Prompt Leaks, Loops, 2-Word Spillover)
+// ================================================================
+console.log('\n--- TEST SUITE 7: Regression Fixes ---');
+
+runTest('7.1 Drops mixed non-Latin gibberish when isEnglish=true, preserves when isEnglish=false', () => {
+  const cues = [
+    { start: '00:00:01,000', end: '00:00:03,000', startMs: 1000, endMs: 3000, text: 'Karininek ihrenkiقar tree in the shower.ossori' },
+    { start: '00:00:04,000', end: '00:00:06,000', startMs: 4000, endMs: 6000, text: '않은ka kiddo' },
+    { start: '00:00:07,000', end: '00:00:09,000', startMs: 7000, endMs: 9000, text: 'By phoneрыв' },
+    { start: '00:00:10,000', end: '00:00:12,000', startMs: 10000, endMs: 12000, text: 'Anyway, we got stuck decorating.' },
+  ];
+
+  const filteredEn = filterHallucinations(cues, undefined, { isEnglish: true });
+  assert.strictEqual(filteredEn.length, 1, `Expected only clean English cue, got ${filteredEn.length}`);
+  assert.strictEqual(filteredEn[0].text, 'Anyway, we got stuck decorating.');
+
+  const filteredNonEn = filterHallucinations(cues, undefined, { isEnglish: false });
+  assert.strictEqual(filteredNonEn.length, 4, 'Must preserve non-Latin text when isEnglish=false');
+});
+
+runTest('7.2 Strips leaked "Characters from an anime episode" prompt fragments cleanly', () => {
+  const standaloneCues = [
+    { start: '00:00:01,000', end: '00:00:03,000', startMs: 1000, endMs: 3000, text: 'Characters from an anime episode.' },
+    { start: '00:00:07,000', end: '00:00:09,000', startMs: 7000, endMs: 9000, text: 'See you tomorrow.' },
+  ];
+  const filteredStandalone = filterHallucinations(standaloneCues, undefined, { isEnglish: true });
+  assert.strictEqual(filteredStandalone.length, 1);
+  assert.strictEqual(filteredStandalone[0].text, 'See you tomorrow.');
+
+  const rawSrt = `1
+00:00:01,000 --> 00:00:03,000
+Characters from an anime episode.
+
+2
+00:00:04,000 --> 00:00:06,000
+Characters from an anime episode The Judo Club's better!
+`;
+  const cleaned = cleanSubtitleSrt(rawSrt, true, { maxLineWidth: 46, maxLineCount: 2 });
+  assert.ok(!cleaned.includes('Characters from an anime episode'), `Leaked prompt must be stripped, got:\n${cleaned}`);
+  assert.ok(cleaned.includes("The Judo Club's better!"), `Dialogue after leaked prefix must remain, got:\n${cleaned}`);
+});
+
+runTest('7.3 Drops repetitive single-word loops (>=5x) while keeping natural 3x repetition', () => {
+  const cues = [
+    { start: '00:00:01,000', end: '00:00:05,000', startMs: 1000, endMs: 5000, text: 'hope, hope, hope, hope, hope, hope, hope, hope, hope, hope.' },
+    { start: '00:00:06,000', end: '00:00:09,000', startMs: 6000, endMs: 9000, text: "It's cold, cold, cold." },
+  ];
+
+  const filtered = filterHallucinations(cues, undefined, { isEnglish: true });
+  assert.strictEqual(filtered.length, 1, `Expected loop dropped and 3x natural repetition kept, got ${filtered.length}`);
+  assert.strictEqual(filtered[0].text, "It's cold, cold, cold.");
+});
+
+runTest('7.4 Merges short 2-word sentence-ending overflow fragment into 2-line cue', () => {
+  const cues = [
+    { start: '00:00:01,000', end: '00:00:02,800', startMs: 1000, endMs: 2800, text: 'Seriously, you only come around once in' },
+    { start: '00:00:02,900', end: '00:00:03,700', startMs: 2900, endMs: 3700, text: 'a while.' },
+  ];
+
+  const merged = mergeIsolatedSingleWords(cues, 46, 2, undefined, { maxOrphanLineWidth: 50 });
+  assert.strictEqual(merged.length, 1, `Expected 2-word overflow fragment merged, got ${merged.length}`);
+  assert.strictEqual(merged[0].endMs, 3700);
+  const lines = merged[0].text.split('\n');
+  assert.ok(lines.length <= 2, `Merged cue must be <= 2 lines, got ${lines.length}: ${merged[0].text}`);
+  for (const line of lines) {
+    assert.ok(line.length <= 50, `Each merged line must be <= 50 chars, got ${line.length}: "${line}"`);
+  }
+  assert.strictEqual(lines.join(' '), 'Seriously, you only come around once in a while.');
+});
+
 console.log('\n================================================================');
 console.log(`TOTAL TESTS: ${totalTests} | PASSED: ${passedTests} | FAILED: 0`);
 console.log('================================================================\n');

@@ -98,6 +98,7 @@ export const GlassSelect: React.FC<GlassSelectProps> = ({
         <div
           role="listbox"
           aria-label={ariaLabel}
+          onClick={(event) => event.stopPropagation()}
           className={`glass-dropdown animate-pop-in absolute left-0 top-full z-[90] mt-1.5 max-h-64 w-full min-w-[9rem] overflow-y-auto rounded-xl p-1 ${menuClassName}`}
         >
           {options.map((option) => {
@@ -108,7 +109,8 @@ export const GlassSelect: React.FC<GlassSelectProps> = ({
                 type="button"
                 role="option"
                 aria-selected={isSelected}
-                onClick={() => {
+                onClick={(event) => {
+                  event.stopPropagation();
                   onChange(option.value);
                   setOpen(false);
                 }}

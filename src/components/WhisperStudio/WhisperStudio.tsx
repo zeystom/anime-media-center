@@ -232,6 +232,7 @@ const WhisperStudioImpl: React.FC<WhisperStudioProps> = ({
   const [isDetectingCharacters, setIsDetectingCharacters] = useState<boolean>(false);
   const [detectedAnimeTitle, setDetectedAnimeTitle] = useState<string>('');
   const [userPromptOverride, setUserPromptOverride] = useState<string | null>(null);
+  const [disabledCharacters, setDisabledCharacters] = useState<Set<string>>(() => new Set());
   const [activeModel, setActiveModel] = useState<string>('large-v3-turbo');
   const [availableModels, setAvailableModels] = useState<string[]>(['large-v3-turbo']);
   const [downloadingModelName, setDownloadingModelName] = useState<string | null>(null);
@@ -317,7 +318,12 @@ const WhisperStudioImpl: React.FC<WhisperStudioProps> = ({
         if (parsed.channelMode) setChannelMode(parsed.channelMode);
         if (parsed.task) setTask(parsed.task);
         if (parsed.language) setLanguage(parsed.language);
-        if (parsed.userPromptOverride) setUserPromptOverride(parsed.userPromptOverride);
+        if (typeof parsed.userPromptOverride === 'string') {
+          const savedPrompt = parsed.userPromptOverride.trim();
+          if (savedPrompt && !/^(?:Dialogue|Characters)\s+from\s+an\s+anime\s+episode\b/i.test(savedPrompt)) {
+            setUserPromptOverride(parsed.userPromptOverride);
+          }
+        }
       }
     } catch {}
   }, []);
@@ -466,6 +472,7 @@ const WhisperStudioImpl: React.FC<WhisperStudioProps> = ({
     setDetectedAllCharacterNames([]);
     setDetectedAnimeTitle('');
     setUserPromptOverride(null);
+    setDisabledCharacters(new Set());
 
     if (!selectedFolder || !window.electronAPI) {
       return;
@@ -689,14 +696,8 @@ const WhisperStudioImpl: React.FC<WhisperStudioProps> = ({
     }
   };
 
-  // Computes active initial prompt automatically without user friction
-  const activePrompt = useMemo(() => {
-    if (userPromptOverride !== null) return userPromptOverride;
-    if (detectedCharacters.length > 0) {
-      return `Dialogue from an anime episode. Characters: ${detectedCharacters.join(', ')}.`;
-    }
-    return 'Dialogue from an anime episode.';
-  }, [userPromptOverride, detectedCharacters]);
+  // Optional custom prompt (blank by default so Whisper's auto-prompting avoids leaks/skips)
+  const customPrompt = (userPromptOverride || '').trim();
 
   const isCustomQuality = useMemo(() => {
     if (qualityOption === 'custom') return true;
@@ -713,28 +714,33 @@ const WhisperStudioImpl: React.FC<WhisperStudioProps> = ({
   }, [qualityOption, vadSensitivity, antiStutter, preventSingleWords, channelMode]);
 
   const buildWhisperOptions = (selectivePaths?: string[]): WhisperOptions => {
+    const rawCorrectionNames =
+      detectedAllCharacterNames.length > 0
+        ? detectedAllCharacterNames
+        : detectedCharacters;
+    const activeCorrectionNames = rawCorrectionNames.filter(
+      (name) => !disabledCharacters.has(name.toLowerCase())
+    );
+
     return {
       preset: qualityOption,
       model: activeModel || 'large-v3-turbo',
       language,
       task,
+      vadMethod: 'pyannote_v3',
       vadThreshold: vadSensitivity === 'high' ? 0.28 : vadSensitivity === 'balanced' ? 0.35 : 0.45,
-      vadMinSpeechDurationMs: vadSensitivity === 'standard' ? 250 : 150,
+      vadMinSpeechDurationMs: vadSensitivity === 'standard' ? 250 : vadSensitivity === 'high' ? 100 : 150,
       vadSpeechPadMs: vadSensitivity === 'high' ? 1000 : 900,
-      conditionOnPreviousText: !antiStutter,
-      compressionRatioThreshold: antiStutter ? 2.8 : 2.4,
+      conditionOnPreviousText: antiStutter,
+      compressionRatioThreshold: 2.4,
       noSpeechThreshold: vadSensitivity === 'high' ? 0.7 : 0.6,
-      initialPrompt: activePrompt,
+      initialPrompt: customPrompt || undefined,
       hotwords: detectedHotwords || undefined,
-      characterNamesForCorrection:
-        detectedAllCharacterNames.length > 0
-          ? detectedAllCharacterNames
-          : detectedCharacters.length > 0
-          ? detectedCharacters
-          : undefined,
+      characterNamesForCorrection: activeCorrectionNames.length > 0 ? activeCorrectionNames : undefined,
       maxLineWidth: 46,
       maxLineCount: 2,
-      maxCommaCent: preventSingleWords ? 100 : 70,
+      maxCommaCent: 70,
+      mergeSingleWords: preventSingleWords,
       minDistToEnd: 8,
       sentence: true,
       channelMode,
@@ -1404,66 +1410,58 @@ const WhisperStudioImpl: React.FC<WhisperStudioProps> = ({
               {isEditingPrompt && (
                 <div className="p-3 rounded-xl bg-zinc-900/90 border border-zinc-800 space-y-2.5">
                   <div className="flex items-center justify-between text-[11px] text-zinc-400">
-                    <span>Initial dialogue prompt:</span>
+                    <span>Custom Whisper prompt (optional — leave blank for best accuracy):</span>
                     <button
                       type="button"
-                      disabled={isProcessing}
+                      disabled={isProcessing || !userPromptOverride}
                       onClick={() => setUserPromptOverride(null)}
                       className="text-[10px] text-zinc-400 hover:text-white disabled:opacity-50"
                     >
-                      Reset to default
+                      Clear
                     </button>
                   </div>
 
                   <input
                     type="text"
                     disabled={isProcessing}
-                    value={activePrompt}
-                    onChange={(e) => setUserPromptOverride(e.target.value)}
-                    placeholder="Character names, anime dialogue context..."
+                    value={userPromptOverride ?? ''}
+                    onChange={(e) => setUserPromptOverride(e.target.value || null)}
+                    placeholder="Leave blank so Whisper won't skip lines or leak text; character names auto-correct after generation."
                     className="w-full px-3 py-1.5 rounded-lg bg-zinc-950 border border-zinc-700 text-xs text-zinc-100 focus:outline-none focus:border-indigo-500 font-sans"
                   />
 
                   {detectedCharacters.length > 0 && (
                     <div className="space-y-1.5 pt-1">
                       <span className="text-[10px] text-zinc-500 block">
-                        Toggle names for {detectedAnimeTitle || 'this series'}:
+                        Toggle spelling auto-correction for {detectedAnimeTitle || 'this series'}:
                       </span>
                       <div className="flex flex-wrap gap-1 max-h-24 overflow-y-auto scrollbar-thin pr-1">
                         {detectedCharacters.map((char) => {
-                          const isInPrompt = activePrompt.toLowerCase().includes(char.toLowerCase());
+                          const key = char.toLowerCase();
+                          const isEnabled = !disabledCharacters.has(key);
                           return (
                             <button
                               key={char}
                               type="button"
                               disabled={isProcessing}
                               onClick={() => {
-                                let currentNames: string[] = [];
-                                const charMatch = activePrompt.match(/Characters:\s*([^.]+)/i);
-                                if (charMatch) {
-                                  currentNames = charMatch[1].split(',').map((t) => t.trim()).filter(Boolean);
-                                } else {
-                                  currentNames = activePrompt.split(',').map((t) => t.trim()).filter(Boolean);
-                                }
-                                const idx = currentNames.findIndex((t) => t.toLowerCase() === char.toLowerCase());
-                                if (idx !== -1) {
-                                  currentNames.splice(idx, 1);
-                                } else {
-                                  currentNames.push(char);
-                                }
-                                if (currentNames.length > 0) {
-                                  setUserPromptOverride(`Dialogue from an anime episode. Characters: ${currentNames.join(', ')}.`);
-                                } else {
-                                  setUserPromptOverride('Dialogue from an anime episode.');
-                                }
+                                setDisabledCharacters((prev) => {
+                                  const next = new Set(prev);
+                                  if (next.has(key)) {
+                                    next.delete(key);
+                                  } else {
+                                    next.add(key);
+                                  }
+                                  return next;
+                                });
                               }}
                               className={`px-2 py-0.5 rounded text-[10px] font-medium border transition-colors ${
-                                isInPrompt
+                                isEnabled
                                   ? 'bg-indigo-600/30 text-indigo-200 border-indigo-500/60'
                                   : 'bg-zinc-800 text-zinc-400 border-zinc-700 hover:text-white'
                               }`}
                             >
-                              {isInPrompt ? `✓ ${char}` : `+ ${char}`}
+                              {isEnabled ? `✓ ${char}` : `+ ${char}`}
                             </button>
                           );
                         })}

@@ -147,7 +147,7 @@ function SelectField({ label, value, onChange, options, className = '', disabled
   disabled?: boolean
 }) {
   return (
-    <label className={`relative flex min-w-0 flex-col gap-1.5 ${disabled ? 'opacity-45' : ''} ${className}`}>
+    <div className={`relative flex min-w-0 flex-col gap-1.5 ${disabled ? 'opacity-45' : ''} ${className}`}>
       <span className="text-[9px] font-bold uppercase tracking-[0.15em] text-zinc-500">{label}</span>
       <GlassSelect
         disabled={disabled}
@@ -157,7 +157,7 @@ function SelectField({ label, value, onChange, options, className = '', disabled
         ariaLabel={label}
         className="h-10 w-full"
       />
-    </label>
+    </div>
   )
 }
 

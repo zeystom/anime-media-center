@@ -1,5 +1,18 @@
 # Changelog
 
+## 3.2.0 — Whisper Accuracy Overhaul, Movie Detection, Discover & Completion Prompt Fixes
+
+### Whisper Studio & Subtitles
+- Switched default VAD across presets to `pyannote_v3` to capture child and higher-pitched speech without skipping lines.
+- Stopped forcing synthetic prompt strings (`"Dialogue from an anime episode."` / unrequested character lists) when no custom prompt is set, preventing skipped cue starts and leaked non-English artifacts.
+- Restored `condition_on_previous_text` (`true`), `compression_ratio_threshold` (`2.4`), and `--max_comma_cent 70` for natural multi-line timing.
+- Filtered non-Latin gibberish / stutter-loop hallucinations, merged 1-2 word spillover cues, and widened the player subtitle overlay (`max-w-[92vw]`) to avoid accidental 3-line wrapping.
+
+### UI & Playback
+- **Movie Detection:** added folder-name and AniList `MOVIE` format detection (`isFolderMovie`, `resolveEpisodeBadgeLabel`, `resolveResumeUnitLabel`) so movies show `Movie` and `Resume Movie` instead of `EP` / `Resume EP` in the Home hero banner, Recent Episodes rail, player Episode Drawer, Anime Detail view, and Season Hero chips.
+- **Completion Notification:** centered `CompletionPrompt` using a full-width flex container so Framer Motion's vertical slide animation no longer overrides horizontal centering.
+- **Discover Dropdowns:** fixed `SelectField` and `GlassSelect` click propagation so single-select filter dropdowns close cleanly after selection while the multi-select `Genre` picker stays open.
+
 ## 3.1.0 — Fast Multi-Connection Updater, Touchpad Magnetic Rail Scroll, Flush Card Badges & Episode Synopses
 
 ### Auto-Updater & Progress UI

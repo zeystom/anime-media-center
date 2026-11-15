@@ -317,6 +317,16 @@ export interface WhisperOptions {
   model?: string;
   language?: string;
   task?: 'transcribe' | 'translate';
+  vadMethod?:
+    | 'pyannote_v3'
+    | 'pyannote_onnx_v3'
+    | 'silero_v4_fw'
+    | 'silero_v5_fw'
+    | 'silero_v3'
+    | 'silero_v4'
+    | 'silero_v5'
+    | 'auditok'
+    | 'webrtc';
   vadThreshold?: number;
   vadMinSpeechDurationMs?: number;
   vadSpeechPadMs?: number;
@@ -331,6 +341,7 @@ export interface WhisperOptions {
   maxCommaCent?: number;
   sentence?: boolean;
   minDistToEnd?: number;
+  mergeSingleWords?: boolean;
   channelMode?: 'auto' | 'fc';
   speechNorm?: boolean;
   selectedFilePaths?: string[];

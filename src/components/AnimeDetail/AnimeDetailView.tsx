@@ -37,7 +37,7 @@ import { resolveAnimeTitle } from '../../utils/title'
 // ../../lib/releaseParser/index.ts, which pulls native/wasm deps unsuitable
 // for the renderer process.
 import { parseReleaseCore } from '../../lib/releaseParser/regexEngine.ts'
-import { formatFileSize, formatTime } from '../../utils/format'
+import { formatFileSize, formatTime, isFolderMovie } from '../../utils/format'
 import { normalizeAgeRating } from '../../utils/ageRating'
 import { useAgeRatings } from '../../hooks/useAgeRatings'
 import { showGlobalToast } from '../Toast'
@@ -586,7 +586,9 @@ const AnimeDetailViewImpl: React.FC<AnimeDetailViewProps> = ({
       '--anime-accent': `hsl(${themeHue} 78% 62%)`,
       '--anime-accent-soft': `hsla(${themeHue} 78% 62% / .16)`,
   } as React.CSSProperties
-  const isFeatureFilm = hero.format?.toUpperCase() === 'MOVIE'
+  const isFeatureFilm = hero.format
+    ? hero.format.toUpperCase() === 'MOVIE'
+    : Boolean(localFolder && isFolderMovie(localFolder))
 
   const ageRatingItems = useMemo(() => [{ idMal: hero.idMal }], [hero.idMal])
   const { ratings: ageRatings } = useAgeRatings(ageRatingItems)

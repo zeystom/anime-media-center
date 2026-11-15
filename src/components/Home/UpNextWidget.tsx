@@ -2,7 +2,7 @@ import React, { useEffect, useMemo, useRef, useState } from 'react';
 import { motion } from 'framer-motion';
 import { ArrowRight, Play, X } from 'lucide-react';
 import { Episode, PlaybackProgress, RemoteEpisodesResult } from '../../types';
-import { formatTime, cleanSeriesTitle, cleanEpisodeTitle } from '../../utils/format';
+import { formatTime, cleanSeriesTitle, cleanEpisodeTitle, resolveEpisodeBadgeLabel, resolveResumeUnitLabel } from '../../utils/format';
 
 export interface UpNextData {
   progress: PlaybackProgress;
@@ -12,6 +12,7 @@ export interface UpNextData {
   bannerUrl?: string | null;
   anilistId?: number | null;
   isUpNext: boolean;
+  isMovie?: boolean;
 }
 
 interface UpNextWidgetProps {
@@ -110,6 +111,7 @@ export const UpNextWidget: React.FC<UpNextWidgetProps> = ({ data, onPlay, onOpen
   // The Show more/less marker lives OUTSIDE the clamped paragraph — an inline
   // "…more" span sits past the clamp cut and would never be visible.
   const [animeDescription, setAnimeDescription] = useState<string | null>(null);
+  const [apiFormat, setApiFormat] = useState<string | null>(null);
   const descriptionRef = useRef<HTMLParagraphElement | null>(null);
   const [descriptionClamped, setDescriptionClamped] = useState(false);
   const [descriptionReaderOpen, setDescriptionReaderOpen] = useState(false);
@@ -143,12 +145,15 @@ export const UpNextWidget: React.FC<UpNextWidgetProps> = ({ data, onPlay, onOpen
 
   useEffect(() => {
     setAnimeDescription(null);
+    setApiFormat(null);
     setDescriptionReaderOpen(false);
     if (!anilistId || !window.electronAPI?.getCatalogDetails) return;
     let cancelled = false;
     window.electronAPI.getCatalogDetails(anilistId)
       .then((details) => {
-        if (cancelled || !details?.description) return;
+        if (cancelled || !details) return;
+        if (details.format) setApiFormat(details.format);
+        if (!details.description) return;
         const text = details.description
           .replace(/<[^>]*>/g, ' ')
           .replace(/\s+/g, ' ')
@@ -204,12 +209,15 @@ export const UpNextWidget: React.FC<UpNextWidgetProps> = ({ data, onPlay, onOpen
     }
   };
   const remaining = Math.max(0, progress.duration - progress.currentTime);
+  const isMovie = apiFormat ? apiFormat.toUpperCase() === 'MOVIE' : Boolean(data.isMovie);
+  const badgeLabel = isMovie ? resolveEpisodeBadgeLabel(progress.episodeNumber, true) : progress.episodeNumber;
+  const resumeTarget = resolveResumeUnitLabel(progress.episodeNumber, isMovie);
   const parsedEpisodeTitle = cleanEpisodeTitle(episode.fileName).displayTitle;
   const isReleaseText = (value: string | null | undefined) =>
     !value || /[\[\]]/.test(value) || /\b(?:2160p|1080p|720p|web[- ]?rip|web[- ]?dl|bluray|h\.?265|x265|hevc|e[- ]?ac[- ]?3|multi[- ]audio|dual[- ]audio|repack)\b/i.test(value);
   const episodeTitle = [apiEpisodeTitle, episode.kitsuTitle, episode.episodeTitle, parsedEpisodeTitle]
     .find((candidate) => !isReleaseText(candidate) && !/^episode\s*\d*$/i.test(candidate || ''))
-    || `Episode ${progress.episodeNumber || episode.episodeNumber || ''}`.trim();
+    || (isMovie && badgeLabel === 'Movie' ? 'Movie' : `Episode ${progress.episodeNumber || episode.episodeNumber || ''}`.trim());
   const activeLogoUrl = apiLogoUrls[logoIdx] ?? null;
   const showLogo = Boolean(activeLogoUrl && logoLoaded);
 
@@ -266,7 +274,7 @@ export const UpNextWidget: React.FC<UpNextWidgetProps> = ({ data, onPlay, onOpen
           <span className="inline-flex items-center gap-2 rounded-full border px-3 py-1 text-[10px] font-extrabold uppercase tracking-[0.14em] shadow-[0_0_24px_rgba(244,63,94,0.12)]" style={{ borderColor: `hsla(${themeHue}, 78%, 70%, .38)`, backgroundColor: `hsla(${themeHue}, 78%, 55%, .17)`, color: `hsl(${themeHue} 85% 82%)` }}>
             <span className="h-1.5 w-1.5 animate-pulse rounded-full" style={{ backgroundColor: `hsl(${themeHue} 88% 72%)` }} />{isUpNext ? 'Up next' : 'Continue playing'}
           </span>
-          {progress.episodeNumber && <span className="rounded-md border border-white/15 bg-black/35 px-2.5 py-1 font-mono text-[11px] font-semibold text-zinc-200 backdrop-blur">{progress.episodeNumber}</span>}
+          {badgeLabel && <span className="rounded-md border border-white/15 bg-black/35 px-2.5 py-1 font-mono text-[11px] font-semibold text-zinc-200 backdrop-blur">{badgeLabel}</span>}
           <span className="rounded-md border border-white/15 bg-black/35 px-2.5 py-1 font-mono text-[11px] text-zinc-300 backdrop-blur">{formatTime(progress.currentTime)} / {formatTime(progress.duration)}</span>
         </div>
 
@@ -342,8 +350,8 @@ export const UpNextWidget: React.FC<UpNextWidgetProps> = ({ data, onPlay, onOpen
         </div>
 
         <div className="mt-6 flex flex-wrap items-center gap-3">
-          <button onClick={() => onPlay(episode, startAt)} className="btn-hue inline-flex items-center gap-2.5 rounded-2xl px-6 py-3.5 text-sm font-extrabold text-white transition hover:-translate-y-0.5 active:translate-y-0" title={`Resume ${progress.episodeNumber || 'episode'}`}>
-            <Play className="h-4 w-4 fill-current" /> Resume {progress.episodeNumber || 'episode'}
+          <button onClick={() => onPlay(episode, startAt)} className="btn-hue inline-flex items-center gap-2.5 rounded-2xl px-6 py-3.5 text-sm font-extrabold text-white transition hover:-translate-y-0.5 active:translate-y-0" title={`Resume ${resumeTarget}`}>
+            <Play className="h-4 w-4 fill-current" /> Resume {resumeTarget}
           </button>
           {onOpenDetails && <button onClick={onOpenDetails} className="inline-flex items-center gap-2 rounded-2xl border border-white/15 bg-white/[0.06] px-5 py-3.5 text-sm font-semibold text-zinc-100 backdrop-blur transition hover:bg-white/10">
             Anime overview <ArrowRight className="h-4 w-4" />

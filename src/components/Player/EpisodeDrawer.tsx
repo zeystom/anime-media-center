@@ -1,7 +1,7 @@
 import React, { useState, useEffect, useRef, useMemo } from 'react';
 import { X, Play, CheckCircle2, ListVideo, Film } from 'lucide-react';
 import { Episode, PlaybackProgress } from '../../types';
-import { formatTime, cleanEpisodeTitle, cleanSeriesTitle, formatEpisodeDisplayTitle } from '../../utils/format';
+import { formatTime, cleanEpisodeTitle, cleanSeriesTitle, formatEpisodeDisplayTitle, isFolderMovie, resolveEpisodeBadgeLabel } from '../../utils/format';
 import { parseReleaseCore } from '../../lib/releaseParser/regexEngine';
 import { PLACEHOLDER_EPISODE_IMAGE } from '../../utils/assets';
 
@@ -20,6 +20,7 @@ interface EpisodeDrawerProps {
   folderPath?: string;
   anilistId?: number | null;
   remoteEpisodes?: Map<number, { title: string | null; thumbnailUrl: string | null }>;
+  isMovie?: boolean;
 }
 
 interface EpisodeItemProps {
@@ -29,6 +30,7 @@ interface EpisodeItemProps {
   onSelect: () => void;
   isCurrentRef?: (el: HTMLDivElement | null) => void;
   remoteInfo?: { title: string | null; thumbnailUrl: string | null };
+  isMovie?: boolean;
 }
 
 const EpisodeDrawerItem: React.FC<EpisodeItemProps> = ({
@@ -38,6 +40,7 @@ const EpisodeDrawerItem: React.FC<EpisodeItemProps> = ({
   onSelect,
   isCurrentRef,
   remoteInfo,
+  isMovie = false,
 }) => {
   const primaryThumbnail = remoteInfo?.thumbnailUrl || episode.kitsuThumbnail || null;
   const fallbackThumbnail = episode.thumbnailUrl || null;
@@ -106,7 +109,7 @@ const EpisodeDrawerItem: React.FC<EpisodeItemProps> = ({
               loading="lazy"
             />
             <span className="absolute bottom-1 right-1 px-1 py-0.5 rounded text-[9px] font-bold bg-black/75 text-zinc-300 border border-white/10">
-              {parsed.episodeLabel}
+              {resolveEpisodeBadgeLabel(parsed.episodeLabel, isMovie)}
             </span>
           </div>
         )}
@@ -193,8 +196,10 @@ export const EpisodeDrawer: React.FC<EpisodeDrawerProps> = ({
   folderPath,
   anilistId,
   remoteEpisodes,
+  isMovie,
 }) => {
   const activeElementRef = useRef<HTMLDivElement | null>(null);
+  const resolvedIsMovie = isMovie ?? isFolderMovie({ folderName: animeTitle || '', episodes });
 
   // Close drawer on Escape key when open
   useEffect(() => {
@@ -368,6 +373,7 @@ export const EpisodeDrawer: React.FC<EpisodeDrawerProps> = ({
                 isPlaying={isPlaying}
                 progress={progress}
                 remoteInfo={remoteInfo}
+                isMovie={resolvedIsMovie}
                 onSelect={() => {
                   onSelectEpisode(ep);
                   onClose();

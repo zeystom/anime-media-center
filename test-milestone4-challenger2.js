@@ -708,6 +708,45 @@ runTest('5.2 FolderBrowser search matrix: zero match query never displays unconf
   assert.strictEqual(state2.renderSelectedDetails, false);
 });
 
+// ============================================================================
+// CHALLENGE GROUP 6: Movie Labeling, CompletionPrompt Centering & Discover Select
+// ============================================================================
+console.log('\n--- CHALLENGE GROUP 6: Movie Labeling, CompletionPrompt & Discover Select ---');
+
+runTest('6.1 UpNextWidget renders Movie / Resume Movie instead of EP when isMovie=true', () => {
+  for (const epNum of ['EP', '', undefined]) {
+    const html = cleanSsr(renderUpNext(upNextPayload({
+      progress: { episodeNumber: epNum },
+      episode: { fileName: 'The Disappearance of Haruhi Suzumiya (2010).mkv', episodeNumber: 'EP' },
+      seasonName: 'The Disappearance of Haruhi Suzumiya',
+      isMovie: true,
+    })));
+    assert(html.includes('>Movie<'), `Expected Movie chip when isMovie=true (episodeNumber=${epNum})`);
+    assert(html.includes('Resume Movie'), `Expected "Resume Movie" button when isMovie=true (episodeNumber=${epNum})`);
+    assert(html.includes('title="Resume Movie"'), `Expected "Resume Movie" tooltip when isMovie=true`);
+    assert(!html.includes('Resume EP'), `Must not emit "Resume EP" for a movie`);
+  }
+});
+
+runTest('6.2 CompletionPrompt centers via flex wrapper instead of conflicting transform with motion.div', () => {
+  const completionPromptPath = path.join(__dirname, 'src', 'components', 'common', 'CompletionPrompt.tsx');
+  const src = fs.readFileSync(completionPromptPath, 'utf-8');
+  assert(src.includes('inset-x-0') && src.includes('flex justify-center'), 'CompletionPrompt must center with fixed inset-x-0 flex justify-center');
+  assert(!src.includes('-translate-x-1/2'), 'CompletionPrompt must not use -translate-x-1/2 alongside framer-motion y transform');
+});
+
+runTest('6.3 Discover SelectField avoids <label> re-toggle while Genre multi-select stays open', () => {
+  const discoverSrc = fs.readFileSync(path.join(__dirname, 'src', 'components', 'Home', 'DiscoverView.tsx'), 'utf-8');
+  const glassSelectSrc = fs.readFileSync(path.join(__dirname, 'src', 'components', 'common', 'GlassSelect.tsx'), 'utf-8');
+
+  const selectFieldMatch = discoverSrc.match(/function SelectField[\s\S]*?\n\}/);
+  assert(selectFieldMatch, 'DiscoverView must define SelectField');
+  assert(!selectFieldMatch[0].includes('<label'), 'SelectField must not wrap GlassSelect in <label> (which forwards option clicks back to trigger)');
+  assert(glassSelectSrc.includes('event.stopPropagation()'), 'GlassSelect option clicks must call stopPropagation()');
+  const toggleGenreMatch = discoverSrc.match(/const toggleGenre = [\s\S]*?\n  \}/);
+  assert(toggleGenreMatch && !toggleGenreMatch[0].includes('setIsGenrePickerOpen(false)'), 'Genre multi-select must stay open after toggling a genre');
+});
+
 console.log('\n================================================================');
 console.log(`ALL CHALLENGER 2 EMPIRICAL TESTS PASSED: ${passedTests} / ${totalTests} (100%)`);
 console.log('================================================================\n');

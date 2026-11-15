@@ -28,7 +28,7 @@ import { TrackControls } from './TrackControls';
 import { EpisodeDrawer } from './EpisodeDrawer';
 import { MagneticEpisodePeek } from './MagneticEpisodePeek';
 import { RippleIndicator, RippleType } from './RippleIndicator';
-import { formatTime, cleanEpisodeTitle, cleanSeriesTitle, formatEpisodeDisplayTitle } from '../../utils/format';
+import { formatTime, cleanEpisodeTitle, cleanSeriesTitle, formatEpisodeDisplayTitle, isFolderMovie } from '../../utils/format';
 import { parseReleaseCore } from '../../lib/releaseParser/regexEngine';
 import { PLACEHOLDER_EPISODE_IMAGE } from '../../utils/assets';
 
@@ -2157,6 +2157,7 @@ export const VideoPlayer: React.FC<VideoPlayerProps> = ({
         folderPath={folderPath}
         anilistId={anilistId}
         remoteEpisodes={remoteEpisodes}
+        isMovie={Boolean(folder && isFolderMovie(folder))}
       />
 
       {/* Playback Error Overlay */}

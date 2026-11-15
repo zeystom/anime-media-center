@@ -1,7 +1,7 @@
 import React, { useEffect, useMemo, useRef, useState } from 'react'
 import { Play, Clock3 } from 'lucide-react'
 import type { AnimeFolder, Episode, PlaybackProgress } from '../../types'
-import { cleanEpisodeTitle, formatTime } from '../../utils/format'
+import { cleanEpisodeTitle, formatTime, isFolderMovie, resolveEpisodeBadgeLabel } from '../../utils/format'
 import { parseReleaseCore } from '../../lib/releaseParser/regexEngine.ts'
 import { HorizontalScroller } from '../common/HorizontalScroller'
 import { PLACEHOLDER_EPISODE_IMAGE } from '../../utils/assets'
@@ -142,6 +142,8 @@ export const RecentEpisodesRail: React.FC<RecentEpisodesRailProps> = ({ folders,
 
       <HorizontalScroller label="Recently watched episodes" className="flex gap-4 overflow-x-auto pb-3">
         {recent.map(({ folder, episode, progress }) => {
+          const isMovie = isFolderMovie(folder)
+          const badgeLabel = resolveEpisodeBadgeLabel(episode.episodeNumber, isMovie)
           const episodeNum = parseReleaseCore(episode.fileName).episodeNumbers[0]
           const remote = folder.anilistId != null && Number.isInteger(episodeNum)
             ? remoteMeta.get(`${folder.anilistId}:${episodeNum}`)
@@ -154,7 +156,7 @@ export const RecentEpisodesRail: React.FC<RecentEpisodesRailProps> = ({ folders,
               ? rawTitle
               : parsedTitle && !titleLooksLikeRelease(parsedTitle)
                 ? parsedTitle
-                : remote?.title || `Episode ${episode.episodeNumber || ''}`
+                : remote?.title || (isMovie && badgeLabel === 'Movie' ? 'Movie' : `Episode ${episode.episodeNumber || ''}`)
           const duration = progress.duration || episode.duration || 0
           const percent = duration > 0 ? Math.min(100, Math.round((progress.currentTime / duration) * 100)) : 0
           const seriesTitle = folder.canonicalTitle || folder.folderName
@@ -174,7 +176,7 @@ export const RecentEpisodesRail: React.FC<RecentEpisodesRailProps> = ({ folders,
                 <div className="absolute inset-0 flex items-center justify-center bg-black/0 transition group-hover:bg-black/30">
                   <span className="flex h-11 w-11 scale-90 items-center justify-center rounded-full bg-rose-500 text-white opacity-0 shadow-[0_0_24px_rgba(244,63,94,0.45)] transition group-hover:scale-100 group-hover:opacity-100"><Play className="ml-0.5 h-4 w-4 fill-current" /></span>
                 </div>
-                <span className="absolute left-2.5 top-2.5 rounded-md border border-white/10 bg-black/85 px-2 py-1 font-mono text-[10px] font-bold text-white">{episode.episodeNumber || 'EP'}</span>
+                <span className="absolute left-2.5 top-2.5 rounded-md border border-white/10 bg-black/85 px-2 py-1 font-mono text-[10px] font-bold text-white">{badgeLabel}</span>
                 <div className="absolute inset-x-0 bottom-0 h-1 bg-white/15"><div className="h-full bg-gradient-to-r from-rose-500 to-cyan-300" style={{ width: `${percent}%` }} /></div>
               </div>
               <div className="p-3.5">
