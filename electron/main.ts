@@ -10,6 +10,11 @@ import { probeMkv, extractEmbeddedSubtitle, extractEmbeddedAss, extractEmbeddedP
 import { isPgsCodec, isUnsupportedBitmapCodec, registerPgsSupFile } from './pgs';
 import { whisperManager } from './whisper';
 import { findExternalSubtitles } from './subtitles';
+import {
+  extractSignsFromEmbeddedAssTrack,
+  searchOnlineSubtitles,
+  downloadAndSaveOnlineSubtitle,
+} from './subtitleSearch';
 import { AnimeFolder, Episode, PlaybackProgress, SeasonPreference, VIDEO_EXTENSIONS, ReleaseSearchResult, ProviderReport, DiscoverCatalogParams } from './types';
 import { getKitsuMetadata, fetchAniSkipTimes } from './kitsu';
 import { extractEpisodeNumber } from './episodes';
@@ -1519,6 +1524,61 @@ function setupIpcHandlers() {
     } catch {
       return { success: false };
     }
+  });
+
+  ipcMain.handle('subtitles:extract-signs-from-embedded', async (_event, params: { filePath?: string; trackIndex?: number }) => {
+    if (!params?.filePath || typeof params.filePath !== 'string' || typeof params.trackIndex !== 'number') {
+      return { success: false, error: 'Invalid subtitle extraction parameters.' };
+    }
+    return extractSignsFromEmbeddedAssTrack({
+      filePath: params.filePath,
+      trackIndex: params.trackIndex,
+    });
+  });
+
+  ipcMain.handle('subtitles:search-online', async (_event, params: {
+    filePath?: string;
+    folderPath?: string;
+    animeTitle?: string;
+    anilistId?: number | null;
+    mode?: 'signs' | 'all';
+    queryOverride?: string;
+  }) => {
+    if (!params?.filePath || typeof params.filePath !== 'string') {
+      return {
+        results: [],
+        reports: [],
+        resolvedIds: { anilistId: null, imdbId: null, tvdbId: null },
+        episodeNumber: null,
+        seasonNumber: null,
+        queryUsed: params?.animeTitle || '',
+      };
+    }
+    return searchOnlineSubtitles({
+      filePath: params.filePath,
+      folderPath: params.folderPath,
+      animeTitle: params.animeTitle,
+      anilistId: params.anilistId ?? null,
+      mode: params.mode === 'all' ? 'all' : 'signs',
+      queryOverride: params.queryOverride,
+    });
+  });
+
+  ipcMain.handle('subtitles:download-online', async (_event, params: {
+    filePath?: string;
+    result?: any;
+    targetMode?: 'signs' | 'main';
+    extractSignsOnly?: boolean;
+  }) => {
+    if (!params?.filePath || typeof params.filePath !== 'string' || !params?.result) {
+      return { success: false, error: 'Invalid subtitle download parameters.' };
+    }
+    return downloadAndSaveOnlineSubtitle({
+      filePath: params.filePath,
+      result: params.result,
+      targetMode: params.targetMode === 'main' ? 'main' : 'signs',
+      extractSignsOnly: params.extractSignsOnly,
+    });
   });
 
   ipcMain.handle('save-playback-progress', async (_event, progress: PlaybackProgress) => {

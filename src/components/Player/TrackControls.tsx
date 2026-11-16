@@ -12,9 +12,27 @@ import {
   Palette,
   SlidersHorizontal,
   Layers,
+  Search,
+  Wand2,
+  Download,
+  KeyRound,
+  Loader2,
+  AlertCircle,
+  CheckCircle2,
 } from 'lucide-react';
-import { AudioTrack, SubtitleTrack } from '../../types';
+import {
+  AudioTrack,
+  SubtitleTrack,
+  AppSettings,
+  VideoMetadata,
+  OnlineSubtitleResult,
+  SubtitleSearchResponse,
+} from '../../types';
 import { getSubtitleTextShadow } from './SubtitleOverlay';
+import {
+  isTopSignsCandidate,
+  isAllowedSignsLanguage,
+} from '../../../electron/assSignsExtractor';
 
 interface TrackControlsProps {
   isOpen: boolean;
@@ -45,6 +63,18 @@ interface TrackControlsProps {
   outlineColor?: string;
   onUpdateOutlineColor?: (color: string) => void;
   onResetSubtitleStyle?: () => void;
+  episodeFilePath?: string;
+  folderPath?: string;
+  animeTitle?: string;
+  anilistId?: number | null;
+  settings?: AppSettings;
+  onUpdateSettings?: (updated: Partial<AppSettings>) => void;
+  onSubtitleTrackAdded?: (
+    updatedMeta: VideoMetadata,
+    trackId: string,
+    targetMode: 'signs' | 'main',
+    statusMsg?: string
+  ) => void;
 }
 
 const FONT_FAMILIES: Record<string, string> = {
@@ -101,7 +131,24 @@ const BG_OPTIONS: Array<{ id: 'none' | 'translucent' | 'semi' | 'solid'; label: 
 
 function normalizeSubtitleTitle(track: SubtitleTrack): string {
   if (track.type === 'external') {
-    return 'External .srt (Whisper)';
+    if (track.isSigns || track.isForced) {
+      const cleaned = (track.title || '')
+        .replace(/^External:\s*/i, '')
+        .trim();
+      if (cleaned && !/\.(?:ass|ssa|srt|vtt)$/i.test(cleaned)) {
+        return cleaned;
+      }
+      return 'English — Signs / Songs (External)';
+    }
+    if (
+      track.isDubtitle ||
+      /whisper/i.test(track.title || '') ||
+      (track.filePath && /\.whisper\./i.test(track.filePath))
+    ) {
+      return 'External .srt (Whisper)';
+    }
+    const cleaned = (track.title || '').replace(/^External:\s*/i, '').trim();
+    return cleaned || 'English — External Subtitles';
   }
   const lang = track.languageName || 'English';
   const rawTitle = (track.title || '').trim();
@@ -127,12 +174,11 @@ function normalizeSubtitleTitle(track: SubtitleTrack): string {
 }
 
 function formatSubtitleCodecBadge(track: SubtitleTrack): string {
-  if (track.type === 'external') return 'SRT';
   const codec = (track.codec || '').toUpperCase();
   if (!codec) return 'SRT';
   if (/PGS/.test(codec)) return 'PGS';
   if (/DVD_SUBTITLE|DVDSUB|VOBSUB/.test(codec)) return 'VOBSUB';
-  if (/WEBVTT/.test(codec)) return 'VTT';
+  if (/WEBVTT|VTT/.test(codec)) return 'VTT';
   return codec.replace('SUBRIP', 'SRT');
 }
 
@@ -203,9 +249,34 @@ export const TrackControls: React.FC<TrackControlsProps> = ({
   outlineColor = '#000000',
   onUpdateOutlineColor,
   onResetSubtitleStyle,
+  episodeFilePath,
+  folderPath,
+  animeTitle,
+  anilistId,
+  settings,
+  onUpdateSettings,
+  onSubtitleTrackAdded,
 }) => {
-  const [activeTab, setActiveTab] = useState<'tracks' | 'styling'>('tracks');
+  const [activeTab, setActiveTab] = useState<'tracks' | 'styling' | 'search'>('tracks');
   const [previewBackdrop, setPreviewBackdrop] = useState<'spectrum' | 'dark' | 'bright'>('spectrum');
+
+  // Local embedded ASS -> Signs extraction state
+  const [extractingEmbedded, setExtractingEmbedded] = useState(false);
+  const [selectedExtractTrackIdx, setSelectedExtractTrackIdx] = useState<number | null>(null);
+  const [signsActionStatus, setSignsActionStatus] = useState<{ type: 'success' | 'error'; text: string } | null>(null);
+
+  // Online subtitle search state
+  const [searchMode, setSearchMode] = useState<'signs' | 'all'>('signs');
+  const [searchTargetMode, setSearchTargetMode] = useState<'signs' | 'main'>('signs');
+  const [searchQuery, setSearchQuery] = useState<string>(animeTitle || '');
+  const [searchingOnline, setSearchingOnline] = useState<boolean>(false);
+  const [searchResponse, setSearchResponse] = useState<SubtitleSearchResponse | null>(null);
+  const [searchError, setSearchError] = useState<string | null>(null);
+  const [downloadingResultId, setDownloadingResultId] = useState<string | null>(null);
+  const [showApiKeysBar, setShowApiKeysBar] = useState<boolean>(false);
+  const [subsourceKeyDraft, setSubsourceKeyDraft] = useState<string>(settings?.subsourceApiKey || '');
+  const [subdlKeyDraft, setSubdlKeyDraft] = useState<string>(settings?.subdlApiKey || '');
+  const [opensubsKeyDraft, setOpensubsKeyDraft] = useState<string>(settings?.opensubtitlesApiKey || '');
 
   const currOutlineIndex = Math.max(
     0,
@@ -222,8 +293,14 @@ export const TrackControls: React.FC<TrackControlsProps> = ({
   useEffect(() => {
     if (isOpen) {
       setActiveTab('tracks');
+      setSignsActionStatus(null);
+      setSearchError(null);
+      setSearchQuery(animeTitle || '');
+      setSubsourceKeyDraft(settings?.subsourceApiKey || '');
+      setSubdlKeyDraft(settings?.subdlApiKey || '');
+      setOpensubsKeyDraft(settings?.opensubtitlesApiKey || '');
     }
-  }, [isOpen]);
+  }, [isOpen, animeTitle, settings?.subsourceApiKey, settings?.subdlApiKey, settings?.opensubtitlesApiKey]);
 
   useEffect(() => {
     if (!isOpen) return;
@@ -237,14 +314,136 @@ export const TrackControls: React.FC<TrackControlsProps> = ({
     return () => window.removeEventListener('keydown', handleKeyDown);
   }, [isOpen]);
 
+  // Embedded ASS tracks eligible for instant local Signs & Songs extraction
+  const extractableAssTracks = subtitleTracks.filter(
+    (track) =>
+      track.type === 'embedded' &&
+      track.index !== null &&
+      /ass|ssa/i.test(track.codec || '') &&
+      isAllowedSignsLanguage(track.language) &&
+      !isTopSignsCandidate(track, null)
+  );
+
+  const effectiveExtractTrackIdx =
+    selectedExtractTrackIdx !== null && extractableAssTracks.some((t) => t.index === selectedExtractTrackIdx)
+      ? selectedExtractTrackIdx
+      : (extractableAssTracks[0]?.index ?? null);
+
+  const runOnlineSearch = async (modeOverride?: 'signs' | 'all', queryTextOverride?: string) => {
+    if (!episodeFilePath || !window.electronAPI?.searchOnlineSubtitles) return;
+    const activeMode = modeOverride ?? searchMode;
+    const q = (queryTextOverride !== undefined ? queryTextOverride : searchQuery).trim();
+    setSearchingOnline(true);
+    setSearchError(null);
+    try {
+      const res = await window.electronAPI.searchOnlineSubtitles({
+        filePath: episodeFilePath,
+        folderPath,
+        animeTitle: animeTitle || undefined,
+        anilistId: anilistId ?? null,
+        mode: activeMode,
+        queryOverride: q && q !== (animeTitle || '').trim() ? q : undefined,
+      });
+      setSearchResponse(res);
+      if (res.queryUsed && !q) {
+        setSearchQuery(res.queryUsed);
+      }
+    } catch (err: any) {
+      setSearchError(err?.message || 'Subtitle search failed.');
+    } finally {
+      setSearchingOnline(false);
+    }
+  };
+
+  const openSearchTab = (targetMode: 'signs' | 'main') => {
+    const mode: 'signs' | 'all' = targetMode === 'signs' ? 'signs' : 'all';
+    setSearchTargetMode(targetMode);
+    setSearchMode(mode);
+    setSearchError(null);
+    setActiveTab('search');
+    void runOnlineSearch(mode, searchQuery || animeTitle || '');
+  };
+
+  const handleExtractSignsFromEmbedded = async () => {
+    if (!episodeFilePath || effectiveExtractTrackIdx === null || !window.electronAPI?.extractSignsFromEmbeddedSub) return;
+    setExtractingEmbedded(true);
+    setSignsActionStatus(null);
+    try {
+      const res = await window.electronAPI.extractSignsFromEmbeddedSub({
+        filePath: episodeFilePath,
+        trackIndex: effectiveExtractTrackIdx,
+      });
+      if (res?.success && res.metadata && res.trackId) {
+        const msg = res.keptCuesCount
+          ? `Extracted ${res.keptCuesCount} sign/song cues`
+          : 'Signs track extracted';
+        setSignsActionStatus({ type: 'success', text: msg });
+        onSubtitleTrackAdded?.(res.metadata, res.trackId, 'signs', msg);
+      } else {
+        setSignsActionStatus({
+          type: 'error',
+          text: res?.error || 'No signs or songs layers were found in that track.',
+        });
+      }
+    } catch (err: any) {
+      setSignsActionStatus({
+        type: 'error',
+        text: err?.message || 'Extraction failed.',
+      });
+    } finally {
+      setExtractingEmbedded(false);
+    }
+  };
+
+  const handleDownloadResult = async (item: OnlineSubtitleResult) => {
+    if (!episodeFilePath || !window.electronAPI?.downloadOnlineSubtitle) return;
+    setDownloadingResultId(item.id);
+    setSearchError(null);
+    try {
+      const res = await window.electronAPI.downloadOnlineSubtitle({
+        filePath: episodeFilePath,
+        result: item,
+        targetMode: searchTargetMode,
+        extractSignsOnly: searchTargetMode === 'signs',
+      });
+      if (res?.success && res.metadata && res.trackId) {
+        const msg =
+          searchTargetMode === 'signs'
+            ? res.keptCuesCount
+              ? `Added Signs track (${res.keptCuesCount} cues)`
+              : 'Added Signs & Songs track'
+            : 'Added external subtitle track';
+        setSignsActionStatus({ type: 'success', text: msg });
+        onSubtitleTrackAdded?.(res.metadata, res.trackId, searchTargetMode, msg);
+        setActiveTab('tracks');
+      } else {
+        setSearchError(res?.error || 'Could not apply the selected subtitle.');
+      }
+    } catch (err: any) {
+      setSearchError(err?.message || 'Subtitle download failed.');
+    } finally {
+      setDownloadingResultId(null);
+    }
+  };
+
+  const handleSaveApiKeys = async () => {
+    const patch: Partial<AppSettings> = {
+      subsourceApiKey: subsourceKeyDraft.trim(),
+      subdlApiKey: subdlKeyDraft.trim(),
+      opensubtitlesApiKey: opensubsKeyDraft.trim(),
+    };
+    if (window.electronAPI?.updateSettings) {
+      await window.electronAPI.updateSettings(patch).catch(() => {});
+    }
+    onUpdateSettings?.(patch);
+    setShowApiKeysBar(false);
+    void runOnlineSearch(searchMode, searchQuery);
+  };
+
   if (!isOpen) return null;
 
   // Filter 2nd Subtitle / Signs (Top):
-  const topSignsTracks = subtitleTracks.filter((track) => {
-    const isEng = track.language === 'eng' || track.language === 'en';
-    const isSignOrForced = track.isSigns || track.isForced || /sign|song|forced/i.test(track.title);
-    return isEng && isSignOrForced && track.id !== selectedMainSubId;
-  });
+  const topSignsTracks = subtitleTracks.filter((track) => isTopSignsCandidate(track, selectedMainSubId));
 
   return (
     <div
@@ -265,6 +464,10 @@ export const TrackControls: React.FC<TrackControlsProps> = ({
               <div className="w-8 h-8 rounded-lg bg-rose-500/20 text-rose-400 flex items-center justify-center border border-rose-500/30">
                 <Sparkles className="w-4 h-4" />
               </div>
+            ) : activeTab === 'search' ? (
+              <div className="w-8 h-8 rounded-lg bg-indigo-500/20 text-indigo-400 flex items-center justify-center border border-indigo-500/30">
+                <Search className="w-4 h-4" />
+              </div>
             ) : (
               <div className="w-8 h-8 rounded-lg bg-red-600/20 text-red-400 flex items-center justify-center border border-red-500/30">
                 <Subtitles className="w-4 h-4" />
@@ -272,11 +475,19 @@ export const TrackControls: React.FC<TrackControlsProps> = ({
             )}
             <div>
               <h3 className="text-base font-bold text-white tracking-tight">
-                {activeTab === 'styling' ? 'Advanced Subtitle Styling' : 'Audio & Subtitle Manager'}
+                {activeTab === 'styling'
+                  ? 'Advanced Subtitle Styling'
+                  : activeTab === 'search'
+                  ? searchTargetMode === 'signs'
+                    ? 'Search Signs & Songs Online'
+                    : 'Search Subtitles Online'
+                  : 'Audio & Subtitle Manager'}
               </h3>
               <p className="text-xs text-zinc-400">
                 {activeTab === 'styling'
                   ? 'Custom styling applied live to external, dialogue, and signs subtitles'
+                  : activeTab === 'search'
+                  ? 'Downloads lightweight ASS/SRT tracks and auto-filters Signs & Songs when needed'
                   : 'Settings automatically persist for this entire anime season'}
               </p>
             </div>
@@ -352,6 +563,17 @@ export const TrackControls: React.FC<TrackControlsProps> = ({
                     <Subtitles className="w-4 h-4 text-emerald-400" />
                     <span>Main Subtitle (Bottom)</span>
                   </div>
+                  {episodeFilePath && (
+                    <button
+                      type="button"
+                      onClick={() => openSearchTab('main')}
+                      className="flex items-center space-x-1 px-2 py-0.5 rounded-md bg-zinc-800/90 hover:bg-zinc-700 text-zinc-300 hover:text-white border border-white/10 text-[10px] font-semibold normal-case tracking-normal transition-colors"
+                      title="Search online for full dialogue subtitles"
+                    >
+                      <Search className="w-3 h-3 text-emerald-400" />
+                      <span>Search</span>
+                    </button>
+                  )}
                 </div>
 
                 <div className="space-y-1.5 max-h-72 overflow-y-auto pr-1">
@@ -468,6 +690,72 @@ export const TrackControls: React.FC<TrackControlsProps> = ({
                     </div>
                   )}
                 </div>
+
+                {/* Signs & Songs Quick Actions: Local Embedded ASS Extraction + Online Search */}
+                {episodeFilePath && (
+                  <div className="space-y-1.5 pt-1">
+                    {extractableAssTracks.length > 0 && (
+                      <div className="p-2 rounded-xl bg-zinc-900/70 border border-zinc-800/90 space-y-1.5">
+                        {extractableAssTracks.length > 1 && (
+                          <select
+                            value={effectiveExtractTrackIdx ?? ''}
+                            onChange={(e) => setSelectedExtractTrackIdx(Number(e.target.value))}
+                            className="w-full px-2 py-1 rounded-lg bg-zinc-950 border border-zinc-800 text-[11px] text-zinc-300 focus:outline-none focus:border-rose-500/50"
+                            aria-label="Source ASS track for signs extraction"
+                          >
+                            {extractableAssTracks.map((t, i) => (
+                              <option key={t.id} value={t.index ?? ''}>
+                                {getSubTrackDisplay(t, i, extractableAssTracks).title}
+                              </option>
+                            ))}
+                          </select>
+                        )}
+                        <button
+                          type="button"
+                          onClick={handleExtractSignsFromEmbedded}
+                          disabled={extractingEmbedded}
+                          className="w-full flex items-center justify-center space-x-1.5 px-2.5 py-1.5 rounded-lg bg-rose-500/15 hover:bg-rose-500/25 text-rose-200 border border-rose-500/30 text-[11px] font-semibold transition-all disabled:opacity-50"
+                          title="Filter signs, titles & songs from the embedded full ASS track (instant, offline)"
+                        >
+                          {extractingEmbedded ? (
+                            <Loader2 className="w-3.5 h-3.5 animate-spin text-rose-300" />
+                          ) : (
+                            <Wand2 className="w-3.5 h-3.5 text-rose-400" />
+                          )}
+                          <span>
+                            {extractingEmbedded ? 'Extracting Signs...' : 'Extract Signs from Embedded ASS'}
+                          </span>
+                        </button>
+                      </div>
+                    )}
+
+                    <button
+                      type="button"
+                      onClick={() => openSearchTab('signs')}
+                      className="w-full flex items-center justify-center space-x-1.5 px-3 py-2 rounded-xl bg-zinc-800/80 hover:bg-zinc-700/80 text-zinc-200 hover:text-white border border-white/10 text-xs font-semibold transition-all"
+                    >
+                      <Search className="w-3.5 h-3.5 text-rose-400" />
+                      <span>Search Signs Online</span>
+                    </button>
+
+                    {signsActionStatus && (
+                      <div
+                        className={`flex items-center space-x-1.5 px-2.5 py-1.5 rounded-lg text-[11px] border ${
+                          signsActionStatus.type === 'success'
+                            ? 'bg-emerald-500/10 border-emerald-500/30 text-emerald-300'
+                            : 'bg-amber-500/10 border-amber-500/30 text-amber-300'
+                        }`}
+                      >
+                        {signsActionStatus.type === 'success' ? (
+                          <CheckCircle2 className="w-3.5 h-3.5 shrink-0" />
+                        ) : (
+                          <AlertCircle className="w-3.5 h-3.5 shrink-0" />
+                        )}
+                        <span className="truncate">{signsActionStatus.text}</span>
+                      </div>
+                    )}
+                  </div>
+                )}
               </div>
             </div>
 
@@ -1012,6 +1300,275 @@ export const TrackControls: React.FC<TrackControlsProps> = ({
                   Done
                 </button>
               </div>
+            </div>
+          </div>
+        )}
+
+        {/* TAB 3: Online Subtitle & Signs Search */}
+        {activeTab === 'search' && (
+          <div className="py-4 space-y-4 animate-in fade-in slide-in-from-right-2 duration-200">
+            {/* Search Bar & Mode Controls */}
+            <div className="flex flex-col sm:flex-row sm:items-center gap-2.5">
+              <div className="flex items-center bg-zinc-900 p-1 rounded-xl border border-zinc-800 shrink-0">
+                <button
+                  type="button"
+                  onClick={() => {
+                    setSearchMode('signs');
+                    setSearchTargetMode('signs');
+                    void runOnlineSearch('signs');
+                  }}
+                  className={`px-3 py-1.5 rounded-lg text-xs font-semibold transition-all ${
+                    searchMode === 'signs'
+                      ? 'bg-rose-500/20 text-rose-200 border border-rose-500/40'
+                      : 'text-zinc-400 hover:text-zinc-200'
+                  }`}
+                >
+                  Signs &amp; Songs (Top)
+                </button>
+                <button
+                  type="button"
+                  onClick={() => {
+                    setSearchMode('all');
+                    setSearchTargetMode('main');
+                    void runOnlineSearch('all');
+                  }}
+                  className={`px-3 py-1.5 rounded-lg text-xs font-semibold transition-all ${
+                    searchMode === 'all'
+                      ? 'bg-emerald-500/20 text-emerald-200 border border-emerald-500/40'
+                      : 'text-zinc-400 hover:text-zinc-200'
+                  }`}
+                >
+                  Full Subtitles (Bottom)
+                </button>
+              </div>
+
+              <form
+                onSubmit={(e) => {
+                  e.preventDefault();
+                  void runOnlineSearch(searchMode, searchQuery);
+                }}
+                className="flex items-center gap-2 flex-1 min-w-0"
+              >
+                <div className="relative flex-1 min-w-0">
+                  <Search className="w-3.5 h-3.5 text-zinc-500 absolute left-3 top-1/2 -translate-y-1/2 pointer-events-none" />
+                  <input
+                    type="text"
+                    value={searchQuery}
+                    onChange={(e) => setSearchQuery(e.target.value)}
+                    placeholder="Anime title override..."
+                    className="w-full pl-8 pr-3 py-2 rounded-xl bg-zinc-900 border border-zinc-800 text-xs text-zinc-100 placeholder-zinc-500 focus:outline-none focus:border-zinc-600"
+                  />
+                </div>
+                <button
+                  type="submit"
+                  disabled={searchingOnline}
+                  className="px-3.5 py-2 rounded-xl bg-indigo-600 hover:bg-indigo-500 text-white text-xs font-semibold transition-all disabled:opacity-50 shrink-0 flex items-center space-x-1.5"
+                >
+                  {searchingOnline ? <Loader2 className="w-3.5 h-3.5 animate-spin" /> : <Search className="w-3.5 h-3.5" />}
+                  <span>Search</span>
+                </button>
+              </form>
+
+              <button
+                type="button"
+                onClick={() => setShowApiKeysBar((v) => !v)}
+                className={`px-3 py-2 rounded-xl border text-xs font-semibold flex items-center space-x-1.5 shrink-0 transition-colors ${
+                  showApiKeysBar
+                    ? 'bg-zinc-800 border-zinc-600 text-white'
+                    : 'bg-zinc-900 border-zinc-800 text-zinc-400 hover:text-zinc-200'
+                }`}
+                title="Configure optional SubSource, SubDL, or OpenSubtitles API keys"
+              >
+                <KeyRound className="w-3.5 h-3.5" />
+                <span>API Keys</span>
+              </button>
+            </div>
+
+            {/* Optional Quick API Keys Drawer */}
+            {showApiKeysBar && (
+              <div className="p-3 rounded-xl bg-zinc-900/90 border border-zinc-800 space-y-2.5 animate-in fade-in duration-150">
+                <div className="flex items-center justify-between text-[11px]">
+                  <span className="text-zinc-300 font-semibold">
+                    Optional Provider Keys <span className="text-zinc-500 font-normal">(TsukiHime works with no key)</span>
+                  </span>
+                  <button
+                    type="button"
+                    onClick={handleSaveApiKeys}
+                    className="px-2.5 py-1 rounded-lg bg-zinc-100 hover:bg-white text-zinc-900 font-bold text-[11px] transition-colors"
+                  >
+                    Save &amp; Re-Search
+                  </button>
+                </div>
+                <div className="grid grid-cols-1 sm:grid-cols-3 gap-2">
+                  <input
+                    type="password"
+                    value={subsourceKeyDraft}
+                    onChange={(e) => setSubsourceKeyDraft(e.target.value)}
+                    placeholder="SubSource X-API-Key"
+                    className="px-2.5 py-1.5 rounded-lg bg-zinc-950 border border-zinc-800 text-[11px] font-mono text-zinc-200 placeholder-zinc-600 focus:outline-none focus:border-zinc-600"
+                  />
+                  <input
+                    type="password"
+                    value={subdlKeyDraft}
+                    onChange={(e) => setSubdlKeyDraft(e.target.value)}
+                    placeholder="SubDL API Key"
+                    className="px-2.5 py-1.5 rounded-lg bg-zinc-950 border border-zinc-800 text-[11px] font-mono text-zinc-200 placeholder-zinc-600 focus:outline-none focus:border-zinc-600"
+                  />
+                  <input
+                    type="password"
+                    value={opensubsKeyDraft}
+                    onChange={(e) => setOpensubsKeyDraft(e.target.value)}
+                    placeholder="OpenSubtitles Api-Key"
+                    className="px-2.5 py-1.5 rounded-lg bg-zinc-950 border border-zinc-800 text-[11px] font-mono text-zinc-200 placeholder-zinc-600 focus:outline-none focus:border-zinc-600"
+                  />
+                </div>
+              </div>
+            )}
+
+            {/* Provider Status & Episode Match Badges */}
+            {searchResponse && (
+              <div className="flex flex-wrap items-center gap-1.5 text-[10px]">
+                {searchResponse.episodeNumber !== null && (
+                  <span className="px-2 py-0.5 rounded-md bg-zinc-800/90 text-zinc-200 border border-zinc-700 font-mono">
+                    {searchResponse.seasonNumber ? `S${String(searchResponse.seasonNumber).padStart(2, '0')}` : ''}
+                    Ep {searchResponse.episodeNumber}
+                  </span>
+                )}
+                {searchResponse.reports.map((rep) => (
+                  <span
+                    key={rep.provider}
+                    className={`px-2 py-0.5 rounded-md border font-medium ${
+                      rep.ok
+                        ? rep.count > 0
+                          ? 'bg-emerald-500/10 text-emerald-300 border-emerald-500/30'
+                          : 'bg-zinc-900 text-zinc-400 border-zinc-800'
+                        : rep.skippedReason === 'missing-api-key'
+                        ? 'bg-zinc-900/60 text-zinc-500 border-zinc-800/80'
+                        : 'bg-amber-500/10 text-amber-300 border-amber-500/30'
+                    }`}
+                    title={rep.error || (rep.skippedReason === 'missing-api-key' ? 'Add optional API key to enable' : '')}
+                  >
+                    {rep.label}:{' '}
+                    {rep.ok
+                      ? `${rep.count} found`
+                      : rep.skippedReason === 'missing-api-key'
+                      ? 'No key'
+                      : 'Unavailable'}
+                  </span>
+                ))}
+              </div>
+            )}
+
+            {searchError && (
+              <div className="flex items-center space-x-2 p-2.5 rounded-xl bg-red-950/40 border border-red-500/30 text-xs text-red-200">
+                <AlertCircle className="w-4 h-4 text-red-400 shrink-0" />
+                <span>{searchError}</span>
+              </div>
+            )}
+
+            {/* Results List */}
+            <div className="space-y-2 max-h-72 overflow-y-auto pr-1">
+              {searchingOnline ? (
+                <div className="py-12 flex flex-col items-center justify-center space-y-2 text-zinc-400 text-xs">
+                  <Loader2 className="w-6 h-6 animate-spin text-indigo-400" />
+                  <span>Searching anime subtitle sources...</span>
+                </div>
+              ) : searchResponse && searchResponse.results.length > 0 ? (
+                searchResponse.results.map((item) => {
+                  const isDownloading = downloadingResultId === item.id;
+                  const willAutoFilter = searchTargetMode === 'signs' && !item.isSignsOnly && item.canExtractSigns;
+
+                  return (
+                    <div
+                      key={item.id}
+                      className="flex items-center justify-between gap-3 p-3 rounded-xl bg-zinc-900/70 border border-zinc-800/90 hover:border-zinc-700 transition-colors"
+                    >
+                      <div className="min-w-0 flex-1 space-y-1">
+                        <div className="flex items-center flex-wrap gap-1.5">
+                          <span className="text-xs font-semibold text-zinc-100 truncate max-w-md" title={item.title}>
+                            {item.title}
+                          </span>
+                          <span className="px-1.5 py-0.5 rounded text-[10px] font-mono bg-zinc-800 text-zinc-300 border border-zinc-700/60">
+                            {item.format.toUpperCase()}
+                          </span>
+                          <span className="px-1.5 py-0.5 rounded text-[10px] font-semibold bg-indigo-500/15 text-indigo-300 border border-indigo-500/30">
+                            {item.providerLabel}
+                          </span>
+                          {item.isSignsOnly ? (
+                            <span className="px-1.5 py-0.5 rounded text-[10px] font-semibold bg-rose-500/15 text-rose-300 border border-rose-500/30">
+                              Signs &amp; Songs
+                            </span>
+                          ) : willAutoFilter ? (
+                            <span className="px-1.5 py-0.5 rounded text-[10px] font-semibold bg-emerald-500/15 text-emerald-300 border border-emerald-500/30">
+                              Full ASS → Auto-Extract Signs
+                            </span>
+                          ) : null}
+                        </div>
+                        {item.releaseName && item.releaseName !== item.title && (
+                          <p className="text-[11px] text-zinc-500 font-mono truncate" title={item.releaseName}>
+                            {item.releaseName}
+                          </p>
+                        )}
+                      </div>
+
+                      <button
+                        type="button"
+                        onClick={() => handleDownloadResult(item)}
+                        disabled={downloadingResultId !== null}
+                        className={`px-3 py-1.5 rounded-lg text-xs font-semibold flex items-center space-x-1.5 shrink-0 transition-all disabled:opacity-50 ${
+                          searchTargetMode === 'signs'
+                            ? 'bg-rose-600 hover:bg-rose-500 text-white'
+                            : 'bg-emerald-600 hover:bg-emerald-500 text-white'
+                        }`}
+                      >
+                        {isDownloading ? (
+                          <Loader2 className="w-3.5 h-3.5 animate-spin" />
+                        ) : willAutoFilter ? (
+                          <Wand2 className="w-3.5 h-3.5" />
+                        ) : (
+                          <Download className="w-3.5 h-3.5" />
+                        )}
+                        <span>
+                          {isDownloading
+                            ? 'Applying...'
+                            : willAutoFilter
+                            ? 'Extract & Use'
+                            : searchTargetMode === 'signs'
+                            ? 'Use Signs'
+                            : 'Use Subtitle'}
+                        </span>
+                      </button>
+                    </div>
+                  );
+                })
+              ) : searchResponse ? (
+                <div className="py-10 px-4 text-center rounded-xl bg-zinc-900/40 border border-dashed border-zinc-800 space-y-1.5">
+                  <p className="text-xs font-medium text-zinc-300">
+                    No matching {searchMode === 'signs' ? 'Signs / ASS' : 'subtitle'} tracks found for this episode.
+                  </p>
+                  <p className="text-[11px] text-zinc-500">
+                    Try editing the title above or switching to Full Subtitles / adding a SubSource or SubDL API key.
+                  </p>
+                </div>
+              ) : null}
+            </div>
+
+            {/* Search Footer */}
+            <div className="pt-4 border-t border-zinc-800/80 flex items-center justify-between">
+              <button
+                type="button"
+                onClick={() => setActiveTab('tracks')}
+                className="flex items-center space-x-1.5 px-4 py-2 rounded-xl bg-zinc-800 hover:bg-zinc-700 text-zinc-100 hover:text-white border border-white/10 text-xs font-semibold transition-all shadow-sm active:scale-95 cursor-pointer"
+              >
+                <span>← Back to Audio &amp; Subtitles</span>
+              </button>
+              <button
+                type="button"
+                onClick={handleClose}
+                className="px-5 py-2 rounded-xl bg-red-600 hover:bg-red-500 text-white text-xs font-bold transition-all shadow-md shadow-red-600/20 active:scale-95 cursor-pointer"
+              >
+                Done
+              </button>
             </div>
           </div>
         )}

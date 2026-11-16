@@ -31,6 +31,7 @@ import { RippleIndicator, RippleType } from './RippleIndicator';
 import { formatTime, cleanEpisodeTitle, cleanSeriesTitle, formatEpisodeDisplayTitle, isFolderMovie } from '../../utils/format';
 import { parseReleaseCore } from '../../lib/releaseParser/regexEngine';
 import { PLACEHOLDER_EPISODE_IMAGE } from '../../utils/assets';
+import { isTopSignsCandidate, isAllowedSignsLanguage } from '../../../electron/assSignsExtractor';
 
 interface VideoPlayerProps {
   episode: Episode;
@@ -461,6 +462,10 @@ export const VideoPlayer: React.FC<VideoPlayerProps> = ({
   const [selectedTopSubId, setSelectedTopSubId] = useState<string | null>(null);
   const [topSubEnabled, setTopSubEnabled] = useState<boolean>(false);
   const [syncOffset, setSyncOffset] = useState<number>(0);
+  const explicitTopSubOffRef = useRef<boolean>(false);
+  const autoTriedSignsPathsRef = useRef<Set<string>>(new Set());
+  const activeEpisodePathRef = useRef<string>(episode.filePath);
+  activeEpisodePathRef.current = episode.filePath;
 
   // Subtitle Appearance & Style (defaults to 38px, White, Sans, Outline always active)
   const [fontSize, setFontSize] = useState<number>(settings.subtitlesFontSize || 38);
@@ -732,8 +737,10 @@ export const VideoPlayer: React.FC<VideoPlayerProps> = ({
             if (exactMatch) {
               mainSubId = exactMatch.id;
             } else if (targetId.startsWith('ext-')) {
-              // External Whisper / SRT track: find any external track in current episode
-              const ext = meta.subtitleTracks.find((s) => s.type === 'external');
+              // External Whisper / dialogue SRT track: prefer dubtitle, never auto-pick signs-only tracks
+              const ext =
+                meta.subtitleTracks.find((s) => s.type === 'external' && s.isDubtitle && !s.isSigns) ||
+                meta.subtitleTracks.find((s) => s.type === 'external' && !s.isSigns && !s.isForced);
               if (ext) mainSubId = ext.id;
             } else {
               // Embedded track: find track with matching language & dialogue type
@@ -756,7 +763,7 @@ export const VideoPlayer: React.FC<VideoPlayerProps> = ({
               (s.isDubtitle || /sdh|dubtitle|hearing impaired/i.test(s.title)) &&
               !s.isSigns
           );
-          const extSub = meta.subtitleTracks.find((s) => s.type === 'external');
+          const extSub = meta.subtitleTracks.find((s) => s.type === 'external' && !s.isSigns && !s.isForced);
           const defaultEngSub = meta.subtitleTracks.find(
             (s) => (s.language === 'eng' || s.language === 'en') && s.isDefault && !s.isSigns
           );
@@ -789,26 +796,31 @@ export const VideoPlayer: React.FC<VideoPlayerProps> = ({
         setSelectedMainSubId(mainSubId);
 
         // Determine Default Top Subtitle / Signs:
-        // Strictly filter for English Forced/Signs tracks. NEVER auto-select foreign languages!
+        // Strictly filter for English/non-verbal Forced/Signs tracks. NEVER auto-select foreign languages!
         let topSubId: string | null = null;
         let topEnabled = false;
 
         if (seasonPref && 'topSubtitleTrackId' in seasonPref && seasonPref.topSubtitleTrackId !== undefined) {
           if (seasonPref.topSubtitleTrackId === null) {
+            explicitTopSubOffRef.current = true;
             topSubId = null;
             topEnabled = false;
           } else {
+            explicitTopSubOffRef.current = false;
             const exactTop = meta.subtitleTracks.find((s) => s.id === seasonPref.topSubtitleTrackId);
             if (exactTop) {
               topSubId = exactTop.id;
               topEnabled = seasonPref.topSubEnabled;
+            } else if (seasonPref.topSubtitleTrackId.startsWith('ext-')) {
+              const extSigns =
+                meta.subtitleTracks.find((s) => s.type === 'external' && isTopSignsCandidate(s, mainSubId)) ||
+                meta.subtitleTracks.find((s) => isTopSignsCandidate(s, mainSubId));
+              if (extSigns) {
+                topSubId = extSigns.id;
+                topEnabled = seasonPref.topSubEnabled;
+              }
             } else {
-              const engSigns = meta.subtitleTracks.find(
-                (s) =>
-                  (s.language === 'eng' || s.language === 'en') &&
-                  (s.isSigns || s.isForced || /sign|song|forced/i.test(s.title)) &&
-                  s.id !== mainSubId
-              );
+              const engSigns = meta.subtitleTracks.find((s) => isTopSignsCandidate(s, mainSubId));
               if (engSigns) {
                 topSubId = engSigns.id;
                 topEnabled = seasonPref.topSubEnabled;
@@ -816,15 +828,11 @@ export const VideoPlayer: React.FC<VideoPlayerProps> = ({
             }
           }
         } else {
+          explicitTopSubOffRef.current = false;
           const selectedMain = meta.subtitleTracks.find((s) => s.id === mainSubId);
           const isMainFull = selectedMain && /full|all/i.test(selectedMain.title);
 
-          const engSigns = meta.subtitleTracks.find(
-            (s) =>
-              (s.language === 'eng' || s.language === 'en') &&
-              (s.isSigns || s.isForced || /sign|song|forced/i.test(s.title)) &&
-              s.id !== mainSubId
-          );
+          const engSigns = meta.subtitleTracks.find((s) => isTopSignsCandidate(s, mainSubId));
           if (engSigns) {
             topSubId = engSigns.id;
             topEnabled = !isMainFull;
@@ -1233,11 +1241,13 @@ export const VideoPlayer: React.FC<VideoPlayerProps> = ({
       topEnabled = topSubEnabled,
       offset = syncOffset
     ) => {
+      const effectiveTopSub =
+        topSub === null && !explicitTopSubOffRef.current ? undefined : topSub;
       const pref: SeasonPreference = {
         preferredAudioLanguage: 'eng',
         preferredAudioIndex: audioIdx,
         mainSubtitleTrackId: mainSub,
-        topSubtitleTrackId: topSub,
+        ...(effectiveTopSub !== undefined ? { topSubtitleTrackId: effectiveTopSub } : {}),
         topSubEnabled: topEnabled,
         subSyncOffset: offset,
       };
@@ -1550,6 +1560,7 @@ export const VideoPlayer: React.FC<VideoPlayerProps> = ({
   // Top subtitle switch
   const handleSelectTopSub = useCallback(
     (trackId: string | null) => {
+      explicitTopSubOffRef.current = trackId === null;
       setSelectedTopSubId(trackId);
       const enabled = trackId !== null;
       setTopSubEnabled(enabled);
@@ -1561,10 +1572,181 @@ export const VideoPlayer: React.FC<VideoPlayerProps> = ({
   // 1-Click Top Sub Toggle
   const handleToggleTopSub = useCallback(() => {
     const nextState = !topSubEnabled;
+    explicitTopSubOffRef.current = !nextState;
     setTopSubEnabled(nextState);
     showRipple('sync', nextState ? 'Top Sub: ON' : 'Top Sub: OFF');
     persistSeasonRule(selectedAudioIndex, selectedMainSubId, selectedTopSubId, nextState, syncOffset);
   }, [topSubEnabled, selectedAudioIndex, selectedMainSubId, selectedTopSubId, syncOffset, persistSeasonRule]);
+
+  // Callback when a new external Signs or Main subtitle track is extracted/downloaded
+  const handleSubtitleTrackAdded = useCallback(
+    (updatedMeta: VideoMetadata, trackId: string, targetMode: 'signs' | 'main', statusMsg?: string) => {
+      setMetadata(updatedMeta);
+      if (targetMode === 'signs') {
+        explicitTopSubOffRef.current = false;
+        setSelectedTopSubId(trackId);
+        setTopSubEnabled(true);
+        persistSeasonRule(selectedAudioIndex, selectedMainSubId, trackId, true, syncOffset);
+      } else {
+        setSelectedMainSubId(trackId);
+        persistSeasonRule(selectedAudioIndex, trackId, selectedTopSubId, topSubEnabled, syncOffset);
+      }
+      showRipple('sync', statusMsg || 'Subtitles Updated');
+    },
+    [selectedAudioIndex, selectedMainSubId, selectedTopSubId, topSubEnabled, syncOffset, persistSeasonRule, showRipple]
+  );
+
+  const handleSubtitleTrackAddedRef = useRef(handleSubtitleTrackAdded);
+  handleSubtitleTrackAddedRef.current = handleSubtitleTrackAdded;
+
+  // Automatic background Signs & Songs acquisition:
+  // When no dedicated Signs/Forced track exists and the active Main Subtitle
+  // is not already ASS/SSA (e.g., English Dub + Whisper SRT or no dialogue subs),
+  // automatically extract Signs from an eligible embedded ASS track or fetch
+  // high-confidence online Signs/ASS subtitles without interrupting playback.
+  useEffect(() => {
+    if (loading) return;
+    if (!metadata || metadata.filePath !== episode.filePath) return;
+    if (selectedTopSubId !== null) return;
+    if (explicitTopSubOffRef.current) return;
+
+    const activeMain = selectedMainSubId
+      ? metadata.subtitleTracks.find((s) => s.id === selectedMainSubId) || null
+      : null;
+    if (
+      activeMain &&
+      (/^(ass|ssa)$/i.test((activeMain.codec || '').trim()) ||
+        (activeMain.filePath && /\.(ass|ssa)$/i.test(activeMain.filePath)))
+    ) {
+      return;
+    }
+
+    const hasExistingSigns = metadata.subtitleTracks.some((s) =>
+      isTopSignsCandidate(s, selectedMainSubId)
+    );
+    if (hasExistingSigns) return;
+
+    if (autoTriedSignsPathsRef.current.has(episode.filePath)) return;
+
+    const api = window.electronAPI;
+    const extractSignsFn = api?.extractSignsFromEmbeddedSub;
+    const searchOnlineFn = api?.searchOnlineSubtitles;
+    const downloadOnlineFn = api?.downloadOnlineSubtitle;
+    if (!extractSignsFn || !searchOnlineFn || !downloadOnlineFn) {
+      return;
+    }
+
+    autoTriedSignsPathsRef.current.add(episode.filePath);
+    let cancelled = false;
+    const targetFile = episode.filePath;
+
+    (async () => {
+      try {
+        // 1. Try local zero-latency Signs & Songs extraction from an embedded ASS/SSA track
+        const embeddedAss =
+          metadata.subtitleTracks.find(
+            (s) =>
+              s.type === 'embedded' &&
+              s.index !== null &&
+              /ass|ssa/i.test(s.codec || '') &&
+              (s.language === 'eng' || s.language === 'en' || s.language === 'enm') &&
+              !/commentary|notes/i.test(s.title || '')
+          ) ||
+          metadata.subtitleTracks.find(
+            (s) =>
+              s.type === 'embedded' &&
+              s.index !== null &&
+              /ass|ssa/i.test(s.codec || '') &&
+              isAllowedSignsLanguage(s.language)
+          );
+
+        if (embeddedAss && embeddedAss.index !== null) {
+          const extractRes = await extractSignsFn({
+            filePath: targetFile,
+            trackIndex: embeddedAss.index,
+          });
+          if (
+            cancelled ||
+            explicitTopSubOffRef.current ||
+            activeEpisodePathRef.current !== targetFile
+          ) {
+            return;
+          }
+          if (extractRes?.success && extractRes.metadata && extractRes.trackId) {
+            handleSubtitleTrackAddedRef.current(
+              extractRes.metadata,
+              extractRes.trackId,
+              'signs',
+              typeof extractRes.keptCuesCount === 'number'
+                ? `Signs Auto-Extracted (${extractRes.keptCuesCount})`
+                : 'Signs & Songs Auto-Extracted'
+            );
+            return;
+          }
+        }
+
+        // 2. Fallback to high-confidence online Signs / ASS match (TsukiHime + optional keys)
+        const searchRes = await searchOnlineFn({
+          filePath: targetFile,
+          folderPath,
+          animeTitle: effectiveAnimeTitle || undefined,
+          anilistId: anilistId ?? folder?.anilistId ?? null,
+          mode: 'signs',
+        });
+        if (
+          cancelled ||
+          explicitTopSubOffRef.current ||
+          activeEpisodePathRef.current !== targetFile
+        ) {
+          return;
+        }
+
+        const bestOnline = (searchRes?.results || []).find(
+          (r) => (r.format === 'ass' || r.format === 'ssa') && r.matchScore >= 140
+        );
+        if (!bestOnline) return;
+
+        const dlRes = await downloadOnlineFn({
+          filePath: targetFile,
+          result: bestOnline,
+          targetMode: 'signs',
+          extractSignsOnly: !bestOnline.isSignsOnly,
+        });
+        if (
+          cancelled ||
+          explicitTopSubOffRef.current ||
+          activeEpisodePathRef.current !== targetFile
+        ) {
+          return;
+        }
+
+        if (dlRes?.success && dlRes.metadata && dlRes.trackId) {
+          handleSubtitleTrackAddedRef.current(
+            dlRes.metadata,
+            dlRes.trackId,
+            'signs',
+            `Signs Auto-Loaded (${bestOnline.providerLabel})`
+          );
+        }
+      } catch {
+        // Auto-acquisition must fail silently so playback is never interrupted
+      }
+    })();
+
+    return () => {
+      cancelled = true;
+    };
+  }, [
+    loading,
+    metadata,
+    episode.filePath,
+    folderPath,
+    effectiveAnimeTitle,
+    anilistId,
+    folder?.anilistId,
+    selectedTopSubId,
+    selectedMainSubId,
+  ]);
 
   // Sync Offset Change
   const handleUpdateSyncOffset = useCallback(
@@ -2194,6 +2376,13 @@ export const VideoPlayer: React.FC<VideoPlayerProps> = ({
         outlineColor={outlineColor}
         onUpdateOutlineColor={(c) => handleUpdateSubtitleStyle({ outlineColor: c })}
         onResetSubtitleStyle={handleResetSubtitleStyle}
+        episodeFilePath={episode.filePath}
+        folderPath={folderPath}
+        animeTitle={effectiveAnimeTitle}
+        anilistId={anilistId}
+        settings={settings}
+        onUpdateSettings={onUpdateSettings}
+        onSubtitleTrackAdded={handleSubtitleTrackAdded}
       />
 
       {/* Episode Drawer (In-Player Switcher) */}

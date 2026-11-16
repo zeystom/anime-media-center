@@ -4,10 +4,14 @@ import path from 'path';
 import crypto from 'crypto';
 import { AudioTrack, SubtitleCue, SubtitleTrack, VideoChapter, VideoMetadata } from './types';
 import { storage } from './storage';
+import { isSignsSubtitleTitle } from './assSignsExtractor';
 
 const LANG_MAP: Record<string, string> = {
   eng: 'English',
   en: 'English',
+  enm: 'English (Honorifics)',
+  zxx: 'Signs / Non-Verbal',
+  und: 'Undetermined',
   jpn: 'Japanese',
   ja: 'Japanese',
   spa: 'Spanish',
@@ -456,7 +460,7 @@ export async function probeMkv(filePath: string, ffmpegPath: string): Promise<Vi
   };
 }
 
-function parseFfmpegProbeOutput(filePath: string, stderr: string): VideoMetadata {
+export function parseFfmpegProbeOutput(filePath: string, stderr: string): VideoMetadata {
   const fileName = path.basename(filePath);
   const baseNameWithoutExt = path.parse(filePath).name;
   const folder = path.dirname(filePath);
@@ -472,13 +476,13 @@ function parseFfmpegProbeOutput(filePath: string, stderr: string): VideoMetadata
   const audioTracks: AudioTrack[] = [];
   const subtitleTracks: SubtitleTrack[] = [];
 
-  const streamRegex = /Stream #0:(\d+)(?:\(([a-zA-Z0-9_-]+)\))?:\s*(Audio|Subtitle|Video):\s*([^\r\n]+)/g;
+  const streamRegex = /Stream #0:(\d+)(?:\(([a-zA-Z0-9_-]+)\))?:\s*(Audio|Subtitle|Video|Attachment|Data):\s*([^\r\n]+)/g;
   let match: RegExpExecArray | null;
 
   const streamEntries: Array<{
     index: number;
     lang: string;
-    type: 'Audio' | 'Subtitle' | 'Video';
+    type: 'Audio' | 'Subtitle' | 'Video' | 'Attachment' | 'Data';
     details: string;
     startPos: number;
   }> = [];
@@ -497,11 +501,12 @@ function parseFfmpegProbeOutput(filePath: string, stderr: string): VideoMetadata
 
   for (let i = 0; i < streamEntries.length; i++) {
     const entry = streamEntries[i];
+    if (entry.type === 'Attachment' || entry.type === 'Data') continue;
     const nextStart = i < streamEntries.length - 1 ? streamEntries[i + 1].startPos : stderr.length;
     const block = stderr.slice(entry.startPos, nextStart);
 
-    // Extract title from metadata in this block
-    const titleMatch = block.match(/title\s*:\s*([^\r\n]+)/i);
+    // Extract title from indented Metadata lines (never match "title:" inside "Subtitle:")
+    const titleMatch = block.match(/(?:^|\r?\n)\s+title\s*:\s*([^\r\n]+)/i);
     const title = titleMatch ? titleMatch[1].trim() : '';
 
     if (entry.type === 'Audio') {
@@ -536,7 +541,7 @@ function parseFfmpegProbeOutput(filePath: string, stderr: string): VideoMetadata
     } else if (entry.type === 'Subtitle') {
       const isDefault = block.includes('(default)');
       const isForced = block.includes('(forced)') || /forced/i.test(title);
-      const isSigns = isForced || /sign|song|signs|songs/i.test(title);
+      const isSigns = isForced || isSignsSubtitleTitle(title);
       const isHearingImpaired = block.includes('(hearing impaired)') || /hearing impaired/i.test(title);
       const isDubtitle = isHearingImpaired || /sdh|dubtitle|\bcc\b|closed caption/i.test(title) || /sdh|dubtitle/i.test(block);
 
@@ -641,10 +646,11 @@ export function isEmbeddedPgsCached(filePath: string, streamIndex: number): bool
   return isCacheFileReady(subtitleCacheFile(filePath, streamIndex, 'sup'));
 }
 
-function buildSubtitleCodecArgs(ext: 'srt' | 'ass' | 'sup'): string[] {
-  if (ext === 'ass') return ['-c:s', 'copy'];
+export function buildSubtitleCodecArgs(ext: 'srt' | 'ass' | 'sup'): string[] {
+  // Always pass explicit `-f` because temp extraction files end in `.tmp`.
+  if (ext === 'ass') return ['-c:s', 'copy', '-f', 'ass'];
   if (ext === 'sup') return ['-c:s', 'copy', '-f', 'sup'];
-  return ['-c:s', 'srt'];
+  return ['-c:s', 'srt', '-f', 'srt'];
 }
 
 async function extractEmbeddedTrackToFile(
@@ -1017,17 +1023,19 @@ export function filterFontsForAss(assContent: string, fontUrls: string[]): strin
     referenced.add(m[1].trim().toLowerCase().replace(/[\s-_]/g, ''));
   }
 
-  if (referenced.size === 0) {
-    return fontUrls
-      .filter((u) => !u.toLowerCase().includes('arialunicodems') && !u.toLowerCase().endsWith('.ttc'))
-      .slice(0, 5);
-  }
-
-  const matched = fontUrls.filter((u) => {
+  const validFontUrls = fontUrls.filter((u) => {
     const fileName = decodeURIComponent(u.split('/').pop() || '').toLowerCase();
     if (fileName.endsWith('.ttc')) return false;
     if (fileName.includes('arialunicodems') && !referenced.has('arialunicodems')) return false;
+    return true;
+  });
 
+  if (referenced.size === 0) {
+    return validFontUrls.slice(0, 8);
+  }
+
+  const matched = validFontUrls.filter((u) => {
+    const fileName = decodeURIComponent(u.split('/').pop() || '').toLowerCase();
     const cleanFile = fileName.replace(/[\s-_]/g, '');
     for (const ref of referenced) {
       if (cleanFile.includes(ref) || ref.includes(cleanFile.replace(/\.[a-z0-9]+$/, ''))) return true;
@@ -1035,7 +1043,16 @@ export function filterFontsForAss(assContent: string, fontUrls: string[]): strin
     return false;
   });
 
-  return matched.slice(0, 8);
+  // If the ASS references more font families than filename-matched files (e.g.
+  // abbreviated filenames like GOODDP.ttf for "GoodDog Plain"), include
+  // remaining folder fonts up to 24 so JASSUB can still resolve their family names.
+  if (matched.length < referenced.size && matched.length < validFontUrls.length) {
+    const matchedSet = new Set(matched);
+    const extras = validFontUrls.filter((u) => !matchedSet.has(u));
+    return [...matched, ...extras].slice(0, 24);
+  }
+
+  return matched.slice(0, 24);
 }
 
 export async function generateSingleThumbnail(

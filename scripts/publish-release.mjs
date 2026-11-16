@@ -38,12 +38,13 @@ if (!token) {
   process.exit(1);
 }
 
-const RELEASE_BODY = `## Kaiko ${VERSION} — Blu-ray PGS Bitmap Subtitles & Window Seek Timestamp Fix
+const RELEASE_BODY = `## Kaiko ${VERSION} — Automatic Signs & Songs, Local ASS Extractor & Online Subtitle Search
 
-### Subtitle Playback Fixes
-- **Blu-ray PGS bitmap subtitles (\`hdmv_pgs_subtitle\`):** added a native \`.sup\` parser, RLE bitmap decoder, PNG encoder, and local \`/pgs\` HTTP server route so both \`2ND SUB / SIGNS (TOP)\` and \`MAIN SUBTITLE (BOTTOM)\` render Blu-ray bitmap signs and dialogue tracks instead of returning empty cues.
-- **Windowed seek timestamp preservation (\`-copyts\`):** fixed 2-minute windowed subtitle extraction resetting timestamps to \`0:00\`, and added automatic window re-extraction when seeking outside cached bounds before full-track extraction finishes.
-- **Dual-subtitle layout & UI:** centered top-slot PGS sign bitmaps in \`2ND SUB / SIGNS (TOP)\` to prevent overlap with bottom dialogue, preloaded upcoming bitmap cues, and added a \`PGS\` codec badge in the Audio & Subtitle Manager.
+### What's New
+- **Automatic Background Signs & Songs:** when watching Dub + Whisper SRT (or no dialogue subs) without a dedicated Signs track, Kaiko automatically extracts Signs & Songs from eligible embedded ASS/SSA tracks or fetches high-confidence online Signs/ASS subtitles in the background — while strictly honoring explicit \`OFF\` choices.
+- **1-Click Local ASS Signs & Songs Extractor:** extracts positioned signs, titles, notes, credits, and OP/ED/karaoke into a standalone \`.en.signs.ass\` track for \`2ND SUB / SIGNS (TOP)\`.
+- **Online Subtitle Search & Font Bundling:** adds keyless anime-first search via **TsukiHime** (including automatic \`.xz\` archive unpacking and font attachments for JASSUB), plus optional API-key support for **SubSource**, **SubDL**, and **OpenSubtitles** in **Settings -> Online Subtitle & Signs Search** and the player's **Online Sub Search** tab.
+- **MKV Probe, Extraction & Font Fixes:** fixed FFmpeg metadata title parsing (\`Subtitle: ass\` no longer masks \`Metadata: title\`), added explicit \`-f ass\` / \`-f srt\` muxer flags so embedded ASS extraction works reliably on Windows, improved Season 1 vs Season 2 batch matching, and increased obfuscated ASS font matching cap to 24.
 
 ---
 ### Assets included

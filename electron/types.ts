@@ -207,6 +207,11 @@ export interface AppSettings {
   /** Languages accepted by automatic release matching; an empty list accepts any explicitly detected language. */
   preferredTorrentAudioLanguages?: string[];
   preferredTorrentSubtitleLanguages?: string[];
+
+  // ---- Optional Online Subtitle Provider Keys (BYOC; TsukiHime requires no key) ----
+  subsourceApiKey?: string;
+  subdlApiKey?: string;
+  opensubtitlesApiKey?: string;
 }
 
 // ---- P2P shared types ----
@@ -436,4 +441,69 @@ export interface WhisperEngineDownloadProgress {
   error?: string | null;
   whisperPath?: string | null;
   message?: string;
+}
+
+// ---- Online Subtitle Search & Signs Extraction Types ----
+
+export type SubtitleProviderId = 'tsukihime' | 'subsource' | 'subdl' | 'opensubtitles';
+
+export interface OnlineSubtitleSourceRef {
+  provider: SubtitleProviderId;
+  tsukihimeTorrentId?: number;
+  tsukihimeFileId?: number;
+  tsukihimeAttachId?: number;
+  tsukihimeIsTosho?: boolean;
+  tsukihimeAttachName?: string;
+  tsukihimeFontAttachments?: Array<{ id: number; name: string }>;
+  subsourceId?: number;
+  subdlUrl?: string;
+  opensubtitlesFileId?: number;
+}
+
+export interface OnlineSubtitleResult {
+  id: string;
+  provider: SubtitleProviderId;
+  providerLabel: string;
+  title: string;
+  releaseName?: string;
+  format: 'ass' | 'ssa' | 'srt' | 'vtt';
+  language: string;
+  isSignsOnly: boolean;
+  /** True when the track is a full ASS/SSA script that can be filtered down to Signs & Songs locally. */
+  canExtractSigns: boolean;
+  downloadCount?: number;
+  matchScore: number;
+  sourceRef: OnlineSubtitleSourceRef;
+}
+
+export interface SubtitleSearchProviderReport {
+  provider: SubtitleProviderId;
+  label: string;
+  ok: boolean;
+  count: number;
+  skippedReason?: 'missing-api-key';
+  error?: string;
+}
+
+export interface SubtitleSearchResponse {
+  results: OnlineSubtitleResult[];
+  reports: SubtitleSearchProviderReport[];
+  resolvedIds: {
+    anilistId: number | null;
+    imdbId: string | null;
+    tvdbId: number | null;
+  };
+  episodeNumber: number | null;
+  seasonNumber: number | null;
+  queryUsed: string;
+}
+
+export interface SubtitleActionResult {
+  success: boolean;
+  error?: string;
+  savedPath?: string;
+  trackId?: string;
+  keptCuesCount?: number;
+  totalCuesCount?: number;
+  metadata?: VideoMetadata;
 }

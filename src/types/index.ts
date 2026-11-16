@@ -33,7 +33,17 @@ export interface StorageOverview {
 import type { CatalogItem, CatalogRelatedTitle, AiringEntry, DiscoverCatalogPage, GenrePickRail, FranchiseSeasonEntry } from '../../electron/catalog';
 import type { RemoteEpisodeInfo, RemoteEpisodesResult } from '../../electron/aniZip';
 import type { UserLibraryEntry, UserListStatus } from '../../electron/userLibrary';
-import type { P2pState, VpnStatus, ReleaseSearchResult, RssProvider, AppSettings, ReleaseSearchResponse } from '../../electron/types';
+import type {
+  P2pState,
+  VpnStatus,
+  ReleaseSearchResult,
+  RssProvider,
+  AppSettings,
+  ReleaseSearchResponse,
+  OnlineSubtitleResult,
+  SubtitleSearchResponse,
+  SubtitleActionResult,
+} from '../../electron/types';
 
 export interface StreamInfo {
   url: string;
@@ -89,6 +99,21 @@ export interface ElectronAPI {
   probeVideo: (filePath: string) => Promise<import('../../electron/types').VideoMetadata>;
   extractSubtitleTrack: (filePath: string, trackId: string, trackIndex: number | null, isExternal: boolean, externalPath?: string, playbackPosSec?: number, forceFull?: boolean) => Promise<import('../../electron/types').SubtitleTrackPayload>;
   warmSubtitles?: (filePath: string) => Promise<{ success: boolean }>;
+  extractSignsFromEmbeddedSub?: (params: { filePath: string; trackIndex: number }) => Promise<SubtitleActionResult>;
+  searchOnlineSubtitles?: (params: {
+    filePath: string;
+    folderPath?: string;
+    animeTitle?: string;
+    anilistId?: number | null;
+    mode: 'signs' | 'all';
+    queryOverride?: string;
+  }) => Promise<SubtitleSearchResponse>;
+  downloadOnlineSubtitle?: (params: {
+    filePath: string;
+    result: OnlineSubtitleResult;
+    targetMode: 'signs' | 'main';
+    extractSignsOnly?: boolean;
+  }) => Promise<SubtitleActionResult>;
   onSubtitleFontsReady?: (callback: (data: { filePath: string; trackIndex: number; fonts: string[] }) => void) => () => void;
   savePlaybackProgress: (progress: import('../../electron/types').PlaybackProgress) => Promise<void>;
   getAllPlaybackProgress: () => Promise<Record<string, import('../../electron/types').PlaybackProgress>>;

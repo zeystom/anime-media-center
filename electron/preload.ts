@@ -76,6 +76,22 @@ contextBridge.exposeInMainWorld('electronAPI', {
     forceFull?: boolean
   ) => ipcRenderer.invoke('extract-subtitle-track', filePath, trackId, trackIndex, isExternal, externalPath, playbackPosSec, forceFull),
   warmSubtitles: (filePath: string) => ipcRenderer.invoke('subtitles:warm', filePath),
+  extractSignsFromEmbeddedSub: (params: { filePath: string; trackIndex: number }) =>
+    ipcRenderer.invoke('subtitles:extract-signs-from-embedded', params),
+  searchOnlineSubtitles: (params: {
+    filePath: string;
+    folderPath?: string;
+    animeTitle?: string;
+    anilistId?: number | null;
+    mode: 'signs' | 'all';
+    queryOverride?: string;
+  }) => ipcRenderer.invoke('subtitles:search-online', params),
+  downloadOnlineSubtitle: (params: {
+    filePath: string;
+    result: import('./types').OnlineSubtitleResult;
+    targetMode: 'signs' | 'main';
+    extractSignsOnly?: boolean;
+  }) => ipcRenderer.invoke('subtitles:download-online', params),
   onSubtitleFontsReady: (callback: (data: { filePath: string; trackIndex: number; fonts: string[] }) => void) => {
     const listener = (_e: Electron.IpcRendererEvent, data: { filePath: string; trackIndex: number; fonts: string[] }) => callback(data);
     ipcRenderer.on('subtitles:fonts-ready', listener);

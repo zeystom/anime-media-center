@@ -64,7 +64,10 @@ export function findExternalSubtitles(videoPath: string, preloadedEntries?: stri
         suffixTokens.includes('whisper') ||
         fileLower === `${base.toLowerCase()}.whisper.srt`;
       const isForced = suffixTokens.includes('forced');
-      const isSigns = suffixTokens.includes('signs') || suffixTokens.includes('sign');
+      const isSigns =
+        suffixTokens.includes('signs') ||
+        suffixTokens.includes('sign') ||
+        suffixTokens.includes('songs');
       const isDubtitle =
         suffixTokens.includes('sdh') ||
         suffixTokens.includes('dub') ||

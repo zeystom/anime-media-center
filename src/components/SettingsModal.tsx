@@ -26,6 +26,7 @@ import {
   Sparkles,
   ChevronDown,
   ChevronUp,
+  Subtitles,
 } from 'lucide-react';
 import { AppSettings } from '../types';
 import type { P2pState, RssProvider, UpdaterState, UpdateInfoPayload } from '../types';
@@ -180,6 +181,11 @@ export const SettingsModal: React.FC<SettingsModalProps> = ({
   const [providersBusy, setProvidersBusy] = useState(false);
   const providerImportRef = useRef<HTMLInputElement>(null);
 
+  // Optional online subtitle provider API keys
+  const [subsourceApiKey, setSubsourceApiKey] = useState(settings.subsourceApiKey || '');
+  const [subdlApiKey, setSubdlApiKey] = useState(settings.subdlApiKey || '');
+  const [opensubtitlesApiKey, setOpensubtitlesApiKey] = useState(settings.opensubtitlesApiKey || '');
+
   // Application update state
   const [appVersion, setAppVersion] = useState<string>('1.0.11');
   const [checkForUpdatesOnStartup, setCheckForUpdatesOnStartup] = useState<boolean>(
@@ -236,6 +242,9 @@ export const SettingsModal: React.FC<SettingsModalProps> = ({
       setReleaseSelectionMode(settings.releaseSelectionMode ?? 'automatic');
       setPreferredAudioLanguages((settings.preferredTorrentAudioLanguages ?? ['en']) as TorrentLanguageCode[]);
       setPreferredSubtitleLanguages((settings.preferredTorrentSubtitleLanguages ?? ['en']) as TorrentLanguageCode[]);
+      setSubsourceApiKey(settings.subsourceApiKey || '');
+      setSubdlApiKey(settings.subdlApiKey || '');
+      setOpensubtitlesApiKey(settings.opensubtitlesApiKey || '');
 
       // Check existence of external binaries and models
       window.electronAPI
@@ -1978,6 +1987,73 @@ export const SettingsModal: React.FC<SettingsModalProps> = ({
                     </button>
                   </div>
                 )}
+              </div>
+            </div>
+          </div>
+
+          {/* Section: Subtitle Search Providers */}
+          <div className="space-y-3 pt-3 border-t border-white/10">
+            <label className="text-xs font-semibold text-zinc-200 uppercase tracking-wider flex items-center space-x-2">
+              <Subtitles className="w-3.5 h-3.5 text-zinc-400" />
+              <span>Online Subtitle &amp; Signs Search</span>
+            </label>
+
+            <div className="space-y-3 rounded-xl bg-zinc-900/90 border border-white/10 p-3.5">
+              <div className="flex items-center justify-between gap-2">
+                <div className="space-y-0.5">
+                  <p className="text-xs font-semibold text-zinc-200">TsukiHime Anime Subtitles</p>
+                  <p className="text-[10px] text-zinc-500">
+                    Built-in anime ASS &amp; font database — works out of the box with no API key.
+                  </p>
+                </div>
+                <span className="inline-flex items-center space-x-1 px-2 py-0.5 rounded text-[10px] font-semibold bg-emerald-500/15 text-emerald-400 border border-emerald-500/25 shrink-0">
+                  <CheckCircle2 className="w-3 h-3" />
+                  <span>Active</span>
+                </span>
+              </div>
+
+              <div className="pt-2 border-t border-white/5 space-y-2.5">
+                <p className="text-[10px] text-zinc-400">
+                  Optional personal API keys for fallback subtitle databases (stored locally):
+                </p>
+
+                <div className="grid grid-cols-1 gap-2">
+                  {[
+                    {
+                      label: 'SubSource API Key (7,200 req/day free)',
+                      value: subsourceApiKey,
+                      setter: setSubsourceApiKey,
+                      keyName: 'subsourceApiKey' as const,
+                      placeholder: 'Optional X-API-Key from subsource.net',
+                    },
+                    {
+                      label: 'SubDL API Key',
+                      value: subdlApiKey,
+                      setter: setSubdlApiKey,
+                      keyName: 'subdlApiKey' as const,
+                      placeholder: 'Optional API key from subdl.com',
+                    },
+                    {
+                      label: 'OpenSubtitles API Key (supports Foreign/Forced flag)',
+                      value: opensubtitlesApiKey,
+                      setter: setOpensubtitlesApiKey,
+                      keyName: 'opensubtitlesApiKey' as const,
+                      placeholder: 'Optional Api-Key from opensubtitles.com',
+                    },
+                  ].map((field) => (
+                    <div key={field.keyName} className="space-y-1">
+                      <label className="text-[10px] font-medium text-zinc-400">{field.label}</label>
+                      <input
+                        type="password"
+                        value={field.value}
+                        onChange={(e) => field.setter(e.target.value)}
+                        onBlur={() => onSave({ [field.keyName]: field.value.trim() })}
+                        placeholder={field.placeholder}
+                        className="w-full px-3 py-1.5 rounded-lg bg-zinc-950/70 border border-white/10 text-xs font-mono text-zinc-200 placeholder-zinc-600 focus:outline-none focus:border-zinc-500"
+                      />
+                    </div>
+                  ))}
+                </div>
               </div>
             </div>
           </div>
