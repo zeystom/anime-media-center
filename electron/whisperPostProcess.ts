@@ -14,12 +14,39 @@
  *    - Handles mid-sentence lowercasing and start-of-cue uppercasing properly.
  */
 
+import type { OpEdSkipRange, SingingSuppressionMode, VideoChapter } from './types';
+
 export interface CueBlock {
   start: string;
   end: string;
   startMs: number;
   endMs: number;
   text: string;
+}
+
+/**
+ * Parses an SRT or Whisper log timestamp (HH:MM:SS,mmm or MM:SS.mmm) into milliseconds.
+ */
+export function parseSrtTimestampToMs(tc: string): number {
+  const match = tc.match(/(?:(\d+):)?(\d+):(\d+)[,.](\d+)/);
+  if (!match) return 0;
+  const h = match[1] ? parseInt(match[1], 10) : 0;
+  const m = parseInt(match[2], 10) || 0;
+  const s = parseInt(match[3], 10) || 0;
+  const ms = parseInt(match[4].padEnd(3, '0').slice(0, 3), 10) || 0;
+  return h * 3600000 + m * 60000 + s * 1000 + ms;
+}
+
+/**
+ * Formats milliseconds into standard SRT timecode HH:MM:SS,mmm.
+ */
+export function msToSrtTimecode(totalMs: number): string {
+  const clamped = Math.max(0, Math.round(totalMs));
+  const hrs = Math.floor(clamped / 3600000);
+  const mins = Math.floor((clamped % 3600000) / 60000);
+  const secs = Math.floor((clamped % 60000) / 1000);
+  const ms = clamped % 1000;
+  return `${String(hrs).padStart(2, '0')}:${String(mins).padStart(2, '0')}:${String(secs).padStart(2, '0')},${String(ms).padStart(3, '0')}`;
 }
 
 /**
@@ -66,6 +93,7 @@ export const DEFAULT_HALLUCINATIONS: RegExp[] = [
   /^\s*(?:watching|watching\.|bye\.|see\s+you\s+next\s+time[.]?)\s*$/i,
   /^\s*(?:mbc|nhk|tbs|tv\s+tokyo)\s*$/i,
   /^\s*(?:dialogue|characters)\s+from\s+an\s+anime\s+episode[.!,:\s-]*$/i,
+  /^\s*this\s+is\s+the\s+(?:first|second|third)\s+(?:sentence|one)[.!]?\s*$/i,
 ];
 
 const NON_LATIN_GIBBERISH_REGEX = /[\u0400-\u04ff\u0590-\u05ff\u0600-\u06ff\u0e00-\u0e7f\uac00-\ud7af]/u;
@@ -282,6 +310,166 @@ export function filterHallucinations(
   });
 }
 
+// Words that should never be left stranded at the end of a subtitle line or cue
+const DETERMINER_WORDS = new Set([
+  'a', 'an', 'the', 'my', 'your', 'his', 'her', 'its', 'our', 'their',
+  'this', 'that', 'these', 'those', 'some', 'any', 'no', 'every', 'each',
+  'another', 'other', 'such',
+]);
+
+const PREPOSITION_WORDS = new Set([
+  'of', 'in', 'on', 'at', 'to', 'for', 'from', 'with', 'by', 'as', 'into',
+  'onto', 'upon', 'about', 'above', 'below', 'under', 'over', 'through',
+  'across', 'after', 'before', 'between', 'among', 'during', 'without',
+  'within', 'against', 'toward', 'towards', 'near', 'like', 'than', 'via', 'per',
+]);
+
+const CLAUSE_CONJUNCTIONS = new Set([
+  'because', 'although', 'though', 'unless', 'while', 'whereas', 'since',
+  'until', 'before', 'after', 'when', 'whenever', 'where', 'wherever',
+  'whether', 'if', 'that', 'which', 'and', 'but', 'or', 'so', 'yet', 'nor',
+]);
+
+const AUXILIARY_OR_PRONOUN_GLUE = new Set([
+  'i', "i'm", "i'll", "i've", "i'd", 'you', "you're", "you'll", "you've", "you'd",
+  'he', "he's", "he'll", "he'd", 'she', "she's", "she'll", "she'd",
+  'we', "we're", "we'll", "we've", "we'd", 'they', "they're", "they'll", "they've", "they'd",
+  'it', "it's", "it'll", 'will', 'would', 'can', 'could', 'shall', 'should',
+  'may', 'might', 'must', 'am', 'is', 'are', 'was', 'were', 'be', 'been', 'being',
+  'have', 'has', 'had', 'do', 'does', 'did', 'not', "don't", "doesn't", "didn't",
+  "won't", "wouldn't", "can't", "couldn't", "shouldn't", "isn't", "aren't",
+  "wasn't", "weren't", 'very', 'too', 'pretty', 'really', 'quite', 'rather',
+]);
+
+const INFINITIVE_INTRO_VERBS = new Set([
+  'going', 'gonna', 'want', 'wanna', 'wanted', 'have', 'has', 'had', 'used',
+  'need', 'needed', 'needs', 'trying', 'tried', 'try', 'able', 'supposed',
+  'ought', 'got', 'gotta', 'seem', 'seems', 'seemed', 'started', 'begin',
+  'decided', 'forgot', 'forget', 'promised', 'managed', 'asked', 'told',
+]);
+
+const COMPLEMENT_BRIDGE_VERBS = new Set([
+  'think', 'thought', 'know', 'knew', 'guess', 'guessed', 'suppose', 'supposed',
+  'believe', 'believed', 'hope', 'hoped', 'wish', 'wished', 'feel', 'felt',
+  'mean', 'meant', 'say', 'said', 'tell', 'told', 'ask', 'asked', 'see', 'saw',
+  'hear', 'heard', 'swear', 'swore', 'bet', 'promise', 'promised', 'agree', 'agreed',
+  'wonder', 'wondered', 'remember', 'remembered', 'forget', 'forgot', 'realize',
+  'realized', 'notice', 'noticed', 'find', 'found', 'show', 'showed', 'prove',
+  'proved', 'seem', 'seemed', 'look', 'looked', 'make', 'made', 'let', 'get', 'got',
+  'want', 'wanted', 'need', 'needed', 'love', 'loved', 'hate', 'hated', 'call',
+  'called', 'watch', 'watched', 'use', 'used', 'using', 'take', 'took', 'give', 'gave',
+  'put', 'bring', 'brought', 'keep', 'kept', 'hold', 'held', 'leave', 'left',
+]);
+
+const OBJECT_PRONOUNS = new Set(['me', 'you', 'him', 'her', 'us', 'them', 'it']);
+
+const RELATIVE_HEAD_NOUNS = new Set([
+  'thing', 'things', 'one', 'ones', 'way', 'ways', 'time', 'times', 'day', 'days',
+  'night', 'nights', 'year', 'years', 'week', 'weeks', 'moment', 'moments',
+  'place', 'places', 'reason', 'reasons', 'person', 'people', 'guy', 'girl',
+  'man', 'woman', 'part', 'kind', 'sort',
+]);
+
+const STRONG_SENTENCE_STARTERS = new Set([
+  "i'm", "i'll", "i've", "i'd", 'we', "we're", "we'll", "we've", "we'd",
+  'you', "you're", "you'll", "you've", "you'd", 'they', "they're", "they'll", "they've", "they'd",
+  'he', "he's", "he'll", "he'd", 'she', "she's", "she'll", "she'd",
+  'it', "it's", "it'll", 'this', 'that', "that's", 'there', "there's", 'these', 'those',
+  'everything', 'everyone', 'everybody', 'someone', 'somebody', 'nothing', 'nobody',
+  'anything', 'anyone', 'anyway', 'actually', 'seriously', 'honestly', 'probably', 'maybe',
+  'wait', 'listen', 'look', 'come', 'hey', 'well', 'oh', 'ah', 'um', 'uh', 'huh',
+  'yeah', 'yes', 'no', 'nope', 'okay', 'alright', 'sure', 'sorry', 'thanks', 'thank', 'please',
+  'what', 'why', 'how', 'when', 'where', 'who', 'which',
+  "don't", "doesn't", "didn't", "can't", "couldn't", "won't", "wouldn't", "shouldn't",
+  "isn't", "aren't", "wasn't", "weren't", "let's", 'my', 'our', 'your', 'his', 'her', 'their',
+]);
+
+const STANDALONE_I_FOLLOWING_VERBS = new Set([
+  'better', 'need', 'want', 'think', 'thought', "don't", "didn't", "can't", "couldn't",
+  "won't", "wouldn't", 'should', "shouldn't", 'could', 'would', 'have', 'had', 'was', 'am',
+  'swear', 'bet', 'guess', 'hope', 'wish', 'know', 'mean', 'remember', 'feel', 'hate',
+  'love', 'used', 'got', 'just', 'really', 'never', 'always',
+]);
+
+const PROPER_NOUN_SKIP_WORDS = new Set([
+  'monday', 'tuesday', 'wednesday', 'thursday', 'friday', 'saturday', 'sunday',
+  'january', 'february', 'march', 'april', 'may', 'june', 'july', 'august',
+  'september', 'october', 'november', 'december', 'english', 'japanese', 'chinese',
+  'korean', 'christmas', 'halloween', 'god', 'lord', 'ok', 'tv', 'mr', 'mrs', 'ms', 'dr', 'miss',
+]);
+
+function stripEdgePunct(word: string): string {
+  return word.replace(/^[^\w']+|[^\w']+$/g, '');
+}
+
+function buildCharNameTokenSet(characterNames?: string[]): Set<string> {
+  const set = new Set<string>();
+  for (const name of characterNames || []) {
+    const trimmed = name.trim();
+    if (!trimmed) continue;
+    set.add(trimmed.toLowerCase());
+    for (const part of trimmed.split(/\s+/)) {
+      const clean = stripEdgePunct(part).toLowerCase();
+      if (clean.length >= 2) set.add(clean);
+    }
+  }
+  return set;
+}
+
+/**
+ * Scores a word split boundary between `words[i]` (end of left part) and `words[i + 1]` (start of right part).
+ * Lower scores indicate better syntactic/natural break points; higher penalties discourage stranding glue words.
+ */
+function scoreSyntacticSplit(words: string[], splitIdx: number, isCueBoundary: boolean): number {
+  const leftWord = words[splitIdx];
+  const rightWord = words[splitIdx + 1];
+  const prevLeftWord = splitIdx > 0 ? stripEdgePunct(words[splitIdx - 1]).toLowerCase() : '';
+  const leftClean = stripEdgePunct(leftWord).toLowerCase();
+  const rightClean = stripEdgePunct(rightWord).toLowerCase();
+
+  let penalty = 0;
+
+  // Strong rewards for punctuation and clause boundaries
+  if (/[.!?…]["'”’]?$/.test(leftWord)) {
+    penalty -= isCueBoundary ? 60 : 42;
+  } else if (/[,;:—–]$/.test(leftWord)) {
+    penalty -= isCueBoundary ? 35 : 22;
+  }
+
+  if (CLAUSE_CONJUNCTIONS.has(rightClean) && splitIdx >= 2) {
+    penalty -= isCueBoundary ? 26 : 14;
+  } else if (PREPOSITION_WORDS.has(rightClean) && splitIdx >= 2) {
+    const isInfinitive = rightClean === 'to' && INFINITIVE_INTRO_VERBS.has(prevLeftWord);
+    if (!isInfinitive) {
+      penalty -= isCueBoundary ? 14 : 8;
+    }
+  }
+
+  // Heavy penalties for breaking after hanging glue words (articles, prepositions, auxiliaries, pronouns, conjunctions)
+  const leftHasPunct = /[.!?…,;:—–]$/.test(leftWord);
+  if (!leftHasPunct) {
+    if (DETERMINER_WORDS.has(leftClean)) {
+      penalty += isCueBoundary ? 48 : 30;
+    } else if (PREPOSITION_WORDS.has(leftClean)) {
+      penalty += isCueBoundary ? 45 : 28;
+    } else if (AUXILIARY_OR_PRONOUN_GLUE.has(leftClean)) {
+      penalty += isCueBoundary ? 42 : 24;
+    } else if (CLAUSE_CONJUNCTIONS.has(leftClean)) {
+      penalty += isCueBoundary ? 38 : 22;
+    } else if (COMPLEMENT_BRIDGE_VERBS.has(leftClean) && DETERMINER_WORDS.has(rightClean)) {
+      // Avoid breaking transitive verb from its object determiner ("could use | the stage")
+      penalty += isCueBoundary ? 24 : 14;
+    }
+
+    // Keep multi-word proper nouns / capitalized names intact ("Sakura | High Festival", "Light | Music Club")
+    if (/^[A-Z][A-Za-z'’-]+$/.test(leftWord) && /^[A-Z][A-Za-z'’-]+$/.test(rightWord)) {
+      penalty += isCueBoundary ? 22 : 16;
+    }
+  }
+
+  return penalty;
+}
+
 /**
  * Formats subtitle text into at most 2 balanced lines of maxLineWidth.
  * Returns ok: false if the text cannot fit within 2 lines of maxLineWidth without overflowing.
@@ -294,6 +482,18 @@ export function balanceSubtitleLines(
   const clean = text.replace(/[\n\r]+/g, ' ').replace(/\s+/g, ' ').trim();
   if (!clean) return { lines: [], ok: true };
 
+  // If cue has two distinct sentences (e.g. two speakers in one rapid cue), place each on its own line
+  if (clean.length > 24 && clean.length <= maxLineWidth * 2) {
+    const sentMatch = clean.match(/^(.+?[.!?…]["'”’]?)\s+([^.!?]+[.!?…]["'”’]?)$/);
+    if (sentMatch) {
+      const s1 = sentMatch[1].trim();
+      const s2 = sentMatch[2].trim();
+      if (s1.length <= maxLineWidth && s2.length <= maxLineWidth) {
+        return { lines: [s1, s2], ok: true };
+      }
+    }
+  }
+
   // Fits on a single line cleanly
   if (clean.length <= maxLineWidth) {
     return { lines: [clean], ok: true };
@@ -304,7 +504,7 @@ export function balanceSubtitleLines(
     return { lines: [clean], ok: false };
   }
 
-  // Find ideal split point near the middle (length / 2)
+  // Find ideal split point near the middle (length / 2) with syntactic awareness
   const mid = Math.floor(clean.length / 2);
   const words = clean.split(' ');
 
@@ -319,11 +519,15 @@ export function balanceSubtitleLines(
 
     // Both lines must be within maxLineWidth
     if (line1Len <= maxLineWidth && line2Len <= maxLineWidth) {
-      // Prioritize natural punctuation breaks and avoid leaving 1 short word alone on line 2
-      const endsWithPunct = /[,;:.!?]$/.test(words[i]);
-      const singleWordLine2 = words.length - 1 - i === 1 && line2Len <= 10 && words.length >= 4;
+      const leftEndsSentence = /[.!?…]["'”’]?$/.test(words[i]);
+      const singleWordLine2 =
+        !leftEndsSentence && words.length - 1 - i === 1 && line2Len <= 12 && words.length >= 4;
+      const singleWordLine1 =
+        !leftEndsSentence && i === 0 && line1Len <= 10 && words.length >= 4;
       const diffFromMid = Math.abs(line1Len - mid);
-      const score = diffFromMid - (endsWithPunct ? 12 : 0) + (singleWordLine2 ? 10 : 0);
+      const syntactic = scoreSyntacticSplit(words, i, false);
+      const score =
+        diffFromMid + syntactic + (singleWordLine2 ? 22 : 0) + (singleWordLine1 ? 16 : 0);
 
       if (score < bestScore) {
         bestScore = score;
@@ -340,6 +544,108 @@ export function balanceSubtitleLines(
 
   // Cannot balance into 2 lines <= maxLineWidth
   return { lines: [clean], ok: false };
+}
+
+/**
+ * Restores missing sentence-ending periods between unpunctuated English sentences
+ * when Whisper drops periods in a rapid dialogue run (e.g. "around This will be" -> "around. This will be").
+ * Protects character names, multi-word proper nouns, and complement clauses ("I think This is").
+ */
+export function restoreMissingSentenceBreaks(
+  text: string,
+  characterNames?: string[]
+): string {
+  const clean = text.replace(/[\n\r]+/g, ' ').replace(/\s+/g, ' ').trim();
+  if (!clean) return clean;
+
+  const words = clean.split(' ');
+  if (words.length < 3) return clean;
+
+  const charNameSet = buildCharNameTokenSet(characterNames);
+  const out: string[] = [];
+
+  for (let i = 0; i < words.length; i++) {
+    const cur = words[i];
+    out.push(cur);
+
+    if (i >= words.length - 1) continue;
+
+    // Only consider inserting a period if current word lacks sentence/clause punctuation
+    if (/[.!?…,;:—–"'”’\-]$/.test(cur)) continue;
+    if (!/[a-z0-9)]$/.test(cur)) continue;
+
+    const next = words[i + 1];
+    if (!/^[A-Z]/.test(next)) continue;
+
+    const curClean = stripEdgePunct(cur).toLowerCase();
+    const nextCleanRaw = stripEdgePunct(next);
+    const nextClean = nextCleanRaw.toLowerCase();
+    if (!curClean || !nextClean) continue;
+
+    // Skip abbreviations, articles, prepositions, conjunctions, auxiliaries, object pronouns, bridge verbs
+    if (
+      DETERMINER_WORDS.has(curClean) ||
+      PREPOSITION_WORDS.has(curClean) ||
+      CLAUSE_CONJUNCTIONS.has(curClean) ||
+      (AUXILIARY_OR_PRONOUN_GLUE.has(curClean) &&
+        !(curClean === 'too' && (STRONG_SENTENCE_STARTERS.has(nextClean) || nextCleanRaw === 'I'))) ||
+      COMPLEMENT_BRIDGE_VERBS.has(curClean) ||
+      OBJECT_PRONOUNS.has(curClean) ||
+      PROPER_NOUN_SKIP_WORDS.has(curClean)
+    ) {
+      continue;
+    }
+
+    // Never split before character names, acronyms, days/months, or multi-word TitleCase proper nouns
+    if (charNameSet.has(nextClean) || PROPER_NOUN_SKIP_WORDS.has(nextClean)) continue;
+    if (/^[A-Z]{2,}$/.test(nextCleanRaw)) continue;
+
+    const afterNext = i + 2 < words.length ? words[i + 2] : '';
+    const afterNextClean = stripEdgePunct(afterNext).toLowerCase();
+    const isMultiWordProperNoun =
+      afterNext.length > 0 &&
+      /^[A-Z]/.test(afterNext) &&
+      !STRONG_SENTENCE_STARTERS.has(nextClean) &&
+      !STRONG_SENTENCE_STARTERS.has(afterNextClean);
+    if (isMultiWordProperNoun) continue;
+
+    let shouldInsertBreak = false;
+
+    if (STRONG_SENTENCE_STARTERS.has(nextClean)) {
+      // Guard ambiguous adverbs/prepositions like "around" unless next clause clearly has a verb or phrasal verb
+      if (curClean === 'around' || curClean === 'near' || curClean === 'along') {
+        const prevClean = i > 0 ? stripEdgePunct(words[i - 1]).toLowerCase() : '';
+        const isPhrasal = prevClean === 'play' || prevClean === 'mess' || prevClean === 'hang' || prevClean === 'fool';
+        const nextIsVerb = AUXILIARY_OR_PRONOUN_GLUE.has(afterNextClean) || next.includes("'");
+        shouldInsertBreak = isPhrasal || nextIsVerb;
+      } else {
+        shouldInsertBreak = true;
+      }
+    } else if (nextCleanRaw === 'I') {
+      if (!RELATIVE_HEAD_NOUNS.has(curClean) && STANDALONE_I_FOLLOWING_VERBS.has(afterNextClean)) {
+        shouldInsertBreak = true;
+      }
+    } else if (nextClean === 'a' || nextClean === 'an') {
+      // e.g. "maid cafe A haunted house would be..."
+      if (afterNext && /^[a-z]/.test(afterNext) && i >= 3) {
+        shouldInsertBreak = true;
+      }
+    } else if (nextClean.length >= 4) {
+      // Echoed dialogue question/phrase: "We're having a training camp Training camp?"
+      for (let back = Math.max(0, i - 4); back <= i; back++) {
+        if (stripEdgePunct(words[back]).toLowerCase() === nextClean) {
+          shouldInsertBreak = true;
+          break;
+        }
+      }
+    }
+
+    if (shouldInsertBreak) {
+      out[out.length - 1] = `${cur}.`;
+    }
+  }
+
+  return out.join(' ');
 }
 
 /**
@@ -475,4 +781,503 @@ export function mergeIsolatedSingleWords(
   }
 
   return merged;
+}
+
+interface TimedWord {
+  word: string;
+  startMs: number;
+  endMs: number;
+}
+
+function buildTimedWordsForChain(chain: CueBlock[]): TimedWord[] {
+  const timed: TimedWord[] = [];
+
+  for (const cue of chain) {
+    const clean = cue.text.replace(/[\n\r]+/g, ' ').replace(/\s+/g, ' ').trim();
+    if (!clean) continue;
+    const words = clean.split(' ');
+    const cueStart = cue.startMs;
+    const cueDur = Math.max(200, cue.endMs - cue.startMs);
+    const totalChars = Math.max(1, clean.length);
+
+    let offset = 0;
+    for (let i = 0; i < words.length; i++) {
+      const w = words[i];
+      const wStartRatio = offset / totalChars;
+      const wEndRatio = (offset + w.length) / totalChars;
+      const startMs = Math.round(cueStart + cueDur * wStartRatio);
+      const endMs = Math.max(startMs + 40, Math.round(cueStart + cueDur * wEndRatio));
+      timed.push({ word: w, startMs, endMs });
+      offset += w.length + 1;
+    }
+  }
+
+  return timed;
+}
+
+function splitLongWordsSyntactically(
+  words: TimedWord[],
+  maxLineWidth: number,
+  maxLineCount: number
+): TimedWord[][] {
+  const maxCueChars = maxLineWidth * maxLineCount;
+  const wordTexts = words.map((w) => w.word);
+  const fullText = wordTexts.join(' ');
+  if (fullText.length <= maxCueChars && balanceSubtitleLines(fullText, maxLineWidth).ok) {
+    return [words];
+  }
+  if (words.length <= 2) {
+    return [words];
+  }
+
+  // Build prefix lengths for O(1) slice length checks
+  const prefixLen: number[] = new Array(words.length);
+  let acc = 0;
+  for (let i = 0; i < words.length; i++) {
+    acc += words[i].word.length + (i > 0 ? 1 : 0);
+    prefixLen[i] = acc;
+  }
+
+  const totalLen = prefixLen[words.length - 1];
+  const needsOnlyTwoCues = totalLen <= maxCueChars * 2;
+  const targetChars = needsOnlyTwoCues ? Math.floor(totalLen / 2) : Math.floor(maxCueChars * 0.78);
+
+  let bestIdx = -1;
+  let bestScore = Infinity;
+
+  for (let i = 1; i < words.length - 1; i++) {
+    const leftLen = prefixLen[i];
+    const rightLen = totalLen - leftLen - 1;
+    if (leftLen > maxCueChars) break;
+
+    const leftText = wordTexts.slice(0, i + 1).join(' ');
+    if (!balanceSubtitleLines(leftText, maxLineWidth).ok) continue;
+
+    if (needsOnlyTwoCues) {
+      if (rightLen > maxCueChars) continue;
+      const rightText = wordTexts.slice(i + 1).join(' ');
+      if (!balanceSubtitleLines(rightText, maxLineWidth).ok) continue;
+    }
+
+    const syntactic = scoreSyntacticSplit(wordTexts, i, true);
+    const leftTooShort = i + 1 <= 2 && leftLen < 12 ? 30 : 0;
+    const rightTooShort = words.length - 1 - i <= 2 && rightLen < 12 ? 30 : 0;
+    const balanceCost = Math.abs(leftLen - targetChars) * 0.45;
+    const score = syntactic + leftTooShort + rightTooShort + balanceCost;
+
+    if (score < bestScore) {
+      bestScore = score;
+      bestIdx = i;
+    }
+  }
+
+  // Fallback: if strict <=maxLineWidth balance had no valid 2-cue fit, allow max length up to maxCueChars
+  if (bestIdx === -1) {
+    for (let i = 1; i < words.length - 1; i++) {
+      const leftLen = prefixLen[i];
+      const rightLen = totalLen - leftLen - 1;
+      if (leftLen > maxCueChars) break;
+      if (needsOnlyTwoCues && rightLen > maxCueChars) continue;
+      const syntactic = scoreSyntacticSplit(wordTexts, i, true);
+      const score = syntactic + Math.abs(leftLen - targetChars) * 0.45;
+      if (score < bestScore) {
+        bestScore = score;
+        bestIdx = i;
+      }
+    }
+  }
+
+  if (bestIdx === -1) {
+    // Hard cap split before maxCueChars
+    let cut = 0;
+    while (cut < words.length - 2 && prefixLen[cut + 1] <= maxCueChars) cut++;
+    bestIdx = Math.max(0, cut);
+  }
+
+  const left = words.slice(0, bestIdx + 1);
+  const right = words.slice(bestIdx + 1);
+  return [left, ...splitLongWordsSyntactically(right, maxLineWidth, maxLineCount)];
+}
+
+function segmentWordStreamToCues(
+  timedWords: TimedWord[],
+  maxLineWidth: number,
+  maxLineCount: number
+): CueBlock[] {
+  if (timedWords.length === 0) return [];
+
+  // 1. Group words into complete sentences at .!?… boundaries
+  const sentences: TimedWord[][] = [];
+  let currentSentence: TimedWord[] = [];
+
+  for (let i = 0; i < timedWords.length; i++) {
+    const tw = timedWords[i];
+    currentSentence.push(tw);
+    if (/[.!?…]["'”’]?$/.test(tw.word)) {
+      sentences.push(currentSentence);
+      currentSentence = [];
+    }
+  }
+  if (currentSentence.length > 0) {
+    sentences.push(currentSentence);
+  }
+
+  // 2. Pack complete sentences cleanly: never wrap tail of Sentence A onto Sentence B's line,
+  //    and split overly long single sentences at syntactic clause boundaries.
+  const cueGroups: TimedWord[][] = [];
+  let idx = 0;
+
+  while (idx < sentences.length) {
+    const s1 = sentences[idx];
+    const s1Text = s1.map((w) => w.word).join(' ');
+
+    if (idx + 1 < sentences.length) {
+      const s2 = sentences[idx + 1];
+      const s2Text = s2.map((w) => w.word).join(' ');
+      const gapBetween = s2[0].startMs - s1[s1.length - 1].endMs;
+      const combinedDur = s2[s2.length - 1].endMs - s1[0].startMs;
+      const bothFitSeparateLines =
+        s1Text.length <= maxLineWidth &&
+        s2Text.length <= maxLineWidth &&
+        maxLineCount >= 2 &&
+        gapBetween <= 450 &&
+        combinedDur <= 5500;
+
+      if (bothFitSeparateLines) {
+        cueGroups.push([...s1, ...s2]);
+        idx += 2;
+        continue;
+      }
+    }
+
+    const s1Balanced = balanceSubtitleLines(s1Text, maxLineWidth);
+    if (s1Balanced.ok && s1Balanced.lines.length <= maxLineCount) {
+      cueGroups.push(s1);
+    } else {
+      cueGroups.push(...splitLongWordsSyntactically(s1, maxLineWidth, maxLineCount));
+    }
+    idx += 1;
+  }
+
+  // 3. Build formatted CueBlocks with monotonic, non-overlapping timestamps
+  const result: CueBlock[] = [];
+  const chainMaxEnd = timedWords[timedWords.length - 1].endMs;
+
+  for (let g = 0; g < cueGroups.length; g++) {
+    const group = cueGroups[g];
+    if (group.length === 0) continue;
+    const rawText = group.map((w) => w.word).join(' ');
+    const balanced = balanceSubtitleLines(rawText, maxLineWidth);
+    const text = balanced.ok ? balanced.lines.join('\n') : rawText;
+
+    let startMs = group[0].startMs;
+    if (result.length > 0 && startMs < result[result.length - 1].endMs) {
+      startMs = result[result.length - 1].endMs;
+    }
+
+    let endMs = group[group.length - 1].endMs;
+    if (g + 1 < cueGroups.length && cueGroups[g + 1].length > 0) {
+      const nextRawStart = cueGroups[g + 1][0].startMs;
+      if (nextRawStart > startMs && nextRawStart < endMs) {
+        endMs = nextRawStart;
+      }
+    }
+    endMs = Math.min(chainMaxEnd, Math.max(startMs + 250, endMs));
+    if (endMs <= startMs) endMs = startMs + 250;
+
+    result.push({
+      start: msToSrtTimecode(startMs),
+      end: msToSrtTimecode(endMs),
+      startMs,
+      endMs,
+      text,
+    });
+  }
+
+  return result;
+}
+
+/**
+ * Full syntactic cue & line refiner:
+ * 1. Restores missing sentence-ending periods between unpunctuated English clauses.
+ * 2. Merges isolated 1-2 word orphan fragments via `mergeIsolatedSingleWords`.
+ * 3. Re-segments linked incomplete cue chains and overlong multi-sentence cues at natural
+ *    sentence/clause boundaries instead of cutting mid-phrase ("We'll be", "you will / be", "recognized as").
+ * 4. Re-balances line breaks across all cues using syntactic scoring.
+ */
+export function rebalanceSubtitleCues(
+  cues: CueBlock[],
+  maxLineWidth: number = 46,
+  maxLineCount: number = 2,
+  characterNames?: string[],
+  options?: { maxOrphanLineWidth?: number; isEnglish?: boolean }
+): CueBlock[] {
+  if (cues.length === 0) return cues;
+
+  const isEnglish = options?.isEnglish !== false;
+
+  // 1. Restore missing sentence periods on unpunctuated multi-sentence cues
+  let working = cues.map((cue) => {
+    const trimmed = cue.text.replace(/[\n\r]+/g, ' ').replace(/\s+/g, ' ').trim();
+    if (!trimmed || /^[([].*[)\]]$/.test(trimmed) || !isEnglish) {
+      return { ...cue };
+    }
+    return {
+      ...cue,
+      text: restoreMissingSentenceBreaks(trimmed, characterNames),
+    };
+  });
+
+  // 2. Preserve existing tight orphan merging & casing rules
+  working = mergeIsolatedSingleWords(working, maxLineWidth, maxLineCount, characterNames, {
+    maxOrphanLineWidth: options?.maxOrphanLineWidth,
+  });
+
+  // 3. Rebalance contiguous incomplete cue chains & overlong single cues
+  const rebalanced: CueBlock[] = [];
+  let i = 0;
+
+  while (i < working.length) {
+    const startCue = working[i];
+    const startText = startCue.text.replace(/[\n\r]+/g, ' ').replace(/\s+/g, ' ').trim();
+    const isStartParen = /^[([].*[)\]]$/.test(startText);
+
+    if (isStartParen) {
+      rebalanced.push(startCue);
+      i++;
+      continue;
+    }
+
+    const chain: CueBlock[] = [startCue];
+    let j = i;
+    while (j + 1 < working.length && chain.length < 5) {
+      const prev = working[j];
+      const next = working[j + 1];
+      const prevFlat = prev.text.replace(/[\n\r]+/g, ' ').replace(/\s+/g, ' ').trim();
+      const nextFlat = next.text.replace(/[\n\r]+/g, ' ').replace(/\s+/g, ' ').trim();
+      if (!prevFlat || !nextFlat || /^[([].*[)\]]$/.test(nextFlat)) break;
+
+      const gap = next.startMs - prev.endMs;
+      const prevEndsSentence = /[.!?…]["'”’]?$/.test(prevFlat);
+      const totalDur = next.endMs - startCue.startMs;
+
+      if (gap >= 0 && gap <= 550 && !prevEndsSentence && totalDur <= 18000) {
+        chain.push(next);
+        j++;
+      } else {
+        break;
+      }
+    }
+
+    const singleOverflow =
+      chain.length === 1 && !balanceSubtitleLines(startText, maxLineWidth).ok;
+
+    if (chain.length > 1 || singleOverflow) {
+      const timedWords = buildTimedWordsForChain(chain);
+      const segmented = segmentWordStreamToCues(timedWords, maxLineWidth, maxLineCount);
+      if (segmented.length > 0) {
+        rebalanced.push(...segmented);
+      } else {
+        rebalanced.push(...chain);
+      }
+      i = j + 1;
+      continue;
+    }
+
+    // Single cue within 2-line budget: apply syntactic line balancing
+    const balanced = balanceSubtitleLines(startText, maxLineWidth);
+    rebalanced.push({
+      ...startCue,
+      text: balanced.ok ? balanced.lines.join('\n') : startCue.text,
+    });
+    i++;
+  }
+
+  return rebalanced;
+}
+
+/**
+ * Returns true if a chapter title denotes an anime opening sequence.
+ */
+export function isOpeningChapterTitle(title?: string): boolean {
+  const t = (title || '').trim().toLowerCase();
+  if (!t) return false;
+  if (/^(?:intro|prologue|pre-opening|cold\s*open|recap|preview|part\s*[ab12]|episode|ed|ending)/i.test(t)) {
+    return false;
+  }
+  return (
+    /^(?:op|opening|openning)(?:\b|\d|\s|:|-|$)/i.test(t) ||
+    /(?:^|\b)(?:op|opening|openning)\s*(?:theme|\d+)?(?:\b|$)/i.test(t) ||
+    /theme\s*song/i.test(t)
+  );
+}
+
+/**
+ * Returns true if a chapter title denotes an anime ending credits sequence
+ * (never matches next-episode previews or main episode parts).
+ */
+export function isEndingChapterTitle(title?: string): boolean {
+  const t = (title || '').trim().toLowerCase();
+  if (!t) return false;
+  if (
+    /^(?:intro|prologue|avant|op|opening|openning|part\s*[ab12]|episode|preview|next|epilogue|post|omake|c\s*part)/i.test(t) ||
+    /\b(?:preview|next\s*episode)\b/i.test(t)
+  ) {
+    return false;
+  }
+  return (
+    /^(?:ed|ending|credits|end\s*credits)(?:\b|\d|\s|:|-|$)/i.test(t) ||
+    /(?:^|\b)(?:ed|ending)\s*(?:theme|\d+)?(?:\b|$)/i.test(t)
+  );
+}
+
+function isGenericChapterTitle(title?: string): boolean {
+  const t = (title || '').trim();
+  return !t || /^chapter\s*\d+$/i.test(t);
+}
+
+/**
+ * Detects Opening and Ending intervals from MKV chapter markers.
+ * Named chapters take priority; unnamed ~85-93s chapters in multi-chapter episodes
+ * are exposed separately so callers can prefer AniSkip when available.
+ */
+export function detectOpEdFromChapters(
+  chapters?: VideoChapter[],
+  durationSec?: number
+): {
+  namedOp?: OpEdSkipRange;
+  namedEd?: OpEdSkipRange;
+  unnamedOp?: OpEdSkipRange;
+  unnamedEd?: OpEdSkipRange;
+} {
+  if (!chapters || chapters.length === 0) return {};
+
+  const totalDur =
+    durationSec && durationSec > 0
+      ? durationSec
+      : Math.max(...chapters.map((c) => (Number.isFinite(c.end) ? c.end : 0)), 0);
+
+  let namedOp: OpEdSkipRange | undefined;
+  let namedEd: OpEdSkipRange | undefined;
+  let unnamedOp: OpEdSkipRange | undefined;
+  let unnamedEd: OpEdSkipRange | undefined;
+
+  for (const ch of chapters) {
+    if (!Number.isFinite(ch.start) || !Number.isFinite(ch.end) || ch.end <= ch.start) continue;
+    const dur = ch.end - ch.start;
+
+    if (!namedOp && isOpeningChapterTitle(ch.title) && dur >= 35 && dur <= 140) {
+      if (totalDur <= 0 || ch.start < Math.max(600, totalDur * 0.5)) {
+        namedOp = { start: ch.start, end: ch.end, label: 'OP', source: 'chapter' };
+        continue;
+      }
+    }
+
+    if (!namedEd && isEndingChapterTitle(ch.title) && dur >= 35 && dur <= 140) {
+      if (totalDur <= 0 || ch.start >= totalDur * 0.5) {
+        namedEd = { start: ch.start, end: ch.end, label: 'ED', source: 'chapter' };
+        continue;
+      }
+    }
+
+    if (chapters.length >= 3 && isGenericChapterTitle(ch.title) && dur >= 85 && dur <= 93) {
+      if (!unnamedOp && ch.start < 360) {
+        unnamedOp = { start: ch.start, end: ch.end, label: 'OP', source: 'chapter' };
+      } else if (!unnamedEd && totalDur > 600 && ch.start >= totalDur - 240 && ch.start > 0) {
+        unnamedEd = { start: ch.start, end: ch.end, label: 'ED', source: 'chapter' };
+      }
+    }
+  }
+
+  return { namedOp, namedEd, unnamedOp, unnamedEd };
+}
+
+/**
+ * Checks whether a subtitle cue lies inside any OP/ED skip interval.
+ * Applies a conservative edge margin (default 1.5s) so adjacent spoken dialogue
+ * right before or after an opening/ending is never accidentally dropped.
+ */
+export function isCueInSkipRanges(
+  startMs: number,
+  endMs: number,
+  skipRanges?: OpEdSkipRange[],
+  edgeMarginMs: number = 1500
+): boolean {
+  if (!skipRanges || skipRanges.length === 0) return false;
+
+  const cueEnd = Math.max(startMs, endMs);
+  const cueDur = cueEnd - startMs;
+  const cueMid = (startMs + cueEnd) / 2;
+
+  for (const range of skipRanges) {
+    if (!Number.isFinite(range.start) || !Number.isFinite(range.end) || range.end <= range.start) continue;
+    const rawStartMs = range.start * 1000;
+    const rawEndMs = range.end * 1000;
+    const margin = rawEndMs - rawStartMs > edgeMarginMs * 4 ? edgeMarginMs : 0;
+    const effStart = rawStartMs + margin;
+    const effEnd = rawEndMs - margin;
+    if (effEnd <= effStart) continue;
+
+    if (cueMid >= effStart && cueMid <= effEnd) {
+      return true;
+    }
+
+    if (cueDur > 0) {
+      const overlap = Math.max(0, Math.min(cueEnd, effEnd) - Math.max(startMs, effStart));
+      if (overlap / cueDur >= 0.75) {
+        return true;
+      }
+    }
+  }
+
+  return false;
+}
+
+/**
+ * Filters out subtitle cues that fall inside confirmed OP/ED skip intervals.
+ */
+export function filterCuesBySkipRanges(
+  cues: CueBlock[],
+  skipRanges?: OpEdSkipRange[]
+): CueBlock[] {
+  if (!skipRanges || skipRanges.length === 0) return cues;
+  return cues.filter((cue) => !isCueInSkipRanges(cue.startMs, cue.endMs, skipRanges));
+}
+
+/**
+ * Normalizes legacy boolean and tri-state singing suppression preferences.
+ */
+export function normalizeSingingSuppression(value: unknown): SingingSuppressionMode {
+  if (value === 'balanced' || value === 'strict' || value === 'off') {
+    return value;
+  }
+  if (value === true) {
+    return 'strict';
+  }
+  return 'off';
+}
+
+/**
+ * Builds the FFmpeg `-af` filter stages for Balanced singing/music suppression.
+ * Uses 48kHz resampling + timestamp sync and partial RNNoise blending (`mix < 1.0`)
+ * so high-pitched, quiet, or slow anime dialogue is preserved instead of muted.
+ */
+export function buildBalancedAudioFilterChain(options: {
+  rnndnModelName?: string;
+  rnndnMix?: number;
+  extractFrontCenter?: boolean;
+}): string[] {
+  const filters: string[] = [];
+  if (options.extractFrontCenter) {
+    filters.push('pan=mono|c0=FC');
+  }
+  if (options.rnndnModelName) {
+    const rawMix = typeof options.rnndnMix === 'number' && Number.isFinite(options.rnndnMix)
+      ? options.rnndnMix
+      : 0.6;
+    const mix = Math.min(1, Math.max(0, rawMix));
+    filters.push('aresample=48000:async=3600:first_pts=0');
+    filters.push(`arnndn=m=${options.rnndnModelName}:mix=${mix}`);
+  }
+  return filters;
 }

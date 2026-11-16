@@ -328,6 +328,15 @@ export interface WhisperLiveCue {
 
 export type WhisperPreset = 'anime' | 'bgm' | 'fast' | 'custom';
 
+export type SingingSuppressionMode = 'off' | 'balanced' | 'strict';
+
+export interface OpEdSkipRange {
+  start: number;
+  end: number;
+  label: 'OP' | 'ED';
+  source: 'chapter' | 'aniskip';
+}
+
 export interface WhisperOptions {
   preset?: WhisperPreset;
   model?: string;
@@ -349,6 +358,7 @@ export interface WhisperOptions {
   conditionOnPreviousText?: boolean;
   compressionRatioThreshold?: number;
   noSpeechThreshold?: number;
+  hallucinationSilenceThreshold?: number;
   initialPrompt?: string;
   hotwords?: string;
   temperature?: number;
@@ -360,6 +370,9 @@ export interface WhisperOptions {
   mergeSingleWords?: boolean;
   channelMode?: 'auto' | 'fc';
   speechNorm?: boolean;
+  skipOpEd?: boolean;
+  suppressSinging?: boolean | SingingSuppressionMode;
+  animeTitle?: string;
   selectedFilePaths?: string[];
   hallucinationList?: string[];
   characterNamesForCorrection?: string[];

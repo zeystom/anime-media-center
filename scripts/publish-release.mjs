@@ -38,13 +38,12 @@ if (!token) {
   process.exit(1);
 }
 
-const RELEASE_BODY = `## Kaiko ${VERSION} — Automatic Signs & Songs, Local ASS Extractor & Online Subtitle Search
+const RELEASE_BODY = `## Kaiko ${VERSION} — Whisper OP/ED Filtering, Balanced Music Suppression & Syntactic Cue Splitting
 
 ### What's New
-- **Automatic Background Signs & Songs:** when watching Dub + Whisper SRT (or no dialogue subs) without a dedicated Signs track, Kaiko automatically extracts Signs & Songs from eligible embedded ASS/SSA tracks or fetches high-confidence online Signs/ASS subtitles in the background — while strictly honoring explicit \`OFF\` choices.
-- **1-Click Local ASS Signs & Songs Extractor:** extracts positioned signs, titles, notes, credits, and OP/ED/karaoke into a standalone \`.en.signs.ass\` track for \`2ND SUB / SIGNS (TOP)\`.
-- **Online Subtitle Search & Font Bundling:** adds keyless anime-first search via **TsukiHime** (including automatic \`.xz\` archive unpacking and font attachments for JASSUB), plus optional API-key support for **SubSource**, **SubDL**, and **OpenSubtitles** in **Settings -> Online Subtitle & Signs Search** and the player's **Online Sub Search** tab.
-- **MKV Probe, Extraction & Font Fixes:** fixed FFmpeg metadata title parsing (\`Subtitle: ass\` no longer masks \`Metadata: title\`), added explicit \`-f ass\` / \`-f srt\` muxer flags so embedded ASS extraction works reliably on Windows, improved Season 1 vs Season 2 batch matching, and increased obfuscated ASS font matching cap to 24.
+- **Opening & Ending Filter (Skip OP / ED):** added visible **Opening & Music Filter** controls in Whisper Studio. Automatically excludes hallucinations inside MKV chapter and AniSkip OP/ED ranges (with a 1.5s safety margin for edge speech), enables \`--hallucination_silence_threshold 2\`, and disables Whisper's leaky auto-prompt over music.
+- **3-Mode Music Suppression (\`Off\` · \`Balanced\` · \`Strict\`):** replaced binary aggressive singing removal with a **\`Balanced\`** FFmpeg RNNoise blend (\`mix=0.6\`, keeping 40% dry voice harmonics with automatic spectral denoise fallback) so quiet, high-pitched, and slow anime voices stay intact while dampening background music, plus **\`Strict\`** for heavy insert songs.
+- **Natural Punctuation & Syntactic Cue Splitting:** fixed inverted \`antiStutter\` context resets and added \`--max_gap 1.0\` to prevent multi-line period loss, conservatively restored missed sentence breaks between glued clauses, and upgraded post-processing to rebalance multi-cue splits at natural grammatical boundaries within 2 lines.
 
 ---
 ### Assets included

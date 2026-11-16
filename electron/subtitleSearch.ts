@@ -64,7 +64,7 @@ function getKaikoUserAgent(): string {
     const ver = app && typeof app.getVersion === 'function' ? app.getVersion() : '';
     if (ver) return `Kaiko/${ver}`;
   } catch {}
-  return 'Kaiko/3.3.0';
+  return 'Kaiko/3.3.1';
 }
 
 function runExecFileBuffer(cmd: string, args: string[], cwd: string): Promise<Buffer> {

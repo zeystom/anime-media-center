@@ -7,7 +7,7 @@
 <p align="center"><strong>Your anime library, player, and subtitle studio — on your PC.</strong></p>
 
 <p align="center">
-  <img src="https://img.shields.io/badge/Version-3.3.0-ec4899?style=flat-square" alt="Version 3.3.0" />
+  <img src="https://img.shields.io/badge/Version-3.3.1-ec4899?style=flat-square" alt="Version 3.3.1" />
   <img src="https://img.shields.io/badge/Platform-Windows%2010%20%2F%2011-blue?style=flat-square" alt="Windows 10 and 11" />
   <img src="https://img.shields.io/badge/Electron-33-47848F?style=flat-square&logo=electron" alt="Electron 33" />
   <img src="https://img.shields.io/badge/License-MIT-green?style=flat-square" alt="MIT License" />
@@ -84,6 +84,12 @@ Torrent downloads are an optional feature. The application includes a built-in W
 
 For a magnet link that contains no tracker address, the engine appends a small list of public tracker addresses bundled with the app to improve peer discovery. Magnets that already contain trackers keep their own tracker list. Trackers only help peers find each other; they do not provide search results or host download content. You are responsible for the sources you configure and the material you download or share; check the laws that apply where you live.
 
+## What's new in 3.3.1
+
+- **Whisper OP/ED Filtering & Controls:** added visible **Skip Opening & Ending (OP / ED)** controls powered by MKV chapters and AniSkip (with 1.5s boundary protection for adjacent dialogue), `--hallucination_silence_threshold 2`, and `--initial_prompt None` when unset to prevent gibberish lyrics and leaked prompt text during openings and endings.
+- **Balanced Music Suppression (`Off` · `Balanced` · `Strict`):** added a gentle **`Balanced`** mode (`arnndn mix=0.6` via FFmpeg with `--ff_fftdn 12` fallback) that dampens background music and noise without erasing quiet, high-pitched, or slow anime speech, alongside **`Strict`** for heavy insert songs.
+- **Punctuation & Syntactic Cue Splitting Fixes:** fixed the inverted `antiStutter` context-reset setting (`--max_gap 1.0`), restored missed periods between sentences (`restoreMissingSentenceBreaks`), and added syntax-aware cross-cue rebalancing (`rebalanceSubtitleCues`) so lines and cues split cleanly at clause boundaries instead of stranding short glue phrases.
+
 ## What's new in 3.3.0
 
 - **Automatic Background Signs & Songs:** when no dedicated Signs/Forced track is active and Main Subtitle is not already ASS/SSA (for instance, English Dub with Whisper SRT or no dialogue subs), Kaiko automatically extracts a standalone `.en.signs.ass` track from eligible embedded ASS/SSA tracks or fetches high-confidence online Signs/ASS subtitles in the background — while respecting explicit `OFF` preferences.
@@ -104,7 +110,7 @@ For a magnet link that contains no tracker address, the engine appends a small l
 
 ## Install the Windows app
 
-Download the `Kaiko-Setup-3.3.0.exe` installer from the project’s GitHub Releases page, run it, and choose an install folder. The installer creates Desktop and Start Menu shortcuts. Updates can also be installed directly from within the app via **Settings -> Application Updates** or the startup update prompt (with rendered GitHub release notes). During a normal uninstall, Kaiko asks separately whether to remove saved settings, anime lists, and watch history, and whether to clear the contents of configured media-library folders. Both choices default to **No**; deleting library contents requires a second confirmation listing the folders. Clearing a library folder removes every file inside it, not just Kaiko downloads, and leaves the folder itself in place. Silent uninstall and app upgrades preserve personal data.
+Download the `Kaiko-Setup-3.3.1.exe` installer from the project’s GitHub Releases page, run it, and choose an install folder. The installer creates Desktop and Start Menu shortcuts. Updates can also be installed directly from within the app via **Settings -> Application Updates** or the startup update prompt (with rendered GitHub release notes). During a normal uninstall, Kaiko asks separately whether to remove saved settings, anime lists, and watch history, and whether to clear the contents of configured media-library folders. Both choices default to **No**; deleting library contents requires a second confirmation listing the folders. Clearing a library folder removes every file inside it, not just Kaiko downloads, and leaves the folder itself in place. Silent uninstall and app upgrades preserve personal data.
 
 FFmpeg and a lightweight 7-Zip decompression engine (`7z.exe` + `7z.dll`) are bundled directly into Kaiko for playback, extraction, and automated setup on Windows 10 and Windows 11. The Faster-Whisper-XXL engine can be downloaded and configured in 1 click directly inside Kaiko (or auto-detected from Subtitle Edit / custom paths), along with AI models (`large-v3-turbo`, `medium`, and `small`).
 

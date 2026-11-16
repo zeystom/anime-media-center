@@ -1,5 +1,14 @@
 # Changelog
 
+## 3.3.1 — Whisper OP/ED Filtering, Balanced Music Suppression & Syntactic Cue Splitting
+
+- **Opening & Ending Filter (`electron/whisperPostProcess.ts`, `electron/whisper.ts`, `WhisperStudio.tsx`):** added explicit **Skip Opening & Ending (OP / ED)** controls in Whisper Studio (enabled by default). Uses MKV chapter metadata (named OP/ED and unnamed ~90s intro/outro chapters) paired with AniSkip timings to drop song hallucinations in openings and endings while preserving edge dialogue via a 1.5s safety margin, sets `--hallucination_silence_threshold 2`, and passes `--initial_prompt None` when no custom prompt is configured to stop Purfview's auto-prompt phrases from leaking over music.
+- **3-Mode Music & Singing Suppression (`Off` · `Balanced` · `Strict`):** replaced the aggressive all-or-nothing singing filter with a 3-mode selector in **Opening & Music Filter**:
+  - **`Off`:** leaves dialogue audio untouched while **Skip OP/ED** handles intro/outro hallucinations cleanly.
+  - **`Balanced`:** pre-processes the selected track via FFmpeg (`aresample=48000:async=3600:first_pts=0` + `arnndn` blended at `mix=0.6`, with `--ff_fftdn 12` fallback) to attenuate background music and noise by 60% while keeping 40% dry signal intact so quiet, high-pitched, and slow anime dialogue is never wiped out.
+  - **`Strict`:** uses `--ff_rnndn_sh` for episodes with loud mid-episode insert singing.
+- **Whisper Punctuation & Syntactic Cue Rebalancing:** fixed the inverted `antiStutter` mapping (`conditionOnPreviousText: !antiStutter`) that prevented window resets after missing periods, added `--max_gap 1.0` and `--prompt_reset_on_no_end 1`, added conservative sentence-boundary restoration (`restoreMissingSentenceBreaks`), and replaced single-word-only spillover merging with syntax-aware cross-cue rebalancing (`rebalanceSubtitleCues`, `scoreSyntacticSplit`) to keep clauses, auxiliaries, prepositions, and multi-word proper nouns intact across at most 2 balanced lines.
+
 ## 3.3.0 — Automatic Signs & Songs Acquisition, Local ASS Extractor & Online Subtitle Search
 
 - **Automatic Background Signs & Songs (`VideoPlayer.tsx`):** when `2ND SUB / SIGNS (TOP)` has no active signs track and Main Subtitle is not already ASS/SSA (e.g., English Dub + Whisper SRT or no dialogue subs), Kaiko now automatically extracts a standalone `.en.signs.ass` from any eligible embedded ASS/SSA track or fetches high-confidence online Signs/ASS subtitles without interrupting playback, while strictly honoring explicit `OFF` preferences (`topSubtitleTrackId: null`) and avoiding overwriting unset preferences during audio/main-sub changes.

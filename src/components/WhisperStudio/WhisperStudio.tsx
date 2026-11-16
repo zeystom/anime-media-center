@@ -21,6 +21,7 @@ import {
   Check,
   Download,
   Sparkles,
+  Music,
 } from 'lucide-react';
 import {
   AnimeFolder,
@@ -31,6 +32,7 @@ import {
   WhisperLiveCue,
   WhisperOptions,
   WhisperPreset,
+  SingingSuppressionMode,
   WhisperEngineDownloadProgress,
 } from '../../types';
 import { cleanSeriesTitle, cleanEpisodeTitle, formatFileSize } from '../../utils/format';
@@ -302,6 +304,8 @@ const WhisperStudioImpl: React.FC<WhisperStudioProps> = ({
   const [antiStutter, setAntiStutter] = useState<boolean>(true);
   const [preventSingleWords, setPreventSingleWords] = useState<boolean>(true);
   const [channelMode, setChannelMode] = useState<'auto' | 'fc'>('auto');
+  const [skipOpEd, setSkipOpEd] = useState<boolean>(true);
+  const [suppressSinging, setSuppressSinging] = useState<SingingSuppressionMode>('off');
   const [task, setTask] = useState<'transcribe' | 'translate'>('transcribe');
   const [language, setLanguage] = useState<string>('en');
 
@@ -316,6 +320,17 @@ const WhisperStudioImpl: React.FC<WhisperStudioProps> = ({
         if (parsed.antiStutter !== undefined) setAntiStutter(parsed.antiStutter);
         if (parsed.preventSingleWords !== undefined) setPreventSingleWords(parsed.preventSingleWords);
         if (parsed.channelMode) setChannelMode(parsed.channelMode);
+        if (parsed.skipOpEd !== undefined) setSkipOpEd(Boolean(parsed.skipOpEd));
+        if (parsed.suppressSinging !== undefined) {
+          const val = parsed.suppressSinging;
+          setSuppressSinging(
+            val === 'balanced' || val === 'strict' || val === 'off'
+              ? val
+              : val === true
+              ? 'strict'
+              : 'off'
+          );
+        }
         if (parsed.task) setTask(parsed.task);
         if (parsed.language) setLanguage(parsed.language);
         if (typeof parsed.userPromptOverride === 'string') {
@@ -339,13 +354,15 @@ const WhisperStudioImpl: React.FC<WhisperStudioProps> = ({
           antiStutter,
           preventSingleWords,
           channelMode,
+          skipOpEd,
+          suppressSinging,
           task,
           language,
           userPromptOverride,
         })
       );
     } catch {}
-  }, [qualityOption, vadSensitivity, antiStutter, preventSingleWords, channelMode, task, language, userPromptOverride]);
+  }, [qualityOption, vadSensitivity, antiStutter, preventSingleWords, channelMode, skipOpEd, suppressSinging, task, language, userPromptOverride]);
 
   // Synchronize initialFolder when user opens Whisper from library (unless job is running)
   useEffect(() => {
@@ -731,9 +748,10 @@ const WhisperStudioImpl: React.FC<WhisperStudioProps> = ({
       vadThreshold: vadSensitivity === 'high' ? 0.28 : vadSensitivity === 'balanced' ? 0.35 : 0.45,
       vadMinSpeechDurationMs: vadSensitivity === 'standard' ? 250 : vadSensitivity === 'high' ? 100 : 150,
       vadSpeechPadMs: vadSensitivity === 'high' ? 1000 : 900,
-      conditionOnPreviousText: antiStutter,
+      conditionOnPreviousText: !antiStutter,
       compressionRatioThreshold: 2.4,
       noSpeechThreshold: vadSensitivity === 'high' ? 0.7 : 0.6,
+      hallucinationSilenceThreshold: 2,
       initialPrompt: customPrompt || undefined,
       hotwords: detectedHotwords || undefined,
       characterNamesForCorrection: activeCorrectionNames.length > 0 ? activeCorrectionNames : undefined,
@@ -745,6 +763,9 @@ const WhisperStudioImpl: React.FC<WhisperStudioProps> = ({
       sentence: true,
       channelMode,
       speechNorm: qualityOption === 'bgm',
+      skipOpEd,
+      suppressSinging,
+      animeTitle: currentAnime?.canonicalTitle || cleanSeriesTitle(currentAnime?.folderName || selectedFolder) || undefined,
       selectedFilePaths: selectivePaths || (selectedEpisodePaths.size > 0 ? Array.from(selectedEpisodePaths) : undefined),
     };
   };
@@ -1472,6 +1493,120 @@ const WhisperStudioImpl: React.FC<WhisperStudioProps> = ({
               )}
             </div>
 
+            {/* Opening & Music Filter (Always Visible) */}
+            <div className="pt-2.5 border-t border-zinc-800/60 space-y-2">
+              <div className="flex items-center justify-between text-xs">
+                <div className="flex items-center space-x-1.5 text-zinc-300">
+                  <Music className="w-3.5 h-3.5 text-indigo-400 shrink-0" />
+                  <span className="font-semibold">Opening &amp; Music Filter</span>
+                </div>
+                <span
+                  className={`text-[10px] font-semibold px-1.5 py-0.5 rounded border ${
+                    skipOpEd || suppressSinging !== 'off'
+                      ? 'bg-emerald-500/15 text-emerald-300 border-emerald-500/30'
+                      : 'bg-zinc-800/80 text-zinc-400 border-zinc-700'
+                  }`}
+                >
+                  {skipOpEd && suppressSinging !== 'off'
+                    ? `OP/ED Skip + ${suppressSinging === 'balanced' ? 'Balanced' : 'Strict'}`
+                    : skipOpEd
+                    ? 'OP/ED Skip On'
+                    : suppressSinging === 'balanced'
+                    ? 'Balanced Filter On'
+                    : suppressSinging === 'strict'
+                    ? 'Strict Filter On'
+                    : 'Off'}
+                </span>
+              </div>
+
+              <div className="space-y-1.5">
+                <div
+                  onClick={() => {
+                    if (!isProcessing) setSkipOpEd((prev) => !prev);
+                  }}
+                  className={`flex items-center justify-between gap-3 p-2 rounded-xl bg-zinc-900/60 border border-zinc-800/80 transition-colors ${
+                    isProcessing ? 'opacity-60 cursor-not-allowed' : 'cursor-pointer hover:border-zinc-700/80'
+                  }`}
+                >
+                  <div className="min-w-0">
+                    <span className="text-xs font-medium text-zinc-200 block">
+                      Skip Opening &amp; Ending (OP / ED)
+                    </span>
+                    <span className="text-[10px] text-zinc-500 block leading-tight mt-0.5">
+                      Ignores lyrics in detected OP/ED using MKV chapters &amp; AniSkip. Turn off if characters talk over credits.
+                    </span>
+                  </div>
+                  <button
+                    type="button"
+                    role="switch"
+                    aria-checked={skipOpEd}
+                    aria-label="Skip Opening and Ending"
+                    disabled={isProcessing}
+                    onClick={(e) => {
+                      e.stopPropagation();
+                      setSkipOpEd((prev) => !prev);
+                    }}
+                    className={`w-10 h-5 rounded-full p-0.5 transition-colors duration-200 shrink-0 disabled:opacity-50 ${
+                      skipOpEd ? 'bg-indigo-600' : 'bg-zinc-700'
+                    }`}
+                  >
+                    <div
+                      className={`w-4 h-4 rounded-full bg-white shadow-sm transition-transform duration-200 ${
+                        skipOpEd ? 'translate-x-5' : 'translate-x-0'
+                      }`}
+                    />
+                  </button>
+                </div>
+
+                <div className="p-2.5 rounded-xl bg-zinc-900/60 border border-zinc-800/80 space-y-2">
+                  <div className="flex items-center justify-between gap-2">
+                    <span className="text-xs font-medium text-zinc-200">
+                      Suppress singing &amp; music
+                    </span>
+                    <div
+                      role="radiogroup"
+                      aria-label="Suppress singing and music"
+                      className="inline-flex items-center p-0.5 rounded-lg bg-zinc-950/80 border border-zinc-800"
+                    >
+                      {(
+                        [
+                          { id: 'off', label: 'Off' },
+                          { id: 'balanced', label: 'Balanced' },
+                          { id: 'strict', label: 'Strict' },
+                        ] as const
+                      ).map((opt) => {
+                        const active = suppressSinging === opt.id;
+                        return (
+                          <button
+                            key={opt.id}
+                            type="button"
+                            role="radio"
+                            aria-checked={active}
+                            disabled={isProcessing}
+                            onClick={() => setSuppressSinging(opt.id)}
+                            className={`px-2 py-0.5 rounded-md text-[11px] font-medium transition-colors disabled:opacity-50 ${
+                              active
+                                ? 'bg-indigo-600 text-white shadow-sm'
+                                : 'text-zinc-400 hover:text-zinc-200'
+                            }`}
+                          >
+                            {opt.label}
+                          </button>
+                        );
+                      })}
+                    </div>
+                  </div>
+                  <span className="text-[10px] text-zinc-500 block leading-tight">
+                    {suppressSinging === 'off'
+                      ? 'Audio kept untouched. Skip OP/ED above still removes intro & outro gibberish cleanly.'
+                      : suppressSinging === 'balanced'
+                      ? 'Soft compromise: dampens BGM & singing (~60%) while keeping quiet, high-pitched, and slow anime voices intact.'
+                      : 'Aggressive full-episode neural filter for heavy insert songs; may drop 20–30% of quiet or high-pitched speech.'}
+                  </span>
+                </div>
+              </div>
+            </div>
+
             {/* Advanced Settings Link (Collapsed by Default) */}
             <div className="pt-2 border-t border-zinc-800/60">
               <button
@@ -1569,6 +1704,18 @@ const WhisperStudioImpl: React.FC<WhisperStudioProps> = ({
               <span>English Dialogue</span>
               <span>·</span>
               <span>Standard 2-Line</span>
+              <span>·</span>
+              <span className={skipOpEd ? 'text-emerald-400/90' : 'text-zinc-500'}>
+                {skipOpEd ? 'OP/ED Skip On' : 'OP/ED Skip Off'}
+              </span>
+              {suppressSinging !== 'off' && (
+                <>
+                  <span>·</span>
+                  <span className="text-indigo-400">
+                    {suppressSinging === 'balanced' ? 'Music Filter: Balanced' : 'Music Filter: Strict'}
+                  </span>
+                </>
+              )}
             </div>
           </div>
         </div>

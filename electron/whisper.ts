@@ -4,10 +4,12 @@ import path from 'path';
 import crypto from 'crypto';
 import os from 'os';
 import { app, BrowserWindow, Notification } from 'electron';
-import { WhisperLogMessage, WhisperQueueItem, WhisperStatus, WhisperOptions, WhisperLiveCue } from './types';
+import { WhisperLogMessage, WhisperQueueItem, WhisperStatus, WhisperOptions, WhisperLiveCue, OpEdSkipRange, VideoChapter } from './types';
 import { storage } from './storage';
 import { probeMkv, invalidateProbeCache } from './ffmpeg';
 import { hasWhisperSubtitle } from './subtitles';
+import { fetchAniSkipTimes } from './kitsu';
+import { extractEpisodeNumber } from './episodes';
 
 /**
  * Detects whether a subtitle text contains Japanese characters (Hiragana, Katakana, or Kanji).
@@ -49,9 +51,16 @@ export function cleanJapaneseArtifacts(text: string): string {
 }
 
 import {
+  buildBalancedAudioFilterChain,
   correctCharacterSpellings,
+  detectOpEdFromChapters,
+  filterCuesBySkipRanges,
   filterHallucinations,
+  isCueInSkipRanges,
   mergeIsolatedSingleWords,
+  normalizeSingingSuppression,
+  parseSrtTimestampToMs,
+  rebalanceSubtitleCues,
   CueBlock,
 } from './whisperPostProcess';
 
@@ -61,7 +70,9 @@ export interface CleanSubtitleOptions {
   maxLineWidth?: number;
   maxLineCount?: number;
   mergeSingleWords?: boolean;
+  skipRanges?: OpEdSkipRange[];
   onCorrection?: (orig: string, repl: string, similarity: number, segmentId?: number | string) => void;
+  onOpEdFiltered?: (count: number) => void;
 }
 
 /**
@@ -81,16 +92,6 @@ export function cleanSubtitleSrt(
 
   try {
     const rawBlocks = srtContent.replace(/\r\n/g, '\n').split(/\n\s*\n/);
-
-    function timecodeToMs(tc: string): number {
-      const match = tc.match(/(?:(\d+):)?(\d+):(\d+)[,.](\d+)/);
-      if (!match) return 0;
-      const h = match[1] ? parseInt(match[1], 10) : 0;
-      const m = parseInt(match[2], 10) || 0;
-      const s = parseInt(match[3], 10) || 0;
-      const ms = parseInt(match[4].padEnd(3, '0').slice(0, 3), 10) || 0;
-      return h * 3600000 + m * 60000 + s * 1000 + ms;
-    }
 
     let cues: CueBlock[] = [];
 
@@ -124,6 +125,7 @@ export function cleanSubtitleSrt(
         }
         text = cleanJapaneseArtifacts(text)
           .replace(/^(?:Dialogue|Characters)\s+from\s+an\s+anime\s+episode[.!,:\s-]*/i, '')
+          .replace(/^This\s+is\s+the\s+(?:first|second|third)\s+(?:sentence|one)[.!,:\s-]*/i, '')
           .trim();
         if (!text) continue;
       }
@@ -131,8 +133,8 @@ export function cleanSubtitleSrt(
       cues.push({
         start: startStr,
         end: endStr,
-        startMs: timecodeToMs(startStr),
-        endMs: timecodeToMs(endStr),
+        startMs: parseSrtTimestampToMs(startStr),
+        endMs: parseSrtTimestampToMs(endStr),
         text,
       });
     }
@@ -141,6 +143,16 @@ export function cleanSubtitleSrt(
 
     // 1. Filter known silence/music/script hallucinations
     cues = filterHallucinations(cues, options?.hallucinationList, { isEnglish });
+
+    // 1b. Filter cues falling inside detected OP/ED intervals before merging
+    if (options?.skipRanges && options.skipRanges.length > 0) {
+      const beforeSkip = cues.length;
+      cues = filterCuesBySkipRanges(cues, options.skipRanges);
+      const removedCount = beforeSkip - cues.length;
+      if (removedCount > 0 && options.onOpEdFiltered) {
+        options.onOpEdFiltered(removedCount);
+      }
+    }
 
     // 2. Fuzzy spelling correction for anime character names (runs before merge to establish proper names)
     if (options?.characterNames && options.characterNames.length > 0) {
@@ -158,12 +170,14 @@ export function cleanSubtitleSrt(
       });
     }
 
-    // 3. Merge isolated single-word / short trailing fragments (strictly capped to max 2 lines)
+    // 3. Rebalance subtitle cues: restore missed sentence breaks, merge broken fragments,
+    //    re-segment illogical multi-cue spills cleanly, and balance lines per cue
     if (options?.mergeSingleWords !== false) {
-      const maxLineWidth = options?.maxLineWidth ?? 44;
+      const maxLineWidth = options?.maxLineWidth ?? 46;
       const maxLineCount = options?.maxLineCount ?? 2;
-      cues = mergeIsolatedSingleWords(cues, maxLineWidth, maxLineCount, options?.characterNames, {
+      cues = rebalanceSubtitleCues(cues, maxLineWidth, maxLineCount, options?.characterNames, {
         maxOrphanLineWidth: Math.min(50, maxLineWidth + 4),
+        isEnglish,
       });
     }
 
@@ -174,7 +188,7 @@ export function cleanSubtitleSrt(
       out += `${i + 1}\n${c.start} --> ${c.end}\n${c.text}\n\n`;
     }
 
-    return out.trim() ? out : srtContent;
+    return out.trim() ? out : '';
   } catch {
     return srtContent;
   }
@@ -193,6 +207,71 @@ export class WhisperManager {
   private currentRunId: string | null = null;
   private runPromise: Promise<void> | null = null;
   private activeOptions: WhisperOptions = {};
+  private activeSkipRanges: OpEdSkipRange[] = [];
+
+  private formatTimeCompact(sec: number): string {
+    const s = Math.max(0, Math.round(sec));
+    const hrs = Math.floor(s / 3600);
+    const mins = Math.floor((s % 3600) / 60);
+    const rem = s % 60;
+    if (hrs > 0) {
+      return `${hrs}:${String(mins).padStart(2, '0')}:${String(rem).padStart(2, '0')}`;
+    }
+    return `${mins}:${String(rem).padStart(2, '0')}`;
+  }
+
+  private async resolveSkipRangesForEpisode(params: {
+    fileName: string;
+    folderPath: string;
+    animeTitle?: string;
+    chapters?: VideoChapter[];
+    duration?: number;
+  }): Promise<OpEdSkipRange[]> {
+    const { namedOp, namedEd, unnamedOp, unnamedEd } = detectOpEdFromChapters(
+      params.chapters,
+      params.duration
+    );
+
+    let opRange = namedOp;
+    let edRange = namedEd;
+
+    if (!opRange || !edRange) {
+      const folderBase = path.basename(params.folderPath);
+      const isGenericSubfolder = /^(?:season\s*\d+|s\d+|part\s*\d+|cour\s*\d+|movie|movies|specials?|ova|oad)$/i.test(
+        folderBase
+      );
+      const fallbackSeries = isGenericSubfolder
+        ? `${path.basename(path.dirname(params.folderPath))} ${folderBase}`
+        : folderBase;
+      const seriesName = (params.animeTitle || fallbackSeries || '').trim();
+      const epNum = extractEpisodeNumber(params.fileName).episodeNum;
+
+      if (seriesName && epNum !== null && epNum > 0) {
+        try {
+          const aniSkip = await Promise.race([
+            fetchAniSkipTimes(seriesName, epNum, params.duration || 0),
+            new Promise<null>((resolve) => setTimeout(() => resolve(null), 3500)),
+          ]);
+          if (aniSkip) {
+            if (!opRange && aniSkip.op && aniSkip.op.end > aniSkip.op.start) {
+              opRange = { start: aniSkip.op.start, end: aniSkip.op.end, label: 'OP', source: 'aniskip' };
+            }
+            if (!edRange && aniSkip.ed && aniSkip.ed.end > aniSkip.ed.start) {
+              edRange = { start: aniSkip.ed.start, end: aniSkip.ed.end, label: 'ED', source: 'aniskip' };
+            }
+          }
+        } catch {}
+      }
+    }
+
+    if (!opRange && unnamedOp) opRange = unnamedOp;
+    if (!edRange && unnamedEd) edRange = unnamedEd;
+
+    const ranges: OpEdSkipRange[] = [];
+    if (opRange) ranges.push(opRange);
+    if (edRange) ranges.push(edRange);
+    return ranges;
+  }
 
   getStatus(): WhisperStatus {
     return {
@@ -280,12 +359,14 @@ export class WhisperManager {
     }
 
     this.broadcastProgress(mainWindow);
+    const skipOpEdEnabled = this.activeOptions.skipOpEd ?? true;
+    const suppressSingingEnabled = Boolean(this.activeOptions.suppressSinging);
     this.sendLog(
       mainWindow,
       'info',
       `Initialized Whisper queue with ${this.queue.length} files (${
         this.queue.filter((q) => q.status === 'skipped').length
-      } skipped)`
+      } skipped) · OP/ED filter: ${skipOpEdEnabled ? 'ON' : 'OFF'} · Singing suppression: ${suppressSingingEnabled ? 'ON' : 'OFF'}`
     );
 
     const pendingItems = this.queue.filter((q) => q.status === 'pending');
@@ -323,11 +404,15 @@ export class WhisperManager {
           // 1.5 Dynamic English audio track determination per file
           let effectiveTrack = audioTrackNum;
           let isTrackSurround = false;
+          let fileChapters: VideoChapter[] | undefined;
+          let fileDuration: number | undefined;
           try {
             const meta = await probeMkv(item.filePath, settings.ffmpegPath);
             if (meta.duration > 0) {
               item.duration = meta.duration;
+              fileDuration = meta.duration;
             }
+            fileChapters = meta.chapters;
             const engTrack = meta.audioTracks.find(
               (t) => t.language === 'eng' || t.language === 'en' || (t.title && /english/i.test(t.title))
             );
@@ -390,6 +475,33 @@ export class WhisperManager {
             );
           }
 
+          let skipRanges: OpEdSkipRange[] = [];
+          if (skipOpEdEnabled) {
+            skipRanges = await this.resolveSkipRangesForEpisode({
+              fileName: item.fileName,
+              folderPath,
+              animeTitle: this.activeOptions.animeTitle,
+              chapters: fileChapters,
+              duration: fileDuration,
+            });
+            if (skipRanges.length > 0) {
+              const rangeDesc = skipRanges
+                .map((r) => `${r.label} ${this.formatTimeCompact(r.start)}-${this.formatTimeCompact(r.end)} (${r.source})`)
+                .join(', ');
+              this.sendLog(
+                mainWindow,
+                'info',
+                `[${i + 1}/${this.queue.length}] OP/ED filter active: ${rangeDesc}`
+              );
+            } else {
+              this.sendLog(
+                mainWindow,
+                'info',
+                `[${i + 1}/${this.queue.length}] OP/ED filter: no OP/ED timestamps found for this episode`
+              );
+            }
+          }
+
           this.sendLog(
             mainWindow,
             'info',
@@ -397,7 +509,7 @@ export class WhisperManager {
           );
 
           try {
-            await this.processSingleFile(item, whisperExe, folderPath, effectiveTrack, runId, mainWindow, isTrackSurround);
+            await this.processSingleFile(item, whisperExe, folderPath, effectiveTrack, runId, mainWindow, isTrackSurround, skipRanges);
 
             if (this.cancelled || this.currentRunId !== runId) {
               item.status = 'cancelled';
@@ -498,7 +610,13 @@ export class WhisperManager {
     filePath: string,
     audioIndex: number,
     outputPath: string,
-    ffmpegPath: string
+    ffmpegPath: string,
+    options?: {
+      rnndnDir?: string;
+      rnndnModelName?: string;
+      rnndnMix?: number;
+      extractFrontCenter?: boolean;
+    }
   ): Promise<void> {
     return new Promise((resolve, reject) => {
       const args = [
@@ -507,12 +625,27 @@ export class WhisperManager {
         '-i', filePath,
         '-map', `0:a:${audioIndex}`,
         '-vn',
+      ];
+
+      const filterParts = buildBalancedAudioFilterChain({
+        rnndnModelName: options?.rnndnDir ? options?.rnndnModelName : undefined,
+        rnndnMix: options?.rnndnMix,
+        extractFrontCenter: options?.extractFrontCenter,
+      });
+      if (filterParts.length > 0) {
+        args.push('-af', filterParts.join(','));
+      }
+
+      args.push(
         '-acodec', 'pcm_s16le',
         '-ar', '16000',
         '-ac', '1',
         outputPath,
-      ];
-      const child = spawn(ffmpegPath, args, { windowsHide: true });
+      );
+      const child = spawn(ffmpegPath, args, {
+        cwd: options?.rnndnDir || undefined,
+        windowsHide: true,
+      });
       this.activeProcess = child;
       let stderr = '';
       child.stderr.on('data', (d) => {
@@ -540,7 +673,8 @@ export class WhisperManager {
     audioTrackNum: number,
     runId: string,
     mainWindow: BrowserWindow,
-    isTrackSurround = false
+    isTrackSurround = false,
+    skipRanges: OpEdSkipRange[] = []
   ): Promise<void> {
     // Use short hash-based temp directory to prevent Windows MAX_PATH (260 char) errors
     // with long anime filenames and release group tags.
@@ -550,30 +684,75 @@ export class WhisperManager {
     const tmpDir = path.join(baseTemp, 'kaiko_w', `${shortRunId}_${fileHash}`);
 
     fs.mkdirSync(tmpDir, { recursive: true });
+    this.activeSkipRanges = skipRanges;
 
     const stderrLines: string[] = [];
 
     try {
+      const opts = this.activeOptions;
+      const settings = storage.getSettings();
+      const suppressMode = normalizeSingingSuppression(opts.suppressSinging);
+      const extractFrontCenter = opts.channelMode === 'fc' && isTrackSurround;
       const baseName = path.parse(item.filePath).name;
       let inputPath = item.filePath;
-      const needExtract = audioTrackNum > 6;
+      const needRawExtract = audioTrackNum > 6;
+      let preFilteredWithBalanced = false;
+      let balancedFallbackFftdn = false;
 
-      if (needExtract) {
-        const settings = storage.getSettings();
+      if (suppressMode === 'balanced') {
+        const shModelSrc = path.join(path.dirname(whisperExe), '_xxl_data', 'faster_whisper', 'assets', 'sh.rnnn');
+        const hasFfmpeg = Boolean(settings.ffmpegPath && fs.existsSync(settings.ffmpegPath));
+        if (fs.existsSync(shModelSrc) && hasFfmpeg) {
+          const localModelName = 'sh.rnnn';
+          fs.copyFileSync(shModelSrc, path.join(tmpDir, localModelName));
+          const extractedWav = path.join(tmpDir, `${baseName}.wav`);
+          this.sendLog(
+            mainWindow,
+            'info',
+            'Applying Balanced music filter (60% RNNoise + 40% dry voice to protect quiet & high voices)...'
+          );
+          try {
+            await this.extractAudioTrack(item.filePath, Math.max(0, audioTrackNum - 1), extractedWav, settings.ffmpegPath, {
+              rnndnDir: tmpDir,
+              rnndnModelName: localModelName,
+              rnndnMix: 0.6,
+              extractFrontCenter,
+            });
+            inputPath = extractedWav;
+            preFilteredWithBalanced = true;
+          } catch (filterErr: any) {
+            if (this.cancelled || this.currentRunId !== runId) throw filterErr;
+            this.sendLog(
+              mainWindow,
+              'info',
+              `Balanced RNNoise blend unavailable (${filterErr?.message || 'error'}); falling back to gentle denoise.`
+            );
+            balancedFallbackFftdn = true;
+          }
+        } else {
+          this.sendLog(mainWindow, 'info', 'Using gentle spectral denoise fallback for Balanced music filter.');
+          balancedFallbackFftdn = true;
+        }
+      }
+
+      if (needRawExtract && !preFilteredWithBalanced) {
         const extractedWav = path.join(tmpDir, `${baseName}.wav`);
         this.sendLog(mainWindow, 'info', `Extracting audio stream index ${audioTrackNum - 1} via FFmpeg...`);
-        await this.extractAudioTrack(item.filePath, audioTrackNum - 1, extractedWav, settings.ffmpegPath);
+        await this.extractAudioTrack(item.filePath, Math.max(0, audioTrackNum - 1), extractedWav, settings.ffmpegPath, {
+          extractFrontCenter,
+        });
         inputPath = extractedWav;
       }
 
+      const alreadyExtracted = preFilteredWithBalanced || needRawExtract;
+
       await new Promise<void>((resolve, reject) => {
         this.liveCues = [];
-        const opts = this.activeOptions;
         const preset = opts.preset || 'anime';
 
         // Tuned smart defaults by preset. pyannote_v3 avoids Silero dropping high-pitched / child voices,
-        // leaving --initial_prompt unset lets faster-whisper-xxl use its native 'auto' handling without
-        // leaking prompt text or skipping chunk starts, and compression_ratio_threshold=2.4 rejects loops.
+        // passing --initial_prompt None when no custom prompt is set prevents Purfview's 'auto' prompt from
+        // leaking phrases like "This is the third sentence." during music, and compression_ratio_threshold=2.4 rejects loops.
         const defaultVadMethod = 'pyannote_v3' as const;
         let defaultVadThreshold = 0.35;
         let defaultVadMinDuration = 150;
@@ -595,7 +774,6 @@ export class WhisperManager {
           defaultNoSpeech = 0.6;
         }
 
-        const settings = storage.getSettings();
         let model = opts.model || settings.whisperModel || 'large-v3-turbo';
         if (settings.customModelPath && fs.existsSync(settings.customModelPath)) {
           const customName = path.basename(settings.customModelPath).replace(/^faster-whisper-/, '');
@@ -605,13 +783,14 @@ export class WhisperManager {
         }
         const task = opts.task || 'transcribe';
         const language = opts.language || 'en';
-        const condition = opts.conditionOnPreviousText ?? true;
+        const condition = opts.conditionOnPreviousText ?? false;
         const vadMethod = opts.vadMethod || defaultVadMethod;
         const vadThreshold = opts.vadThreshold ?? defaultVadThreshold;
         const vadMinDuration = opts.vadMinSpeechDurationMs ?? defaultVadMinDuration;
         const vadPad = opts.vadSpeechPadMs ?? defaultVadPad;
         const compressionRatio = opts.compressionRatioThreshold ?? defaultCompressionRatio;
         const noSpeech = opts.noSpeechThreshold ?? defaultNoSpeech;
+        const hallucinationSilence = opts.hallucinationSilenceThreshold ?? 2;
         const prompt = opts.initialPrompt ? opts.initialPrompt.trim() : '';
         const maxLineWidth = opts.maxLineWidth ?? 46;
         const maxLineCount = opts.maxLineCount ?? 2;
@@ -633,20 +812,25 @@ export class WhisperManager {
           '--no_speech_threshold', noSpeech.toString(),
         ];
 
+        if (hallucinationSilence > 0) {
+          args.push('--hallucination_silence_threshold', hallucinationSilence.toString());
+        }
+
         if (vadMethod.startsWith('silero')) {
           args.push('--vad_threshold', vadThreshold.toString());
         }
 
         if (!condition) {
           args.push('--reprompt', 'False');
+        } else {
+          args.push('--prompt_reset_on_no_end', '1');
         }
 
-        if (prompt && prompt !== 'None') {
-          args.push('--initial_prompt', prompt);
-        }
+        args.push('--initial_prompt', prompt && prompt !== 'None' ? prompt : 'None');
 
         args.push(
           '--sentence',
+          '--max_gap', '1.0',
           '--max_line_width', maxLineWidth.toString(),
           '--max_line_count', maxLineCount.toString(),
           '--max_comma_cent', maxCommaCent.toString(),
@@ -656,20 +840,28 @@ export class WhisperManager {
           '--beep_off'
         );
 
+        if (suppressMode === 'strict') {
+          args.push('--ff_rnndn_sh');
+        } else if (balancedFallbackFftdn) {
+          args.push('--ff_fftdn', '12');
+        }
+
         if (speechNorm) {
           args.push('--ff_speechnorm');
         }
 
-        if (opts.channelMode === 'fc') {
+        if (opts.channelMode === 'fc' && !alreadyExtracted) {
           if (isTrackSurround) {
             args.push('--ff_fc');
             this.sendLog(mainWindow, 'info', 'Surround audio (5.1/7.1) detected: extracting Front Center (FC) dialogue channel');
           } else {
             this.sendLog(mainWindow, 'info', 'Stereo/mono audio detected: skipped --ff_fc to prevent muting dialogue');
           }
+        } else if (extractFrontCenter && preFilteredWithBalanced) {
+          this.sendLog(mainWindow, 'info', 'Surround audio (5.1/7.1) detected: extracted Front Center (FC) dialogue channel');
         }
 
-        if (!needExtract) {
+        if (!alreadyExtracted) {
           args.push('--ff_track', audioTrackNum.toString(), '--ff_sync');
         }
 
@@ -747,6 +939,14 @@ export class WhisperManager {
           maxLineWidth: this.activeOptions.maxLineWidth ?? 46,
           maxLineCount: this.activeOptions.maxLineCount ?? 2,
           mergeSingleWords: this.activeOptions.mergeSingleWords ?? true,
+          skipRanges,
+          onOpEdFiltered: (count) => {
+            this.sendLog(
+              mainWindow,
+              'info',
+              `[Skip OP/ED] Filtered ${count} subtitle cue${count === 1 ? '' : 's'} inside opening/ending intervals`
+            );
+          },
           onCorrection: (orig, repl, sim, seg) => {
             this.sendLog(
               mainWindow,
@@ -773,6 +973,7 @@ export class WhisperManager {
       invalidateProbeCache(item.filePath);
       storage.clearLibraryCache();
     } finally {
+      this.activeSkipRanges = [];
       // Clean up temporary output directory
       try {
         if (fs.existsSync(tmpDir)) {
@@ -854,7 +1055,18 @@ export class WhisperManager {
         if (isEnglish && containsJapaneseLyrics(text)) {
           continue;
         }
-        const cleanedText = isEnglish ? cleanJapaneseArtifacts(text) : text;
+        if (this.activeSkipRanges.length > 0) {
+          const startMs = parseSrtTimestampToMs(start);
+          const endMs = parseSrtTimestampToMs(end);
+          if (isCueInSkipRanges(startMs, endMs, this.activeSkipRanges)) {
+            continue;
+          }
+        }
+        const cleanedText = isEnglish
+          ? cleanJapaneseArtifacts(text)
+              .replace(/^This\s+is\s+the\s+(?:first|second|third)\s+(?:sentence|one)[.!,:\s-]*/i, '')
+              .trim()
+          : text;
         if (!cleanedText) continue;
 
         const cue: WhisperLiveCue = {
