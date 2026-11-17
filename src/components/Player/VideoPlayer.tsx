@@ -31,6 +31,7 @@ import { RippleIndicator, RippleType } from './RippleIndicator';
 import { formatTime, cleanEpisodeTitle, cleanSeriesTitle, formatEpisodeDisplayTitle, isFolderMovie } from '../../utils/format';
 import { parseReleaseCore } from '../../lib/releaseParser/regexEngine';
 import { PLACEHOLDER_EPISODE_IMAGE } from '../../utils/assets';
+import { isSyntheticMouseMove, markSyntheticMouseMove } from '../../utils/cursorSync';
 import { isTopSignsCandidate, isAllowedSignsLanguage } from '../../../electron/assSignsExtractor';
 
 interface VideoPlayerProps {
@@ -687,6 +688,13 @@ export const VideoPlayer: React.FC<VideoPlayerProps> = ({
       setShowControls(false);
     }, 3500);
   }, []);
+
+  useEffect(() => {
+    resetControlsTimer();
+    return () => {
+      if (hideControlsTimerRef.current) clearTimeout(hideControlsTimerRef.current);
+    };
+  }, [resetControlsTimer]);
 
   // 1. Initial Load: Probe Video & Fetch Season Preferences
   useEffect(() => {
@@ -1449,7 +1457,7 @@ export const VideoPlayer: React.FC<VideoPlayerProps> = ({
   // Play Next Episode directly
   const handlePlayNextEpisode = useCallback(() => {
     if (!nextEpisode) return;
-    showRipple('forward', `Next: ${formatEpisodeDisplayTitle(nextEpisode)}`);
+    showRipple('forward');
     const saved = history[nextEpisode.filePath];
     const resumeTime = saved?.currentTime && !saved.completed ? saved.currentTime : 0;
     onEpisodeChange(nextEpisode, resumeTime);
@@ -1939,6 +1947,89 @@ export const VideoPlayer: React.FC<VideoPlayerProps> = ({
 
   // Controls are visible when mouse moves, or if video is paused, or while loading, or if a modal/drawer is open
   const areControlsVisible = showControls || !isPlaying || loading || isTrackControlsOpen || isEpisodeDrawerOpen;
+  const areControlsVisibleRef = useRef(areControlsVisible);
+  areControlsVisibleRef.current = areControlsVisible;
+  const prevControlsVisibleRef = useRef(areControlsVisible);
+  const cursorRefreshTimersRef = useRef<number[]>([]);
+  const lastMousePosRef = useRef<{ x: number; y: number } | null>(null);
+
+  const clearScheduledCursorRefresh = useCallback(() => {
+    for (const id of cursorRefreshTimersRef.current) {
+      window.clearTimeout(id);
+    }
+    cursorRefreshTimersRef.current = [];
+    if (containerRef.current) {
+      delete containerRef.current.dataset.cursorRefresh;
+    }
+  }, []);
+
+  const refreshHiddenCursor = useCallback(() => {
+    if (areControlsVisibleRef.current) return;
+    if (document.visibilityState !== 'visible' || !document.hasFocus()) return;
+    const container = containerRef.current;
+    if (!container) return;
+
+    // Cycle cursor default -> none + synthetic hit-test so Chromium/Windows drops
+    // stale arrow cursors after Alt-Tab or minimize/restore without mouse movement.
+    container.dataset.cursorRefresh = 'true';
+    markSyntheticMouseMove(160);
+    window.electronAPI?.syncPlayerCursor?.();
+
+    const restoreTimer = window.setTimeout(() => {
+      const el = containerRef.current;
+      if (!el) return;
+      delete el.dataset.cursorRefresh;
+      if (!areControlsVisibleRef.current && document.visibilityState === 'visible' && document.hasFocus()) {
+        markSyntheticMouseMove(160);
+        window.electronAPI?.syncPlayerCursor?.();
+      }
+    }, 16);
+    cursorRefreshTimersRef.current.push(restoreTimer);
+  }, []);
+
+  const scheduleHiddenCursorSync = useCallback(() => {
+    clearScheduledCursorRefresh();
+    if (areControlsVisibleRef.current) return;
+    refreshHiddenCursor();
+    cursorRefreshTimersRef.current.push(
+      window.setTimeout(refreshHiddenCursor, 60),
+      window.setTimeout(refreshHiddenCursor, 180),
+    );
+  }, [clearScheduledCursorRefresh, refreshHiddenCursor]);
+
+  useEffect(() => {
+    const wasVisible = prevControlsVisibleRef.current;
+    prevControlsVisibleRef.current = areControlsVisible;
+    if (wasVisible && !areControlsVisible) {
+      scheduleHiddenCursorSync();
+    } else if (areControlsVisible) {
+      clearScheduledCursorRefresh();
+    }
+  }, [areControlsVisible, scheduleHiddenCursorSync, clearScheduledCursorRefresh]);
+
+  useEffect(() => {
+    const handleRestore = () => {
+      if (!areControlsVisibleRef.current) {
+        scheduleHiddenCursorSync();
+      }
+    };
+    const handleVisibilityChange = () => {
+      if (document.visibilityState === 'visible' && !areControlsVisibleRef.current) {
+        scheduleHiddenCursorSync();
+      }
+    };
+
+    window.addEventListener('focus', handleRestore);
+    document.addEventListener('visibilitychange', handleVisibilityChange);
+    const unsubRestore = window.electronAPI?.onWindowFocusRestored?.(handleRestore);
+
+    return () => {
+      window.removeEventListener('focus', handleRestore);
+      document.removeEventListener('visibilitychange', handleVisibilityChange);
+      unsubRestore?.();
+      clearScheduledCursorRefresh();
+    };
+  }, [scheduleHiddenCursorSync, clearScheduledCursorRefresh]);
 
   const handleVideoError = useCallback((e: React.SyntheticEvent<HTMLVideoElement>) => {
     const video = e.currentTarget;
@@ -1946,7 +2037,16 @@ export const VideoPlayer: React.FC<VideoPlayerProps> = ({
     console.warn('[VideoPlayer] Video element error:', mediaError?.code, mediaError?.message);
   }, []);
 
-  const handleContainerMouseMove = useCallback(() => {
+  const handleContainerMouseMove = useCallback((e: React.MouseEvent<HTMLDivElement>) => {
+    if (isSyntheticMouseMove()) {
+      lastMousePosRef.current = { x: e.clientX, y: e.clientY };
+      return;
+    }
+    const prev = lastMousePosRef.current;
+    if (prev && prev.x === e.clientX && prev.y === e.clientY) {
+      return;
+    }
+    lastMousePosRef.current = { x: e.clientX, y: e.clientY };
     resetControlsTimer();
   }, [resetControlsTimer]);
 
@@ -2101,6 +2201,7 @@ export const VideoPlayer: React.FC<VideoPlayerProps> = ({
       {/* Bottom HUD (Auto-hiding). Individual frosted-glass pills over a light gradient. */}
       <div
         onMouseMove={(e) => {
+          if (isSyntheticMouseMove()) return;
           resetControlsTimer();
           e.stopPropagation();
         }}

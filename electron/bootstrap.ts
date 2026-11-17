@@ -1,6 +1,7 @@
 import { app, BrowserWindow, ipcMain, screen } from 'electron';
 import path from 'path';
 import { fileURLToPath } from 'url';
+import { applyWindowAppDetails, KAIKO_APP_ID, resolveWindowIconPath } from './appIdentity';
 
 const __filename = fileURLToPath(import.meta.url);
 const __dirname = path.dirname(__filename);
@@ -24,7 +25,7 @@ app.commandLine.appendSwitch('disable-renderer-backgrounding');
 // during development unless the branded app name/AUMID are set before startup.
 app.setName('Kaiko');
 if (process.platform === 'win32') {
-  app.setAppUserModelId('com.animemediacenter.app');
+  app.setAppUserModelId(KAIKO_APP_ID);
 }
 
 if (!app.requestSingleInstanceLock()) {
@@ -40,10 +41,10 @@ if (!app.requestSingleInstanceLock()) {
 
   app.whenReady().then(async () => {
     if (process.platform === 'win32') {
-      app.setAppUserModelId('com.animemediacenter.app');
+      app.setAppUserModelId(KAIKO_APP_ID);
     }
 
-    const icon = path.join(__dirname, '../app-icon.ico');
+    const icon = resolveWindowIconPath(__dirname);
     const { x, y, width, height } = screen.getPrimaryDisplay().workArea;
     const restoredWidth = Math.max(1024, Math.min(1400, Math.round(width * 0.82)));
     const restoredHeight = Math.max(700, Math.min(900, Math.round(height * 0.84)));
@@ -75,15 +76,7 @@ if (!app.requestSingleInstanceLock()) {
         backgroundThrottling: false,
       },
     });
-    if (process.platform === 'win32') {
-      const relaunchPath = app.isPackaged ? process.execPath : path.join(app.getAppPath(), 'Kaiko.exe');
-      splash.setAppDetails({
-        appId: 'com.animemediacenter.app',
-        appIconPath: icon,
-        relaunchCommand: `"${relaunchPath}"`,
-        relaunchDisplayName: 'Kaiko',
-      });
-    }
+    applyWindowAppDetails(splash, __dirname);
     splash.setMenu(null);
     splash.removeMenu();
     // Establish the maximized geometry while opacity is 0 and bounds already match

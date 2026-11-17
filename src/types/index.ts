@@ -156,6 +156,8 @@ export interface ElectronAPI {
   setFullScreen: (flag: boolean) => Promise<boolean>;
   isFullScreen: () => Promise<boolean>;
   onFullScreenChange: (callback: (isFull: boolean) => void) => () => void;
+  onWindowFocusRestored?: (callback: () => void) => () => void;
+  syncPlayerCursor?: () => void;
   /** Fired on progressive episodes-pipeline pushes (first snapshot, hedge
    *  page, retries, final) — the payload is delivered with the event. */
   onRemoteEpisodesUpdated: (callback: (anilistId: number, result: RemoteEpisodesResult) => void) => () => void;

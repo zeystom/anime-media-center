@@ -18,17 +18,25 @@ interface OverscrollState {
 
 const EMPTY_OVERSCROLL: OverscrollState = { side: null, progress: 0, pullPx: 0, railShiftPx: 0 }
 const PULL_THRESHOLD = 110
+const WHEEL_PULL_THRESHOLD = 160
 const RING_RADIUS = 20
 const RING_CIRCUMFERENCE = 2 * Math.PI * RING_RADIUS
-const WHEEL_RELEASE_MS = 150
+const WHEEL_RELEASE_MS = 220
+const TOUCHPAD_RELEASE_MS = 420
 const WHEEL_COOLDOWN_MS = 450
 const SCROLL_IDLE_MS = 150
 
-function computeOverscrollState(side: 'left' | 'right', rawOverscroll: number, deadzone: number): OverscrollState {
+function computeOverscrollState(
+  side: 'left' | 'right',
+  rawOverscroll: number,
+  deadzone: number,
+  threshold: number = PULL_THRESHOLD
+): OverscrollState {
   const effectivePull = Math.max(0, rawOverscroll - deadzone)
-  const progress = Math.min(1, effectivePull / PULL_THRESHOLD)
-  const pullPx = effectivePull > 0 ? Math.min(44, Math.pow(effectivePull, 0.72) * 1.45) : 0
-  const railShiftPx = effectivePull > 0 ? Math.min(18, Math.pow(effectivePull, 0.65) * 0.75) : 0
+  const progress = Math.min(1, effectivePull / threshold)
+  const scaledPull = effectivePull * (PULL_THRESHOLD / threshold)
+  const pullPx = scaledPull > 0 ? Math.min(44, Math.pow(scaledPull, 0.72) * 1.45) : 0
+  const railShiftPx = scaledPull > 0 ? Math.min(18, Math.pow(scaledPull, 0.65) * 0.75) : 0
   return { side, progress, pullPx, railShiftPx }
 }
 
@@ -281,6 +289,11 @@ const HorizontalScrollerImpl: React.FC<HorizontalScrollerProps> = ({ children, c
       maxScrollRef.current = maxScroll
       if (maxScroll <= 2) return
 
+      const isDiscreteWheel = event.deltaMode !== 0 || (event.shiftKey && event.deltaX === 0)
+      const pullThreshold = isDiscreteWheel ? PULL_THRESHOLD : WHEEL_PULL_THRESHOLD
+      const releaseMs = isDiscreteWheel ? WHEEL_RELEASE_MS : TOUCHPAD_RELEASE_MS
+      const minKeepAliveDx = isDiscreteWheel ? 4 : 1.5
+
       if (!wheelActiveRef.current) {
         wheelActiveRef.current = true
         wheelStartedAtEdgeRef.current =
@@ -289,16 +302,26 @@ const HorizontalScrollerImpl: React.FC<HorizontalScrollerProps> = ({ children, c
       }
 
       const activeSide = wheelSideRef.current
-      const deadzone = wheelStartedAtEdgeRef.current ? 8 : 30
+      const deadzone = isDiscreteWheel
+        ? (wheelStartedAtEdgeRef.current ? 8 : 30)
+        : (wheelStartedAtEdgeRef.current ? 32 : 90)
 
       if (activeSide !== null && wheelPullRef.current > 0 && ((activeSide === 'right' && rawDx < 0) || (activeSide === 'left' && rawDx > 0))) {
-        event.preventDefault()
-        wheelPullRef.current = Math.max(0, wheelPullRef.current - Math.abs(rawDx) * 1.15)
-        if (wheelPullRef.current > 0) {
-          applyOverscroll(computeOverscrollState(activeSide, wheelPullRef.current, deadzone), true)
-        } else {
+        if (wheelPullRef.current <= deadzone) {
+          wheelPullRef.current = 0
           wheelSideRef.current = null
           applyOverscroll(EMPTY_OVERSCROLL, false)
+        } else {
+          event.preventDefault()
+          const pullBackGain = isDiscreteWheel ? 1.15 : 0.85
+          wheelPullRef.current = Math.max(0, wheelPullRef.current - Math.abs(rawDx) * pullBackGain)
+          if (wheelPullRef.current > deadzone) {
+            applyOverscroll(computeOverscrollState(activeSide, wheelPullRef.current, deadzone, pullThreshold), true)
+          } else {
+            wheelPullRef.current = 0
+            wheelSideRef.current = null
+            applyOverscroll(EMPTY_OVERSCROLL, false)
+          }
         }
       } else {
         const atRightEdge = element.scrollLeft >= maxScroll - 2 && rawDx > 0
@@ -310,14 +333,20 @@ const HorizontalScrollerImpl: React.FC<HorizontalScrollerProps> = ({ children, c
             wheelSideRef.current = side
             wheelPullRef.current = 0
           }
-          wheelPullRef.current += Math.min(48, Math.abs(rawDx) * 1.15)
-          applyOverscroll(computeOverscrollState(side, wheelPullRef.current, deadzone), true)
+          const pullGain = isDiscreteWheel
+            ? 1.15
+            : (wheelStartedAtEdgeRef.current ? 0.5 : 0.45)
+          const maxStep = isDiscreteWheel
+            ? 48
+            : (wheelStartedAtEdgeRef.current ? 20 : 18)
+          wheelPullRef.current += Math.min(maxStep, Math.abs(rawDx) * pullGain)
+          applyOverscroll(computeOverscrollState(side, wheelPullRef.current, deadzone, pullThreshold), true)
         }
       }
 
-      if (wheelReleaseTimerRef.current == null || overscrollRef.current.progress < 1 || Math.abs(rawDx) >= 4) {
+      if (wheelReleaseTimerRef.current == null || overscrollRef.current.progress < 1 || Math.abs(rawDx) >= minKeepAliveDx) {
         if (wheelReleaseTimerRef.current != null) window.clearTimeout(wheelReleaseTimerRef.current)
-        wheelReleaseTimerRef.current = window.setTimeout(finishWheelGesture, WHEEL_RELEASE_MS)
+        wheelReleaseTimerRef.current = window.setTimeout(finishWheelGesture, releaseMs)
       }
     }
 

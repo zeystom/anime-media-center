@@ -38,12 +38,14 @@ if (!token) {
   process.exit(1);
 }
 
-const RELEASE_BODY = `## Kaiko ${VERSION} — Settings Redesign, Larger Laptop Hero Logos & Delta Updates
+const RELEASE_BODY = `## Kaiko ${VERSION} — Player OSD & Cursor Sync, Touchpad Tuning & Taskbar Icon Fix
 
 ### What's New
-- **Two-Pane Settings Redesign:** rebuilt \`SettingsModal.tsx\` into a wider, scannable layout with 5 dedicated categories (\`Library & UI\`, \`Subtitles & AI\`, \`Downloads & P2P\`, \`Backup & Data\`, \`Updates\`), trimmed redundant text clutter, and unified Kaiko's Obsidian & Crimson styling.
-- **Larger Compact-Display Hero Logos:** bumped the hero clearlogo cap on \`max-height: 920px\` laptop screens (\`5rem\` → \`6.75rem\`) so series logos stay bold and balanced alongside the Recently Watched strip.
-- **Smaller Installer & Parallel Blockmap Delta Updates:** added strict \`files\` packaging filters and Electron \`emptyOutDir\` cleanup (removing the duplicate \`105 MB\` \`ffmpeg.exe\`, dev/test files, and frontend-only \`node_modules\` already bundled in \`dist/\` from \`app.asar\`), and implemented SHA-512-verified parallel blockmap delta downloads in \`electron/updater.ts\` so future updates (\`4.1.3+\`) fetch only changed blocks instead of the entire installer.
+- **Clean Player Next-Episode OSD & Adaptive Status Pill:** removed the overflowing episode title from the center OSD circle when switching episodes and adapted \`RippleIndicator\` into a frosted pill for longer status labels so text never clips outside the badge.
+- **Auto-Hide Cursor After Alt-Tab / Restore:** returning to a playing episode via Alt-Tab or taskbar restore now hides the mouse cursor together with the player HUD without requiring a manual mouse wiggle.
+- **Laptop Touchpad Overscroll Tuning:** two-finger horizontal touchpad scrolling on Home rails now uses heavier pull resistance, wider edge deadzones, and a longer release window so you clearly see the magnetic end indicator without accidentally snapping back mid-swipe.
+- **Installer & Taskbar Icon Fix:** unpacked \`app-icon.ico\` outside \`app.asar\`, switched Win32 \`setAppDetails\` icon resolution to real filesystem/executable paths, and flushed Shell icon notifications in NSIS so launching Kaiko right after installing or updating shows the proper taskbar icon.
+- **Repository Cleanup:** removed unused legacy Home/placeholder assets and orphaned draft test files.
 
 ---
 ### Assets included

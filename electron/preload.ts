@@ -143,6 +143,14 @@ contextBridge.exposeInMainWorld('electronAPI', {
     ipcRenderer.on('fullscreen-change', handler);
     return () => ipcRenderer.removeListener('fullscreen-change', handler);
   },
+  onWindowFocusRestored: (callback: () => void) => {
+    const handler = () => callback();
+    ipcRenderer.on('window:focus-restored', handler);
+    return () => ipcRenderer.removeListener('window:focus-restored', handler);
+  },
+  syncPlayerCursor: () => {
+    ipcRenderer.send('player:sync-cursor');
+  },
   onRemoteEpisodesUpdated: (callback: (anilistId: number, result: import('./aniZip').RemoteEpisodesResult) => void) => {
     const handler = (_event: any, anilistId: number, result: import('./aniZip').RemoteEpisodesResult) => callback(anilistId, result);
     ipcRenderer.on('metadata:remote-episodes-updated', handler);

@@ -1,5 +1,11 @@
 !include "LogicLib.nsh"
 
+!macro customInstall
+  ; Flush Windows Shell icon/shortcut notifications immediately after install or upgrade
+  ; so launching Kaiko directly from the Finish page resolves its icon right away.
+  System::Call 'Shell32::SHChangeNotify(i 0x08000000, i 0x1000, i 0, i 0)'
+!macroend
+
 !macro customUnInstall
   ; Silent uninstall and upgrades always preserve personal files.
   ${IfNot} ${Silent}

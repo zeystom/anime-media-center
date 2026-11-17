@@ -370,6 +370,11 @@ video {
   cursor: none !important;
 }
 
+.hide-cursor[data-cursor-refresh="true"],
+.hide-cursor[data-cursor-refresh="true"] * {
+  cursor: default !important;
+}
+
 /* JASSUB Canvas: render on top of video, below UI controls, with click-through and isolated GPU layer */
 canvas.JASSUB {
   position: absolute !important;

@@ -1,5 +1,13 @@
 # Changelog
 
+## 4.1.4 — Player OSD & Cursor Sync, Touchpad Overscroll Tuning & Installer Taskbar Icon Fix
+
+- **Player Next-Episode OSD & Adaptive Pill Layout (`VideoPlayer.tsx`, `RippleIndicator.tsx`):** Removed the redundant episode title from the center OSD circle when switching to the next episode (leaving only the clean icon pulse, while the loading screen and header show the title), and updated `RippleIndicator` to keep circular badges for icon-only / short seek deltas (`+5s`/`-5s`/`+10s`/`-10s`) while expanding into a frosted horizontal pill for longer status messages so text never overflows.
+- **Auto-Hide Cursor After Minimize / Alt-Tab (`VideoPlayer.tsx`, `MagneticEpisodePeek.tsx`, `src/utils/cursorSync.ts`, `src/index.css`, `electron/main.ts`, `electron/preload.ts`):** Added focus/restore and UI-hide cursor synchronization (`syncPlayerCursor` with stationary probe suppression) so the mouse cursor hides together with the player UI when returning to the app via Alt-Tab or taskbar restore without needing to move the mouse.
+- **Laptop Touchpad Overscroll Resistance (`HorizontalScroller.tsx`):** Tuned continuous pixel `wheel` overscroll resistance (`WHEEL_PULL_THRESHOLD = 160`, higher edge deadzones `32`/`90`, damped pull gain `0.5`/`0.45`, and a `420 ms` touchpad release window) so two-finger touchpad scrolling shows the magnetic end-of-rail indicator with plenty of reaction time instead of snapping back immediately mid-gesture.
+- **Windows Installer & Taskbar Icon Fix (`electron/appIdentity.ts`, `electron/bootstrap.ts`, `electron/main.ts`, `package.json`, `build/installer.nsh`):** Unpacked `app-icon.ico` into `resources/` (`extraResources`), resolved real Win32 disk/executable icon paths instead of `app.asar` paths in `BrowserWindow.setAppDetails()`, and flushed Windows Shell icon notifications on install/upgrade (`SHChangeNotify`) so launching Kaiko directly from the installer displays the proper taskbar icon instead of a blank file icon.
+- **Repository Cleanup:** Removed unused legacy Home/placeholder files (`DownloadedRail.tsx`, `SeasonHero.tsx`, `public/placeholder-episode*.jpg`) and orphaned draft challenger test artifacts.
+
 ## 4.1.3 — Settings Redesign, Larger Compact Hero Logos & True Delta Updates
 
 - **Two-Pane Settings Redesign (`SettingsModal.tsx`):** Rebuilt Settings into a wider two-pane layout (`max-w-4xl`) with a category sidebar (`Library & UI`, `Subtitles & AI`, `Downloads & P2P`, `Backup & Data`, `Updates`) and persistent footer, cutting verbose boilerplate copy, aligning all controls and toggles to Kaiko's Obsidian & Crimson palette, and fixing state resets when reopening the modal.

@@ -1,8 +1,9 @@
-import { app, BrowserWindow, ipcMain, dialog, shell, Menu, Notification } from 'electron';
+import { app, BrowserWindow, ipcMain, dialog, shell, Menu, Notification, screen } from 'electron';
 import path from 'path';
 import fs from 'fs';
 import { spawn, ChildProcess } from 'child_process';
 import { fileURLToPath } from 'url';
+import { applyWindowAppDetails, KAIKO_APP_ID, resolveWindowIconPath } from './appIdentity';
 import { storage, autoDetectFfmpegPath, autoDetectWhisperPath } from './storage';
 import { resolveUserDataPath } from './userDataPath';
 import { streamServer } from './server';
@@ -491,13 +492,11 @@ async function createWindow() {
   try {
     // Set AppUserModelId for Windows taskbar & Start Menu integration
     if (process.platform === 'win32') {
-      app.setAppUserModelId('com.animemediacenter.app');
+      app.setAppUserModelId(KAIKO_APP_ID);
     }
 
-    // Determine custom application icon
-    const iconIco = path.join(__dirname, '../app-icon.ico');
-    const iconPng = path.join(__dirname, '../app-icon.png');
-    const appIcon = fs.existsSync(iconIco) ? iconIco : fs.existsSync(iconPng) ? iconPng : undefined;
+    // Determine custom application icon (prefer unpacked icon outside app.asar)
+    const appIcon = resolveWindowIconPath(__dirname);
 
     // Start the local server in the background while the bootstrap window is visible.
     streamServerStartPromise = streamServer.start().catch((error) => {
@@ -536,15 +535,7 @@ async function createWindow() {
         backgroundThrottling: false,
       },
     });
-    if (process.platform === 'win32' && appIcon) {
-      const relaunchPath = app.isPackaged ? process.execPath : path.join(app.getAppPath(), 'Kaiko.exe');
-      mainWindow.setAppDetails({
-        appId: 'com.animemediacenter.app',
-        appIconPath: appIcon,
-        relaunchCommand: `"${relaunchPath}"`,
-        relaunchDisplayName: 'Kaiko',
-      });
-    }
+    applyWindowAppDetails(mainWindow, __dirname);
     // Bootstrap already sized the reused window to the display work area.
     // Maximizing a hidden HWND here can expose it before Chromium paints.
 
@@ -562,6 +553,12 @@ async function createWindow() {
     });
     mainWindow.on('leave-full-screen', () => {
       mainWindow?.webContents.send('fullscreen-change', false);
+    });
+    mainWindow.on('focus', () => {
+      mainWindow?.webContents.send('window:focus-restored');
+    });
+    mainWindow.on('restore', () => {
+      mainWindow?.webContents.send('window:focus-restored');
     });
     // Setup IPC Handlers (Guarded against duplicate registration)
     setupIpcHandlers();
@@ -719,9 +716,26 @@ async function createWindow() {
 }
 
 let ipcHandlersSetup = false;
+function syncWindowCursorToPointer(win: BrowserWindow | null) {
+  if (!win || win.isDestroyed() || win.isMinimized() || !win.isFocused()) return;
+  try {
+    const pt = screen.getCursorScreenPoint();
+    const bounds = win.getContentBounds();
+    const relX = Math.round(pt.x - bounds.x);
+    const relY = Math.round(pt.y - bounds.y);
+    if (relX >= 0 && relY >= 0 && relX < bounds.width && relY < bounds.height) {
+      win.webContents.sendInputEvent({ type: 'mouseMove', x: relX, y: relY });
+    }
+  } catch {}
+}
+
 function setupIpcHandlers() {
   if (ipcHandlersSetup) return;
   ipcHandlersSetup = true;
+
+  ipcMain.on('player:sync-cursor', () => {
+    syncWindowCursorToPointer(mainWindow);
+  });
 
   ipcMain.handle('age-ratings:get-updated', () => getUpdatedAgeRatings());
 

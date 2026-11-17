@@ -1,5 +1,6 @@
 import React, { useEffect, useRef, useCallback } from 'react';
 import { ChevronLeft } from 'lucide-react';
+import { isSyntheticMouseMove } from '../../utils/cursorSync';
 
 interface MagneticEpisodePeekProps {
   isOpen: boolean;
@@ -200,6 +201,7 @@ export const MagneticEpisodePeek: React.FC<MagneticEpisodePeekProps> = ({
     }
 
     const handleMouseMove = (e: MouseEvent) => {
+      if (isSyntheticMouseMove()) return;
       const windowWidth = window.innerWidth;
       const windowHeight = window.innerHeight;
 
