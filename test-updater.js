@@ -33,7 +33,7 @@ function runTest(name, fn) {
 const bundle = await esbuild.build({
   stdin: {
     contents: `
-      export { isNewerVersion, getAppVersion } from './electron/updater.ts';
+      export { isNewerVersion, getAppVersion, computeDeltaOperations, parseLatestYmlMeta } from './electron/updater.ts';
       export { StorageService } from './electron/storage.ts';
       export { formatReleaseNotesHtml, convertMarkdownToHtml, sanitizeReleaseNotesHtml } from './src/utils/releaseNotes.ts';
     `,
@@ -55,6 +55,7 @@ const bundle = await esbuild.build({
     'url',
     'os',
     'events',
+    'zlib',
   ],
   plugins: [
     {
@@ -71,11 +72,13 @@ const bundle = await esbuild.build({
 const tmpBundlePath = path.join(process.cwd(), '.test_updater_bundle.mjs');
 fs.writeFileSync(tmpBundlePath, bundle.outputFiles[0].text);
 
-let isNewerVersion, getAppVersion, StorageService, formatReleaseNotesHtml, convertMarkdownToHtml, sanitizeReleaseNotesHtml;
+let isNewerVersion, getAppVersion, computeDeltaOperations, parseLatestYmlMeta, StorageService, formatReleaseNotesHtml, convertMarkdownToHtml, sanitizeReleaseNotesHtml;
 try {
   const mod = await import(pathToFileURL(tmpBundlePath).href);
   isNewerVersion = mod.isNewerVersion;
   getAppVersion = mod.getAppVersion;
+  computeDeltaOperations = mod.computeDeltaOperations;
+  parseLatestYmlMeta = mod.parseLatestYmlMeta;
   StorageService = mod.StorageService;
   formatReleaseNotesHtml = mod.formatReleaseNotesHtml;
   convertMarkdownToHtml = mod.convertMarkdownToHtml;
@@ -469,6 +472,47 @@ runTest('10.4 Empty, null, or undefined release notes handled gracefully without
   assert.strictEqual(formatReleaseNotesHtml(''), '');
   assert.strictEqual(formatReleaseNotesHtml(null), '');
   assert.strictEqual(formatReleaseNotesHtml(undefined), '');
+});
+
+// 11. Blockmap Delta Plan & latest.yml Parsing
+console.log('\n--- TEST SUITE 11: Blockmap Delta Plan & latest.yml Metadata ---');
+
+runTest('11.1 computeDeltaOperations reuses unchanged chunks, downloads changed chunks, and coalesces tiny copy gaps', () => {
+  const oldBm = {
+    version: '2',
+    files: [{
+      name: 'file',
+      offset: 0,
+      sizes: [50000, 4096, 4096, 80000],
+      checksums: ['hashA', 'hashGap', 'hashChangedOld', 'hashD'],
+    }],
+  };
+  const newBm = {
+    version: '2',
+    files: [{
+      name: 'file',
+      offset: 0,
+      sizes: [50000, 4096, 4096, 4096, 80000],
+      checksums: ['hashA', 'hashNew1', 'hashGap', 'hashNew2', 'hashD'],
+    }],
+  };
+  const plan = computeDeltaOperations(oldBm, newBm);
+  assert.strictEqual(plan.totalNewBytes, 50000 + 4096 + 4096 + 4096 + 80000);
+  // hashNew1 + tiny 4 KiB hashGap + hashNew2 coalesce into one DOWNLOAD range [50000..62288)
+  assert.deepStrictEqual(plan.operations, [
+    { kind: 'copy', oldStart: 0, oldEnd: 50000, newStart: 0, newEnd: 50000 },
+    { kind: 'download', newStart: 50000, newEnd: 62288 },
+    { kind: 'copy', oldStart: 58192, oldEnd: 138192, newStart: 62288, newEnd: 142288 },
+  ]);
+  assert.strictEqual(plan.copyBytes + plan.downloadBytes, plan.totalNewBytes);
+});
+
+runTest('11.2 parseLatestYmlMeta extracts sha512, size, and path cleanly', () => {
+  const yml = `version: 4.1.3\nfiles:\n  - url: Kaiko-Setup-4.1.3.exe\n    sha512: abc123==\n    size: 112233445\npath: Kaiko-Setup-4.1.3.exe\n`;
+  const parsed = parseLatestYmlMeta(yml);
+  assert.strictEqual(parsed.sha512, 'abc123==');
+  assert.strictEqual(parsed.size, 112233445);
+  assert.strictEqual(parsed.path, 'Kaiko-Setup-4.1.3.exe');
 });
 
 console.log('\n================================================================');

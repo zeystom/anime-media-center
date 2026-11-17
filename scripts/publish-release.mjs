@@ -38,12 +38,12 @@ if (!token) {
   process.exit(1);
 }
 
-const RELEASE_BODY = `## Kaiko ${VERSION} — Compact Laptop & Low-Height Display Adaptation
+const RELEASE_BODY = `## Kaiko ${VERSION} — Settings Redesign, Larger Laptop Hero Logos & Delta Updates
 
 ### What's New
-- **Laptop & Low-Height Hero Adaptation (\`max-height: 920px\`):** introduced a viewport-height-aware compact Home tier in \`src/index.css\` and \`UpNextWidget.tsx\` so 1080p laptops with 125–150% Windows DPI scaling (and 768p/900p screens) get balanced artwork headroom without changing a single pixel on 2K or 1080p@100% desktop displays.
-- **Proportionate Hero Overlay & Artwork Framing:** compacts hero top/bottom padding, clearlogo size, text column width (\`34rem\`), action buttons, and edge/bottom gradients on shorter viewports while raising hero artwork positioning (\`center 10%\`) so character faces stay unobstructed.
-- **Complete Above-the-Fold Recently Watched on Laptops:** scales \`RecentEpisodesRail.tsx\` cards to \`210px\` with tighter padding and a compact header on viewports \`<= 920px\` tall so the full strip fits cleanly above the taskbar.
+- **Two-Pane Settings Redesign:** rebuilt \`SettingsModal.tsx\` into a wider, scannable layout with 5 dedicated categories (\`Library & UI\`, \`Subtitles & AI\`, \`Downloads & P2P\`, \`Backup & Data\`, \`Updates\`), trimmed redundant text clutter, and unified Kaiko's Obsidian & Crimson styling.
+- **Larger Compact-Display Hero Logos:** bumped the hero clearlogo cap on \`max-height: 920px\` laptop screens (\`5rem\` → \`6.75rem\`) so series logos stay bold and balanced alongside the Recently Watched strip.
+- **Smaller Installer & Parallel Blockmap Delta Updates:** added strict \`files\` packaging filters and Electron \`emptyOutDir\` cleanup (removing the duplicate \`105 MB\` \`ffmpeg.exe\`, dev/test files, and frontend-only \`node_modules\` already bundled in \`dist/\` from \`app.asar\`), and implemented SHA-512-verified parallel blockmap delta downloads in \`electron/updater.ts\` so future updates (\`4.1.3+\`) fetch only changed blocks instead of the entire installer.
 
 ---
 ### Assets included

@@ -425,6 +425,7 @@ export interface UpdateInfoPayload {
   downloadUrl?: string | null;
   fileName?: string | null;
   fileSize?: number | null;
+  sha512?: string | null;
 }
 
 export interface UpdateProgressPayload {

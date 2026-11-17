@@ -138,10 +138,8 @@ export function initUpdater(mainWindowGetter: () => BrowserWindow | null): void 
 
   updater.autoDownload = false;
   updater.autoInstallOnAppQuit = false;
-  // Disable differential blockmap downloads: GitHub Releases single-range requests run
-  // sequentially with 1s pauses and frequently fail SHA-512 verification against solid NSIS
-  // installers, forcing a slow second full download.
-  (updater as any).disableDifferentialDownload = true;
+  // Allow differential blockmap downloads when falling back to electron-updater.
+  (updater as any).disableDifferentialDownload = false;
 
   try {
     if (app && !app.isPackaged) {
@@ -176,12 +174,15 @@ export function initUpdater(mainWindowGetter: () => BrowserWindow | null): void 
     }
 
     const dlUrl = `https://github.com/${GITHUB_OWNER}/${GITHUB_REPO}/releases/download/v${info.version}/Kaiko-Setup-${info.version}.exe`;
+    const firstFile = Array.isArray((info as any).files) && (info as any).files.length > 0 ? (info as any).files[0] : null;
     const payload: UpdateInfoPayload = {
       version: info.version,
       releaseDate: info.releaseDate,
       releaseNotes: notes,
       downloadUrl: dlUrl,
       fileName: `Kaiko-Setup-${info.version}.exe`,
+      fileSize: typeof firstFile?.size === 'number' ? firstFile.size : null,
+      sha512: firstFile?.sha512 || (info as any).sha512 || null,
     };
 
     updaterState.status = 'available';
@@ -287,7 +288,7 @@ export async function checkForUpdates(isStartup = false): Promise<UpdaterState> 
       if (app && !app.isPackaged) {
         updater.forceDevUpdateConfig = true;
       }
-      (updater as any).disableDifferentialDownload = true;
+      (updater as any).disableDifferentialDownload = false;
       updater.setFeedURL({
         provider: 'github',
         owner: GITHUB_OWNER,
@@ -315,12 +316,15 @@ export async function checkForUpdates(isStartup = false): Promise<UpdaterState> 
         const dlUrl = tag
           ? `https://github.com/${GITHUB_OWNER}/${GITHUB_REPO}/releases/download/v${tag}/Kaiko-Setup-${tag}.exe`
           : null;
+        const firstFile = Array.isArray((info as any).files) && (info as any).files.length > 0 ? (info as any).files[0] : null;
         const payload: UpdateInfoPayload = {
           version: tag,
           releaseDate: info.releaseDate,
           releaseNotes: notes,
           downloadUrl: dlUrl,
           fileName: tag ? `Kaiko-Setup-${tag}.exe` : null,
+          fileSize: typeof firstFile?.size === 'number' ? firstFile.size : null,
+          sha512: firstFile?.sha512 || (info as any).sha512 || null,
         };
 
         if (tag && isNewerVersion(tag, cur)) {
@@ -415,8 +419,132 @@ export async function checkForUpdates(isStartup = false): Promise<UpdaterState> 
 
 const PARALLEL_DOWNLOAD_CONNECTIONS = 6;
 const PARALLEL_MIN_SIZE_BYTES = 4 * 1024 * 1024;
+const DELTA_MAX_RATIO = 0.75;
+const DELTA_COALESCE_GAP_BYTES = 16 * 1024;
+const DELTA_MAX_MERGED_RANGE_BYTES = 4 * 1024 * 1024;
 
-function publishFullProgress(transferred: number, total: number, bytesPerSecond: number) {
+export interface BlockMapFile {
+  name: string;
+  offset?: number;
+  sizes: number[];
+  checksums: string[];
+}
+
+export interface BlockMapData {
+  version?: string;
+  files: BlockMapFile[];
+}
+
+export type DeltaOperation =
+  | { kind: 'copy'; oldStart: number; oldEnd: number; newStart: number; newEnd: number }
+  | { kind: 'download'; newStart: number; newEnd: number };
+
+export function parseLatestYmlMeta(rawYaml: string): { sha512?: string; size?: number; path?: string } {
+  if (!rawYaml || typeof rawYaml !== 'string') return {};
+  const shaMatch = rawYaml.match(/^\s*sha512:\s*['"]?([A-Za-z0-9+/=]+)['"]?\s*$/m);
+  const sizeMatch = rawYaml.match(/^\s*size:\s*(\d+)\s*$/m);
+  const pathMatch = rawYaml.match(/^\s*path:\s*['"]?(.+?)['"]?\s*$/m);
+  return {
+    sha512: shaMatch?.[1],
+    size: sizeMatch ? parseInt(sizeMatch[1], 10) : undefined,
+    path: pathMatch?.[1],
+  };
+}
+
+export function computeDeltaOperations(
+  oldBlockMap: BlockMapData,
+  newBlockMap: BlockMapData
+): { operations: DeltaOperation[]; downloadBytes: number; copyBytes: number; totalNewBytes: number } {
+  if (!oldBlockMap?.files?.length || !newBlockMap?.files?.length) {
+    throw new Error('Blockmap has no files');
+  }
+  if (oldBlockMap.version !== newBlockMap.version) {
+    throw new Error(`Blockmap version mismatch (${oldBlockMap.version} vs ${newBlockMap.version})`);
+  }
+
+  const newFile = newBlockMap.files[0];
+  const oldFile = oldBlockMap.files.find((f) => f.name === newFile.name) || oldBlockMap.files[0];
+  if (!oldFile || newFile.sizes.length !== newFile.checksums.length || oldFile.sizes.length !== oldFile.checksums.length) {
+    throw new Error('Malformed blockmap arrays');
+  }
+
+  const oldChecksumMap = new Map<string, { offset: number; size: number }>();
+  let oldCursor = oldFile.offset ?? 0;
+  for (let i = 0; i < oldFile.checksums.length; i++) {
+    const size = oldFile.sizes[i];
+    const checksum = oldFile.checksums[i];
+    if (!oldChecksumMap.has(checksum)) {
+      oldChecksumMap.set(checksum, { offset: oldCursor, size });
+    }
+    oldCursor += size;
+  }
+
+  const rawOps: DeltaOperation[] = [];
+  let newCursor = newFile.offset ?? 0;
+  for (let i = 0; i < newFile.checksums.length; i++) {
+    const size = newFile.sizes[i];
+    const checksum = newFile.checksums[i];
+    const match = oldChecksumMap.get(checksum);
+    const prev = rawOps[rawOps.length - 1];
+
+    if (match && match.size === size) {
+      if (prev && prev.kind === 'copy' && prev.oldEnd === match.offset && prev.newEnd === newCursor) {
+        prev.oldEnd += size;
+        prev.newEnd += size;
+      } else {
+        rawOps.push({
+          kind: 'copy',
+          oldStart: match.offset,
+          oldEnd: match.offset + size,
+          newStart: newCursor,
+          newEnd: newCursor + size,
+        });
+      }
+    } else if (prev && prev.kind === 'download' && prev.newEnd === newCursor) {
+      prev.newEnd += size;
+    } else {
+      rawOps.push({
+        kind: 'download',
+        newStart: newCursor,
+        newEnd: newCursor + size,
+      });
+    }
+    newCursor += size;
+  }
+
+  // Coalesce tiny COPY gaps between DOWNLOAD chunks so one HTTP Range request
+  // covers localized edits cleanly without thousands of extra round-trips.
+  const operations: DeltaOperation[] = [];
+  for (let i = 0; i < rawOps.length; i++) {
+    const op = rawOps[i];
+    const prev = operations[operations.length - 1];
+    const next = rawOps[i + 1];
+    if (
+      op.kind === 'copy' &&
+      prev?.kind === 'download' &&
+      next?.kind === 'download' &&
+      op.newEnd - op.newStart <= DELTA_COALESCE_GAP_BYTES &&
+      next.newEnd - prev.newStart <= DELTA_MAX_MERGED_RANGE_BYTES
+    ) {
+      prev.newEnd = next.newEnd;
+      i++;
+      continue;
+    }
+    operations.push({ ...op });
+  }
+
+  let downloadBytes = 0;
+  let copyBytes = 0;
+  for (const op of operations) {
+    const len = op.newEnd - op.newStart;
+    if (op.kind === 'download') downloadBytes += len;
+    else copyBytes += len;
+  }
+
+  return { operations, downloadBytes, copyBytes, totalNewBytes: newCursor };
+}
+
+function publishProgress(transferred: number, total: number, bytesPerSecond: number, phase: 'delta' | 'full') {
   phaseMaxTransferred = Math.max(phaseMaxTransferred, transferred);
   lastProgressTotal = total;
   const currentPercent = total > 0 ? Math.min(100, Math.max(1, Math.round((transferred / total) * 100))) : 0;
@@ -426,9 +554,284 @@ function publishFullProgress(transferred: number, total: number, bytesPerSecond:
     bytesPerSecond: Math.max(0, bytesPerSecond),
     transferred,
     total,
-    phase: 'full',
+    phase,
   };
   broadcastState();
+}
+
+function resolveUpdaterCacheDir(): string | null {
+  const path = require('path');
+  if (process.env.LOCALAPPDATA) {
+    return path.join(process.env.LOCALAPPDATA, 'anime-media-center-updater');
+  }
+  try {
+    if (app && typeof app.getPath === 'function') {
+      return path.join(path.dirname(app.getPath('appData')), 'Local', 'anime-media-center-updater');
+    }
+  } catch {}
+  return null;
+}
+
+async function fetchBlockMap(url: string, userAgent: string): Promise<BlockMapData> {
+  const zlib = require('zlib');
+  const resp = await fetch(url, { headers: { 'User-Agent': userAgent } });
+  if (!resp.ok) {
+    throw new Error(`Blockmap HTTP ${resp.status} for ${url}`);
+  }
+  const buf = Buffer.from(await resp.arrayBuffer());
+  return JSON.parse(zlib.gunzipSync(buf).toString('utf8'));
+}
+
+async function fetchReleaseYmlMeta(version: string, userAgent: string): Promise<{ sha512?: string; size?: number }> {
+  const url = `https://github.com/${GITHUB_OWNER}/${GITHUB_REPO}/releases/download/v${version}/latest.yml`;
+  const resp = await fetch(url, { headers: { 'User-Agent': userAgent } });
+  if (!resp.ok) return {};
+  const text = await resp.text();
+  return parseLatestYmlMeta(text);
+}
+
+async function verifyFileSha512(filePath: string, expectedSha512: string): Promise<boolean> {
+  const fs = require('fs');
+  const crypto = require('crypto');
+  const hash = crypto.createHash('sha512');
+  await new Promise<void>((resolve, reject) => {
+    const stream = fs.createReadStream(filePath);
+    stream.on('data', (chunk: Buffer) => hash.update(chunk));
+    stream.on('end', () => resolve());
+    stream.on('error', reject);
+  });
+  return hash.digest('base64') === expectedSha512;
+}
+
+async function tryParallelDeltaDownload(
+  dlUrl: string,
+  targetPath: string,
+  userAgent: string,
+  targetVersion: string,
+  expectedSha512?: string | null,
+  expectedSize?: number | null
+): Promise<boolean> {
+  const fs = require('fs');
+  const path = require('path');
+  const zlib = require('zlib');
+
+  const cacheDir = resolveUpdaterCacheDir();
+  if (!cacheDir) return false;
+  const oldInstallerPath = path.join(cacheDir, 'installer.exe');
+  if (!fs.existsSync(oldInstallerPath)) return false;
+
+  const oldStat = fs.statSync(oldInstallerPath);
+  if (!oldStat.isFile() || oldStat.size <= 0) return false;
+
+  const curVer = updaterState.currentVersion;
+  let newBlockMap: BlockMapData;
+  let oldBlockMap: BlockMapData;
+
+  try {
+    const newBlockMapPromise = fetchBlockMap(`${dlUrl}.blockmap`, userAgent);
+    const cachedOldBmPath = path.join(cacheDir, `blockmap-${curVer}.json.gz`);
+    let oldBlockMapPromise: Promise<BlockMapData>;
+    if (fs.existsSync(cachedOldBmPath)) {
+      oldBlockMapPromise = fs.promises
+        .readFile(cachedOldBmPath)
+        .then((buf: Buffer) => JSON.parse(zlib.gunzipSync(buf).toString('utf8')));
+    } else {
+      const oldBmUrl = `https://github.com/${GITHUB_OWNER}/${GITHUB_REPO}/releases/download/v${curVer}/Kaiko-Setup-${curVer}.exe.blockmap`;
+      oldBlockMapPromise = fetchBlockMap(oldBmUrl, userAgent).then(async (bm) => {
+        try {
+          await fs.promises.mkdir(cacheDir, { recursive: true });
+          await fs.promises.writeFile(cachedOldBmPath, zlib.gzipSync(JSON.stringify(bm)));
+        } catch {}
+        return bm;
+      });
+    }
+
+    [newBlockMap, oldBlockMap] = await Promise.all([newBlockMapPromise, oldBlockMapPromise]);
+  } catch (err: any) {
+    console.warn('[Updater] Blockmap fetch failed, falling back to full installer:', err?.message || err);
+    return false;
+  }
+
+  const oldFileEntry = oldBlockMap.files?.[0];
+  if (!oldFileEntry) return false;
+  const expectedOldSize = (oldFileEntry.offset ?? 0) + oldFileEntry.sizes.reduce((a, b) => a + b, 0);
+  if (oldStat.size !== expectedOldSize) {
+    console.warn(`[Updater] Cached installer size (${oldStat.size}) != v${curVer} blockmap (${expectedOldSize}), using full download`);
+    return false;
+  }
+
+  let plan: ReturnType<typeof computeDeltaOperations>;
+  try {
+    plan = computeDeltaOperations(oldBlockMap, newBlockMap);
+  } catch (err: any) {
+    console.warn('[Updater] Delta plan failed, using full download:', err?.message || err);
+    return false;
+  }
+
+  const { operations, downloadBytes, totalNewBytes } = plan;
+  if (downloadBytes <= 0 || totalNewBytes <= 0 || downloadBytes > totalNewBytes * DELTA_MAX_RATIO) {
+    console.log(`[Updater] Delta (${downloadBytes} B) exceeds threshold for ${totalNewBytes} B, using full download`);
+    return false;
+  }
+  if (expectedSize && expectedSize > 0 && totalNewBytes !== expectedSize) {
+    console.warn(`[Updater] Blockmap total (${totalNewBytes}) != expectedSize (${expectedSize}), using full download`);
+    return false;
+  }
+
+  let sha512 = expectedSha512 || null;
+  if (!sha512) {
+    try {
+      const ymlMeta = await fetchReleaseYmlMeta(targetVersion, userAgent);
+      sha512 = ymlMeta.sha512 || null;
+    } catch {}
+  }
+  if (!sha512) {
+    console.warn('[Updater] No expected SHA-512 for delta verification, falling back to full download');
+    return false;
+  }
+
+  let probeResp: Response;
+  try {
+    probeResp = await fetch(dlUrl, { headers: { 'User-Agent': userAgent, Range: 'bytes=0-0' } });
+    try { await probeResp.body?.cancel(); } catch {}
+  } catch {
+    return false;
+  }
+  if (probeResp.status !== 206) {
+    return false;
+  }
+  const resolvedUrl = probeResp.url || dlUrl;
+
+  console.log(
+    `[Updater] Delta download: ${(downloadBytes / 1048576).toFixed(2)} MB of ${(totalNewBytes / 1048576).toFixed(2)} MB ` +
+    `(${Math.round((downloadBytes / totalNewBytes) * 100)}% across ${operations.filter((o) => o.kind === 'download').length} ranges)`
+  );
+
+  resetProgressWindow(downloadBytes, 'delta');
+  updaterState.downloadProgress = {
+    percent: 1,
+    bytesPerSecond: 0,
+    transferred: 0,
+    total: downloadBytes,
+    phase: 'delta',
+  };
+  broadcastState();
+
+  const oldHandle = await fs.promises.open(oldInstallerPath, 'r');
+  const newHandle = await fs.promises.open(targetPath, 'w');
+  const abortCtrl = new AbortController();
+
+  try {
+    const copyBuf = Buffer.allocUnsafe(1024 * 1024);
+    for (const op of operations) {
+      if (op.kind !== 'copy') continue;
+      let srcOffset = op.oldStart;
+      let dstOffset = op.newStart;
+      let remaining = op.oldEnd - op.oldStart;
+      while (remaining > 0) {
+        const chunkLen = Math.min(copyBuf.length, remaining);
+        const { bytesRead } = await oldHandle.read(copyBuf, 0, chunkLen, srcOffset);
+        if (bytesRead <= 0) {
+          throw new Error(`Unexpected EOF reading cached installer at offset ${srcOffset}`);
+        }
+        await newHandle.write(copyBuf, 0, bytesRead, dstOffset);
+        srcOffset += bytesRead;
+        dstOffset += bytesRead;
+        remaining -= bytesRead;
+      }
+    }
+
+    const downloadOps = operations.filter((op): op is Extract<DeltaOperation, { kind: 'download' }> => op.kind === 'download');
+    let nextOpIndex = 0;
+    let transferred = 0;
+    let lastTime = Date.now();
+    let lastBytes = 0;
+
+    const fetchRangeWithRetry = async (op: Extract<DeltaOperation, { kind: 'download' }>) => {
+      const expectedLen = op.newEnd - op.newStart;
+      for (let attempt = 0; attempt < 2; attempt++) {
+        let segTransferred = 0;
+        let writeOffset = op.newStart;
+        try {
+          const segResp = await fetch(resolvedUrl, {
+            headers: { 'User-Agent': userAgent, Range: `bytes=${op.newStart}-${op.newEnd - 1}` },
+            signal: abortCtrl.signal,
+          });
+          if (segResp.status !== 206 || !segResp.body) {
+            throw new Error(`Segment HTTP ${segResp.status} for ${op.newStart}-${op.newEnd - 1}`);
+          }
+          const reader = segResp.body.getReader();
+          while (true) {
+            const { done, value } = await reader.read();
+            if (done) break;
+            await newHandle.write(value, 0, value.length, writeOffset);
+            writeOffset += value.length;
+            segTransferred += value.length;
+            transferred += value.length;
+
+            const now = Date.now();
+            if (now - lastTime >= 150) {
+              const elapsed = Math.max(1, now - lastTime);
+              const bps = Math.round(((transferred - lastBytes) / elapsed) * 1000);
+              lastTime = now;
+              lastBytes = transferred;
+              publishProgress(transferred, downloadBytes, bps, 'delta');
+            }
+          }
+          if (segTransferred !== expectedLen) {
+            throw new Error(`Truncated delta range ${op.newStart}-${op.newEnd - 1}: got ${segTransferred} of ${expectedLen}`);
+          }
+          return;
+        } catch (err) {
+          transferred = Math.max(0, transferred - segTransferred);
+          if (attempt === 1 || abortCtrl.signal.aborted) throw err;
+        }
+      }
+    };
+
+    const workerCount = Math.min(PARALLEL_DOWNLOAD_CONNECTIONS, downloadOps.length);
+    const workers = Array.from({ length: workerCount }, async () => {
+      while (true) {
+        const idx = nextOpIndex++;
+        if (idx >= downloadOps.length) return;
+        await fetchRangeWithRetry(downloadOps[idx]).catch((err) => {
+          abortCtrl.abort();
+          throw err;
+        });
+      }
+    });
+
+    await Promise.all(workers);
+    await newHandle.close();
+    await oldHandle.close();
+
+    const finalStat = fs.statSync(targetPath);
+    if (finalStat.size !== totalNewBytes) {
+      throw new Error(`Assembled delta size ${finalStat.size} != expected ${totalNewBytes}`);
+    }
+    const shaOk = await verifyFileSha512(targetPath, sha512);
+    if (!shaOk) {
+      throw new Error('Assembled delta installer failed SHA-512 verification');
+    }
+
+    try {
+      const targetBmPath = path.join(cacheDir, `blockmap-${targetVersion}.json.gz`);
+      await fs.promises.writeFile(targetBmPath, zlib.gzipSync(JSON.stringify(newBlockMap)));
+    } catch {}
+
+    downloadedInstallerPath = targetPath;
+    updaterState.status = 'downloaded';
+    updaterState.downloadProgress = null;
+    updaterState.error = null;
+    broadcastState();
+    return true;
+  } catch (err: any) {
+    await newHandle.close().catch(() => {});
+    await oldHandle.close().catch(() => {});
+    try { fs.unlinkSync(targetPath); } catch {}
+    console.warn('[Updater] Parallel delta download failed, falling back to full installer:', err?.message || err);
+    return false;
+  }
 }
 
 async function tryParallelRangeDownload(
@@ -518,7 +921,7 @@ async function tryParallelRangeDownload(
         const bps = Math.round(((transferred - lastBytes) / elapsed) * 1000);
         lastTime = now;
         lastBytes = transferred;
-        publishFullProgress(transferred, rangeTotal, bps);
+        publishProgress(transferred, rangeTotal, bps, 'full');
       }
     }
 
@@ -617,7 +1020,7 @@ async function downloadDirectAsset(url: string, fileName?: string | null, expect
         const bps = Math.round(((transferred - lastBytes) / elapsed) * 1000);
         lastTime = now;
         lastBytes = transferred;
-        publishFullProgress(transferred, total, bps);
+        publishProgress(transferred, total, bps, 'full');
       }
     }
     await new Promise<void>((resolve, reject) => {
@@ -672,8 +1075,6 @@ export async function downloadUpdate(): Promise<{ success: boolean; error?: stri
       updaterState.downloadProgress = { percent: 1, bytesPerSecond: 0, transferred: 0, total: initialTotal, phase: 'full' };
       broadcastState();
 
-      // 1. Direct multi-connection download first (avoids slow sequential blockmap requests
-      // and double-download fallbacks in electron-updater).
       let dlUrl = updaterState.updateInfo?.downloadUrl;
       const targetVersion = updaterState.updateInfo?.version;
       if (!dlUrl && targetVersion) {
@@ -684,7 +1085,27 @@ export async function downloadUpdate(): Promise<{ success: boolean; error?: stri
         }
       }
 
-      if (dlUrl) {
+      if (dlUrl && targetVersion) {
+        const path = require('path');
+        const tempDir = (app && typeof app.getPath === 'function') ? app.getPath('temp') : process.cwd();
+        const targetName = updaterState.updateInfo?.fileName || `Kaiko-Setup-${targetVersion}.exe`;
+        const targetPath = path.join(tempDir, targetName);
+        const userAgent = `Kaiko/${updaterState.currentVersion}`;
+
+        // 1. Fast parallel blockmap delta download when the installed installer is cached locally.
+        const deltaDone = await tryParallelDeltaDownload(
+          dlUrl,
+          targetPath,
+          userAgent,
+          targetVersion,
+          updaterState.updateInfo?.sha512,
+          updaterState.updateInfo?.fileSize
+        );
+        if (deltaDone) {
+          return { success: true };
+        }
+
+        // 2. Direct multi-connection full download fallback.
         try {
           console.log('[Updater] Downloading installer via direct multi-connection transfer:', dlUrl);
           await downloadDirectAsset(dlUrl, updaterState.updateInfo?.fileName, updaterState.updateInfo?.fileSize);
@@ -694,12 +1115,12 @@ export async function downloadUpdate(): Promise<{ success: boolean; error?: stri
         }
       }
 
-      // 2. Fallback to electron-updater with differential blockmap disabled (single full pass)
+      // 3. Fallback to electron-updater
       const updater = getAutoUpdater();
       if (updater && app && app.isPackaged) {
         try {
-          (updater as any).disableDifferentialDownload = true;
-          console.log('[Updater] Attempting single-pass fallback via electron-updater...');
+          (updater as any).disableDifferentialDownload = false;
+          console.log('[Updater] Attempting fallback via electron-updater...');
           resetProgressWindow(initialTotal, 'full');
           await updater.downloadUpdate();
           return { success: true };

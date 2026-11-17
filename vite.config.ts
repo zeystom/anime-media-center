@@ -44,6 +44,7 @@ export default defineConfig({
         vite: {
           build: {
             outDir: 'dist-electron',
+            emptyOutDir: true,
             rollupOptions: {
               external: ['electron', 'child_process', 'fs', 'fs/promises', 'path', 'os', 'http', 'url', 'crypto', 'events', 'anitomyscript', 'fast-xml-parser', 'webtorrent', 'electron-updater'],
             },
@@ -61,6 +62,7 @@ export default defineConfig({
               name: 'force-cjs-preload',
               config(c) {
                 c.build = c.build || {};
+                c.build.emptyOutDir = false;
                 const currentLib = typeof c.build.lib === 'object' && c.build.lib ? c.build.lib : { entry: '' };
                 c.build.lib = {
                   ...currentLib,

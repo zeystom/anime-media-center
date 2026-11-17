@@ -24,8 +24,6 @@ import {
   Rss,
   Languages,
   Sparkles,
-  ChevronDown,
-  ChevronUp,
   Subtitles,
 } from 'lucide-react';
 import { AppSettings } from '../types';
@@ -70,7 +68,7 @@ const ToggleSwitch: React.FC<{
     aria-label={label}
     title={label}
     className={`w-11 h-6 rounded-full p-0.5 transition-colors duration-200 shrink-0 disabled:opacity-50 ${
-      checked ? 'bg-red-600' : 'bg-zinc-700'
+      checked ? 'bg-rose-500 shadow-[0_0_12px_rgba(255,30,109,0.35)]' : 'bg-zinc-700'
     }`}
   >
     <div
@@ -153,7 +151,7 @@ export const SettingsModal: React.FC<SettingsModalProps> = ({
 
   const [isDetecting, setIsDetecting] = useState(false);
   const [showSetupGuide, setShowSetupGuide] = useState(false);
-  const [isWhisperSectionExpanded, setIsWhisperSectionExpanded] = useState(true);
+  const [activeTab, setActiveTab] = useState<'general' | 'subtitles' | 'downloads' | 'backup' | 'updates'>('general');
   const [confirmDeleteIndex, setConfirmDeleteIndex] = useState<number | null>(null);
 
   const [confirmDeleteEngine, setConfirmDeleteEngine] = useState<boolean>(false);
@@ -232,6 +230,12 @@ export const SettingsModal: React.FC<SettingsModalProps> = ({
       setCustomModelPath(settings.customModelPath || '');
       setCheckForUpdatesOnStartup(settings.checkForUpdatesOnStartup ?? true);
       setAutoUpdate(settings.autoUpdate ?? true);
+      setAnimeTitleLanguage(settings.animeTitleLanguage ?? 'english');
+      setNavbarBlur(settings.navbarBlur ?? true);
+      setConfirmDeleteIndex(null);
+      setConfirmDeleteEngine(false);
+      setConfirmDeleteModel(null);
+      setConfirmRestore(false);
       setLibraryFolders(
         Array.isArray(settings.libraryFolders) && settings.libraryFolders.length > 0
           ? settings.libraryFolders
@@ -528,7 +532,7 @@ export const SettingsModal: React.FC<SettingsModalProps> = ({
     };
     window.addEventListener('keydown', handleKeyDown, true);
     return () => window.removeEventListener('keydown', handleKeyDown, true);
-  }, [isOpen, ffmpegPath, whisperPath, settings, onClose, showP2pConsent]);
+  }, [isOpen, ffmpegPath, whisperPath, whisperModel, customModelPath, settings, onClose, showP2pConsent, manualUpdateModalOpen]);
 
   if (!isOpen) return null;
 
@@ -1123,6 +1127,39 @@ export const SettingsModal: React.FC<SettingsModalProps> = ({
     }
   };
 
+  const navTabs: Array<{
+    id: 'general' | 'subtitles' | 'downloads' | 'backup' | 'updates';
+    label: string;
+    icon: React.ReactNode;
+    dot?: string;
+  }> = [
+    { id: 'general', label: 'Library & UI', icon: <Folder className="w-4 h-4" /> },
+    {
+      id: 'subtitles',
+      label: 'Subtitles & AI',
+      icon: <Sparkles className="w-4 h-4" />,
+      dot: binaryStatus.whisperExists ? 'bg-emerald-400' : 'bg-amber-400',
+    },
+    {
+      id: 'downloads',
+      label: 'Downloads & P2P',
+      icon: <Share2 className="w-4 h-4" />,
+      dot: p2pState?.enabled ? 'bg-emerald-400' : undefined,
+    },
+    { id: 'backup', label: 'Backup & Data', icon: <Database className="w-4 h-4" /> },
+    {
+      id: 'updates',
+      label: 'Updates',
+      icon: <RefreshCw className="w-4 h-4" />,
+      dot:
+        updaterState.status === 'available' ||
+        updaterState.status === 'downloading' ||
+        updaterState.status === 'downloaded'
+          ? 'bg-rose-400 animate-pulse'
+          : undefined,
+    },
+  ];
+
   return createPortal((
     <div
       className="fixed inset-0 z-[100] flex items-center justify-center p-4 modal-dimmer animate-in fade-in duration-150"
@@ -1132,1331 +1169,1186 @@ export const SettingsModal: React.FC<SettingsModalProps> = ({
         role="dialog"
         aria-modal="true"
         data-modal="true"
-        className="modal-glass w-full max-w-xl max-h-[90vh] flex flex-col rounded-2xl text-zinc-100 animate-in zoom-in-95 duration-150 overflow-hidden"
+        className="modal-glass w-full max-w-4xl h-[min(86vh,680px)] flex flex-col rounded-2xl text-zinc-100 animate-in zoom-in-95 duration-150 overflow-hidden"
         onClick={(e) => e.stopPropagation()}
       >
         {/* Header */}
-        <div className="flex items-center justify-between px-6 py-4 border-b border-white/10 shrink-0">
-          <div className="flex items-center space-x-3">
-            <div className="w-8 h-8 rounded-lg bg-zinc-800/80 border border-white/10 flex items-center justify-center text-zinc-400">
-              <SettingsIcon className="w-4 h-4 text-zinc-400" />
+        <div className="flex items-center justify-between px-6 py-4 border-b border-white/[0.08] shrink-0">
+          <div className="flex items-center gap-3">
+            <div className="w-8 h-8 rounded-xl bg-rose-500/15 border border-rose-500/25 flex items-center justify-center text-rose-300">
+              <SettingsIcon className="w-4 h-4" />
             </div>
-            <div>
-              <h3 className="text-sm font-bold text-white tracking-tight">Settings</h3>
-              <p className="text-xs text-zinc-400">Configure media folders and external binary paths</p>
-            </div>
+            <h3 className="text-sm font-bold text-white tracking-tight">Settings</h3>
           </div>
 
-          <div className="flex items-center space-x-2">
-            <button
-              type="button"
-              onClick={handleClose}
-              className="p-1.5 rounded-lg text-zinc-400 hover:text-white hover:bg-zinc-800 transition-colors"
-            >
-              <X className="w-5 h-5" />
-            </button>
-          </div>
+          <button
+            type="button"
+            onClick={handleClose}
+            aria-label="Close settings"
+            className="p-1.5 rounded-lg text-zinc-400 hover:text-white hover:bg-white/[0.08] transition-colors"
+          >
+            <X className="w-5 h-5" />
+          </button>
         </div>
 
-        {/* Form Body (Scrollable) */}
-        <div className="flex-1 overflow-y-auto p-6 space-y-5">
-          {/* Section: Anime Media Folders */}
-          <div className="space-y-2">
-            <div className="flex items-center justify-between">
-              <label className="text-xs font-semibold text-zinc-200 uppercase tracking-wider flex items-center space-x-2">
-                <Folder className="w-3.5 h-3.5 text-zinc-400" />
-                <span>Anime Media Folders ({libraryFolders.length})</span>
-              </label>
-
-              <button
-                type="button"
-                onClick={handleAddFolder}
-                className="flex items-center space-x-1.5 px-3 py-1.5 rounded-lg bg-zinc-800 hover:bg-zinc-700 text-zinc-100 border border-white/10 text-xs font-medium transition-all shadow-sm shrink-0"
-              >
-                <Plus className="w-3.5 h-3.5" />
-                <span>Add Folder</span>
-              </button>
-            </div>
-
-            {/* Folder List with Removal Confirmation */}
-            <div className="space-y-1.5 max-h-40 overflow-y-auto pr-1">
-              {libraryFolders.length === 0 ? (
-                <div className="p-3.5 rounded-xl border border-dashed border-zinc-800 bg-zinc-900/40 text-center">
-                  <p className="text-xs text-zinc-500">No media folders added. Click "+ Add Folder" to choose a directory.</p>
-                </div>
-              ) : (
-                libraryFolders.map((folder, index) =>
-                  confirmDeleteIndex === index ? (
-                    <div
-                      key={`${folder}-${index}-confirm`}
-                      className="flex items-center justify-between gap-3 px-3 py-2 rounded-xl bg-red-950/40 border border-red-500/40 animate-in fade-in duration-150"
-                    >
-                      <div className="flex items-center space-x-2 text-xs text-red-200 min-w-0 flex-1">
-                        <AlertTriangle className="w-3.5 h-3.5 text-red-400 shrink-0" />
-                        <span className="truncate">
-                          Remove <span className="font-mono font-semibold text-white">{folder}</span>?
-                        </span>
-                      </div>
-                      <div className="flex items-center space-x-2 shrink-0">
-                        <button
-                          type="button"
-                          onClick={() => setConfirmDeleteIndex(null)}
-                          className="px-2.5 py-1 rounded-lg text-[11px] font-medium text-zinc-300 hover:text-white bg-zinc-800 hover:bg-zinc-700 transition-colors"
-                        >
-                          Cancel
-                        </button>
-                        <button
-                          type="button"
-                          onClick={() => {
-                            handleRemoveFolder(index);
-                            setConfirmDeleteIndex(null);
-                          }}
-                          className="px-2.5 py-1 rounded-lg text-[11px] font-bold text-white bg-red-600 hover:bg-red-500 transition-colors shadow-sm"
-                        >
-                          Confirm Remove
-                        </button>
-                      </div>
-                    </div>
-                  ) : (
-                    <div
-                      key={`${folder}-${index}`}
-                      className="flex items-center justify-between gap-3 px-3 py-2 rounded-xl bg-zinc-900/90 border border-white/10 hover:border-zinc-700/80 transition-colors group"
-                    >
-                      <div className="flex items-center space-x-2.5 min-w-0 flex-1">
-                        <Folder className="w-3.5 h-3.5 text-zinc-400 shrink-0" />
-                        <span className="font-mono text-xs text-zinc-200 truncate select-all" title={folder}>
-                          {folder}
-                        </span>
-                      </div>
-
-                      <button
-                        type="button"
-                        onClick={() => setConfirmDeleteIndex(index)}
-                        className="p-1 rounded-lg text-zinc-500 hover:text-red-400 hover:bg-red-500/10 transition-colors shrink-0"
-                        title="Remove folder from library"
-                      >
-                        <Trash2 className="w-3.5 h-3.5" />
-                      </button>
-                    </div>
-                  )
-                )
-              )}
-            </div>
-
-          </div>
-
-          {/* Section: Anime Title Language */}
-          <div className="space-y-3 pt-3 border-t border-white/10">
-            <label className="text-xs font-semibold text-zinc-200 uppercase tracking-wider flex items-center space-x-2">
-              <Languages className="w-3.5 h-3.5 text-zinc-400" />
-              <span>Anime Title Language</span>
-            </label>
-
-            <div className="grid grid-cols-3 gap-2.5">
-              {[
-                { value: 'english' as const, label: 'English', desc: 'Localized (e.g. Demon Slayer)' },
-                { value: 'romaji' as const, label: 'Romaji', desc: 'Romanized (e.g. Kimetsu no Yaiba)' },
-                { value: 'native' as const, label: '日本語', desc: 'Native script (e.g. 鬼滅の刃)' },
-              ].map((option) => (
+        {/* Two-Pane Body: Sidebar + Active Category Content */}
+        <div className="flex-1 min-h-0 flex flex-col md:flex-row overflow-hidden">
+          <aside className="w-full md:w-52 shrink-0 border-b md:border-b-0 md:border-r border-white/[0.08] bg-black/25 p-2.5 flex md:flex-col gap-1 overflow-x-auto md:overflow-y-auto scrollbar-none">
+            {navTabs.map((tab) => {
+              const active = activeTab === tab.id;
+              return (
                 <button
-                  key={option.value}
+                  key={tab.id}
                   type="button"
-                  onClick={() => {
-                    setAnimeTitleLanguage(option.value);
-                    onSave({ animeTitleLanguage: option.value });
-                  }}
-                  className={`flex flex-col items-start p-3 rounded-xl border text-left transition-all ${
-                    animeTitleLanguage === option.value
-                      ? 'border-rose-400/50 bg-rose-500/10 text-white shadow-sm'
-                      : 'border-white/10 bg-zinc-900/60 text-zinc-400 hover:border-zinc-700 hover:text-zinc-200'
+                  onClick={() => setActiveTab(tab.id)}
+                  className={`flex items-center justify-between gap-2.5 px-3 py-2.5 rounded-xl text-xs font-semibold whitespace-nowrap transition-all border ${
+                    active
+                      ? 'bg-rose-500/15 text-rose-100 border-rose-500/30 shadow-sm'
+                      : 'border-transparent text-zinc-400 hover:text-zinc-100 hover:bg-white/[0.04]'
                   }`}
                 >
-                  <span className={`text-xs font-bold ${animeTitleLanguage === option.value ? 'text-rose-200' : 'text-zinc-200'}`}>{option.label}</span>
-                  <span className="mt-1 text-[10px] text-zinc-500 leading-tight">{option.desc}</span>
+                  <span className="flex items-center gap-2.5">
+                    <span className={active ? 'text-rose-400' : 'text-zinc-500'}>{tab.icon}</span>
+                    <span>{tab.label}</span>
+                  </span>
+                  {tab.dot && <span className={`w-1.5 h-1.5 rounded-full shrink-0 ${tab.dot}`} />}
                 </button>
-              ))}
-            </div>
-          </div>
+              );
+            })}
+          </aside>
 
-          {/* Navbar blur toggle: the glass blur over scrolled content is the
-              heaviest per-frame effect; weak PCs can turn it off and keep the
-              cheap banner-only blur. */}
-          <div className="flex items-center justify-between p-3 rounded-xl bg-zinc-900/60 border border-white/5">
-            <div className="space-y-0.5 pr-3">
-              <span className="text-xs font-medium text-zinc-200">
-                Navbar blur
-              </span>
-              <p className="text-[11px] text-zinc-400">
-                Glass blur behind the top bar while scrolling. Turn off on weaker PCs — banners keep a cheap blur either way
-              </p>
-            </div>
-            <ToggleSwitch
-              checked={navbarBlur}
-              onChange={handleToggleNavbarBlur}
-              label="Navbar blur"
-            />
-          </div>
-
-          {/* Section: Faster-Whisper AI Subtitles Engine */}
-          <div className="space-y-3 pt-3 border-t border-white/10">
-            <div className="flex items-center justify-between">
-              <button
-                type="button"
-                onClick={() => setIsWhisperSectionExpanded(!isWhisperSectionExpanded)}
-                className="flex items-start space-x-2.5 text-left group transition-colors select-none"
-              >
-                <div className="p-1 rounded-lg bg-zinc-800/80 border border-white/5 group-hover:border-white/15 text-zinc-400 group-hover:text-zinc-200 transition-colors mt-0.5">
-                  {isWhisperSectionExpanded ? (
-                    <ChevronUp className="w-4 h-4" />
-                  ) : (
-                    <ChevronDown className="w-4 h-4" />
-                  )}
-                </div>
-                <div className="flex items-center space-x-2">
-                  <label className="text-xs font-semibold text-zinc-200 uppercase tracking-wider flex items-center space-x-1.5 cursor-pointer">
-                    <Cpu className="w-3.5 h-3.5 text-zinc-400" />
-                    <span>Faster-Whisper Engine</span>
-                  </label>
-                  {binaryStatus.whisperExists ? (
-                    <span className="inline-flex items-center space-x-1 px-2 py-0.5 rounded text-[10px] font-semibold bg-emerald-500/15 text-emerald-400 border border-emerald-500/25">
-                      <CheckCircle2 className="w-3 h-3" />
-                      <span>Ready</span>
-                    </span>
-                  ) : (
-                    <span className="inline-flex items-center space-x-1 px-2 py-0.5 rounded text-[10px] font-semibold bg-amber-500/15 text-amber-400 border border-amber-500/25">
-                      <AlertCircle className="w-3 h-3" />
-                      <span>Not Configured</span>
-                    </span>
-                  )}
-                </div>
-              </button>
-
-              <div className="flex items-center space-x-2 shrink-0">
-                {isWhisperSectionExpanded && (
-                  <button
-                    type="button"
-                    onClick={() => setShowSetupGuide(!showSetupGuide)}
-                    className="flex items-center space-x-1 px-2.5 py-1 rounded-lg text-[11px] font-medium text-zinc-400 hover:text-white hover:bg-zinc-800/80 transition-colors"
-                  >
-                    <HelpCircle className="w-3.5 h-3.5 text-zinc-400" />
-                    <span>{showSetupGuide ? 'Hide Guide' : 'Setup Guide'}</span>
-                  </button>
-                )}
-
-                <button
-                  type="button"
-                  onClick={handleAutoDetect}
-                  disabled={isDetecting}
-                  className="flex items-center space-x-1.5 px-3 py-1 rounded-lg bg-zinc-800 hover:bg-zinc-700 text-zinc-200 hover:text-white border border-white/10 text-xs font-medium transition-all disabled:opacity-50"
-                  title="Scan PATH and Subtitle Edit installations"
-                >
-                  <RefreshCw className={`w-3.5 h-3.5 ${isDetecting ? 'animate-spin text-zinc-300' : 'text-zinc-400'}`} />
-                  <span>Auto-Detect</span>
-                </button>
-              </div>
-            </div>
-
-            {isWhisperSectionExpanded && (
-              <div className="space-y-3 pt-1 animate-in fade-in duration-150">
-                {/* Setup & Installation Guide Card (Expandable) */}
-            {showSetupGuide && (
-              <div className="p-3.5 rounded-xl bg-zinc-900/90 border border-white/10 space-y-2.5 animate-in fade-in duration-150">
-                <div className="flex items-center justify-between">
-                  <span className="text-xs font-bold text-zinc-200">How to set up Faster-Whisper</span>
-                  <button
-                    type="button"
-                    onClick={() => setShowSetupGuide(false)}
-                    className="text-zinc-500 hover:text-zinc-300 text-xs"
-                  >
-                    Close
-                  </button>
-                </div>
-
-                <div className="grid grid-cols-1 md:grid-cols-2 gap-2.5 text-[11px]">
-                  <div className="p-2.5 rounded-lg bg-zinc-950/70 border border-white/5 space-y-1.5">
-                    <div className="font-semibold text-zinc-200 flex items-center justify-between">
-                      <span>1. Subtitle Edit (Easiest)</span>
-                    </div>
-                    <p className="text-zinc-400 text-[10px] leading-relaxed">
-                      In Subtitle Edit, open <em>Video &rarr; Audio to text</em> and pick <strong>Faster-Whisper XXL</strong>. It auto-downloads everything to AppData.
-                    </p>
-                    <button
-                      type="button"
-                      onClick={() => window.electronAPI.openExternalUrl('https://www.nikse.dk/subtitleedit')}
-                      className="inline-flex items-center space-x-1 text-[11px] text-zinc-300 hover:text-white underline pt-0.5"
-                    >
-                      <span>Subtitle Edit Website</span>
-                      <ExternalLink className="w-3 h-3" />
-                    </button>
-                  </div>
-
-                  <div className="p-2.5 rounded-lg bg-zinc-950/70 border border-white/5 space-y-1.5">
-                    <div className="font-semibold text-zinc-200 flex items-center justify-between">
-                      <span>2. Standalone Release</span>
-                    </div>
-                    <p className="text-zinc-400 text-[10px] leading-relaxed">
-                      Download the standalone Windows archive from the Faster-Whisper-XXL release, extract anywhere, and click <strong>Browse</strong>.
-                    </p>
-                    <button
-                      type="button"
-                      onClick={() =>
-                        window.electronAPI.openExternalUrl('https://github.com/Purfview/whisper-standalone-win/releases')
-                      }
-                      className="inline-flex items-center space-x-1 text-[11px] text-zinc-300 hover:text-white underline pt-0.5"
-                    >
-                      <span>Purfview GitHub Releases</span>
-                      <ExternalLink className="w-3 h-3" />
-                    </button>
-                  </div>
-                </div>
-
-                <div className="text-[10px] text-zinc-400 pt-0.5">
-                  <span className="text-zinc-300 font-medium">Model notice:</span> The default <code>large-v3-turbo</code> model can be downloaded below in 1-click or will download automatically on first transcription.
-                </div>
-              </div>
-            )}
-
-            {/* Faster-Whisper Binary Path & Setup */}
-            <div className="space-y-1.5">
-              <label className="text-xs font-medium text-zinc-300">
-                Faster-Whisper-XXL Executable
-              </label>
-              <div className="flex items-center space-x-2">
-                <div className="relative flex-1">
-                  <input
-                    type="text"
-                    placeholder="Auto-detected or specify path to faster-whisper-xxl.exe"
-                    value={whisperPath}
-                    onChange={(e) => handleWhisperChange(e.target.value)}
-                    onBlur={handleWhisperBlur}
-                    onKeyDown={handleWhisperKeyDown}
-                    className="w-full pl-3 pr-24 py-2 rounded-lg bg-zinc-900 border border-white/10 text-xs font-mono text-zinc-200 focus:outline-none focus:border-zinc-500"
-                  />
-                  <div className="absolute right-2.5 top-1/2 -translate-y-1/2 flex items-center space-x-1 pointer-events-none select-none">
-                    {binaryStatus.whisperExists ? (
-                      <>
-                        <CheckCircle2 className="w-3.5 h-3.5 text-emerald-400" />
-                        <span className="text-[11px] font-medium text-emerald-400">Ready</span>
-                      </>
-                    ) : (
-                      <>
-                        <AlertCircle className="w-3.5 h-3.5 text-amber-400" />
-                        <span className="text-[11px] font-medium text-amber-400">Not found</span>
-                      </>
-                    )}
-                  </div>
-                </div>
-                <button
-                  type="button"
-                  onClick={handleBrowseWhisper}
-                  className="flex items-center space-x-1.5 px-3 py-2 rounded-lg bg-zinc-800 hover:bg-zinc-700 text-zinc-200 border border-white/10 text-xs font-medium transition-colors shrink-0"
-                >
-                  <FolderOpen className="w-3.5 h-3.5 text-zinc-400" />
-                  <span>Browse</span>
-                </button>
-              </div>
-
-              {/* In-app engine downloader / setup / deletion */}
-              {isDownloadingEngine ? (
-                <div className="space-y-2 p-3.5 rounded-xl bg-purple-950/30 border border-purple-500/30 text-xs text-zinc-200">
+          <div className="flex-1 min-h-0 overflow-y-auto p-6">
+            {activeTab === 'general' && (
+              <div className="space-y-6 animate-in fade-in duration-150">
+                {/* Media Folders */}
+                <section className="space-y-2.5">
                   <div className="flex items-center justify-between">
-                    <div className="flex items-center space-x-2 min-w-0 pr-2">
-                      <Download className="w-4 h-4 text-purple-400 shrink-0 animate-bounce" />
-                      <span className="font-semibold text-white truncate">
-                        {engineDownloadProgress?.phase === 'extracting'
-                          ? 'Extracting Faster-Whisper-XXL Engine...'
-                          : `Downloading Faster-Whisper-XXL (${engineDownloadProgress?.percent ?? 0}%)`}
-                      </span>
-                    </div>
+                    <h4 className="text-[11px] font-bold uppercase tracking-wider text-zinc-400">
+                      Anime Media Folders ({libraryFolders.length})
+                    </h4>
                     <button
                       type="button"
-                      onClick={handleCancelWhisperEngineDownload}
-                      className="px-2.5 py-1 rounded-lg bg-zinc-800 hover:bg-zinc-700 text-zinc-300 hover:text-white border border-white/10 text-[11px] font-medium transition-colors shrink-0"
+                      onClick={handleAddFolder}
+                      className="flex items-center gap-1.5 px-3 py-1.5 rounded-lg bg-white/[0.07] hover:bg-white/[0.12] text-zinc-100 border border-white/10 text-xs font-medium transition-colors shrink-0"
                     >
-                      Cancel
+                      <Plus className="w-3.5 h-3.5" />
+                      <span>Add Folder</span>
                     </button>
                   </div>
 
-                  <div className="w-full h-2 rounded-full bg-zinc-800 overflow-hidden">
-                    {engineDownloadProgress?.phase === 'extracting' ? (
-                      <div className="h-full w-full bg-gradient-to-r from-purple-500 via-indigo-500 to-purple-500 animate-pulse" />
-                    ) : (
-                      <div
-                        className="h-full bg-gradient-to-r from-purple-500 to-indigo-500 transition-[width] duration-150 ease-out"
-                        style={{ width: `${Math.max(2, Math.min(100, engineDownloadProgress?.percent ?? 0))}%` }}
-                      />
-                    )}
-                  </div>
-
-                  <div className="flex items-center justify-between text-[11px] text-zinc-400 font-mono">
-                    <span>
-                      {engineDownloadProgress?.phase === 'extracting'
-                        ? 'Unpacking standalone archive into app storage (this may take a minute)...'
-                        : `${formatFileSize(engineDownloadProgress?.transferred ?? 0)} / ${formatFileSize(engineDownloadProgress?.total ?? 0)}`}
-                    </span>
-                    {engineDownloadProgress?.phase !== 'extracting' && (
-                      <span>{formatFileSize(engineDownloadProgress?.bytesPerSecond ?? 0)}/s</span>
-                    )}
-                  </div>
-                </div>
-              ) : binaryStatus.whisperExists ? (
-                confirmDeleteEngine ? (
-                  <div className="flex items-center justify-between gap-3 p-3.5 rounded-xl bg-red-950/40 border border-red-500/40 animate-in fade-in duration-150">
-                    <div className="flex items-center space-x-2 text-xs text-red-200 min-w-0 flex-1">
-                      <AlertTriangle className="w-3.5 h-3.5 text-red-400 shrink-0" />
-                      <span className="truncate">
-                        Delete Faster-Whisper-XXL engine from application storage?
-                      </span>
-                    </div>
-                    <div className="flex items-center space-x-2 shrink-0">
-                      <button
-                        type="button"
-                        disabled={isDeletingEngine}
-                        onClick={() => setConfirmDeleteEngine(false)}
-                        className="px-2.5 py-1 rounded-lg text-[11px] font-medium text-zinc-300 hover:text-white bg-zinc-800 hover:bg-zinc-700 transition-colors"
-                      >
-                        Cancel
-                      </button>
-                      <button
-                        type="button"
-                        disabled={isDeletingEngine}
-                        onClick={handleDeleteWhisperEngine}
-                        className="px-2.5 py-1 rounded-lg text-[11px] font-bold text-white bg-red-600 hover:bg-red-500 transition-colors shadow-sm disabled:opacity-50"
-                      >
-                        {isDeletingEngine ? 'Deleting...' : 'Confirm Delete'}
-                      </button>
-                    </div>
-                  </div>
-                ) : (
-                  <div className="flex flex-col sm:flex-row items-start sm:items-center justify-between gap-3 p-3 rounded-xl bg-zinc-900/60 border border-white/5 text-xs text-zinc-300">
-                    <div className="space-y-0.5 min-w-0">
-                      <div className="flex items-center space-x-1.5 font-medium text-zinc-200 text-xs">
-                        <CheckCircle2 className="w-3.5 h-3.5 text-emerald-400 shrink-0" />
-                        <span>Faster-Whisper-XXL Engine Ready</span>
+                  <div className="space-y-1.5 max-h-48 overflow-y-auto pr-0.5">
+                    {libraryFolders.length === 0 ? (
+                      <div className="p-4 rounded-xl border border-dashed border-white/10 bg-white/[0.02] text-center">
+                        <p className="text-xs text-zinc-500">No media folders configured.</p>
                       </div>
-                      <p className="text-[11px] text-zinc-400 truncate">
-                        {whisperPath || 'Engine configured in application storage'}
-                      </p>
-                    </div>
-                    <div className="flex items-center space-x-2 shrink-0 self-end sm:self-center">
-                      <button
-                        type="button"
-                        onClick={() => setConfirmDeleteEngine(true)}
-                        className="flex items-center space-x-1.5 px-3 py-1.5 rounded-lg bg-red-500/10 hover:bg-red-500/20 text-red-400 hover:text-red-300 border border-red-500/20 text-xs font-medium transition-colors shrink-0"
-                      >
-                        <Trash2 className="w-3.5 h-3.5" />
-                        <span>Delete Engine</span>
-                      </button>
-                    </div>
-                  </div>
-                )
-              ) : (
-                <div className="flex flex-col sm:flex-row items-start sm:items-center justify-between gap-3 p-3.5 rounded-xl bg-purple-950/25 border border-purple-500/25 text-xs text-zinc-300">
-                  <div className="space-y-0.5 min-w-0">
-                    <div className="flex items-center space-x-1.5 font-semibold text-white text-xs">
-                      <Sparkles className="w-3.5 h-3.5 text-purple-400 shrink-0" />
-                      <span>In-App Engine Download</span>
-                    </div>
-                    <p className="text-[11px] text-zinc-400 leading-relaxed">
-                      Download and configure the complete Faster-Whisper-XXL standalone engine automatically with zero manual file extraction.
-                    </p>
-                  </div>
-                  <div className="flex items-center space-x-2 shrink-0 self-end sm:self-center">
-                    <button
-                      type="button"
-                      onClick={handleDownloadWhisperEngine}
-                      className="btn-primary flex items-center space-x-1.5 px-3.5 py-1.5 rounded-lg text-white text-xs font-semibold transition-all shrink-0"
-                    >
-                      <Download className="w-3.5 h-3.5" />
-                      <span>Download Engine</span>
-                    </button>
-                    <button
-                      type="button"
-                      onClick={() => window.electronAPI.openExternalUrl('https://github.com/Purfview/whisper-standalone-win/releases')}
-                      title="Open GitHub Releases page"
-                      className="p-1.5 rounded-lg bg-zinc-800 hover:bg-zinc-700 text-zinc-400 hover:text-zinc-200 border border-white/10 transition-colors"
-                    >
-                      <ExternalLink className="w-3.5 h-3.5" />
-                    </button>
-                  </div>
-                </div>
-              )}
-            </div>
-
-            {/* AI Subtitle Model Section */}
-            <div className="space-y-3 pt-3 border-t border-white/10">
-              <label className="text-xs font-semibold text-zinc-200 uppercase tracking-wider flex items-center space-x-2">
-                <Sparkles className="w-3.5 h-3.5 text-zinc-400" />
-                <span>AI Subtitle Model</span>
-              </label>
-
-              {/* Recommended Preset Models */}
-              <div className="space-y-2">
-                {[
-                  {
-                    id: 'large-v3-turbo',
-                    name: 'large-v3-turbo',
-                    badge: 'Default • Recommended • ~1.5 GB • 4–6 GB+ VRAM',
-                  },
-                  {
-                    id: 'medium',
-                    name: 'medium',
-                    badge: 'Mid-Range GPU • ~1.5 GB • 4 GB VRAM',
-                  },
-                  {
-                    id: 'small',
-                    name: 'small',
-                    badge: 'CPU / Low VRAM • ~480 MB • 2 GB VRAM / Any CPU',
-                  },
-                ].map((model) => {
-                  const isInstalled =
-                    model.id === 'large-v3-turbo'
-                      ? binaryStatus.isDefaultModelInstalled ||
-                        Boolean(binaryStatus.installedModels?.some((m) => m.toLowerCase().includes('large-v3-turbo')))
-                      : Boolean(binaryStatus.installedModels?.some((m) => m.toLowerCase().includes(model.id.toLowerCase())));
-                  const isThisDownloading = downloadingModel === model.id;
-                  const isConfirmingDelete = confirmDeleteModel === model.id;
-                  const isThisDeleting = isDeletingModel === model.id;
-
-                  return (
-                    <div
-                      key={model.id}
-                      className="p-3 rounded-xl border bg-zinc-900/60 border-white/5 hover:border-zinc-700/60 transition-all"
-                    >
-                      <div className="flex items-center justify-between gap-3">
-                        <div className="space-y-0.5 min-w-0">
-                          <div className="flex items-center space-x-2 flex-wrap">
-                            <span className="text-xs font-mono font-bold text-white">
-                              {model.name}
-                            </span>
-                            {isInstalled && (
-                              <span className="px-1.5 py-0.5 rounded text-[10px] font-semibold bg-emerald-500/15 text-emerald-300 border border-emerald-500/25">
-                                Installed
+                    ) : (
+                      libraryFolders.map((folder, index) =>
+                        confirmDeleteIndex === index ? (
+                          <div
+                            key={`${folder}-${index}-confirm`}
+                            className="flex items-center justify-between gap-3 px-3 py-2.5 rounded-xl bg-red-950/40 border border-red-500/40 animate-in fade-in duration-150"
+                          >
+                            <div className="flex items-center gap-2 text-xs text-red-200 min-w-0 flex-1">
+                              <AlertTriangle className="w-3.5 h-3.5 text-red-400 shrink-0" />
+                              <span className="truncate">
+                                Remove <span className="font-mono font-semibold text-white">{folder}</span>?
                               </span>
-                            )}
-                          </div>
-                          <p className="text-[10px] text-zinc-400 truncate">
-                            {model.badge}
-                          </p>
-                        </div>
-
-                        <div className="shrink-0 flex items-center space-x-2">
-                          {isThisDownloading ? (
-                            <div className="flex items-center space-x-2">
-                              <span className="text-xs font-mono text-indigo-300 font-semibold animate-pulse">
-                                {downloadProgress.percent !== null ? `${downloadProgress.percent}%` : 'Downloading...'}
-                              </span>
-                              <button
-                                type="button"
-                                onClick={handleCancelDownloadModel}
-                                className="px-2.5 py-1 rounded-lg text-xs bg-red-500/20 hover:bg-red-500/30 text-red-300 border border-red-500/30 transition-colors"
-                              >
-                                Cancel
-                              </button>
                             </div>
-                          ) : isConfirmingDelete ? (
-                            <div className="flex items-center space-x-1.5">
+                            <div className="flex items-center gap-2 shrink-0">
                               <button
                                 type="button"
-                                disabled={isThisDeleting}
-                                onClick={() => setConfirmDeleteModel(null)}
+                                onClick={() => setConfirmDeleteIndex(null)}
                                 className="px-2.5 py-1 rounded-lg text-[11px] font-medium text-zinc-300 hover:text-white bg-zinc-800 hover:bg-zinc-700 transition-colors"
                               >
                                 Cancel
                               </button>
                               <button
                                 type="button"
-                                disabled={isThisDeleting}
-                                onClick={() => handleDeleteModel(model.id)}
-                                className="px-2.5 py-1 rounded-lg text-[11px] font-bold text-white bg-red-600 hover:bg-red-500 transition-colors shadow-sm disabled:opacity-50"
+                                onClick={() => {
+                                  handleRemoveFolder(index);
+                                  setConfirmDeleteIndex(null);
+                                }}
+                                className="px-2.5 py-1 rounded-lg text-[11px] font-bold text-white bg-red-600 hover:bg-red-500 transition-colors"
                               >
-                                {isThisDeleting ? 'Deleting...' : 'Confirm'}
+                                Confirm Remove
                               </button>
                             </div>
-                          ) : isInstalled ? (
-                            <button
-                              type="button"
-                              onClick={() => setConfirmDeleteModel(model.id)}
-                              className="inline-flex items-center space-x-1.5 px-3 py-1.5 rounded-lg bg-red-500/10 hover:bg-red-500/20 text-red-400 hover:text-red-300 border border-red-500/20 text-xs font-medium transition-colors"
-                            >
-                              <Trash2 className="w-3.5 h-3.5" />
-                              <span>Delete</span>
-                            </button>
-                          ) : (
-                            <button
-                              type="button"
-                              disabled={!binaryStatus.whisperExists || Boolean(downloadingModel)}
-                              onClick={() => handleDownloadModel(model.id)}
-                              className="inline-flex items-center space-x-1.5 px-3 py-1.5 rounded-lg bg-indigo-600 hover:bg-indigo-500 disabled:opacity-50 text-white font-medium text-xs shadow transition-colors"
-                            >
-                              <Download className="w-3.5 h-3.5" />
-                              <span>Download</span>
-                            </button>
-                          )}
-                        </div>
-                      </div>
-
-                      {/* Progress bar during download of this specific model */}
-                      {isThisDownloading && (
-                        <div className="mt-2.5 space-y-1.5 animate-in fade-in">
-                          <div className="w-full bg-zinc-800 rounded-full h-1.5 overflow-hidden">
-                            <div
-                              className="bg-indigo-500 h-full transition-[width] duration-150 ease-out"
-                              style={{ width: `${downloadProgress.percent || 5}%` }}
-                            />
                           </div>
-                          {downloadProgress.text && (
-                            <p className="text-[10px] font-mono text-zinc-400 truncate">
-                              {downloadProgress.text}
-                            </p>
-                          )}
-                        </div>
-                      )}
-                    </div>
-                  );
-                })}
-              </div>
-
-              {/* Other Locally Installed Models */}
-              {(() => {
-                const presets = ['large-v3-turbo', 'medium', 'small'];
-                const otherDetected = (binaryStatus.installedModels || []).filter(
-                  (m) => !presets.includes(m.toLowerCase())
-                );
-                if (otherDetected.length === 0) return null;
-                return (
-                  <div className="space-y-1.5 pt-2">
-                    <div className="flex items-center justify-between">
-                      <span className="text-xs font-semibold text-zinc-300">
-                        Other Locally Installed Models ({otherDetected.length})
-                      </span>
-                      <span className="text-[10px] text-zinc-500">
-                        Found in Faster-Whisper or HuggingFace cache
-                      </span>
-                    </div>
-                    <div className="grid grid-cols-1 sm:grid-cols-2 gap-2">
-                      {otherDetected.map((m) => {
-                        const isConfirmingDelete = confirmDeleteModel === m;
-                        const isThisDeleting = isDeletingModel === m;
-
-                        return (
+                        ) : (
                           <div
-                            key={m}
-                            className="p-2.5 rounded-xl border flex items-center justify-between bg-zinc-900/60 border-white/5 hover:border-zinc-700/60 transition-all"
+                            key={`${folder}-${index}`}
+                            className="flex items-center justify-between gap-3 px-3.5 py-2.5 rounded-xl bg-white/[0.03] border border-white/[0.08] hover:border-white/15 transition-colors"
                           >
-                            <div className="min-w-0 space-y-0.5 pr-2">
-                              <span className="text-xs font-mono font-bold text-white block truncate">
-                                {m}
-                              </span>
-                              <span className="text-[10px] text-zinc-400 block truncate">
-                                Local model · {m === 'tiny' ? '~75 MB' : m === 'base' ? '~140 MB' : 'cached'}
+                            <div className="flex items-center gap-2.5 min-w-0 flex-1">
+                              <Folder className="w-3.5 h-3.5 text-zinc-400 shrink-0" />
+                              <span className="font-mono text-xs text-zinc-200 truncate select-all" title={folder}>
+                                {folder}
                               </span>
                             </div>
+                            <button
+                              type="button"
+                              onClick={() => setConfirmDeleteIndex(index)}
+                              className="p-1 rounded-lg text-zinc-500 hover:text-red-400 hover:bg-red-500/10 transition-colors shrink-0"
+                              title="Remove folder from library"
+                            >
+                              <Trash2 className="w-3.5 h-3.5" />
+                            </button>
+                          </div>
+                        )
+                      )
+                    )}
+                  </div>
+                </section>
+
+                {/* Display & Interface */}
+                <section className="space-y-3 pt-4 border-t border-white/[0.08]">
+                  <h4 className="text-[11px] font-bold uppercase tracking-wider text-zinc-400 flex items-center gap-1.5">
+                    <Languages className="w-3.5 h-3.5 text-zinc-500" />
+                    <span>Display</span>
+                  </h4>
+
+                  <div className="space-y-2">
+                    <p className="text-xs font-medium text-zinc-300">Anime Title Language</p>
+                    <div className="grid grid-cols-3 gap-2.5">
+                      {[
+                        { value: 'english' as const, label: 'English', desc: 'Demon Slayer' },
+                        { value: 'romaji' as const, label: 'Romaji', desc: 'Kimetsu no Yaiba' },
+                        { value: 'native' as const, label: '日本語', desc: '鬼滅の刃' },
+                      ].map((option) => (
+                        <button
+                          key={option.value}
+                          type="button"
+                          onClick={() => {
+                            setAnimeTitleLanguage(option.value);
+                            onSave({ animeTitleLanguage: option.value });
+                          }}
+                          className={`flex flex-col items-start p-3 rounded-xl border text-left transition-all ${
+                            animeTitleLanguage === option.value
+                              ? 'border-rose-400/50 bg-rose-500/10 text-white'
+                              : 'border-white/[0.08] bg-white/[0.025] text-zinc-400 hover:border-white/15 hover:text-zinc-200'
+                          }`}
+                        >
+                          <span className={`text-xs font-bold ${animeTitleLanguage === option.value ? 'text-rose-200' : 'text-zinc-200'}`}>
+                            {option.label}
+                          </span>
+                          <span className="mt-0.5 text-[11px] text-zinc-500">{option.desc}</span>
+                        </button>
+                      ))}
+                    </div>
+                  </div>
+
+                  <div className="flex items-center justify-between px-3.5 py-3 rounded-xl bg-white/[0.03] border border-white/[0.08]">
+                    <div className="pr-4">
+                      <p className="text-xs font-semibold text-zinc-200">Navbar blur</p>
+                      <p className="text-[11px] text-zinc-500">Frosted glass behind top bar while scrolling</p>
+                    </div>
+                    <ToggleSwitch
+                      checked={navbarBlur}
+                      onChange={handleToggleNavbarBlur}
+                      label="Navbar blur"
+                    />
+                  </div>
+                </section>
+              </div>
+            )}
+
+            {activeTab === 'subtitles' && (
+              <div className="space-y-6 animate-in fade-in duration-150">
+                {/* Faster-Whisper Engine */}
+                <section className="space-y-3">
+                  <div className="flex items-center justify-between gap-2">
+                    <div className="flex items-center gap-2">
+                      <h4 className="text-[11px] font-bold uppercase tracking-wider text-zinc-400 flex items-center gap-1.5">
+                        <Cpu className="w-3.5 h-3.5 text-zinc-500" />
+                        <span>Faster-Whisper Engine</span>
+                      </h4>
+                      {binaryStatus.whisperExists ? (
+                        <span className="inline-flex items-center gap-1 px-2 py-0.5 rounded-full text-[10px] font-semibold bg-emerald-500/15 text-emerald-300 border border-emerald-500/25">
+                          <CheckCircle2 className="w-3 h-3" />
+                          <span>Ready</span>
+                        </span>
+                      ) : (
+                        <span className="inline-flex items-center gap-1 px-2 py-0.5 rounded-full text-[10px] font-semibold bg-amber-500/15 text-amber-300 border border-amber-500/25">
+                          <AlertCircle className="w-3 h-3" />
+                          <span>Not Configured</span>
+                        </span>
+                      )}
+                    </div>
+
+                    <div className="flex items-center gap-2 shrink-0">
+                      <button
+                        type="button"
+                        onClick={() => setShowSetupGuide(!showSetupGuide)}
+                        className="flex items-center gap-1 px-2.5 py-1 rounded-lg text-[11px] font-medium text-zinc-400 hover:text-white hover:bg-white/[0.06] transition-colors"
+                      >
+                        <HelpCircle className="w-3.5 h-3.5" />
+                        <span>{showSetupGuide ? 'Hide Guide' : 'Setup Guide'}</span>
+                      </button>
+                      <button
+                        type="button"
+                        onClick={handleAutoDetect}
+                        disabled={isDetecting}
+                        className="flex items-center gap-1.5 px-3 py-1 rounded-lg bg-white/[0.07] hover:bg-white/[0.12] text-zinc-200 border border-white/10 text-xs font-medium transition-colors disabled:opacity-50"
+                        title="Scan PATH and Subtitle Edit installations"
+                      >
+                        <RefreshCw className={`w-3.5 h-3.5 ${isDetecting ? 'animate-spin' : 'text-zinc-400'}`} />
+                        <span>Auto-Detect</span>
+                      </button>
+                    </div>
+                  </div>
+
+                  {showSetupGuide && (
+                    <div className="p-3.5 rounded-xl bg-white/[0.03] border border-white/10 grid grid-cols-1 sm:grid-cols-2 gap-2.5 text-[11px] animate-in fade-in duration-150">
+                      <div className="p-2.5 rounded-lg bg-black/30 border border-white/[0.06] space-y-1">
+                        <p className="font-semibold text-zinc-200">1. In-App or Subtitle Edit</p>
+                        <p className="text-zinc-400 text-[10px] leading-relaxed">
+                          Use <strong>Download Engine</strong> below, or reuse Subtitle Edit&apos;s Faster-Whisper XXL install.
+                        </p>
+                        <button
+                          type="button"
+                          onClick={() => window.electronAPI.openExternalUrl('https://www.nikse.dk/subtitleedit')}
+                          className="inline-flex items-center gap-1 text-[11px] text-rose-300 hover:text-rose-200 underline"
+                        >
+                          <span>Subtitle Edit</span>
+                          <ExternalLink className="w-3 h-3" />
+                        </button>
+                      </div>
+                      <div className="p-2.5 rounded-lg bg-black/30 border border-white/[0.06] space-y-1">
+                        <p className="font-semibold text-zinc-200">2. Standalone Archive</p>
+                        <p className="text-zinc-400 text-[10px] leading-relaxed">
+                          Extract Purfview&apos;s Windows archive anywhere and point to <code className="text-zinc-300">faster-whisper-xxl.exe</code>.
+                        </p>
+                        <button
+                          type="button"
+                          onClick={() =>
+                            window.electronAPI.openExternalUrl('https://github.com/Purfview/whisper-standalone-win/releases')
+                          }
+                          className="inline-flex items-center gap-1 text-[11px] text-rose-300 hover:text-rose-200 underline"
+                        >
+                          <span>GitHub Releases</span>
+                          <ExternalLink className="w-3 h-3" />
+                        </button>
+                      </div>
+                    </div>
+                  )}
+
+                  {/* Engine Status / Installer Card */}
+                  {isDownloadingEngine ? (
+                    <div className="space-y-2 p-3.5 rounded-xl bg-rose-950/25 border border-rose-500/30 text-xs text-zinc-200">
+                      <div className="flex items-center justify-between gap-2">
+                        <span className="font-semibold text-white truncate">
+                          {engineDownloadProgress?.phase === 'extracting'
+                            ? 'Extracting Faster-Whisper-XXL...'
+                            : `Downloading Faster-Whisper-XXL (${engineDownloadProgress?.percent ?? 0}%)`}
+                        </span>
+                        <button
+                          type="button"
+                          onClick={handleCancelWhisperEngineDownload}
+                          className="px-2.5 py-1 rounded-lg bg-zinc-800 hover:bg-zinc-700 text-zinc-300 border border-white/10 text-[11px] font-medium shrink-0"
+                        >
+                          Cancel
+                        </button>
+                      </div>
+                      <div className="w-full h-1.5 rounded-full bg-zinc-800 overflow-hidden">
+                        {engineDownloadProgress?.phase === 'extracting' ? (
+                          <div className="h-full w-full bg-rose-500 animate-pulse" />
+                        ) : (
+                          <div
+                            className="h-full bg-gradient-to-r from-rose-600 to-rose-400 transition-[width] duration-150 ease-out"
+                            style={{ width: `${Math.max(2, Math.min(100, engineDownloadProgress?.percent ?? 0))}%` }}
+                          />
+                        )}
+                      </div>
+                      <div className="flex items-center justify-between text-[11px] text-zinc-400 font-mono">
+                        <span>
+                          {engineDownloadProgress?.phase === 'extracting'
+                            ? 'Unpacking archive...'
+                            : `${formatFileSize(engineDownloadProgress?.transferred ?? 0)} / ${formatFileSize(engineDownloadProgress?.total ?? 0)}`}
+                        </span>
+                        {engineDownloadProgress?.phase !== 'extracting' && (
+                          <span>{formatFileSize(engineDownloadProgress?.bytesPerSecond ?? 0)}/s</span>
+                        )}
+                      </div>
+                    </div>
+                  ) : binaryStatus.whisperExists ? (
+                    confirmDeleteEngine ? (
+                      <div className="flex items-center justify-between gap-3 px-3.5 py-2.5 rounded-xl bg-red-950/40 border border-red-500/40 animate-in fade-in duration-150">
+                        <div className="flex items-center gap-2 text-xs text-red-200 min-w-0">
+                          <AlertTriangle className="w-3.5 h-3.5 text-red-400 shrink-0" />
+                          <span className="truncate">Delete Faster-Whisper-XXL from storage?</span>
+                        </div>
+                        <div className="flex items-center gap-2 shrink-0">
+                          <button
+                            type="button"
+                            disabled={isDeletingEngine}
+                            onClick={() => setConfirmDeleteEngine(false)}
+                            className="px-2.5 py-1 rounded-lg text-[11px] font-medium text-zinc-300 bg-zinc-800 hover:bg-zinc-700"
+                          >
+                            Cancel
+                          </button>
+                          <button
+                            type="button"
+                            disabled={isDeletingEngine}
+                            onClick={handleDeleteWhisperEngine}
+                            className="px-2.5 py-1 rounded-lg text-[11px] font-bold text-white bg-red-600 hover:bg-red-500 disabled:opacity-50"
+                          >
+                            {isDeletingEngine ? 'Deleting...' : 'Confirm Delete'}
+                          </button>
+                        </div>
+                      </div>
+                    ) : (
+                      <div className="flex items-center justify-between gap-3 px-3.5 py-2.5 rounded-xl bg-white/[0.03] border border-white/[0.08]">
+                        <div className="min-w-0">
+                          <p className="text-xs font-semibold text-zinc-200">Faster-Whisper-XXL Ready</p>
+                          <p className="text-[11px] text-zinc-500 font-mono truncate">
+                            {whisperPath || 'Configured in application storage'}
+                          </p>
+                        </div>
+                        <button
+                          type="button"
+                          onClick={() => setConfirmDeleteEngine(true)}
+                          className="inline-flex items-center gap-1.5 px-3 py-1.5 rounded-lg bg-red-500/10 hover:bg-red-500/20 text-red-300 border border-red-500/20 text-xs font-medium transition-colors shrink-0"
+                        >
+                          <Trash2 className="w-3.5 h-3.5" />
+                          <span>Delete Engine</span>
+                        </button>
+                      </div>
+                    )
+                  ) : (
+                    <div className="flex items-center justify-between gap-3 p-3.5 rounded-xl bg-rose-950/20 border border-rose-500/25">
+                      <div className="min-w-0">
+                        <p className="text-xs font-semibold text-white">One-Click Engine Setup</p>
+                        <p className="text-[11px] text-zinc-400">Install Faster-Whisper-XXL standalone automatically.</p>
+                      </div>
+                      <div className="flex items-center gap-2 shrink-0">
+                        <button
+                          type="button"
+                          onClick={handleDownloadWhisperEngine}
+                          className="btn-primary flex items-center gap-1.5 px-3.5 py-1.5 rounded-lg text-white text-xs font-semibold"
+                        >
+                          <Download className="w-3.5 h-3.5" />
+                          <span>Download Engine</span>
+                        </button>
+                        <button
+                          type="button"
+                          onClick={() => window.electronAPI.openExternalUrl('https://github.com/Purfview/whisper-standalone-win/releases')}
+                          title="Open GitHub Releases"
+                          className="p-1.5 rounded-lg bg-white/[0.07] hover:bg-white/[0.12] text-zinc-300 border border-white/10"
+                        >
+                          <ExternalLink className="w-3.5 h-3.5" />
+                        </button>
+                      </div>
+                    </div>
+                  )}
+
+                  {/* Executable Path */}
+                  <div className="flex items-center gap-2">
+                    <input
+                      type="text"
+                      placeholder="Path to faster-whisper-xxl.exe"
+                      value={whisperPath}
+                      onChange={(e) => handleWhisperChange(e.target.value)}
+                      onBlur={handleWhisperBlur}
+                      onKeyDown={handleWhisperKeyDown}
+                      className="flex-1 px-3 py-2 rounded-lg bg-black/30 border border-white/10 text-xs font-mono text-zinc-200 placeholder-zinc-600 focus:outline-none focus:border-rose-400/50"
+                    />
+                    <button
+                      type="button"
+                      onClick={handleBrowseWhisper}
+                      className="flex items-center gap-1.5 px-3 py-2 rounded-lg bg-white/[0.07] hover:bg-white/[0.12] text-zinc-200 border border-white/10 text-xs font-medium shrink-0"
+                    >
+                      <FolderOpen className="w-3.5 h-3.5 text-zinc-400" />
+                      <span>Browse</span>
+                    </button>
+                  </div>
+                </section>
+
+                {/* AI Subtitle Models */}
+                <section className="space-y-3 pt-4 border-t border-white/[0.08]">
+                  <h4 className="text-[11px] font-bold uppercase tracking-wider text-zinc-400">
+                    AI Subtitle Models
+                  </h4>
+
+                  <div className="space-y-2">
+                    {[
+                      { id: 'large-v3-turbo', name: 'large-v3-turbo', spec: 'Recommended · ~1.5 GB · 4–6 GB+ VRAM' },
+                      { id: 'medium', name: 'medium', spec: 'Balanced · ~1.5 GB · 4 GB VRAM' },
+                      { id: 'small', name: 'small', spec: 'Fast / CPU · ~480 MB · 2 GB VRAM' },
+                    ].map((model) => {
+                      const isInstalled =
+                        model.id === 'large-v3-turbo'
+                          ? binaryStatus.isDefaultModelInstalled ||
+                            Boolean(binaryStatus.installedModels?.some((m) => m.toLowerCase().includes('large-v3-turbo')))
+                          : Boolean(binaryStatus.installedModels?.some((m) => m.toLowerCase().includes(model.id.toLowerCase())));
+                      const isThisDownloading = downloadingModel === model.id;
+                      const isConfirmingDelete = confirmDeleteModel === model.id;
+                      const isThisDeleting = isDeletingModel === model.id;
+
+                      return (
+                        <div
+                          key={model.id}
+                          className="px-3.5 py-2.5 rounded-xl border bg-white/[0.03] border-white/[0.08]"
+                        >
+                          <div className="flex items-center justify-between gap-3">
+                            <div className="min-w-0">
+                              <div className="flex items-center gap-2">
+                                <span className="text-xs font-mono font-bold text-white">{model.name}</span>
+                                {isInstalled && (
+                                  <span className="px-1.5 py-0.5 rounded text-[10px] font-semibold bg-emerald-500/15 text-emerald-300 border border-emerald-500/25">
+                                    Installed
+                                  </span>
+                                )}
+                              </div>
+                              <p className="text-[11px] text-zinc-500 truncate">{model.spec}</p>
+                            </div>
+
                             <div className="shrink-0">
-                              {isConfirmingDelete ? (
-                                <div className="flex items-center space-x-1.5">
+                              {isThisDownloading ? (
+                                <div className="flex items-center gap-2">
+                                  <span className="text-xs font-mono text-rose-300 font-semibold">
+                                    {downloadProgress.percent !== null ? `${downloadProgress.percent}%` : '...'}
+                                  </span>
+                                  <button
+                                    type="button"
+                                    onClick={handleCancelDownloadModel}
+                                    className="px-2.5 py-1 rounded-lg text-xs bg-red-500/15 hover:bg-red-500/25 text-red-300 border border-red-500/25"
+                                  >
+                                    Cancel
+                                  </button>
+                                </div>
+                              ) : isConfirmingDelete ? (
+                                <div className="flex items-center gap-1.5">
                                   <button
                                     type="button"
                                     disabled={isThisDeleting}
                                     onClick={() => setConfirmDeleteModel(null)}
-                                    className="px-2 py-1 rounded-lg text-[11px] font-medium text-zinc-300 hover:text-white bg-zinc-800 hover:bg-zinc-700 transition-colors"
+                                    className="px-2.5 py-1 rounded-lg text-[11px] bg-zinc-800 hover:bg-zinc-700 text-zinc-300"
                                   >
                                     Cancel
                                   </button>
                                   <button
                                     type="button"
                                     disabled={isThisDeleting}
-                                    onClick={() => handleDeleteModel(m)}
-                                    className="px-2 py-1 rounded-lg text-[11px] font-bold text-white bg-red-600 hover:bg-red-500 transition-colors shadow-sm disabled:opacity-50"
+                                    onClick={() => handleDeleteModel(model.id)}
+                                    className="px-2.5 py-1 rounded-lg text-[11px] font-bold text-white bg-red-600 hover:bg-red-500 disabled:opacity-50"
                                   >
-                                    {isThisDeleting ? '...' : 'Confirm'}
+                                    {isThisDeleting ? 'Deleting...' : 'Confirm'}
                                   </button>
                                 </div>
+                              ) : isInstalled ? (
+                                <button
+                                  type="button"
+                                  onClick={() => setConfirmDeleteModel(model.id)}
+                                  className="inline-flex items-center gap-1.5 px-3 py-1.5 rounded-lg bg-red-500/10 hover:bg-red-500/20 text-red-300 border border-red-500/20 text-xs font-medium"
+                                >
+                                  <Trash2 className="w-3.5 h-3.5" />
+                                  <span>Delete</span>
+                                </button>
                               ) : (
                                 <button
                                   type="button"
-                                  onClick={() => setConfirmDeleteModel(m)}
-                                  className="inline-flex items-center space-x-1 px-2.5 py-1 rounded-lg bg-red-500/10 hover:bg-red-500/20 text-red-400 hover:text-red-300 border border-red-500/20 text-xs font-medium transition-colors"
+                                  disabled={!binaryStatus.whisperExists || Boolean(downloadingModel)}
+                                  onClick={() => handleDownloadModel(model.id)}
+                                  className="inline-flex items-center gap-1.5 px-3 py-1.5 rounded-lg bg-white/[0.08] hover:bg-white/[0.14] disabled:opacity-40 text-zinc-100 border border-white/10 font-medium text-xs transition-colors"
                                 >
-                                  <Trash2 className="w-3 h-3" />
-                                  <span>Delete</span>
+                                  <Download className="w-3.5 h-3.5" />
+                                  <span>Download</span>
                                 </button>
                               )}
                             </div>
                           </div>
-                        );
-                      })}
-                    </div>
-                  </div>
-                );
-              })()}
 
-              {/* Custom Model Folder (Optional) */}
-              <div className="space-y-1.5 pt-1">
-                <label className="text-xs font-medium text-zinc-300 flex items-center justify-between">
-                  <span>Custom Model Folder (Optional)</span>
-                  {customModelPath && (
-                    <span className="text-[10px] text-zinc-400 font-mono">
-                      {binaryStatus.customModelDetectedName || 'Custom'}
-                    </span>
-                  )}
-                </label>
-                <div className="flex items-center space-x-2">
-                  <input
-                    type="text"
-                    readOnly
-                    placeholder="Specify folder if using a separate downloaded model..."
-                    value={customModelPath}
-                    className="flex-1 px-3 py-2 rounded-lg bg-zinc-900 border border-white/10 text-xs font-mono text-zinc-200 truncate focus:outline-none"
-                  />
-                  <button
-                    type="button"
-                    onClick={handleBrowseCustomModel}
-                    className="flex items-center space-x-1.5 px-3 py-2 rounded-lg bg-zinc-800 hover:bg-zinc-700 text-zinc-200 border border-white/10 text-xs font-medium transition-colors shrink-0"
-                  >
-                    <FolderOpen className="w-3.5 h-3.5 text-zinc-400" />
-                    <span>Browse</span>
-                  </button>
-                  {customModelPath && (
+                          {isThisDownloading && (
+                            <div className="mt-2 space-y-1">
+                              <div className="w-full bg-zinc-800 rounded-full h-1.5 overflow-hidden">
+                                <div
+                                  className="bg-rose-500 h-full transition-[width] duration-150 ease-out"
+                                  style={{ width: `${downloadProgress.percent || 5}%` }}
+                                />
+                              </div>
+                              {downloadProgress.text && (
+                                <p className="text-[10px] font-mono text-zinc-400 truncate">{downloadProgress.text}</p>
+                              )}
+                            </div>
+                          )}
+                        </div>
+                      );
+                    })}
+                  </div>
+
+                  {(() => {
+                    const presets = ['large-v3-turbo', 'medium', 'small'];
+                    const otherDetected = (binaryStatus.installedModels || []).filter(
+                      (m) => !presets.includes(m.toLowerCase())
+                    );
+                    if (otherDetected.length === 0) return null;
+                    return (
+                      <div className="space-y-1.5 pt-1">
+                        <p className="text-[11px] font-medium text-zinc-400">
+                          Other Cached Models ({otherDetected.length})
+                        </p>
+                        <div className="grid grid-cols-1 sm:grid-cols-2 gap-2">
+                          {otherDetected.map((m) => {
+                            const isConfirmingDelete = confirmDeleteModel === m;
+                            const isThisDeleting = isDeletingModel === m;
+                            return (
+                              <div
+                                key={m}
+                                className="px-3 py-2 rounded-xl border flex items-center justify-between bg-white/[0.03] border-white/[0.08]"
+                              >
+                                <span className="text-xs font-mono font-bold text-white truncate pr-2">{m}</span>
+                                {isConfirmingDelete ? (
+                                  <div className="flex items-center gap-1.5 shrink-0">
+                                    <button
+                                      type="button"
+                                      disabled={isThisDeleting}
+                                      onClick={() => setConfirmDeleteModel(null)}
+                                      className="px-2 py-1 rounded text-[11px] bg-zinc-800 text-zinc-300"
+                                    >
+                                      Cancel
+                                    </button>
+                                    <button
+                                      type="button"
+                                      disabled={isThisDeleting}
+                                      onClick={() => handleDeleteModel(m)}
+                                      className="px-2 py-1 rounded text-[11px] font-bold bg-red-600 text-white"
+                                    >
+                                      {isThisDeleting ? '...' : 'Confirm'}
+                                    </button>
+                                  </div>
+                                ) : (
+                                  <button
+                                    type="button"
+                                    onClick={() => setConfirmDeleteModel(m)}
+                                    className="px-2.5 py-1 rounded-lg bg-red-500/10 hover:bg-red-500/20 text-red-300 border border-red-500/20 text-[11px] font-medium shrink-0"
+                                  >
+                                    Delete
+                                  </button>
+                                )}
+                              </div>
+                            );
+                          })}
+                        </div>
+                      </div>
+                    );
+                  })()}
+
+                  <div className="flex items-center gap-2 pt-1">
+                    <input
+                      type="text"
+                      readOnly
+                      placeholder="Custom model folder (optional)"
+                      value={customModelPath}
+                      className="flex-1 px-3 py-2 rounded-lg bg-black/30 border border-white/10 text-xs font-mono text-zinc-200 placeholder-zinc-600 truncate focus:outline-none"
+                    />
                     <button
                       type="button"
-                      onClick={handleResetToDefaultModel}
-                      className="px-2.5 py-2 rounded-lg bg-red-500/10 hover:bg-red-500/20 text-red-400 text-xs font-medium border border-red-500/20 transition-colors shrink-0"
-                      title="Clear custom model"
+                      onClick={handleBrowseCustomModel}
+                      className="flex items-center gap-1.5 px-3 py-2 rounded-lg bg-white/[0.07] hover:bg-white/[0.12] text-zinc-200 border border-white/10 text-xs font-medium shrink-0"
                     >
-                      Clear
+                      <FolderOpen className="w-3.5 h-3.5 text-zinc-400" />
+                      <span>Custom Model</span>
                     </button>
-                  )}
-                </div>
-              </div>
-            </div>
-              </div>
-            )}
-          </div>
-
-          {/* Section: Application Updates */}
-          <div className="space-y-3 pt-3 border-t border-white/10">
-            <label className="text-xs font-semibold text-zinc-200 uppercase tracking-wider flex items-center space-x-2">
-              <RefreshCw className="w-3.5 h-3.5 text-zinc-400" />
-              <span>Application Updates</span>
-            </label>
-
-            <div className="space-y-2">
-              {/* Toggle 1: Search updates on start */}
-              <div className="flex items-center justify-between p-3 rounded-xl bg-zinc-900/60 border border-white/5">
-                <div className="space-y-0.5 pr-3">
-                  <span className="text-xs font-medium text-zinc-200">
-                    Check for updates on startup
-                  </span>
-                  <p className="text-[11px] text-zinc-400">
-                    Automatically check for new releases when launching the application
-                  </p>
-                </div>
-                <ToggleSwitch
-                  checked={checkForUpdatesOnStartup}
-                  onChange={handleToggleCheckOnStartup}
-                  label="Check for updates on startup"
-                />
-              </div>
-
-              {/* Toggle 2: Auto-updates */}
-              <div className="flex items-center justify-between p-3 rounded-xl bg-zinc-900/60 border border-white/5">
-                <div className="space-y-0.5 pr-3">
-                  <span className="text-xs font-medium text-zinc-200">
-                    Auto-updates
-                  </span>
-                  <p className="text-[11px] text-zinc-400">
-                    Automatically download available updates in the background
-                  </p>
-                </div>
-                <ToggleSwitch
-                  checked={autoUpdate}
-                  onChange={handleToggleAutoUpdate}
-                  label="Auto-updates"
-                />
-              </div>
-
-              {/* Check for updates button & Status */}
-              <div className="flex flex-col space-y-2.5 p-3.5 rounded-xl bg-zinc-900/60 border border-white/5">
-                <div className="flex items-center justify-between">
-                  <div className="space-y-0.5 min-w-0 pr-3">
-                    <span className="text-xs font-medium text-zinc-200">
-                      Application Version
-                    </span>
-                    <p className="text-[11px] text-zinc-400 font-mono">
-                      Current: <span className="text-zinc-200 font-semibold">v{appVersion}</span>
-                      {updaterState.status === 'not-available' && ' — you are running the latest version'}
-                      {updaterState.status === 'checking' && ' — checking for updates...'}
-                      {updaterState.status === 'available' && ` — new version v${updaterState.updateInfo?.version || ''} available!`}
-                      {updaterState.status === 'downloaded' && ` — v${updaterState.updateInfo?.version || ''} ready to install!`}
-                    </p>
-                  </div>
-
-                  <div className="flex items-center space-x-2 shrink-0">
-                    {updaterState.status === 'available' ? (
-                      <>
-                        <button
-                          type="button"
-                          onClick={() => handleOpenWhatsNew()}
-                          className="flex items-center space-x-1.5 px-3 py-1.5 rounded-lg bg-zinc-800 hover:bg-zinc-700 text-purple-300 border border-purple-500/30 text-xs font-medium transition-all shadow-sm"
-                        >
-                          <Sparkles className="w-3.5 h-3.5" />
-                          <span>What's New</span>
-                        </button>
-                        <button
-                          type="button"
-                          onClick={handleDownloadUpdate}
-                          className="btn-primary flex items-center space-x-1.5 px-3.5 py-1.5 rounded-lg text-white text-xs font-medium transition-all"
-                        >
-                          <Download className="w-3.5 h-3.5" />
-                          <span>Update Now</span>
-                        </button>
-                      </>
-                    ) : updaterState.status === 'downloaded' ? (
+                    {customModelPath && (
                       <button
                         type="button"
-                        onClick={handleInstallUpdate}
-                        className="flex items-center space-x-1.5 px-3.5 py-1.5 rounded-lg bg-green-600 hover:bg-green-500 text-white text-xs font-medium transition-all shadow-sm"
+                        onClick={handleResetToDefaultModel}
+                        className="px-2.5 py-2 rounded-lg bg-red-500/10 hover:bg-red-500/20 text-red-300 text-xs font-medium border border-red-500/20 shrink-0"
                       >
-                        <RefreshCw className="w-3.5 h-3.5" />
-                        <span>Restart &amp; Install</span>
+                        Clear
                       </button>
-                    ) : (
-                      <>
-                        <button
-                          type="button"
-                          onClick={() => handleOpenWhatsNew(appVersion)}
-                          className="flex items-center space-x-1.5 px-2.5 py-1.5 rounded-lg bg-zinc-800 hover:bg-zinc-700 text-zinc-300 border border-white/10 text-xs font-medium transition-all shadow-sm"
-                          title="View release notes for this version"
-                        >
-                          <Sparkles className="w-3.5 h-3.5 text-purple-400" />
-                          <span>What's New</span>
-                        </button>
-                        <button
-                          type="button"
-                          onClick={handleCheckForUpdates}
-                          disabled={updaterState.status === 'checking' || updaterState.status === 'downloading'}
-                          className="flex items-center space-x-1.5 px-3.5 py-1.5 rounded-lg bg-zinc-800 hover:bg-zinc-700 disabled:opacity-50 text-zinc-100 border border-white/10 text-xs font-medium transition-all shadow-sm"
-                        >
-                          <RefreshCw className={`w-3.5 h-3.5 ${updaterState.status === 'checking' ? 'animate-spin text-purple-400' : ''}`} />
-                          <span>{updaterState.status === 'checking' ? 'Checking...' : 'Check for Updates'}</span>
-                        </button>
-                      </>
                     )}
                   </div>
-                </div>
+                </section>
 
-                {/* Downloading Progress Bar */}
-                {updaterState.status === 'downloading' && (
-                  <div className="space-y-1.5 pt-2 border-t border-white/5">
-                    <div className="flex items-center justify-between text-xs text-zinc-300">
-                      <span>Downloading update v{updaterState.updateInfo?.version || ''}...</span>
-                      <span className="font-mono">{updaterDisplayPercent}%</span>
+                {/* Online Subtitle Search */}
+                <section className="space-y-3 pt-4 border-t border-white/[0.08]">
+                  <h4 className="text-[11px] font-bold uppercase tracking-wider text-zinc-400 flex items-center gap-1.5">
+                    <Subtitles className="w-3.5 h-3.5 text-zinc-500" />
+                    <span>Online Subtitle Search</span>
+                  </h4>
+
+                  <div className="rounded-xl bg-white/[0.03] border border-white/[0.08] p-3.5 space-y-3">
+                    <div className="flex items-center justify-between gap-2">
+                      <div>
+                        <p className="text-xs font-semibold text-zinc-200">TsukiHime</p>
+                        <p className="text-[11px] text-zinc-500">Built-in anime ASS &amp; font database</p>
+                      </div>
+                      <span className="inline-flex items-center gap-1 px-2 py-0.5 rounded-full text-[10px] font-semibold bg-emerald-500/15 text-emerald-300 border border-emerald-500/25">
+                        <CheckCircle2 className="w-3 h-3" />
+                        <span>Active</span>
+                      </span>
                     </div>
-                    <div className="w-full h-1.5 rounded-full bg-zinc-800 overflow-hidden">
-                      <div
-                        className="h-full bg-gradient-to-r from-purple-500 to-indigo-500 transition-[width] duration-150 ease-out"
-                        style={{ width: `${Math.max(2, Math.min(100, updaterDisplayPercent))}%` }}
+
+                    <div className="pt-2.5 border-t border-white/[0.06] space-y-2">
+                      <p className="text-[11px] font-medium text-zinc-400">Fallback API Keys (optional)</p>
+                      <div className="grid grid-cols-1 sm:grid-cols-3 gap-2">
+                        {[
+                          { label: 'SubSource', value: subsourceApiKey, setter: setSubsourceApiKey, keyName: 'subsourceApiKey' as const, placeholder: 'X-API-Key' },
+                          { label: 'SubDL', value: subdlApiKey, setter: setSubdlApiKey, keyName: 'subdlApiKey' as const, placeholder: 'API key' },
+                          { label: 'OpenSubtitles', value: opensubtitlesApiKey, setter: setOpensubtitlesApiKey, keyName: 'opensubtitlesApiKey' as const, placeholder: 'Api-Key' },
+                        ].map((field) => (
+                          <div key={field.keyName} className="space-y-1">
+                            <label className="text-[10px] font-medium text-zinc-500">{field.label}</label>
+                            <input
+                              type="password"
+                              value={field.value}
+                              onChange={(e) => field.setter(e.target.value)}
+                              onBlur={() => onSave({ [field.keyName]: field.value.trim() })}
+                              placeholder={field.placeholder}
+                              className="w-full px-2.5 py-1.5 rounded-lg bg-black/30 border border-white/10 text-xs font-mono text-zinc-200 placeholder-zinc-600 focus:outline-none focus:border-rose-400/50"
+                            />
+                          </div>
+                        ))}
+                      </div>
+                    </div>
+                  </div>
+                </section>
+              </div>
+            )}
+
+            {activeTab === 'downloads' && (
+              <div className="space-y-6 animate-in fade-in duration-150">
+                {/* BitTorrent Engine */}
+                <section className="space-y-2.5">
+                  <h4 className="text-[11px] font-bold uppercase tracking-wider text-zinc-400">
+                    BitTorrent Engine
+                  </h4>
+                  <div className="flex items-center justify-between gap-3 rounded-xl bg-white/[0.03] border border-white/[0.08] px-3.5 py-3">
+                    <div className="min-w-0">
+                      <p className="flex items-center gap-2 text-xs font-semibold text-zinc-200">
+                        <span>P2P / BitTorrent</span>
+                        <span
+                          className={`w-1.5 h-1.5 rounded-full ${
+                            p2pState === null ? 'bg-amber-400' : p2pState.enabled ? 'bg-emerald-400' : 'bg-zinc-600'
+                          }`}
+                        />
+                      </p>
+                      <p className="text-[11px] text-zinc-500">
+                        {p2pState === null
+                          ? 'Checking status…'
+                          : p2pState.enabled
+                          ? 'Enabled via user-configured indexers'
+                          : 'Disabled'}
+                      </p>
+                    </div>
+                    <ToggleSwitch
+                      checked={Boolean(p2pState?.enabled)}
+                      onChange={handleToggleP2pEngine}
+                      disabled={p2pBusy || p2pState === null || !window.electronAPI?.enableP2p}
+                      label={p2pState?.enabled ? 'Disable P2P engine' : 'Enable P2P engine'}
+                    />
+                  </div>
+                </section>
+
+                {/* Release Selection & Languages */}
+                <section className="space-y-3 pt-4 border-t border-white/[0.08]">
+                  <h4 className="text-[11px] font-bold uppercase tracking-wider text-zinc-400">
+                    Release Selection
+                  </h4>
+                  <div className="grid grid-cols-2 gap-2">
+                    {([
+                      ['automatic', 'Automatic (best match)'],
+                      ['manual', 'Choose manually'],
+                    ] as const).map(([mode, label]) => (
+                      <button
+                        key={mode}
+                        type="button"
+                        onClick={() => {
+                          setReleaseSelectionMode(mode);
+                          onSave({ releaseSelectionMode: mode });
+                        }}
+                        className={`rounded-xl border px-3 py-2 text-xs font-semibold transition-colors ${
+                          releaseSelectionMode === mode
+                            ? 'border-rose-400/50 bg-rose-500/15 text-rose-100'
+                            : 'border-white/[0.08] bg-white/[0.025] text-zinc-400 hover:bg-white/[0.06] hover:text-zinc-200'
+                        }`}
+                      >
+                        {label}
+                      </button>
+                    ))}
+                  </div>
+
+                  <div className="rounded-xl bg-white/[0.03] border border-white/[0.08] p-3.5 space-y-2.5">
+                    {([
+                      ['Audio', preferredAudioLanguages, setPreferredAudioLanguages, 'preferredTorrentAudioLanguages'],
+                      ['Subtitles', preferredSubtitleLanguages, setPreferredSubtitleLanguages, 'preferredTorrentSubtitleLanguages'],
+                    ] as const).map(([label, selected, setSelected, settingKey]) => (
+                      <div key={label} className="space-y-1.5">
+                        <p className="text-[11px] font-medium text-zinc-400">{label}</p>
+                        <div className="grid grid-cols-2 gap-1.5 sm:grid-cols-5">
+                          {TORRENT_LANGUAGES.map((language) => {
+                            const checked = selected.includes(language.code);
+                            return (
+                              <label
+                                key={language.code}
+                                className={`flex cursor-pointer items-center gap-1.5 rounded-lg border px-2 py-1.5 text-[11px] transition ${
+                                  checked
+                                    ? 'border-rose-400/35 bg-rose-500/10 text-rose-100'
+                                    : 'border-white/[0.06] bg-black/25 text-zinc-400 hover:text-zinc-200'
+                                }`}
+                              >
+                                <input
+                                  type="checkbox"
+                                  checked={checked}
+                                  onChange={() => {
+                                    const next = checked
+                                      ? selected.filter((code) => code !== language.code)
+                                      : [...selected, language.code];
+                                    setSelected(next);
+                                    onSave({ [settingKey]: next });
+                                  }}
+                                  className="accent-rose-500"
+                                />
+                                {language.label}
+                              </label>
+                            );
+                          })}
+                        </div>
+                      </div>
+                    ))}
+                  </div>
+                </section>
+
+                {p2pState?.enabled ? (
+                  <>
+                    {/* Speed & Limits */}
+                    <section className="space-y-2.5 pt-4 border-t border-white/[0.08]">
+                      <h4 className="text-[11px] font-bold uppercase tracking-wider text-zinc-400 flex items-center gap-1.5">
+                        <Gauge className="w-3.5 h-3.5 text-zinc-500" />
+                        <span>Limits</span>
+                      </h4>
+                      <div className="grid grid-cols-2 gap-3 rounded-xl bg-white/[0.03] border border-white/[0.08] p-3.5">
+                        <div className="space-y-1">
+                          <label className="text-[11px] font-medium text-zinc-400">Max simultaneous (1–6)</label>
+                          <input
+                            type="number"
+                            min={1}
+                            max={6}
+                            value={limitMaxConcurrent}
+                            onChange={(e) => setLimitMaxConcurrent(e.target.value)}
+                            onBlur={handleMaxConcurrentBlur}
+                            onKeyDown={(e) => {
+                              if (e.key === 'Enter') (e.target as HTMLInputElement).blur();
+                            }}
+                            className="w-full px-3 py-2 rounded-lg bg-black/30 border border-white/10 text-xs text-zinc-200 focus:outline-none focus:border-rose-400/50"
+                          />
+                        </div>
+                        <div className="space-y-1">
+                          <label className="text-[11px] font-medium text-zinc-400">Seed after complete</label>
+                          <GlassSelect
+                            value={String(limitSeedMinutes)}
+                            onChange={(value) => handleSeedMinutesChange(value)}
+                            options={[
+                              { value: '0', label: 'Stop immediately' },
+                              { value: '15', label: '15 minutes' },
+                              { value: '60', label: '1 hour' },
+                              { value: '480', label: '8 hours' },
+                            ]}
+                            ariaLabel="Seed after complete"
+                            className="w-full px-3 py-2 rounded-lg"
+                          />
+                        </div>
+                      </div>
+                    </section>
+
+                    {/* Indexers (BYOC) */}
+                    <section className="space-y-2.5 pt-4 border-t border-white/[0.08]">
+                      <div className="flex items-center justify-between">
+                        <h4 className="text-[11px] font-bold uppercase tracking-wider text-zinc-400 flex items-center gap-1.5">
+                          <Rss className="w-3.5 h-3.5 text-zinc-500" />
+                          <span>Indexers ({providersDraft.length})</span>
+                        </h4>
+                        <div className="flex items-center gap-1.5">
+                          <button
+                            type="button"
+                            onClick={() => providerImportRef.current?.click()}
+                            disabled={providersBusy}
+                            className="flex items-center gap-1 px-2.5 py-1 rounded-lg bg-white/[0.06] hover:bg-white/[0.11] text-zinc-200 border border-white/10 text-[11px] font-medium disabled:opacity-50"
+                          >
+                            <Upload className="w-3 h-3" />
+                            <span>Import</span>
+                          </button>
+                          <button
+                            type="button"
+                            onClick={handleExportProviders}
+                            className="flex items-center gap-1 px-2.5 py-1 rounded-lg bg-white/[0.06] hover:bg-white/[0.11] text-zinc-200 border border-white/10 text-[11px] font-medium"
+                          >
+                            <Download className="w-3 h-3" />
+                            <span>Export</span>
+                          </button>
+                        </div>
+                      </div>
+
+                      {providersDraft.length === 0 ? (
+                        <div className="p-3.5 rounded-xl border border-dashed border-white/10 bg-white/[0.02] text-center">
+                          <p className="text-xs text-zinc-500">No RSS/Torznab indexers added.</p>
+                        </div>
+                      ) : (
+                        <div className="space-y-2">
+                          {providersDraft.map((provider, index) => (
+                            <div
+                              key={provider.id || `provider-row-${index}`}
+                              className="space-y-1.5 rounded-xl bg-white/[0.03] border border-white/[0.08] p-2.5"
+                            >
+                              <div className="flex items-center gap-2">
+                                <input
+                                  type="text"
+                                  value={provider.name}
+                                  onChange={(e) => handleProviderField(index, { name: e.target.value })}
+                                  placeholder="Indexer name"
+                                  className="flex-1 min-w-0 px-2.5 py-1.5 rounded-lg bg-black/30 border border-white/10 text-xs text-zinc-200 placeholder-zinc-600 focus:outline-none focus:border-rose-400/50"
+                                />
+                                <GlassSelect
+                                  value={provider.type}
+                                  onChange={(value) =>
+                                    handleProviderField(index, { type: value as RssProvider['type'] })
+                                  }
+                                  options={[
+                                    { value: 'rss', label: 'RSS' },
+                                    { value: 'torznab', label: 'Torznab' },
+                                  ]}
+                                  ariaLabel="Feed type"
+                                  title="Feed type"
+                                  className="px-2 py-1.5 rounded-lg shrink-0 w-28"
+                                />
+                                <input
+                                  type="checkbox"
+                                  checked={provider.enabled}
+                                  onChange={(e) => handleProviderField(index, { enabled: e.target.checked })}
+                                  className="w-4 h-4 rounded cursor-pointer accent-rose-500 shrink-0"
+                                  title="Enabled"
+                                  aria-label={`${provider.name || 'Provider'} enabled`}
+                                />
+                                <button
+                                  type="button"
+                                  onClick={() => handleRemoveProvider(index)}
+                                  className="p-1 rounded-lg text-zinc-500 hover:text-red-400 hover:bg-red-500/10 shrink-0"
+                                  title="Remove provider"
+                                >
+                                  <Trash2 className="w-3.5 h-3.5" />
+                                </button>
+                              </div>
+                              <input
+                                type="text"
+                                value={provider.urlTemplate}
+                                onChange={(e) => handleProviderField(index, { urlTemplate: e.target.value })}
+                                placeholder="https://your-indexer.example/rss?q={query}"
+                                className="w-full px-2.5 py-1.5 rounded-lg bg-black/30 border border-white/10 text-[11px] font-mono text-zinc-200 placeholder-zinc-600 focus:outline-none focus:border-rose-400/50 select-all"
+                              />
+                            </div>
+                          ))}
+                        </div>
+                      )}
+
+                      <div className="flex items-center justify-between gap-2 pt-1">
+                        <button
+                          type="button"
+                          onClick={handleAddProvider}
+                          className="flex items-center gap-1.5 px-3 py-1.5 rounded-lg bg-white/[0.07] hover:bg-white/[0.12] text-zinc-100 border border-white/10 text-xs font-medium"
+                        >
+                          <Plus className="w-3.5 h-3.5" />
+                          <span>Add provider</span>
+                        </button>
+                        <button
+                          type="button"
+                          onClick={handleSaveProviders}
+                          disabled={providersBusy}
+                          className="btn-primary flex items-center gap-1.5 px-3.5 py-1.5 rounded-lg text-white text-xs font-semibold disabled:opacity-50"
+                        >
+                          <Save className="w-3.5 h-3.5" />
+                          <span>{providersBusy ? 'Saving…' : 'Save providers'}</span>
+                        </button>
+                      </div>
+
+                      <input
+                        ref={providerImportRef}
+                        type="file"
+                        accept=".json,application/json"
+                        className="hidden"
+                        onChange={handleImportProvidersFile}
                       />
+                    </section>
+                  </>
+                ) : (
+                  <p className="text-xs text-zinc-500">
+                    Enable the P2P engine above to configure download limits and RSS/Torznab indexers.
+                  </p>
+                )}
+              </div>
+            )}
+
+            {activeTab === 'backup' && (
+              <div className="space-y-6 animate-in fade-in duration-150">
+                {/* Documents Backup */}
+                <section className="space-y-2.5">
+                  <h4 className="text-[11px] font-bold uppercase tracking-wider text-zinc-400">
+                    Documents Backup
+                  </h4>
+
+                  <div className="space-y-3 rounded-xl bg-white/[0.03] border border-white/[0.08] p-4">
+                    <div className="flex items-start justify-between gap-3">
+                      <div className="min-w-0">
+                        <p className="text-xs font-semibold text-zinc-200">
+                          {backupStatus?.exists
+                            ? `Synced ${formatRelativeTime(backupStatus.lastSyncedAt) ?? 'recently'}${
+                                backupStatus.sizeBytes ? ` · ${formatFileSize(backupStatus.sizeBytes)}` : ''
+                              }`
+                            : 'No backup created yet'}
+                        </p>
+                        {backupStatus?.path && (
+                          <p className="mt-1 truncate font-mono text-[11px] text-zinc-500 select-all" title={backupStatus.path}>
+                            {backupStatus.path}
+                          </p>
+                        )}
+                      </div>
+                      {backupStatus?.exists && <CheckCircle2 className="w-4 h-4 shrink-0 text-emerald-400" />}
                     </div>
-                    {updaterState.downloadProgress && (
-                      <div className="flex items-center justify-between text-[11px] text-zinc-500 font-mono">
-                        <span>
-                          {formatFileSize(updaterState.downloadProgress.transferred)} / {formatFileSize(updaterState.downloadProgress.total)}
-                          {updaterState.downloadProgress.phase === 'delta' && <span className="text-zinc-600"> (delta)</span>}
-                        </span>
-                        <span>{formatFileSize(updaterState.downloadProgress.bytesPerSecond)}/s</span>
+
+                    {confirmRestore ? (
+                      <div className="flex items-center justify-between gap-3 px-3 py-2 rounded-xl bg-red-950/40 border border-red-500/40 animate-in fade-in duration-150">
+                        <div className="flex items-center gap-2 text-xs text-red-200 min-w-0 flex-1">
+                          <AlertTriangle className="w-3.5 h-3.5 text-red-400 shrink-0" />
+                          <span className="truncate">Replace current history, rules, and list?</span>
+                        </div>
+                        <div className="flex items-center gap-2 shrink-0">
+                          <button
+                            type="button"
+                            onClick={() => setConfirmRestore(false)}
+                            disabled={dataBusy === 'restore'}
+                            className="px-2.5 py-1 rounded-lg text-[11px] bg-zinc-800 hover:bg-zinc-700 text-zinc-300"
+                          >
+                            Cancel
+                          </button>
+                          <button
+                            type="button"
+                            onClick={handleRestoreConfirmed}
+                            disabled={dataBusy === 'restore'}
+                            className="px-2.5 py-1 rounded-lg text-[11px] font-bold bg-red-600 hover:bg-red-500 text-white disabled:opacity-60"
+                          >
+                            {dataBusy === 'restore' ? 'Restoring…' : 'Confirm Restore'}
+                          </button>
+                        </div>
+                      </div>
+                    ) : (
+                      <div className="flex flex-wrap items-center gap-2">
+                        <button
+                          type="button"
+                          onClick={handleBackupNow}
+                          disabled={dataBusy !== null || !window.electronAPI?.backupNow}
+                          className="btn-primary flex items-center gap-1.5 px-3.5 py-1.5 rounded-lg text-white text-xs font-semibold disabled:opacity-50"
+                        >
+                          <Save className="w-3.5 h-3.5" />
+                          <span>{dataBusy === 'backup' ? 'Backing up…' : 'Backup now'}</span>
+                        </button>
+                        {restoreAvailable && (
+                          <button
+                            type="button"
+                            onClick={() => setConfirmRestore(true)}
+                            disabled={dataBusy !== null || !window.electronAPI?.restoreFromBackup}
+                            className="flex items-center gap-1.5 px-3 py-1.5 rounded-lg bg-white/[0.07] hover:bg-white/[0.12] text-zinc-200 border border-white/10 text-xs font-medium disabled:opacity-50"
+                          >
+                            <RotateCcw className="w-3.5 h-3.5 text-zinc-400" />
+                            <span>Restore from backup</span>
+                          </button>
+                        )}
                       </div>
                     )}
                   </div>
-                )}
+                </section>
 
-                {/* Error message */}
-                {updaterState.status === 'error' && updaterState.error && (
-                  <div className="flex items-center justify-between p-2.5 rounded-lg bg-red-950/40 border border-red-500/30 text-xs text-red-200">
-                    <div className="flex items-center space-x-2 min-w-0 pr-2">
-                      <AlertCircle className="w-4 h-4 text-red-400 shrink-0" />
-                      <span className="truncate">{updaterState.error}</span>
-                    </div>
+                {/* Watchlist Export / Import */}
+                <section className="space-y-2.5 pt-4 border-t border-white/[0.08]">
+                  <h4 className="text-[11px] font-bold uppercase tracking-wider text-zinc-400">
+                    Watchlist Snapshot
+                  </h4>
+                  <div className="flex flex-wrap items-center gap-2 rounded-xl bg-white/[0.03] border border-white/[0.08] p-4">
                     <button
                       type="button"
-                      onClick={handleCheckForUpdates}
-                      className="px-2 py-0.5 rounded bg-zinc-800 hover:bg-zinc-700 text-[11px] font-medium text-zinc-200 shrink-0"
-                    >
-                      Retry
-                    </button>
-                  </div>
-                )}
-              </div>
-            </div>
-          </div>
-
-          {/* Section: Subtitle Search Providers */}
-          <div className="space-y-3 pt-3 border-t border-white/10">
-            <label className="text-xs font-semibold text-zinc-200 uppercase tracking-wider flex items-center space-x-2">
-              <Subtitles className="w-3.5 h-3.5 text-zinc-400" />
-              <span>Online Subtitle &amp; Signs Search</span>
-            </label>
-
-            <div className="space-y-3 rounded-xl bg-zinc-900/90 border border-white/10 p-3.5">
-              <div className="flex items-center justify-between gap-2">
-                <div className="space-y-0.5">
-                  <p className="text-xs font-semibold text-zinc-200">TsukiHime Anime Subtitles</p>
-                  <p className="text-[10px] text-zinc-500">
-                    Built-in anime ASS &amp; font database — works out of the box with no API key.
-                  </p>
-                </div>
-                <span className="inline-flex items-center space-x-1 px-2 py-0.5 rounded text-[10px] font-semibold bg-emerald-500/15 text-emerald-400 border border-emerald-500/25 shrink-0">
-                  <CheckCircle2 className="w-3 h-3" />
-                  <span>Active</span>
-                </span>
-              </div>
-
-              <div className="pt-2 border-t border-white/5 space-y-2.5">
-                <p className="text-[10px] text-zinc-400">
-                  Optional personal API keys for fallback subtitle databases (stored locally):
-                </p>
-
-                <div className="grid grid-cols-1 gap-2">
-                  {[
-                    {
-                      label: 'SubSource API Key (7,200 req/day free)',
-                      value: subsourceApiKey,
-                      setter: setSubsourceApiKey,
-                      keyName: 'subsourceApiKey' as const,
-                      placeholder: 'Optional X-API-Key from subsource.net',
-                    },
-                    {
-                      label: 'SubDL API Key',
-                      value: subdlApiKey,
-                      setter: setSubdlApiKey,
-                      keyName: 'subdlApiKey' as const,
-                      placeholder: 'Optional API key from subdl.com',
-                    },
-                    {
-                      label: 'OpenSubtitles API Key (supports Foreign/Forced flag)',
-                      value: opensubtitlesApiKey,
-                      setter: setOpensubtitlesApiKey,
-                      keyName: 'opensubtitlesApiKey' as const,
-                      placeholder: 'Optional Api-Key from opensubtitles.com',
-                    },
-                  ].map((field) => (
-                    <div key={field.keyName} className="space-y-1">
-                      <label className="text-[10px] font-medium text-zinc-400">{field.label}</label>
-                      <input
-                        type="password"
-                        value={field.value}
-                        onChange={(e) => field.setter(e.target.value)}
-                        onBlur={() => onSave({ [field.keyName]: field.value.trim() })}
-                        placeholder={field.placeholder}
-                        className="w-full px-3 py-1.5 rounded-lg bg-zinc-950/70 border border-white/10 text-xs font-mono text-zinc-200 placeholder-zinc-600 focus:outline-none focus:border-zinc-500"
-                      />
-                    </div>
-                  ))}
-                </div>
-              </div>
-            </div>
-          </div>
-
-          {/* Section: Data & Backup */}
-          <div className="space-y-3 pt-3 border-t border-white/10">
-            <label className="text-xs font-semibold text-zinc-200 uppercase tracking-wider flex items-center space-x-2">
-              <Database className="w-3.5 h-3.5 text-zinc-400" />
-              <span>Data &amp; Backup</span>
-            </label>
-
-            {/* Documents backup card */}
-            <div className="space-y-2.5 rounded-xl bg-zinc-900/90 border border-white/10 p-3.5">
-              <div className="flex items-start justify-between gap-3">
-                <div className="min-w-0">
-                  <p className="text-xs font-semibold text-zinc-200">Documents Backup</p>
-                  {backupStatus?.path ? (
-                    <p
-                      className="mt-0.5 truncate font-mono text-[10px] text-zinc-500 select-all"
-                      title={backupStatus.path}
-                    >
-                      {backupStatus.path}
-                    </p>
-                  ) : (
-                    <p className="mt-0.5 text-[10px] text-zinc-500">No backup location reported yet</p>
-                  )}
-                  <p className="mt-0.5 text-[10px] text-zinc-500">
-                    {backupStatus?.exists
-                      ? `Last synced ${formatRelativeTime(backupStatus.lastSyncedAt) ?? 'unknown'}${
-                          backupStatus.sizeBytes ? ` · ${formatFileSize(backupStatus.sizeBytes)}` : ''
-                        }`
-                      : 'No backup created yet'}
-                  </p>
-                </div>
-                {backupStatus?.exists && (
-                  <CheckCircle2 className="w-3.5 h-3.5 shrink-0 text-emerald-400 mt-0.5" />
-                )}
-              </div>
-
-              {confirmRestore ? (
-                <div className="flex items-center justify-between gap-3 px-3 py-2 rounded-xl bg-red-950/40 border border-red-500/40 animate-in fade-in duration-150">
-                  <div className="flex items-center space-x-2 text-xs text-red-200 min-w-0 flex-1">
-                    <AlertTriangle className="w-3.5 h-3.5 text-red-400 shrink-0" />
-                    <span className="truncate">
-                      Restore backup over current data? Watch history, season rules and your list will be replaced.
-                    </span>
-                  </div>
-                  <div className="flex items-center space-x-2 shrink-0">
-                    <button
-                      type="button"
-                      onClick={() => setConfirmRestore(false)}
-                      disabled={dataBusy === 'restore'}
-                      className="px-2.5 py-1 rounded-lg text-[11px] font-medium text-zinc-300 hover:text-white bg-zinc-800 hover:bg-zinc-700 transition-colors disabled:opacity-50"
-                    >
-                      Cancel
-                    </button>
-                    <button
-                      type="button"
-                      onClick={handleRestoreConfirmed}
-                      disabled={dataBusy === 'restore'}
-                      className="px-2.5 py-1 rounded-lg text-[11px] font-bold text-white bg-red-600 hover:bg-red-500 transition-colors shadow-sm disabled:opacity-60"
-                    >
-                      {dataBusy === 'restore' ? 'Restoring…' : 'Confirm Restore'}
-                    </button>
-                  </div>
-                </div>
-              ) : (
-                <div className="flex flex-wrap items-center gap-2">
-                  <button
-                    type="button"
-                    onClick={handleBackupNow}
-                    disabled={dataBusy !== null || !window.electronAPI?.backupNow}
-                    className="flex items-center space-x-1.5 px-3 py-1.5 rounded-lg bg-zinc-100 hover:bg-white text-zinc-900 text-xs font-bold transition-colors shadow-sm disabled:opacity-50"
-                  >
-                    <Save className="w-3.5 h-3.5" />
-                    <span>{dataBusy === 'backup' ? 'Backing up…' : 'Backup now'}</span>
-                  </button>
-                  {restoreAvailable && (
-                    <button
-                      type="button"
-                      onClick={() => setConfirmRestore(true)}
-                      disabled={dataBusy !== null || !window.electronAPI?.restoreFromBackup}
-                      className="flex items-center space-x-1.5 px-3 py-1.5 rounded-lg bg-zinc-800 hover:bg-zinc-700 text-zinc-200 border border-white/10 text-xs font-medium transition-colors disabled:opacity-50"
-                    >
-                      <RotateCcw className="w-3.5 h-3.5 text-zinc-400" />
-                      <span>Restore from backup</span>
-                    </button>
-                  )}
-                </div>
-              )}
-            </div>
-
-            {/* Watchlist import / export card */}
-            <div className="space-y-2.5 rounded-xl bg-zinc-900/90 border border-white/10 p-3.5">
-              <p className="text-xs font-semibold text-zinc-200">Watchlist</p>
-              <p className="text-[10px] text-zinc-500">
-                Export your tracked titles as a full JSON snapshot or MAL-compatible XML, or import an existing list.
-              </p>
-
-              <div className="flex flex-wrap items-center gap-2">
-                <button
-                  type="button"
-                  onClick={() => handleExportWatchlist('json')}
-                  disabled={dataBusy !== null || !window.electronAPI?.exportWatchlist}
-                  className="flex items-center space-x-1.5 px-3 py-1.5 rounded-lg bg-zinc-800 hover:bg-zinc-700 text-zinc-200 border border-white/10 text-xs font-medium transition-colors disabled:opacity-50"
-                  title="Export the full watchlist (scores, progress, status) as JSON"
-                >
-                  <Download className="w-3.5 h-3.5 text-zinc-400" />
-                  <span>JSON (full)</span>
-                </button>
-                <button
-                  type="button"
-                  onClick={() => handleExportWatchlist('mal-xml')}
-                  disabled={dataBusy !== null || !window.electronAPI?.exportWatchlist}
-                  className="flex items-center space-x-1.5 px-3 py-1.5 rounded-lg bg-zinc-800 hover:bg-zinc-700 text-zinc-200 border border-white/10 text-xs font-medium transition-colors disabled:opacity-50"
-                  title="Export as MyAnimeList-compatible XML"
-                >
-                  <Download className="w-3.5 h-3.5 text-zinc-400" />
-                  <span>MAL XML</span>
-                </button>
-                <button
-                  type="button"
-                  onClick={handleImportWatchlist}
-                  disabled={dataBusy !== null || !window.electronAPI?.importWatchlist}
-                  className="flex items-center space-x-1.5 px-3 py-1.5 rounded-lg bg-zinc-800 hover:bg-zinc-700 text-zinc-200 border border-white/10 text-xs font-medium transition-colors disabled:opacity-50"
-                  title="Import a previously exported JSON or MAL XML watchlist"
-                >
-                  <Upload className="w-3.5 h-3.5 text-zinc-400" />
-                  <span>{dataBusy === 'import' ? 'Importing…' : 'Import Watchlist'}</span>
-                </button>
-              </div>
-            </div>
-          </div>
-
-          {/* Section: P2P & Downloads */}
-          <div className="space-y-3 pt-3 border-t border-white/10">
-            <label className="text-xs font-semibold text-zinc-200 uppercase tracking-wider flex items-center space-x-2">
-              <Share2 className="w-3.5 h-3.5 text-zinc-400" />
-              <span>P2P &amp; Downloads</span>
-            </label>
-
-            {/* Master engine toggle card */}
-            <div className="flex items-center justify-between gap-3 rounded-xl bg-zinc-900/90 border border-white/10 p-3.5">
-              <div className="min-w-0">
-                <p className="flex items-center space-x-2 text-xs font-semibold text-zinc-200">
-                  <span>P2P / BitTorrent engine</span>
-                  <span
-                    className={`w-1.5 h-1.5 rounded-full shrink-0 ${
-                      p2pState === null ? 'bg-amber-400' : p2pState.enabled ? 'bg-emerald-400' : 'bg-zinc-600'
-                    }`}
-                  />
-                </p>
-                <p className="mt-0.5 text-[10px] text-zinc-500">
-                  {p2pState === null
-                    ? 'Checking engine state…'
-                    : p2pState.enabled
-                    ? 'On — torrents are downloaded and seeded via your own indexers.'
-                    : 'Off — no torrents are downloaded or shared.'}
-                </p>
-              </div>
-              <ToggleSwitch
-                checked={Boolean(p2pState?.enabled)}
-                onChange={handleToggleP2pEngine}
-                disabled={p2pBusy || p2pState === null || !window.electronAPI?.enableP2p}
-                label={p2pState?.enabled ? 'Disable P2P engine' : 'Enable P2P engine'}
-              />
-            </div>
-
-            <div className="space-y-2 rounded-xl bg-zinc-900/90 border border-white/10 p-3.5">
-              <div>
-                <p className="text-xs font-semibold text-zinc-200">Release selection</p>
-                <p className="mt-0.5 text-[10px] text-zinc-500">
-                  Automatic picks the highest-ranked match by language, title accuracy, video quality and seeders.
-                </p>
-              </div>
-              <div className="grid grid-cols-2 gap-2">
-                {([
-                  ['automatic', 'Automatic'],
-                  ['manual', 'Choose manually'],
-                ] as const).map(([mode, label]) => (
-                  <button
-                    key={mode}
-                    type="button"
-                    onClick={() => {
-                      setReleaseSelectionMode(mode);
-                      onSave({ releaseSelectionMode: mode });
-                    }}
-                    className={`rounded-lg border px-3 py-2 text-xs font-semibold transition-colors ${
-                      releaseSelectionMode === mode
-                        ? 'border-red-500/50 bg-red-500/15 text-red-200'
-                        : 'border-white/10 bg-zinc-950/50 text-zinc-400 hover:bg-zinc-800 hover:text-zinc-200'
-                    }`}
-                  >
-                    {label}{mode === 'automatic' ? ' (default)' : ''}
-                  </button>
-                ))}
-              </div>
-              <p className="pt-1 text-[10px] font-semibold uppercase tracking-wide text-zinc-500">Automatic search languages</p>
-              {([
-                ['Audio', preferredAudioLanguages, setPreferredAudioLanguages, 'preferredTorrentAudioLanguages'],
-                ['Subtitles', preferredSubtitleLanguages, setPreferredSubtitleLanguages, 'preferredTorrentSubtitleLanguages'],
-              ] as const).map(([label, selected, setSelected, settingKey]) => (
-                <div key={label} className="space-y-1.5">
-                  <p className="text-[10px] text-zinc-400">{label}</p>
-                  <div className="grid grid-cols-2 gap-1.5 sm:grid-cols-5">
-                    {TORRENT_LANGUAGES.map((language) => {
-                      const checked = selected.includes(language.code);
-                      return <label key={language.code} className={`flex cursor-pointer items-center gap-1.5 rounded-md border px-2 py-1.5 text-[10px] transition ${checked ? 'border-rose-400/30 bg-rose-500/10 text-rose-100' : 'border-white/5 bg-zinc-950/40 text-zinc-400 hover:text-zinc-200'}`}>
-                        <input type="checkbox" checked={checked} onChange={() => {
-                          const next = checked ? selected.filter((code) => code !== language.code) : [...selected, language.code];
-                          setSelected(next);
-                          onSave({ [settingKey]: next });
-                        }} className="accent-rose-500" />
-                        {language.label}
-                      </label>;
-                    })}
-                  </div>
-                </div>
-              ))}
-              <p className="text-[10px] text-zinc-500">Manual search shows all releases; use its audio and subtitle filters to narrow results.</p>
-            </div>
-
-            {p2pState?.enabled ? (
-              <>
-                {/* Speed & Limits card */}
-                <div className="space-y-2.5 rounded-xl bg-zinc-900/90 border border-white/10 p-3.5">
-                  <p className="flex items-center space-x-2 text-xs font-semibold text-zinc-200">
-                    <Gauge className="w-3.5 h-3.5 text-zinc-400" />
-                    <span>Speed &amp; Limits</span>
-                  </p>
-                  <div className="grid grid-cols-2 gap-2.5">
-                    <div className="space-y-1">
-                      <label className="text-[10px] font-medium text-zinc-400">Max simultaneous downloads</label>
-                      <input
-                        type="number"
-                        min={1}
-                        max={6}
-                        value={limitMaxConcurrent}
-                        onChange={(e) => setLimitMaxConcurrent(e.target.value)}
-                        onBlur={handleMaxConcurrentBlur}
-                        onKeyDown={(e) => {
-                          if (e.key === 'Enter') (e.target as HTMLInputElement).blur();
-                        }}
-                        className="w-full px-3 py-2 rounded-lg bg-zinc-950/70 border border-white/10 text-xs text-zinc-200 focus:outline-none focus:border-zinc-500"
-                      />
-                      <p className="text-[10px] text-zinc-500">Between 1 and 6 torrents at once.</p>
-                    </div>
-                    <div className="space-y-1">
-                      <label className="text-[10px] font-medium text-zinc-400">Seed after complete</label>
-                      <GlassSelect
-                        value={String(limitSeedMinutes)}
-                        onChange={(value) => handleSeedMinutesChange(value)}
-                        options={[
-                          { value: '0', label: 'Stop immediately' },
-                          { value: '15', label: '15 minutes' },
-                          { value: '60', label: '1 hour' },
-                          { value: '480', label: '8 hours' },
-                        ]}
-                        ariaLabel="Seed after complete"
-                        className="w-full px-3 py-2 rounded-lg"
-                      />
-                      <p className="text-[10px] text-zinc-500">How long to keep seeding once done.</p>
-                    </div>
-                  </div>
-                </div>
-                <div className="space-y-2.5 rounded-xl bg-zinc-900/90 border border-white/10 p-3.5">
-                  <div className="flex items-center justify-between">
-                    <p className="flex items-center space-x-2 text-xs font-semibold text-zinc-200">
-                      <Rss className="w-3.5 h-3.5 text-zinc-400" />
-                      <span>Indexers (BYOC)</span>
-                    </p>
-                    <span className="text-[10px] text-zinc-500">{providersDraft.length} configured</span>
-                  </div>
-
-                  {providersDraft.length === 0 ? (
-                    <div className="p-3 rounded-xl border border-dashed border-zinc-800 bg-zinc-950/40 text-center">
-                      <p className="text-[11px] text-zinc-500">No indexers configured yet. Add one below or import a config file.</p>
-                    </div>
-                  ) : (
-                    <div className="space-y-2">
-                      {providersDraft.map((provider, index) => (
-                        <div
-                          key={provider.id || `provider-row-${index}`}
-                          className="space-y-1.5 rounded-xl bg-zinc-950/70 border border-white/10 p-2.5"
-                        >
-                          <div className="flex items-center gap-2">
-                            <input
-                              type="text"
-                              value={provider.name}
-                              onChange={(e) => handleProviderField(index, { name: e.target.value })}
-                              placeholder="Indexer name"
-                              className="flex-1 min-w-0 px-2.5 py-1.5 rounded-lg bg-zinc-900 border border-white/10 text-xs text-zinc-200 placeholder-zinc-600 focus:outline-none focus:border-zinc-500"
-                            />
-                            <GlassSelect
-                              value={provider.type}
-                              onChange={(value) =>
-                                handleProviderField(index, { type: value as RssProvider['type'] })
-                              }
-                              options={[
-                                { value: 'rss', label: 'RSS' },
-                                { value: 'torznab', label: 'Torznab' },
-                              ]}
-                              ariaLabel="Feed type"
-                              title="Feed type"
-                              className="px-2 py-1.5 rounded-lg shrink-0 w-28"
-                            />
-                            <input
-                              type="checkbox"
-                              checked={provider.enabled}
-                              onChange={(e) => handleProviderField(index, { enabled: e.target.checked })}
-                              className="w-4 h-4 rounded border-zinc-700 bg-zinc-900 text-red-600 focus:ring-0 focus:ring-offset-0 cursor-pointer accent-red-600 shrink-0"
-                              title="Enabled"
-                              aria-label={`${provider.name || 'Provider'} enabled`}
-                            />
-                            <button
-                              type="button"
-                              onClick={() => handleRemoveProvider(index)}
-                              className="p-1 rounded-lg text-zinc-500 hover:text-red-400 hover:bg-red-500/10 transition-colors shrink-0"
-                              title="Remove provider"
-                            >
-                              <Trash2 className="w-3.5 h-3.5" />
-                            </button>
-                          </div>
-                          <input
-                            type="text"
-                            value={provider.urlTemplate}
-                            onChange={(e) => handleProviderField(index, { urlTemplate: e.target.value })}
-                            placeholder="https://your-indexer.example/rss?q={query}"
-                            className="w-full px-2.5 py-1.5 rounded-lg bg-zinc-900 border border-white/10 text-[11px] font-mono text-zinc-200 placeholder-zinc-600 focus:outline-none focus:border-zinc-500 select-all"
-                          />
-                        </div>
-                      ))}
-                    </div>
-                  )}
-
-                  <div className="flex flex-wrap items-center gap-2">
-                    <button
-                      type="button"
-                      onClick={handleAddProvider}
-                      className="flex items-center space-x-1.5 px-3 py-1.5 rounded-lg bg-zinc-800 hover:bg-zinc-700 text-zinc-100 border border-white/10 text-xs font-medium transition-all shadow-sm"
-                    >
-                      <Plus className="w-3.5 h-3.5" />
-                      <span>Add provider</span>
-                    </button>
-                    <button
-                      type="button"
-                      onClick={() => providerImportRef.current?.click()}
-                      disabled={providersBusy}
-                      className="flex items-center space-x-1.5 px-3 py-1.5 rounded-lg bg-zinc-800 hover:bg-zinc-700 text-zinc-200 border border-white/10 text-xs font-medium transition-colors disabled:opacity-50"
-                      title="Import providers from a JSON config file"
-                    >
-                      <Upload className="w-3.5 h-3.5 text-zinc-400" />
-                      <span>Import config</span>
-                    </button>
-                    <button
-                      type="button"
-                      onClick={handleExportProviders}
-                      className="flex items-center space-x-1.5 px-3 py-1.5 rounded-lg bg-zinc-800 hover:bg-zinc-700 text-zinc-200 border border-white/10 text-xs font-medium transition-colors"
-                      title="Export providers to animecenter-providers.json"
+                      onClick={() => handleExportWatchlist('json')}
+                      disabled={dataBusy !== null || !window.electronAPI?.exportWatchlist}
+                      className="flex items-center gap-1.5 px-3 py-1.5 rounded-lg bg-white/[0.07] hover:bg-white/[0.12] text-zinc-200 border border-white/10 text-xs font-medium disabled:opacity-50"
                     >
                       <Download className="w-3.5 h-3.5 text-zinc-400" />
-                      <span>Export config</span>
+                      <span>Export JSON</span>
                     </button>
-                    <div className="flex-1" />
                     <button
                       type="button"
-                      onClick={handleSaveProviders}
-                      disabled={providersBusy}
-                      className="flex items-center space-x-1.5 px-3 py-1.5 rounded-lg bg-zinc-100 hover:bg-white text-zinc-900 text-xs font-bold transition-colors shadow-sm disabled:opacity-50"
+                      onClick={() => handleExportWatchlist('mal-xml')}
+                      disabled={dataBusy !== null || !window.electronAPI?.exportWatchlist}
+                      className="flex items-center gap-1.5 px-3 py-1.5 rounded-lg bg-white/[0.07] hover:bg-white/[0.12] text-zinc-200 border border-white/10 text-xs font-medium disabled:opacity-50"
                     >
-                      <Save className="w-3.5 h-3.5" />
-                      <span>{providersBusy ? 'Saving…' : 'Save providers'}</span>
+                      <Download className="w-3.5 h-3.5 text-zinc-400" />
+                      <span>Export MAL XML</span>
+                    </button>
+                    <button
+                      type="button"
+                      onClick={handleImportWatchlist}
+                      disabled={dataBusy !== null || !window.electronAPI?.importWatchlist}
+                      className="flex items-center gap-1.5 px-3 py-1.5 rounded-lg bg-white/[0.07] hover:bg-white/[0.12] text-zinc-200 border border-white/10 text-xs font-medium disabled:opacity-50"
+                    >
+                      <Upload className="w-3.5 h-3.5 text-zinc-400" />
+                      <span>{dataBusy === 'import' ? 'Importing…' : 'Import Watchlist'}</span>
                     </button>
                   </div>
+                </section>
+              </div>
+            )}
 
-                  <p className="text-[10px] text-zinc-500">No indexers are bundled. You bring your own RSS/Torznab sources.</p>
-                </div>
+            {activeTab === 'updates' && (
+              <div className="space-y-6 animate-in fade-in duration-150">
+                {/* Version & Download Status */}
+                <section className="space-y-2.5">
+                  <h4 className="text-[11px] font-bold uppercase tracking-wider text-zinc-400">
+                    Application Version
+                  </h4>
 
-                {/* Hidden input backing the Import config button */}
-                <input
-                  ref={providerImportRef}
-                  type="file"
-                  accept=".json,application/json"
-                  className="hidden"
-                  onChange={handleImportProvidersFile}
-                />
-              </>
-            ) : (
-              <p className="text-[10px] text-zinc-500 px-1">
-                The engine is off. Enable it above to configure speed limits and indexers.
-                No indexers are bundled — you bring your own RSS/Torznab sources.
-              </p>
+                  <div className="space-y-3 p-4 rounded-xl bg-white/[0.03] border border-white/[0.08]">
+                    <div className="flex flex-wrap items-center justify-between gap-3">
+                      <div>
+                        <p className="text-sm font-bold text-white font-mono">v{appVersion}</p>
+                        <p className="text-xs text-zinc-400">
+                          {updaterState.status === 'not-available' && 'Up to date'}
+                          {updaterState.status === 'checking' && 'Checking for updates…'}
+                          {updaterState.status === 'available' && `v${updaterState.updateInfo?.version || ''} available`}
+                          {updaterState.status === 'downloading' && `Downloading v${updaterState.updateInfo?.version || ''}…`}
+                          {updaterState.status === 'downloaded' && `v${updaterState.updateInfo?.version || ''} ready to install`}
+                          {updaterState.status === 'idle' && 'Check for updates or view release notes'}
+                          {updaterState.status === 'error' && 'Update check failed'}
+                        </p>
+                      </div>
+
+                      <div className="flex items-center gap-2 shrink-0">
+                        {updaterState.status === 'available' ? (
+                          <>
+                            <button
+                              type="button"
+                              onClick={() => handleOpenWhatsNew()}
+                              className="flex items-center gap-1.5 px-3 py-1.5 rounded-lg bg-white/[0.07] hover:bg-white/[0.12] text-rose-200 border border-white/10 text-xs font-medium"
+                            >
+                              <Sparkles className="w-3.5 h-3.5 text-rose-400" />
+                              <span>What&apos;s New</span>
+                            </button>
+                            <button
+                              type="button"
+                              onClick={handleDownloadUpdate}
+                              className="btn-primary flex items-center gap-1.5 px-3.5 py-1.5 rounded-lg text-white text-xs font-semibold"
+                            >
+                              <Download className="w-3.5 h-3.5" />
+                              <span>Update Now</span>
+                            </button>
+                          </>
+                        ) : updaterState.status === 'downloaded' ? (
+                          <button
+                            type="button"
+                            onClick={handleInstallUpdate}
+                            className="flex items-center gap-1.5 px-3.5 py-1.5 rounded-lg bg-emerald-600 hover:bg-emerald-500 text-white text-xs font-semibold"
+                          >
+                            <RefreshCw className="w-3.5 h-3.5" />
+                            <span>Restart &amp; Install</span>
+                          </button>
+                        ) : (
+                          <>
+                            <button
+                              type="button"
+                              onClick={() => handleOpenWhatsNew(appVersion)}
+                              className="flex items-center gap-1.5 px-3 py-1.5 rounded-lg bg-white/[0.07] hover:bg-white/[0.12] text-zinc-200 border border-white/10 text-xs font-medium"
+                            >
+                              <Sparkles className="w-3.5 h-3.5 text-rose-400" />
+                              <span>What&apos;s New</span>
+                            </button>
+                            <button
+                              type="button"
+                              onClick={handleCheckForUpdates}
+                              disabled={updaterState.status === 'checking' || updaterState.status === 'downloading'}
+                              className="btn-primary flex items-center gap-1.5 px-3.5 py-1.5 rounded-lg disabled:opacity-50 text-white text-xs font-semibold"
+                            >
+                              <RefreshCw className={`w-3.5 h-3.5 ${updaterState.status === 'checking' ? 'animate-spin' : ''}`} />
+                              <span>{updaterState.status === 'checking' ? 'Checking...' : 'Check for Updates'}</span>
+                            </button>
+                          </>
+                        )}
+                      </div>
+                    </div>
+
+                    {updaterState.status === 'downloading' && (
+                      <div className="space-y-1.5 pt-2.5 border-t border-white/[0.06]">
+                        <div className="flex items-center justify-between text-xs text-zinc-300">
+                          <span>Downloading v{updaterState.updateInfo?.version || ''}…</span>
+                          <span className="font-mono">{updaterDisplayPercent}%</span>
+                        </div>
+                        <div className="w-full h-1.5 rounded-full bg-zinc-800 overflow-hidden">
+                          <div
+                            className="h-full bg-gradient-to-r from-rose-600 to-rose-400 transition-[width] duration-150 ease-out"
+                            style={{ width: `${Math.max(2, Math.min(100, updaterDisplayPercent))}%` }}
+                          />
+                        </div>
+                        {updaterState.downloadProgress && (
+                          <div className="flex items-center justify-between text-[11px] text-zinc-500 font-mono">
+                            <span>
+                              {formatFileSize(updaterState.downloadProgress.transferred)} / {formatFileSize(updaterState.downloadProgress.total)}
+                              {updaterState.downloadProgress.phase === 'delta' && <span className="text-emerald-400"> (delta)</span>}
+                            </span>
+                            <span>{formatFileSize(updaterState.downloadProgress.bytesPerSecond)}/s</span>
+                          </div>
+                        )}
+                      </div>
+                    )}
+
+                    {updaterState.status === 'error' && updaterState.error && (
+                      <div className="flex items-center justify-between p-2.5 rounded-lg bg-red-950/40 border border-red-500/30 text-xs text-red-200">
+                        <div className="flex items-center gap-2 min-w-0 pr-2">
+                          <AlertCircle className="w-4 h-4 text-red-400 shrink-0" />
+                          <span className="truncate">{updaterState.error}</span>
+                        </div>
+                        <button
+                          type="button"
+                          onClick={handleCheckForUpdates}
+                          className="px-2 py-0.5 rounded bg-zinc-800 hover:bg-zinc-700 text-[11px] font-medium text-zinc-200 shrink-0"
+                        >
+                          Retry
+                        </button>
+                      </div>
+                    )}
+                  </div>
+                </section>
+
+                {/* Update Preferences */}
+                <section className="space-y-2 pt-4 border-t border-white/[0.08]">
+                  <h4 className="text-[11px] font-bold uppercase tracking-wider text-zinc-400">
+                    Preferences
+                  </h4>
+
+                  <div className="flex items-center justify-between px-3.5 py-3 rounded-xl bg-white/[0.03] border border-white/[0.08]">
+                    <span className="text-xs font-medium text-zinc-200">Check for updates on startup</span>
+                    <ToggleSwitch
+                      checked={checkForUpdatesOnStartup}
+                      onChange={handleToggleCheckOnStartup}
+                      label="Check for updates on startup"
+                    />
+                  </div>
+
+                  <div className="flex items-center justify-between px-3.5 py-3 rounded-xl bg-white/[0.03] border border-white/[0.08]">
+                    <span className="text-xs font-medium text-zinc-200">Auto-updates</span>
+                    <ToggleSwitch
+                      checked={autoUpdate}
+                      onChange={handleToggleAutoUpdate}
+                      label="Auto-updates"
+                    />
+                  </div>
+                </section>
+              </div>
             )}
           </div>
         </div>
 
-        {/* Footer Actions */}
-        <div className="px-6 py-4 border-t border-white/10 flex items-center justify-between shrink-0 bg-black/25">
-          <div className="flex items-center space-x-3">
+        {/* Persistent Footer */}
+        <div className="px-6 py-3.5 border-t border-white/[0.08] flex items-center justify-between shrink-0 bg-black/30">
+          <div className="flex items-center gap-3">
             <button
               type="button"
               onClick={handleResetDefaults}
-              className="flex items-center space-x-1.5 px-3 py-1.5 rounded-lg text-zinc-400 hover:text-white hover:bg-zinc-800/80 text-xs font-medium transition-colors"
+              className="flex items-center gap-1.5 px-3 py-1.5 rounded-lg text-zinc-400 hover:text-white hover:bg-white/[0.06] text-xs font-medium transition-colors"
             >
               <RotateCcw className="w-3.5 h-3.5" />
               <span>Reset tool paths</span>
@@ -2472,13 +2364,12 @@ export const SettingsModal: React.FC<SettingsModalProps> = ({
           <button
             type="button"
             onClick={handleClose}
-            className="px-5 py-2 rounded-xl bg-zinc-800 hover:bg-zinc-700 text-zinc-100 font-medium text-xs border border-white/10 transition-colors shadow-sm"
+            className="px-5 py-2 rounded-xl bg-white/[0.08] hover:bg-white/[0.14] text-zinc-100 font-medium text-xs border border-white/10 transition-colors"
           >
             Done
           </button>
         </div>
 
-        {/* P2P consent overlay (renders above this modal; handles its own Escape/backdrop) */}
         {showP2pConsent && (
           <P2pConsentModal
             onAccept={handleP2pConsentAccept}
@@ -2486,7 +2377,6 @@ export const SettingsModal: React.FC<SettingsModalProps> = ({
           />
         )}
 
-        {/* Manual Update Check Prompt Modal (shown without "Don't show again" checkbox) */}
         {manualUpdateModalOpen && manualUpdateInfo && (
           <UpdatePromptModal
             isOpen={manualUpdateModalOpen}

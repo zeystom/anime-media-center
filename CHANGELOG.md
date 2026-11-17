@@ -1,5 +1,13 @@
 # Changelog
 
+## 4.1.3 — Settings Redesign, Larger Compact Hero Logos & True Delta Updates
+
+- **Two-Pane Settings Redesign (`SettingsModal.tsx`):** Rebuilt Settings into a wider two-pane layout (`max-w-4xl`) with a category sidebar (`Library & UI`, `Subtitles & AI`, `Downloads & P2P`, `Backup & Data`, `Updates`) and persistent footer, cutting verbose boilerplate copy, aligning all controls and toggles to Kaiko's Obsidian & Crimson palette, and fixing state resets when reopening the modal.
+- **Better Proportioned Laptop Hero Clearlogos (`src/index.css`):** Raised the compact-viewport (`max-height: 920px`) hero logo cap from `5rem` × `340px` to `6.75rem` × `440px` so clearlogos read cleanly on 1080p laptops without crowding the background art.
+- **Slimmer Packaging & Parallel Blockmap Delta Updates (`package.json`, `electron/updater.ts`, `electron/types.ts`):**
+  - Added explicit `"files"` packaging rules and Electron `emptyOutDir` cleanup so `app.asar` no longer duplicates `bin/ffmpeg.exe` (`105 MB`), packs dev/test/screenshot artifacts, or bundles frontend-only `node_modules` already compiled into `dist/` (such as `lucide-react`, `jassub`, `react-dom`, `framer-motion`), shrinking both the full installer and future delta payloads.
+  - Enabled 6-connection parallel blockmap delta downloads (`tryParallelDeltaDownload`, `computeDeltaOperations`) with cached-installer size validation and full SHA-512 verification (falling back cleanly to parallel full download when needed). *(Note: upgrading from `4.1.2` to `4.1.3` still uses the `4.1.2` updater; delta updates take effect starting from `4.1.3` onward.)*
+
 ## 4.1.2 — Compact Laptop & Low-Height Display Adaptation
 
 - **Viewport-Height-Aware Home Hero Scaling (`src/index.css`, `UpNextWidget.tsx`):** Added a `@media (max-height: 920px)` compact layout tier (`--home-hero-min-h: clamp(430px, calc(100vh - 235px), 685px)`) tailored for 1080p laptops at 125–150% DPI scaling (`~1536×816` / `1280×672`), 1366×768 screens, and 900p windows—while leaving 2K/1080p@100% desktop monitors completely unchanged. Scales down hero top/bottom padding (`pt-[84px] pb-5`), logo cap (`80px` height / `340px` width), text column width (`34rem`), progress/button spacing, and gradients while shifting artwork framing upward (`object-position: center 10%`) so character faces and artwork breathe above the text stack.

@@ -656,9 +656,9 @@ canvas.JASSUB {
     font-size: 10px;
   }
   .home-hero-shell .home-hero-logo {
-    max-height: 5rem;
-    max-width: min(100%, 340px);
-    margin-bottom: 0.25rem;
+    max-height: 6.75rem;
+    max-width: min(100%, 440px);
+    margin-bottom: 0.375rem;
   }
   .home-hero-shell .home-hero-title {
     font-size: 2.25rem;
