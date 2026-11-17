@@ -338,7 +338,7 @@ const UpNextWidgetImpl: React.FC<UpNextWidgetProps> = ({ data, onPlay, onOpenDet
   const showLogo = Boolean(activeLogoUrl && logoLoaded);
   // Size the hero so it fills the top fold alongside Recently Watched while
   // keeping the Weekly Radar schedule comfortably below the initial scroll fold.
-  const heroMinHeight = 'clamp(540px, calc(100vh - 315px), 1200px)';
+  const heroMinHeight = 'clamp(540px, calc(100vh - 295px), 1200px)';
 
   return (
     <>
@@ -352,7 +352,7 @@ const UpNextWidgetImpl: React.FC<UpNextWidgetProps> = ({ data, onPlay, onOpenDet
         minHeight: heroMinHeight,
         background: `radial-gradient(ellipse at 78% 24%, hsla(${themeHue}, 80%, 48%, .2), transparent 56%), #07060A`,
       } as React.CSSProperties}
-      className="group relative mb-2 w-full overflow-hidden"
+      className="group relative w-full overflow-hidden"
     >
       {/* Full-bleed banner art dissolved smoothly into --bg-void at the bottom. */}
       <div className="pointer-events-none absolute inset-0 overflow-hidden">
@@ -364,7 +364,7 @@ const UpNextWidgetImpl: React.FC<UpNextWidgetProps> = ({ data, onPlay, onOpenDet
             loading="lazy"
             decoding="async"
             onError={() => setPosterIdx((i) => i + 1)}
-            className="pointer-events-none absolute inset-0 h-full w-full scale-115 object-cover object-[center_24%] opacity-25 blur-2xl saturate-[1.2] transition-opacity duration-300 select-none transform-gpu"
+            className="pointer-events-none absolute inset-0 h-full w-full scale-115 object-cover object-[center_14%] opacity-25 blur-2xl saturate-[1.2] transition-opacity duration-300 select-none transform-gpu"
           />
         )}
         {activeBannerUrl && (
@@ -381,7 +381,7 @@ const UpNextWidgetImpl: React.FC<UpNextWidgetProps> = ({ data, onPlay, onOpenDet
               invalidateResolvedHeroBanner(anilistId, activeBannerUrl);
               setBannerFailed(true);
             }}
-            className={`pointer-events-none absolute inset-0 h-full w-full object-cover object-[center_24%] saturate-[1.18] transition-[opacity,transform] duration-200 group-hover:scale-[1.02] select-none ${bannerLoaded ? 'opacity-90' : 'opacity-0'}`}
+            className={`pointer-events-none absolute inset-0 h-full w-full origin-[center_20%] object-cover object-[center_14%] saturate-[1.18] transition-[opacity,transform] duration-200 group-hover:scale-[1.02] select-none ${bannerLoaded ? 'opacity-90' : 'opacity-0'}`}
           />
         )}
       </div>

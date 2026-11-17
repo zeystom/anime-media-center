@@ -129,7 +129,7 @@ const RecentEpisodesRailImpl: React.FC<RecentEpisodesRailProps> = ({ folders, hi
 
   return (
     <section className="home-rail-section mb-9" aria-label="Recently watched episodes">
-      <div className="mb-4 flex items-end justify-between gap-4">
+      <div className="mb-3 flex items-end justify-between gap-4">
         <div>
           <div className="flex items-center gap-2.5">
             <span className="h-2 w-2 rounded-full bg-rose-400 shadow-[0_0_12px_rgba(251,113,133,0.65)]" />
@@ -179,7 +179,7 @@ const RecentEpisodesRailImpl: React.FC<RecentEpisodesRailProps> = ({ folders, hi
                 <span className="absolute left-2.5 top-2.5 rounded-md border border-white/10 bg-black/85 px-2 py-1 font-mono text-[10px] font-bold text-white">{badgeLabel}</span>
                 <div className="absolute inset-x-0 bottom-0 h-1 bg-white/15"><div className="h-full bg-gradient-to-r from-rose-500 to-cyan-300" style={{ width: `${percent}%` }} /></div>
               </div>
-              <div className="p-3.5">
+              <div className="px-3.5 py-2.5">
                 <p className="truncate text-xs font-bold text-zinc-100" title={seriesTitle}>{seriesTitle}</p>
                 <p className="mt-1 truncate text-[11px] text-zinc-400" title={episodeTitle}>{episodeTitle}</p>
                 <p className="mt-2 flex items-center gap-1.5 font-mono text-[10px] text-zinc-500"><Clock3 className="h-3 w-3" />{formatTime(progress.currentTime)}{duration > 0 ? ` / ${formatTime(duration)}` : ''}</p>

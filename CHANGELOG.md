@@ -1,5 +1,10 @@
 # Changelog
 
+## 4.1.1 — Home Hero Framing & Above-the-Fold Polish
+
+- **Above-the-Fold Home Hero & Recently Watched Fit (`UpNextWidget.tsx`, `RecentEpisodesRail.tsx`):** Adjusted the Home hero height (`calc(100vh - 275px)` → `calc(100vh - 295px)`), removed the redundant `mb-2` hero bottom margin, and tightened Recently Watched header spacing (`mb-4` → `mb-3`) and card text padding (`p-3.5` → `px-3.5 py-2.5`) so the entire Recently Watched strip—including timestamps and card borders—fits cleanly above the initial fold while keeping Weekly Radar below it.
+- **Character-Aware Hero Artwork Framing (`UpNextWidget.tsx`):** Shifted the hero banner and blurred poster fallback vertical focus upward (`object-[center_24%]` → `object-[center_14%]`) and set a top-biased hover zoom origin (`origin-[center_20%]`) so character heads and faces stay clear of the translucent navbar.
+
 ## 4.1.0 — Scroll Latency & Backdrop-Blur Compositor Optimization
 
 - **Zero-Compromise Glass Blur Isolation (`Navbar.tsx`, `AnimeDetailView.tsx`):** Isolated the persistent `backdrop-blur-[20px] backdrop-saturate-[1.35]` backdrop into a dedicated `pointer-events-none` GPU layer (`[transform:scale(1.25)_translateZ(0)]`), replaced `backdropProgress` React state updates with direct DOM ref updates (`backdropImgWrapRef`, `backdropTintRef`, `backdropVignetteRef`), memoized notification counts, and cached scroll-height calculations in Anime Detail with `translateZ(0)` ambient bleed promotion.

@@ -38,13 +38,11 @@ if (!token) {
   process.exit(1);
 }
 
-const RELEASE_BODY = `## Kaiko ${VERSION} — Scroll Latency & Backdrop-Blur Compositor Optimization
+const RELEASE_BODY = `## Kaiko ${VERSION} — Home Hero Framing & Above-the-Fold Polish
 
 ### What's New
-- **Zero-Compromise Glass Blur Isolation:** isolated the Navbar's \`backdrop-blur-[20px]\` / \`backdrop-saturate-[1.35]\` pass into a dedicated \`pointer-events-none\` compositor layer, eliminated scroll-driven React re-renders in \`Navbar.tsx\` and \`AnimeDetailView.tsx\` via direct DOM ref updates, and promoted heavy ambient blur layers to dedicated GPU layers.
-- **Compositor-Fast Vertical & Horizontal Scrolling:** eliminated \`[data-scrolling]\` DOM attribute churn via \`scrollState.ts\`, removed \`content-visibility: auto\` scroll-time paint stalls on \`.anime-card\` and \`.home-rail-section\`, cached Home hero heights with \`ResizeObserver\`, added \`.scroll-composited\` / \`.horizontal-rail\` compositor hints, and fast-pathed wheel routing for horizontal rails.
-- **Zero-Rerender Rails & Smart Hover Gating:** updated \`HorizontalScroller.tsx\` to manage overflow edges, dragging state, and overscroll indicators without React state updates during scroll; added a 120 ms hover-dwell in \`CatalogRail.tsx\` and gated \`AnimeCard.tsx\` hover pre-warming while scrolling.
-- **Analytical Radial Glows & Lighter Widget Paints:** replaced static \`blur-3xl\` orbs across Discover, Library, Downloads, and Schedule with analytical \`radial-gradient\` layers and streamlined \`UpNextWidget.tsx\` hero masking/compositing without sacrificing visual glass depth.
+- **Complete Above-the-Fold Recently Watched Strip:** adjusted the Home hero banner height (\`calc(100vh - 275px)\` → \`calc(100vh - 295px)\`), removed the redundant spacer beneath the hero, and tightened Recently Watched header/card spacing in \`RecentEpisodesRail.tsx\` so full cards, timestamps, and bottom borders fit cleanly on the initial screen without clipping.
+- **Character-Aware Hero Banner Framing:** raised the vertical focal point of Home hero banners and blurred poster fallbacks (\`object-[center_24%]\` → \`object-[center_14%]\`) with an \`origin-[center_20%]\` hover scale origin in \`UpNextWidget.tsx\` so character heads and faces stay clear of the translucent top navbar.
 
 ---
 ### Assets included
