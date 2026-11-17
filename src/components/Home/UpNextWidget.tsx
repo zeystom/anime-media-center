@@ -338,7 +338,7 @@ const UpNextWidgetImpl: React.FC<UpNextWidgetProps> = ({ data, onPlay, onOpenDet
   const showLogo = Boolean(activeLogoUrl && logoLoaded);
   // Size the hero so it fills the top fold alongside Recently Watched while
   // keeping the Weekly Radar schedule comfortably below the initial scroll fold.
-  const heroMinHeight = 'clamp(540px, calc(100vh - 275px), 1200px)';
+  const heroMinHeight = 'clamp(540px, calc(100vh - 315px), 1200px)';
 
   return (
     <>
