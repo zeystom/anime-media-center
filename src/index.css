@@ -623,3 +623,110 @@ canvas.JASSUB {
   border-top: 1px solid rgba(255, 255, 255, 0.08);
   margin: 0.6rem 0;
 }
+
+/* Compact-height Home scaling (1080p laptops @ 125–150% DPI, 1366x768, 900p):
+   keeps 2K/1080p@100% desktop displays untouched while preventing the hero
+   stack from crowding out the artwork or clipping Recently Watched below. */
+@media (max-height: 920px) {
+  .home-hero-shell {
+    --home-hero-min-h: clamp(430px, calc(100vh - 235px), 685px);
+  }
+  .home-hero-shell .home-hero-art {
+    object-position: center 10%;
+  }
+  .home-hero-shell .home-hero-grad-x {
+    background-image: linear-gradient(90deg, rgba(7, 6, 10, 0.86) 0%, rgba(7, 6, 10, 0.38) 28%, rgba(7, 6, 10, 0.03) 58%);
+  }
+  .home-hero-shell .home-hero-grad-y {
+    background-image: linear-gradient(180deg, rgba(7, 6, 10, 0.42) 0%, rgba(7, 6, 10, 0) 20%, rgba(7, 6, 10, 0.14) 62%, rgba(7, 6, 10, 0.78) 84%, rgba(7, 6, 10, 0.96) 94%, #07060A 100%);
+  }
+  .home-hero-shell .home-hero-inner {
+    padding-top: 5.25rem;
+    padding-bottom: 1.25rem;
+  }
+  .home-hero-shell .home-hero-content {
+    max-width: 34rem;
+  }
+  .home-hero-shell .home-hero-badges {
+    margin-bottom: 0.5rem;
+    gap: 0.45rem;
+  }
+  .home-hero-shell .home-hero-badges > span {
+    padding: 0.25rem 0.65rem;
+    font-size: 10px;
+  }
+  .home-hero-shell .home-hero-logo {
+    max-height: 5rem;
+    max-width: min(100%, 340px);
+    margin-bottom: 0.25rem;
+  }
+  .home-hero-shell .home-hero-title {
+    font-size: 2.25rem;
+    line-height: 1.05;
+  }
+  .home-hero-shell .home-hero-ep-title {
+    margin-top: 0.25rem;
+    font-size: 1rem;
+    line-height: 1.4rem;
+  }
+  .home-hero-shell .home-hero-desc {
+    margin-top: 0.375rem;
+    max-width: 30rem;
+    font-size: 0.8125rem;
+    line-height: 1.42;
+  }
+  .home-hero-shell .home-hero-show-more {
+    display: none;
+  }
+  .home-hero-shell .home-hero-progress {
+    margin-top: 0.625rem;
+    max-width: 24rem;
+  }
+  .home-hero-shell .home-hero-progress-meta {
+    margin-bottom: 0.25rem;
+    font-size: 11px;
+  }
+  .home-hero-shell .home-hero-progress-track {
+    height: 0.5rem;
+  }
+  .home-hero-shell .home-hero-actions {
+    margin-top: 0.875rem;
+    gap: 0.625rem;
+  }
+  .home-hero-shell .home-hero-btn-primary {
+    padding: 0.625rem 1.25rem;
+    font-size: 0.875rem;
+    border-radius: 0.875rem;
+  }
+  .home-hero-shell .home-hero-btn-secondary {
+    padding: 0.625rem 1.125rem;
+    font-size: 0.875rem;
+    border-radius: 0.875rem;
+  }
+
+  .home-rail-section.recent-episodes-section {
+    margin-bottom: 1.75rem;
+  }
+  .recent-episodes-section .recent-episodes-header {
+    margin-bottom: 0.5rem;
+  }
+  .recent-episodes-section .recent-episodes-title {
+    font-size: 1rem;
+    line-height: 1.4rem;
+  }
+  .recent-episodes-section .recent-episodes-subtitle {
+    display: none;
+  }
+  .recent-episodes-section .recent-episode-card {
+    width: 210px;
+  }
+  .recent-episodes-section .recent-episode-body {
+    padding: 0.5rem 0.75rem;
+  }
+  .recent-episodes-section .recent-episode-sub {
+    margin-top: 0.125rem;
+  }
+  .recent-episodes-section .recent-episode-meta {
+    margin-top: 0.25rem;
+  }
+}

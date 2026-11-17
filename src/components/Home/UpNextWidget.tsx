@@ -338,7 +338,8 @@ const UpNextWidgetImpl: React.FC<UpNextWidgetProps> = ({ data, onPlay, onOpenDet
   const showLogo = Boolean(activeLogoUrl && logoLoaded);
   // Size the hero so it fills the top fold alongside Recently Watched while
   // keeping the Weekly Radar schedule comfortably below the initial scroll fold.
-  const heroMinHeight = 'clamp(540px, calc(100vh - 295px), 1200px)';
+  // Compact laptops (max-height: 920px) override --home-hero-min-h via CSS.
+  const heroMinHeight = 'var(--home-hero-min-h, clamp(540px, calc(100vh - 295px), 1200px))';
 
   return (
     <>
@@ -352,7 +353,7 @@ const UpNextWidgetImpl: React.FC<UpNextWidgetProps> = ({ data, onPlay, onOpenDet
         minHeight: heroMinHeight,
         background: `radial-gradient(ellipse at 78% 24%, hsla(${themeHue}, 80%, 48%, .2), transparent 56%), #07060A`,
       } as React.CSSProperties}
-      className="group relative w-full overflow-hidden"
+      className="home-hero-shell group relative w-full overflow-hidden"
     >
       {/* Full-bleed banner art dissolved smoothly into --bg-void at the bottom. */}
       <div className="pointer-events-none absolute inset-0 overflow-hidden">
@@ -364,7 +365,7 @@ const UpNextWidgetImpl: React.FC<UpNextWidgetProps> = ({ data, onPlay, onOpenDet
             loading="lazy"
             decoding="async"
             onError={() => setPosterIdx((i) => i + 1)}
-            className="pointer-events-none absolute inset-0 h-full w-full scale-115 object-cover object-[center_14%] opacity-25 blur-2xl saturate-[1.2] transition-opacity duration-300 select-none transform-gpu"
+            className="home-hero-art pointer-events-none absolute inset-0 h-full w-full scale-115 object-cover object-[center_14%] opacity-25 blur-2xl saturate-[1.2] transition-opacity duration-300 select-none transform-gpu"
           />
         )}
         {activeBannerUrl && (
@@ -381,21 +382,21 @@ const UpNextWidgetImpl: React.FC<UpNextWidgetProps> = ({ data, onPlay, onOpenDet
               invalidateResolvedHeroBanner(anilistId, activeBannerUrl);
               setBannerFailed(true);
             }}
-            className={`pointer-events-none absolute inset-0 h-full w-full origin-[center_20%] object-cover object-[center_14%] saturate-[1.18] transition-[opacity,transform] duration-200 group-hover:scale-[1.02] select-none ${bannerLoaded ? 'opacity-90' : 'opacity-0'}`}
+            className={`home-hero-art pointer-events-none absolute inset-0 h-full w-full origin-[center_20%] object-cover object-[center_14%] saturate-[1.18] transition-[opacity,transform] duration-200 group-hover:scale-[1.02] select-none ${bannerLoaded ? 'opacity-90' : 'opacity-0'}`}
           />
         )}
       </div>
-      <div className="pointer-events-none absolute inset-0 bg-[linear-gradient(90deg,rgba(7,6,10,0.88)_0%,rgba(7,6,10,0.46)_34%,rgba(7,6,10,0.04)_68%)]" />
-      <div className="pointer-events-none absolute inset-0 bg-[linear-gradient(180deg,rgba(7,6,10,0.46)_0%,rgba(7,6,10,0.0)_22%,rgba(7,6,10,0.18)_54%,rgba(7,6,10,0.78)_80%,rgba(7,6,10,0.96)_92%,#07060A_100%)]" />
+      <div className="home-hero-grad-x pointer-events-none absolute inset-0 bg-[linear-gradient(90deg,rgba(7,6,10,0.88)_0%,rgba(7,6,10,0.46)_34%,rgba(7,6,10,0.04)_68%)]" />
+      <div className="home-hero-grad-y pointer-events-none absolute inset-0 bg-[linear-gradient(180deg,rgba(7,6,10,0.46)_0%,rgba(7,6,10,0.0)_22%,rgba(7,6,10,0.18)_54%,rgba(7,6,10,0.78)_80%,rgba(7,6,10,0.96)_92%,#07060A_100%)]" />
       <div className="pointer-events-none absolute inset-0" style={{ background: 'radial-gradient(ellipse 56% 78% at 10% 92%, rgba(7,6,10,0.82) 0%, rgba(7,6,10,0.38) 55%, transparent 100%)' }} />
       <div className="pointer-events-none absolute inset-0" style={{ background: `radial-gradient(ellipse at 80% 18%, hsla(${themeHue}, 90%, 58%, .2), transparent 58%)` }} />
 
       <div
         style={{ minHeight: heroMinHeight }}
-        className="relative z-10 flex w-full flex-col justify-end px-6 pb-7 pt-28 md:pb-9 md:pt-32 2xl:px-8 2xl:pb-10"
+        className="home-hero-inner relative z-10 flex w-full flex-col justify-end px-6 pb-7 pt-28 md:pb-9 md:pt-32 2xl:px-8 2xl:pb-10"
       >
-        <div className="flex max-w-3xl flex-col">
-        <div className="mb-3.5 flex flex-wrap items-center gap-2.5">
+        <div className="home-hero-content flex max-w-3xl flex-col">
+        <div className="home-hero-badges mb-3.5 flex flex-wrap items-center gap-2.5">
           <span className="inline-flex items-center gap-2 rounded-full border px-3.5 py-1.5 text-[11px] font-extrabold uppercase tracking-[0.14em] shadow-[0_0_24px_rgba(244,63,94,0.12)]" style={{ borderColor: `hsla(${themeHue}, 78%, 70%, .38)`, backgroundColor: `hsla(${themeHue}, 78%, 55%, .17)`, color: `hsl(${themeHue} 85% 82%)` }}>
             <span className="h-2 w-2 rounded-full shadow-[0_0_8px_currentColor]" style={{ backgroundColor: `hsl(${themeHue} 88% 72%)` }} />{isUpNext ? 'Up next' : 'Continue playing'}
           </span>
@@ -425,7 +426,7 @@ const UpNextWidgetImpl: React.FC<UpNextWidgetProps> = ({ data, onPlay, onOpenDet
             }}
             className={
               showLogo
-                ? 'mb-1.5 max-h-24 w-auto max-w-[min(100%,420px)] self-start object-contain object-left drop-shadow-[0_10px_28px_rgba(0,0,0,0.85)] transition-opacity duration-300 select-none md:max-h-32 md:max-w-[520px] 2xl:max-h-36 2xl:max-w-[580px]'
+                ? 'home-hero-logo mb-1.5 max-h-24 w-auto max-w-[min(100%,420px)] self-start object-contain object-left drop-shadow-[0_10px_28px_rgba(0,0,0,0.85)] transition-opacity duration-300 select-none md:max-h-32 md:max-w-[520px] 2xl:max-h-36 2xl:max-w-[580px]'
                 : 'pointer-events-none absolute h-0 w-0 overflow-hidden opacity-0'
             }
           />
@@ -434,20 +435,20 @@ const UpNextWidgetImpl: React.FC<UpNextWidgetProps> = ({ data, onPlay, onOpenDet
           className={
             showLogo
               ? 'sr-only'
-              : 'max-w-3xl text-4xl font-black leading-[1.03] tracking-tight text-white drop-shadow-lg md:text-6xl 2xl:text-7xl'
+              : 'home-hero-title max-w-3xl text-4xl font-black leading-[1.03] tracking-tight text-white drop-shadow-lg md:text-6xl 2xl:text-7xl'
           }
           title={displayTitle}
         >
           {displayTitle}
         </h2>
-        <p className="mt-2 text-lg font-bold text-zinc-100 [text-shadow:0_2px_10px_rgba(0,0,0,0.9)] md:text-xl 2xl:text-2xl">{episodeTitle}</p>
+        <p className="home-hero-ep-title mt-2 text-lg font-bold text-zinc-100 [text-shadow:0_2px_10px_rgba(0,0,0,0.9)] md:text-xl 2xl:text-2xl">{episodeTitle}</p>
         {description && (
           <>
             <p
               ref={descriptionRef}
               onClick={() => { if (descriptionClamped) setDescriptionReaderOpen(true) }}
               title={descriptionClamped ? 'Show full description' : undefined}
-              className={`mt-2.5 max-w-2xl text-sm leading-relaxed text-zinc-200/90 [text-shadow:0_2px_8px_rgba(0,0,0,0.95)] transition-colors md:text-[15px] 2xl:text-base line-clamp-2 ${
+              className={`home-hero-desc mt-2.5 max-w-2xl text-sm leading-relaxed text-zinc-200/90 [text-shadow:0_2px_8px_rgba(0,0,0,0.95)] transition-colors md:text-[15px] 2xl:text-base line-clamp-2 ${
                 descriptionClamped ? 'cursor-pointer hover:text-white' : ''
               }`}
             >
@@ -457,7 +458,7 @@ const UpNextWidgetImpl: React.FC<UpNextWidgetProps> = ({ data, onPlay, onOpenDet
               <button
                 type="button"
                 onClick={() => setDescriptionReaderOpen(true)}
-                className="mt-1 self-start text-xs font-semibold text-zinc-300 [text-shadow:0_1px_6px_rgba(0,0,0,0.95)] transition-colors hover:text-white"
+                className="home-hero-show-more mt-1 self-start text-xs font-semibold text-zinc-300 [text-shadow:0_1px_6px_rgba(0,0,0,0.95)] transition-colors hover:text-white"
               >
                 Show more
               </button>
@@ -465,20 +466,20 @@ const UpNextWidgetImpl: React.FC<UpNextWidgetProps> = ({ data, onPlay, onOpenDet
           </>
         )}
 
-        <div className={`max-w-lg 2xl:max-w-xl ${description ? 'mt-4' : 'mt-5'}`}>
-          <div className="mb-2 flex items-center justify-between font-mono text-xs text-zinc-200 [text-shadow:0_1px_6px_rgba(0,0,0,0.95)]">
+        <div className={`home-hero-progress max-w-lg 2xl:max-w-xl ${description ? 'mt-4' : 'mt-5'}`}>
+          <div className="home-hero-progress-meta mb-2 flex items-center justify-between font-mono text-xs text-zinc-200 [text-shadow:0_1px_6px_rgba(0,0,0,0.95)]">
             <span>{percent}% completed</span><span>{formatTime(remaining)} remaining</span>
           </div>
-          <div className="h-2.5 overflow-hidden rounded-full border border-white/10 bg-black/70 p-[2px]">
+          <div className="home-hero-progress-track h-2.5 overflow-hidden rounded-full border border-white/10 bg-black/70 p-[2px]">
             <div className="h-full rounded-full transition-all" style={{ width: `${percent}%`, background: 'linear-gradient(90deg, #9E1148, #FF1E6D)', boxShadow: '0 0 16px rgba(255, 30, 109, 0.45)' }} />
           </div>
         </div>
 
-        <div className="mt-5 flex flex-wrap items-center gap-3.5">
-          <button onClick={() => onPlay(episode, startAt)} className="btn-hue inline-flex items-center gap-2.5 rounded-2xl px-7 py-4 text-[15px] font-extrabold text-white transition hover:-translate-y-0.5 active:translate-y-0" title={`Resume ${resumeTarget}`}>
+        <div className="home-hero-actions mt-5 flex flex-wrap items-center gap-3.5">
+          <button onClick={() => onPlay(episode, startAt)} className="home-hero-btn-primary btn-hue inline-flex items-center gap-2.5 rounded-2xl px-7 py-4 text-[15px] font-extrabold text-white transition hover:-translate-y-0.5 active:translate-y-0" title={`Resume ${resumeTarget}`}>
             <Play className="h-[18px] w-[18px] fill-current" /> Resume {resumeTarget}
           </button>
-          {onOpenDetails && <button onClick={onOpenDetails} className="inline-flex items-center gap-2 rounded-2xl border border-white/15 bg-white/[0.06] px-6 py-4 text-[15px] font-semibold text-zinc-100 backdrop-blur transition hover:bg-white/10">
+          {onOpenDetails && <button onClick={onOpenDetails} className="home-hero-btn-secondary inline-flex items-center gap-2 rounded-2xl border border-white/15 bg-white/[0.06] px-6 py-4 text-[15px] font-semibold text-zinc-100 backdrop-blur transition hover:bg-white/10">
             Anime overview <ArrowRight className="h-[18px] w-[18px]" />
           </button>}
         </div>

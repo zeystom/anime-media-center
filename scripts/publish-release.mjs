@@ -38,11 +38,12 @@ if (!token) {
   process.exit(1);
 }
 
-const RELEASE_BODY = `## Kaiko ${VERSION} — Home Hero Framing & Above-the-Fold Polish
+const RELEASE_BODY = `## Kaiko ${VERSION} — Compact Laptop & Low-Height Display Adaptation
 
 ### What's New
-- **Complete Above-the-Fold Recently Watched Strip:** adjusted the Home hero banner height (\`calc(100vh - 275px)\` → \`calc(100vh - 295px)\`), removed the redundant spacer beneath the hero, and tightened Recently Watched header/card spacing in \`RecentEpisodesRail.tsx\` so full cards, timestamps, and bottom borders fit cleanly on the initial screen without clipping.
-- **Character-Aware Hero Banner Framing:** raised the vertical focal point of Home hero banners and blurred poster fallbacks (\`object-[center_24%]\` → \`object-[center_14%]\`) with an \`origin-[center_20%]\` hover scale origin in \`UpNextWidget.tsx\` so character heads and faces stay clear of the translucent top navbar.
+- **Laptop & Low-Height Hero Adaptation (\`max-height: 920px\`):** introduced a viewport-height-aware compact Home tier in \`src/index.css\` and \`UpNextWidget.tsx\` so 1080p laptops with 125–150% Windows DPI scaling (and 768p/900p screens) get balanced artwork headroom without changing a single pixel on 2K or 1080p@100% desktop displays.
+- **Proportionate Hero Overlay & Artwork Framing:** compacts hero top/bottom padding, clearlogo size, text column width (\`34rem\`), action buttons, and edge/bottom gradients on shorter viewports while raising hero artwork positioning (\`center 10%\`) so character faces stay unobstructed.
+- **Complete Above-the-Fold Recently Watched on Laptops:** scales \`RecentEpisodesRail.tsx\` cards to \`210px\` with tighter padding and a compact header on viewports \`<= 920px\` tall so the full strip fits cleanly above the taskbar.
 
 ---
 ### Assets included

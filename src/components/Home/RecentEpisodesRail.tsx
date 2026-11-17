@@ -128,14 +128,14 @@ const RecentEpisodesRailImpl: React.FC<RecentEpisodesRailProps> = ({ folders, hi
   if (recent.length === 0) return null
 
   return (
-    <section className="home-rail-section mb-9" aria-label="Recently watched episodes">
-      <div className="mb-3 flex items-end justify-between gap-4">
+    <section className="home-rail-section recent-episodes-section mb-9" aria-label="Recently watched episodes">
+      <div className="recent-episodes-header mb-3 flex items-end justify-between gap-4">
         <div>
           <div className="flex items-center gap-2.5">
             <span className="h-2 w-2 rounded-full bg-rose-400 shadow-[0_0_12px_rgba(251,113,133,0.65)]" />
-            <h2 className="text-lg font-black uppercase tracking-wide text-white">Recently watched</h2>
+            <h2 className="recent-episodes-title text-lg font-black uppercase tracking-wide text-white">Recently watched</h2>
           </div>
-          <p className="mt-1 text-xs text-zinc-500">Pick up where you left off across your anime</p>
+          <p className="recent-episodes-subtitle mt-1 text-xs text-zinc-500">Pick up where you left off across your anime</p>
         </div>
         <span className="font-mono text-[10px] text-zinc-500">{recent.length} episodes</span>
       </div>
@@ -179,10 +179,10 @@ const RecentEpisodesRailImpl: React.FC<RecentEpisodesRailProps> = ({ folders, hi
                 <span className="absolute left-2.5 top-2.5 rounded-md border border-white/10 bg-black/85 px-2 py-1 font-mono text-[10px] font-bold text-white">{badgeLabel}</span>
                 <div className="absolute inset-x-0 bottom-0 h-1 bg-white/15"><div className="h-full bg-gradient-to-r from-rose-500 to-cyan-300" style={{ width: `${percent}%` }} /></div>
               </div>
-              <div className="px-3.5 py-2.5">
+              <div className="recent-episode-body px-3.5 py-2.5">
                 <p className="truncate text-xs font-bold text-zinc-100" title={seriesTitle}>{seriesTitle}</p>
-                <p className="mt-1 truncate text-[11px] text-zinc-400" title={episodeTitle}>{episodeTitle}</p>
-                <p className="mt-2 flex items-center gap-1.5 font-mono text-[10px] text-zinc-500"><Clock3 className="h-3 w-3" />{formatTime(progress.currentTime)}{duration > 0 ? ` / ${formatTime(duration)}` : ''}</p>
+                <p className="recent-episode-sub mt-1 truncate text-[11px] text-zinc-400" title={episodeTitle}>{episodeTitle}</p>
+                <p className="recent-episode-meta mt-2 flex items-center gap-1.5 font-mono text-[10px] text-zinc-500"><Clock3 className="h-3 w-3" />{formatTime(progress.currentTime)}{duration > 0 ? ` / ${formatTime(duration)}` : ''}</p>
               </div>
             </button>
           )

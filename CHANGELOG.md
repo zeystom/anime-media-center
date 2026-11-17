@@ -1,5 +1,10 @@
 # Changelog
 
+## 4.1.2 — Compact Laptop & Low-Height Display Adaptation
+
+- **Viewport-Height-Aware Home Hero Scaling (`src/index.css`, `UpNextWidget.tsx`):** Added a `@media (max-height: 920px)` compact layout tier (`--home-hero-min-h: clamp(430px, calc(100vh - 235px), 685px)`) tailored for 1080p laptops at 125–150% DPI scaling (`~1536×816` / `1280×672`), 1366×768 screens, and 900p windows—while leaving 2K/1080p@100% desktop monitors completely unchanged. Scales down hero top/bottom padding (`pt-[84px] pb-5`), logo cap (`80px` height / `340px` width), text column width (`34rem`), progress/button spacing, and gradients while shifting artwork framing upward (`object-position: center 10%`) so character faces and artwork breathe above the text stack.
+- **Compact Recently Watched Cards on Short Screens (`src/index.css`, `RecentEpisodesRail.tsx`):** At `max-height: 920px`, scales Recently Watched cards to `210px` wide with tighter card text padding and a single-row header (`recent-episodes-subtitle` hidden), keeping the entire strip—timestamps, card borders, and hover shadow clearance—cleanly above the fold on laptop displays.
+
 ## 4.1.1 — Home Hero Framing & Above-the-Fold Polish
 
 - **Above-the-Fold Home Hero & Recently Watched Fit (`UpNextWidget.tsx`, `RecentEpisodesRail.tsx`):** Adjusted the Home hero height (`calc(100vh - 275px)` → `calc(100vh - 295px)`), removed the redundant `mb-2` hero bottom margin, and tightened Recently Watched header spacing (`mb-4` → `mb-3`) and card text padding (`p-3.5` → `px-3.5 py-2.5`) so the entire Recently Watched strip—including timestamps and card borders—fits cleanly above the initial fold while keeping Weekly Radar below it.
