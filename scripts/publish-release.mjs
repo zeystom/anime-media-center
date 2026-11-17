@@ -38,13 +38,13 @@ if (!token) {
   process.exit(1);
 }
 
-const RELEASE_BODY = `## Kaiko ${VERSION} — Full-Width UI Overhaul, Smart Season Hero Banners & Home FPS Boost
+const RELEASE_BODY = `## Kaiko ${VERSION} — Scroll Latency & Backdrop-Blur Compositor Optimization
 
 ### What's New
-- **Full-Width Layout & Expanded Discovery Rails:** removed narrow max-width constraints across Home, Discover, Library, Schedule, Downloads, and Overview for clean full-screen presentation on 1080p, 1440p, and ultrawide monitors; enlarged the Home hero banner (without duplicate top episode pills), balanced synopsis readability, and expanded Home genre rails to 24 titles each.
-- **Smart Widescreen Hero Banners + TVDB Season Backgrounds:** unified hero artwork resolution across Home, Overview, and the translucent Navbar (\`hero_banners_v2.json\`, \`useActiveHeroBannerUrl\`) with strict aspect/resolution checks (\`>= 1200x680\`, aspect \`>= 1.6\`). Prioritizes per-season Kitsu art and official **TheTVDB Season Backgrounds** (\`tvdb_season_cache_v1.json\`) before falling back to 1080p–4K franchise fanart, loads rapidly over \`getFastHeroBannerSources\`, persists instantly across restarts, and keeps unbannered titles cleanly blurred.
-- **Followed-Anime Radar Priority & Library Hover Pre-Warming:** Home Weekly Radar now prioritizes followed shows ahead of regular airings with matching bell counters and indicators, and Library cards warm metadata smoothly on hover.
-- **Home Performance & Scroll FPS Optimization:** fixed \`HomeView\` memoization and callback stability, added progressive off-edge card mounting in \`CatalogRail\`, removed heavy idle \`backdrop-blur\` compositor passes and hidden GPU blur textures, throttled scroll geometry reads with \`requestAnimationFrame\`, and replaced \`[data-scrolling] *\` with an \`O(1)\` CSS containment rule.
+- **Zero-Compromise Glass Blur Isolation:** isolated the Navbar's \`backdrop-blur-[20px]\` / \`backdrop-saturate-[1.35]\` pass into a dedicated \`pointer-events-none\` compositor layer, eliminated scroll-driven React re-renders in \`Navbar.tsx\` and \`AnimeDetailView.tsx\` via direct DOM ref updates, and promoted heavy ambient blur layers to dedicated GPU layers.
+- **Compositor-Fast Vertical & Horizontal Scrolling:** eliminated \`[data-scrolling]\` DOM attribute churn via \`scrollState.ts\`, removed \`content-visibility: auto\` scroll-time paint stalls on \`.anime-card\` and \`.home-rail-section\`, cached Home hero heights with \`ResizeObserver\`, added \`.scroll-composited\` / \`.horizontal-rail\` compositor hints, and fast-pathed wheel routing for horizontal rails.
+- **Zero-Rerender Rails & Smart Hover Gating:** updated \`HorizontalScroller.tsx\` to manage overflow edges, dragging state, and overscroll indicators without React state updates during scroll; added a 120 ms hover-dwell in \`CatalogRail.tsx\` and gated \`AnimeCard.tsx\` hover pre-warming while scrolling.
+- **Analytical Radial Glows & Lighter Widget Paints:** replaced static \`blur-3xl\` orbs across Discover, Library, Downloads, and Schedule with analytical \`radial-gradient\` layers and streamlined \`UpNextWidget.tsx\` hero masking/compositing without sacrificing visual glass depth.
 
 ---
 ### Assets included

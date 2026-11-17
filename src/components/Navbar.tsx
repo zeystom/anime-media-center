@@ -1,4 +1,4 @@
-import React, { useEffect, useRef, useState } from 'react';
+import React, { useCallback, useEffect, useMemo, useRef, useState } from 'react';
 import { House, Compass, Film, CalendarDays, HardDrive, Sparkles, Settings as SettingsIcon, ShieldCheck, ShieldAlert, Search, Bell, CheckCheck, Trash2, Download, Radio, History, AlertTriangle, Minus, Square, Copy, X } from 'lucide-react';
 import { useCatalogSearch, type RailItem } from '../hooks/useCatalog';
 import type { AppNotification } from '../types/notifications';
@@ -246,9 +246,34 @@ const NavbarImpl: React.FC<NavbarProps> = ({
   const [recentSearches, setRecentSearches] = useState<RailItem[]>(() => loadRecentSearches());
   const searchBoxRef = useRef<HTMLDivElement>(null);
   const notificationsRef = useRef<HTMLDivElement>(null);
-  // Scroll progress arrives via the App-owned pub-sub, so the (memoized)
-  // navbar re-renders alone while page trees stay untouched during scrolls.
-  const [backdropProgress, setBackdropProgress] = useState(1);
+  // Scroll progress updates flow directly to the backdrop DOM refs so Navbar
+  // never re-renders during scroll.
+  const backdropImgWrapRef = useRef<HTMLDivElement>(null);
+  const backdropTintRef = useRef<HTMLDivElement>(null);
+  const backdropVignetteRef = useRef<HTMLDivElement>(null);
+  const backdropModeRef = useRef(backdropMode);
+  backdropModeRef.current = backdropMode;
+
+  const applyBackdropProgress = useCallback((progress: number) => {
+    const p = Math.max(0, Math.min(1, progress));
+    const mode = backdropModeRef.current;
+    const imgWrap = backdropImgWrapRef.current;
+    if (imgWrap) {
+      imgWrap.style.opacity = String((mode === 'anime' ? 0.4 : 0.25) * p);
+      imgWrap.style.transform = `translate3d(0, ${(p - 1) * 72}px, 0)`;
+      imgWrap.style.visibility = p <= 0.001 ? 'hidden' : 'visible';
+    }
+    const tint = backdropTintRef.current;
+    if (tint) {
+      tint.style.opacity = String((mode === 'anime' ? 0.45 : 0.7) * p);
+      tint.style.visibility = p <= 0.001 ? 'hidden' : 'visible';
+    }
+    const vignette = backdropVignetteRef.current;
+    if (vignette) {
+      vignette.style.visibility = p <= 0.001 ? 'hidden' : 'visible';
+    }
+  }, []);
+
   // Ticker for relative notification timestamps — runs only while the
   // notifications drawer is open, so closed labels cost nothing.
   const [nowTick, setNowTick] = useState(() => Date.now());
@@ -263,14 +288,17 @@ const NavbarImpl: React.FC<NavbarProps> = ({
   useEffect(() => {
     if (!backdropEmitter) return;
     const emitter = backdropEmitter.current;
-    const listener = (progress: number) => setBackdropProgress(progress);
+    const listener = (progress: number) => applyBackdropProgress(progress);
     emitter.listeners.add(listener);
-    setBackdropProgress(emitter.value);
+    applyBackdropProgress(emitter.value);
     return () => {
       emitter.listeners.delete(listener);
     };
-    // eslint-disable-next-line react-hooks/exhaustive-deps
-  }, [backdropEmitter]);
+  }, [backdropEmitter, applyBackdropProgress]);
+
+  useEffect(() => {
+    applyBackdropProgress(backdropEmitter?.current.value ?? 1);
+  }, [backdropImage, backdropMode, backdropEmitter, applyBackdropProgress]);
 
   useEffect(() => {
     let mounted = true;
@@ -302,7 +330,7 @@ const NavbarImpl: React.FC<NavbarProps> = ({
     }
   };
   const { results, loading } = useCatalogSearch(query);
-  const unreadCount = notifications.filter((item) => !item.read).length;
+  const unreadCount = useMemo(() => notifications.filter((item) => !item.read).length, [notifications]);
   const notificationTone = (item: AppNotification) => item.tone || (
     item.kind === 'airing' ? (item.finalEpisode ? 'purple' : 'green')
       : item.kind === 'follow' ? 'green'
@@ -351,44 +379,62 @@ const NavbarImpl: React.FC<NavbarProps> = ({
     };
   }, [searchOpen, notificationsOpen]);
 
+  const initialBackdropProgress = Math.max(0, Math.min(1, backdropEmitter?.current.value ?? 1));
+
   return (
     <header
-      className={`isolate absolute inset-x-0 top-0 z-50 flex h-[72px] select-none items-center justify-between gap-2 xl:gap-4 2xl:gap-6 border-b border-white/[0.06] pl-4 xl:pl-6 2xl:pl-8 [-webkit-app-region:drag] ${
-        blurEnabled
-          ? `backdrop-saturate-[1.5] ${backdropImage ? 'bg-[#0a070e]/55 backdrop-blur-[22px]' : 'bg-[#0a070e]/75 backdrop-blur-[22px]'}`
-          : // No glass blur: the bar goes near-solid so the scrolled content
-            // beneath never muddies it; the banner child keeps its own cheap
-            // self-blur, which is the "banner-only" budget mode.
-            'bg-[#0a070e]/95'
-      }`}
+      className="absolute inset-x-0 top-0 z-50 flex h-[72px] select-none items-center justify-between gap-2 xl:gap-4 2xl:gap-6 border-b border-white/[0.06] pl-4 xl:pl-6 2xl:pl-8 [-webkit-app-region:drag]"
     >
-      {backdropImage && (
-        <div aria-hidden className="pointer-events-none absolute inset-0 z-0 overflow-hidden">
-          <img
-            src={backdropImage}
-            alt=""
-            loading="eager"
-            decoding="async"
-            className={`absolute inset-0 h-full w-full scale-125 object-cover ${backdropMode === 'anime' ? 'blur-[7px] saturate-125' : 'blur-[14px] saturate-150'}`}
-            style={{
-              opacity: (backdropMode === 'anime' ? 0.4 : 0.25) * Math.max(0, Math.min(1, backdropProgress)),
-              transform: `scale(1.25) translateY(${(Math.max(0, Math.min(1, backdropProgress)) - 1) * 72}px)`,
-              transition: 'opacity 120ms linear, transform 120ms linear',
-            }}
-          />
-          <div
-            className="absolute inset-0"
-            style={{
-              // The tint fades OUT together with the banner image: an opaque
-              // plate here would hide the header's backdrop-blur of scrolled
-              // content (cards/rails passing under the navbar).
-              backgroundColor: `rgba(16,17,22,${(backdropMode === 'anime' ? 0.45 : 0.7) * Math.max(0, Math.min(1, backdropProgress))})`,
-              transition: 'background-color 120ms linear',
-            }}
-          />
-          <div className="absolute inset-0 bg-gradient-to-b from-[#0F0B15]/20 via-transparent to-[#0F0B15]/35" />
-        </div>
-      )}
+      {/* Dedicated GPU-isolated backdrop layer: decouples the blurred header
+          surface from interactive controls, animated beams, and popovers. */}
+      <div
+        aria-hidden
+        className={`pointer-events-none absolute inset-0 z-0 overflow-hidden [contain:layout_style] ${
+          blurEnabled
+            ? `backdrop-saturate-[1.35] ${backdropImage ? 'bg-[#0a070e]/55 backdrop-blur-[20px]' : 'bg-[#0a070e]/75 backdrop-blur-[20px]'}`
+            : // No glass blur: the bar goes near-solid so the scrolled content
+              // beneath never muddies it; the banner child keeps its own cheap
+              // self-blur, which is the "banner-only" budget mode.
+              'bg-[#0a070e]/95'
+        }`}
+      >
+        {backdropImage && (
+          <>
+            <div
+              ref={backdropImgWrapRef}
+              className="absolute inset-0 will-change-[transform,opacity]"
+              style={{
+                opacity: (backdropMode === 'anime' ? 0.4 : 0.25) * initialBackdropProgress,
+                transform: `translate3d(0, ${(initialBackdropProgress - 1) * 72}px, 0)`,
+                visibility: initialBackdropProgress <= 0.001 ? 'hidden' : 'visible',
+              }}
+            >
+              <img
+                src={backdropImage}
+                alt=""
+                loading="eager"
+                decoding="async"
+                className={`h-full w-full object-cover [transform:scale(1.25)_translateZ(0)] ${backdropMode === 'anime' ? 'blur-[7px] saturate-125' : 'blur-[14px] saturate-150'}`}
+              />
+            </div>
+            <div
+              ref={backdropTintRef}
+              className="absolute inset-0 bg-[#101116] will-change-[opacity]"
+              style={{
+                opacity: (backdropMode === 'anime' ? 0.45 : 0.7) * initialBackdropProgress,
+                visibility: initialBackdropProgress <= 0.001 ? 'hidden' : 'visible',
+              }}
+            />
+            <div
+              ref={backdropVignetteRef}
+              className="absolute inset-0 bg-gradient-to-b from-[#0F0B15]/20 via-transparent to-[#0F0B15]/35"
+              style={{
+                visibility: initialBackdropProgress <= 0.001 ? 'hidden' : 'visible',
+              }}
+            />
+          </>
+        )}
+      </div>
       {/* Brand Logo & Name */}
       <div className="relative z-10 flex shrink-0 cursor-pointer items-center space-x-3 [-webkit-app-region:no-drag]" onClick={() => onSelectTab('home')}>
         <div className="flex h-11 w-11 items-center justify-center rounded-xl border border-rose-300/25 bg-gradient-to-br from-rose-500/40 via-plum-900/50 to-rose-500/20 shadow-lg shadow-black/40">

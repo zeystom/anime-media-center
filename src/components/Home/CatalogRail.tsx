@@ -1,9 +1,10 @@
-import React, { useCallback, useMemo, useState } from 'react';
+import React, { useCallback, useEffect, useMemo, useRef, useState } from 'react';
 import { RailItem } from '../../hooks/useCatalog';
 import { LocalBadgeState } from '../../hooks/useLocalStatus';
 import { AnimeCard } from '../common/AnimeCard';
 import { HorizontalScroller } from '../common/HorizontalScroller';
 import { useAgeRatings } from '../../hooks/useAgeRatings';
+import { isScrollActive } from '../../utils/scrollState';
 
 interface CatalogRailProps {
   title: string;
@@ -39,13 +40,36 @@ const CatalogRailImpl: React.FC<CatalogRailProps> = ({
 }) => {
   const skeletons = useMemo(() => Array.from({ length: SKELETON_COUNT }, (_, i) => i), []);
   const [expanded, setExpanded] = useState(false);
-  const engage = useCallback(() => setExpanded(true), []);
+  const hoverExpandTimerRef = useRef<number | null>(null);
+  const engage = useCallback(() => {
+    if (hoverExpandTimerRef.current != null) {
+      window.clearTimeout(hoverExpandTimerRef.current);
+      hoverExpandTimerRef.current = null;
+    }
+    setExpanded(true);
+  }, []);
+  const scheduleHoverExpand = useCallback(() => {
+    if (expanded || items.length <= INITIAL_VISIBLE_CARDS || isScrollActive()) return;
+    if (hoverExpandTimerRef.current != null) return;
+    hoverExpandTimerRef.current = window.setTimeout(() => {
+      hoverExpandTimerRef.current = null;
+      if (!isScrollActive()) setExpanded(true);
+    }, 120);
+  }, [expanded, items.length]);
+  const cancelHoverExpand = useCallback(() => {
+    if (hoverExpandTimerRef.current != null) {
+      window.clearTimeout(hoverExpandTimerRef.current);
+      hoverExpandTimerRef.current = null;
+    }
+  }, []);
+  useEffect(() => cancelHoverExpand, [cancelHoverExpand]);
   const { ratings } = useAgeRatings(items);
   const tailCutoff = expanded ? items.length : INITIAL_VISIBLE_CARDS;
 
   return (
     <section
-      onPointerEnter={!expanded && items.length > INITIAL_VISIBLE_CARDS ? engage : undefined}
+      onPointerEnter={!expanded && items.length > INITIAL_VISIBLE_CARDS ? scheduleHoverExpand : undefined}
+      onPointerLeave={!expanded && items.length > INITIAL_VISIBLE_CARDS ? cancelHoverExpand : undefined}
       onFocusCapture={!expanded && items.length > INITIAL_VISIBLE_CARDS ? engage : undefined}
       className="home-rail-section mb-10"
     >

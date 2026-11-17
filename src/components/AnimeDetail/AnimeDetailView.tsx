@@ -1352,30 +1352,54 @@ const AnimeDetailViewImpl: React.FC<AnimeDetailViewProps> = ({
 
   const showBanner = !!hero.bannerUrl
   const showPoster = !!hero.posterUrl && !posterFailed
+  const detailBackdropRafRef = useRef<number | null>(null)
+  const detailHeroElRef = useRef<HTMLElement | null>(null)
+  const detailHeroHeightRef = useRef<number>(0)
   const reportBackdropProgress = (container: HTMLDivElement) => {
-    const heroElement = container.querySelector<HTMLElement>('[data-backdrop-hero]')
+    let heroElement = detailHeroElRef.current
+    if (!heroElement || !container.contains(heroElement)) {
+      heroElement = container.querySelector<HTMLElement>('[data-backdrop-hero]')
+      detailHeroElRef.current = heroElement
+      detailHeroHeightRef.current = heroElement ? heroElement.offsetHeight : 0
+    }
     if (!heroElement) {
       onBackdropProgressChange?.(0)
       return
     }
-    const heroRect = heroElement.getBoundingClientRect()
-    const containerTop = container.getBoundingClientRect().top
-    const progress = heroRect.height > 0
-      ? Math.max(0, Math.min(1, (heroRect.bottom - containerTop) / heroRect.height))
+    const heroHeight = detailHeroHeightRef.current || heroElement.offsetHeight
+    const progress = heroHeight > 0
+      ? Math.max(0, Math.min(1, 1 - container.scrollTop / heroHeight))
       : 0
     onBackdropProgressChange?.(progress)
   }
 
+  useEffect(() => () => {
+    if (detailBackdropRafRef.current != null) window.cancelAnimationFrame(detailBackdropRafRef.current)
+  }, [])
+
   useLayoutEffect(() => {
+    detailHeroHeightRef.current = detailHeroElRef.current?.offsetHeight ?? 0
     if (scrollContainerRef.current) reportBackdropProgress(scrollContainerRef.current)
   }, [hero.bannerUrl])
 
   return (
     <div
       ref={scrollContainerRef}
-      onScroll={(event) => reportBackdropProgress(event.currentTarget)}
+      onScroll={(event) => {
+        const container = event.currentTarget
+        const cachedH = detailHeroHeightRef.current
+        if (cachedH > 0 && container.scrollTop > cachedH) {
+          onBackdropProgressChange?.(0)
+          return
+        }
+        if (detailBackdropRafRef.current != null) return
+        detailBackdropRafRef.current = window.requestAnimationFrame(() => {
+          detailBackdropRafRef.current = null
+          reportBackdropProgress(container)
+        })
+      }}
       style={animeThemeStyle}
-      className="fixed inset-x-0 bottom-0 top-0 z-40 overflow-y-auto pt-[72px] bg-void"
+      className="fixed inset-x-0 bottom-0 top-0 z-40 overflow-y-auto scroll-composited pt-[72px] bg-void"
     >
       {/* Full-page ambient color bleed: an unclipped, heavily blurred
           duplicate of the banner anchored at the page root (NOT inside the
@@ -1384,7 +1408,7 @@ const AnimeDetailViewImpl: React.FC<AnimeDetailViewProps> = ({
           smoothly, so it never ends in a visible line. */}
       <div
         aria-hidden
-        className="pointer-events-none absolute inset-x-0 top-0 z-0 h-[950px] overflow-hidden"
+        className="pointer-events-none absolute inset-x-0 top-0 z-0 h-[950px] overflow-hidden transform-gpu"
         style={{
           maskImage: 'linear-gradient(to bottom, black 20%, transparent 100%)',
           WebkitMaskImage: 'linear-gradient(to bottom, black 20%, transparent 100%)',
@@ -1402,7 +1426,7 @@ const AnimeDetailViewImpl: React.FC<AnimeDetailViewProps> = ({
               setBannerFailed(true)
             }}
             className="absolute inset-0 h-full w-full object-cover object-[center_28%] opacity-[0.28] blur-[110px] saturate-[1.9]"
-            style={{ transform: 'scale(1.15)' }}
+            style={{ transform: 'scale(1.15) translateZ(0)' }}
           />
         ) : bannerReady && hero.posterUrl && !posterBgFailed ? (
           <img
@@ -1411,7 +1435,7 @@ const AnimeDetailViewImpl: React.FC<AnimeDetailViewProps> = ({
             loading="lazy"
             onError={() => setPosterBgFailed(true)}
             className="absolute inset-0 h-full w-full object-cover opacity-[0.24] blur-[110px] saturate-[1.9]"
-            style={{ transform: 'scale(1.15)' }}
+            style={{ transform: 'scale(1.15) translateZ(0)' }}
           />
         ) : null}
       </div>

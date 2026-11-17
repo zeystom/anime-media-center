@@ -316,8 +316,16 @@ export const DownloadsView: React.FC<DownloadsViewProps> = ({ onRefreshLibrary, 
     <div className="min-h-full w-full px-6 py-7 2xl:px-8">
       {/* Symmetrical hero banner matching Discover, Library & Schedule */}
       <section className="relative mb-6 flex h-[160px] flex-col justify-center overflow-hidden rounded-[26px] border border-white/[0.08] bg-[#0F0B15] px-6 shadow-2xl shadow-black/20 md:h-[168px] md:px-9">
-        <div className="pointer-events-none absolute -right-20 -top-32 h-80 w-80 rounded-full bg-rose-500/[0.08] blur-3xl" />
-        <div className="pointer-events-none absolute -bottom-36 left-1/3 h-72 w-72 rounded-full bg-violet-500/[0.07] blur-3xl" />
+        <div
+          aria-hidden
+          className="pointer-events-none absolute -right-28 -top-40 h-[440px] w-[440px] rounded-full"
+          style={{ background: 'radial-gradient(closest-side, rgba(255,30,109,0.085), rgba(255,30,109,0.025) 55%, transparent 100%)' }}
+        />
+        <div
+          aria-hidden
+          className="pointer-events-none absolute -bottom-44 left-1/3 h-[400px] w-[400px] rounded-full"
+          style={{ background: 'radial-gradient(closest-side, rgba(156,70,165,0.08), rgba(156,70,165,0.02) 55%, transparent 100%)' }}
+        />
         <div className="relative">
           <div className="flex items-center gap-2 text-rose-300">
             <HardDrive className="h-4 w-4" />

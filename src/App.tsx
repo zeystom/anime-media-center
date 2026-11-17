@@ -12,6 +12,7 @@ import { getPathBasename, getPathDirname, formatFileSize, cleanSeriesTitle, clea
 import { toRailItem } from './hooks/useCatalog';
 import type { RailItem } from './hooks/useCatalog';
 import { useActiveHeroBannerUrl } from './utils/heroBanner';
+import { markScrollActivity } from './utils/scrollState';
 import type { AppNotification, FavouriteAnime, FollowedAnime } from './types/notifications';
 import { UpdatePromptModal } from './components/UpdatePromptModal';
 
@@ -164,28 +165,30 @@ export const App: React.FC = () => {
 
   const updateNavbarBackdropProgress = useCallback((progress: number) => {
     const emitter = navbarProgressEmitter.current;
-    // Quantized to 1/20 (was 1/40): during fast scrolls the coarser steps
-    // halve Navbar re-renders; the 120ms img transitions hide the stepping.
-    const next = Math.max(0, Math.min(1, Math.round(progress * 20) / 20));
-    if (Math.abs(emitter.value - next) < 0.05) return;
+    // Navbar drives backdrop opacity/transform directly via DOM refs (no React
+    // re-renders), so smooth continuous steps are essentially free.
+    const next = Math.max(0, Math.min(1, progress));
+    if (next !== 0 && next !== 1 && Math.abs(emitter.value - next) < 0.004) return;
+    if (emitter.value === next) return;
     emitter.value = next;
     emitter.listeners.forEach((listener) => listener(next));
   }, []);
 
   const homeBackdropRafRef = useRef<number | null>(null);
   const homeHeroElRef = useRef<HTMLElement | null>(null);
+  const homeHeroHeightRef = useRef<number>(0);
+  const homeHeroObserverRef = useRef<ResizeObserver | null>(null);
 
   useEffect(() => () => {
     if (homeBackdropRafRef.current != null) window.cancelAnimationFrame(homeBackdropRafRef.current);
+    homeHeroObserverRef.current?.disconnect();
   }, []);
 
-  // Marks a scroll container as actively scrolling for ~150ms after the last
-  // scroll event without churning the attribute when it is already active.
-  const markScrolling = useCallback((event: React.UIEvent<HTMLDivElement>) => {
-    const el = event.currentTarget as HTMLDivElement & { __scrollIdle?: number };
-    if (!el.hasAttribute('data-scrolling')) el.setAttribute('data-scrolling', 'true');
-    window.clearTimeout(el.__scrollIdle);
-    el.__scrollIdle = window.setTimeout(() => el.removeAttribute('data-scrolling'), 150);
+  // Records scroll activity in a lightweight timestamp instead of mutating
+  // DOM attributes on scroll containers (which triggered 21ms+ full-tree
+  // style recalculations across 3,000+ nodes on every scroll start/stop).
+  const markScrolling = useCallback(() => {
+    markScrollActivity(150);
   }, []);
 
   useEffect(() => {
@@ -1378,18 +1381,21 @@ export const App: React.FC = () => {
     // it, and enough distance (~2/3 of a trackpad swipe) accumulated in one
     // gesture without a direction flip.
     const canConsumeHorizontalScroll = (start: EventTarget | null, direction: number): boolean => {
+      if (start instanceof Element) {
+        const rail = start.closest('.horizontal-rail');
+        if (rail && rail.scrollWidth > rail.clientWidth + 2) return true;
+      }
       let el = start instanceof Element ? start : null;
       while (el && el !== document.body) {
-        const style = window.getComputedStyle(el);
-        const scrollableX = style.overflowX === 'auto' || style.overflowX === 'scroll' || style.overflowX === 'overlay';
-        if (scrollableX && el.scrollWidth > el.clientWidth + 1) {
-          // Horizontal rails handle their own edge overscroll & wrap-around on touchpad swipes.
-          if (el.classList.contains('horizontal-rail') && el.scrollWidth > el.clientWidth + 2) {
-            return true;
+        if (el.scrollWidth > el.clientWidth + 1) {
+          const style = window.getComputedStyle(el);
+          const scrollableX = style.overflowX === 'auto' || style.overflowX === 'scroll' || style.overflowX === 'overlay';
+          if (scrollableX) {
+            if (el.classList.contains('horizontal-rail')) return true;
+            const atStart = el.scrollLeft <= 0;
+            const atEnd = el.scrollLeft >= el.scrollWidth - el.clientWidth - 1;
+            if (!(direction < 0 ? atEnd : atStart)) return true;
           }
-          const atStart = el.scrollLeft <= 0;
-          const atEnd = el.scrollLeft >= el.scrollWidth - el.clientWidth - 1;
-          if (!(direction < 0 ? atEnd : atStart)) return true;
         }
         el = el.parentElement;
       }
@@ -1546,11 +1552,13 @@ export const App: React.FC = () => {
         {/* Home Tab View — full-bleed hero starts beneath the translucent navbar
             when UpNext is mounted; otherwise pt-[72px] keeps rails clear of it. */}
         {(visitedTabs.has('home') || currentTab === 'home') && <div
-          className={`h-full overflow-y-auto ${mostRecentWatched ? '' : 'pt-[72px]'} ${currentTab === 'home' ? 'block' : 'hidden'}`}
+          className={`h-full overflow-y-auto scroll-composited ${mostRecentWatched ? '' : 'pt-[72px]'} ${currentTab === 'home' ? 'block' : 'hidden'}`}
           onScroll={(event) => {
-            markScrolling(event);
             const container = event.currentTarget;
-            if (container.scrollTop > 1300) {
+            const scrollTop = container.scrollTop;
+            markScrolling();
+            const cachedHeight = homeHeroHeightRef.current;
+            if (scrollTop > (cachedHeight > 0 ? cachedHeight : 1300)) {
               updateNavbarBackdropProgress(0);
               return;
             }
@@ -1561,15 +1569,29 @@ export const App: React.FC = () => {
               if (!hero || !container.contains(hero)) {
                 hero = container.querySelector<HTMLElement>('[data-backdrop-hero]');
                 homeHeroElRef.current = hero;
+                homeHeroObserverRef.current?.disconnect();
+                if (hero) {
+                  homeHeroHeightRef.current = hero.offsetHeight;
+                  if (typeof ResizeObserver !== 'undefined') {
+                    const ro = new ResizeObserver(() => {
+                      if (homeHeroElRef.current) {
+                        homeHeroHeightRef.current = homeHeroElRef.current.offsetHeight;
+                      }
+                    });
+                    ro.observe(hero);
+                    homeHeroObserverRef.current = ro;
+                  }
+                } else {
+                  homeHeroHeightRef.current = 0;
+                }
               }
               if (!hero) {
                 updateNavbarBackdropProgress(0);
                 return;
               }
-              const heroRect = hero.getBoundingClientRect();
-              const containerTop = container.getBoundingClientRect().top;
-              const progress = heroRect.height > 0
-                ? Math.max(0, Math.min(1, (heroRect.bottom - containerTop) / heroRect.height))
+              const heroHeight = homeHeroHeightRef.current || hero.offsetHeight;
+              const progress = heroHeight > 0
+                ? Math.max(0, Math.min(1, 1 - container.scrollTop / heroHeight))
                 : 0;
               updateNavbarBackdropProgress(progress);
             });
@@ -1590,7 +1612,7 @@ export const App: React.FC = () => {
         </div>}
 
         {/* Discover tab: genre-based catalog page with full-library search kept in the navbar. */}
-        {(visitedTabs.has('discover') || currentTab === 'discover') && <div className={`h-full overflow-y-auto tab-scroll-symmetric pt-[72px] ${currentTab === 'discover' ? 'block' : 'hidden'}`} onScroll={markScrolling}>
+        {(visitedTabs.has('discover') || currentTab === 'discover') && <div className={`h-full overflow-y-auto scroll-composited tab-scroll-symmetric pt-[72px] ${currentTab === 'discover' ? 'block' : 'hidden'}`} onScroll={markScrolling}>
           <Suspense fallback={<div className="flex h-full items-center justify-center text-sm text-zinc-500">Loading Discover…</div>}>
             <DiscoverView
               folders={visibleFolders}
@@ -1607,7 +1629,7 @@ export const App: React.FC = () => {
         </div>}
 
         {/* Library Tab View */}
-        {(visitedTabs.has('library') || currentTab === 'library') && <div className={`h-full overflow-y-auto tab-scroll-symmetric pt-[72px] ${currentTab === 'library' ? 'block' : 'hidden'}`}>
+        {(visitedTabs.has('library') || currentTab === 'library') && <div className={`h-full overflow-y-auto scroll-composited tab-scroll-symmetric pt-[72px] ${currentTab === 'library' ? 'block' : 'hidden'}`} onScroll={markScrolling}>
           {/* Library shelf: cards open the unified title page */}
           <Suspense fallback={<div className="py-12 text-center text-sm text-zinc-500">Loading Library…</div>}>
             <FolderBrowser
@@ -1644,7 +1666,7 @@ export const App: React.FC = () => {
         </div>}
 
         {/* Schedule Tab View */}
-        {(visitedTabs.has('schedule') || currentTab === 'schedule') && <div className={`h-full overflow-y-auto tab-scroll-symmetric pt-[72px] ${currentTab === 'schedule' ? 'block' : 'hidden'}`}>
+        {(visitedTabs.has('schedule') || currentTab === 'schedule') && <div className={`h-full overflow-y-auto scroll-composited tab-scroll-symmetric pt-[72px] ${currentTab === 'schedule' ? 'block' : 'hidden'}`}>
           <Suspense fallback={<div className="flex h-full items-center justify-center text-sm text-zinc-500">Loading Schedule…</div>}>
             <ScheduleView
               onSelectItem={handleSelectCatalogItem}
@@ -1655,7 +1677,7 @@ export const App: React.FC = () => {
         </div>}
 
         {/* Downloads Tab View (storage usage + files-only deletion) */}
-        {(visitedTabs.has('downloads') || currentTab === 'downloads') && <div className={`h-full overflow-y-auto tab-scroll-symmetric pt-[72px] ${currentTab === 'downloads' ? 'block' : 'hidden'}`}>
+        {(visitedTabs.has('downloads') || currentTab === 'downloads') && <div className={`h-full overflow-y-auto scroll-composited tab-scroll-symmetric pt-[72px] ${currentTab === 'downloads' ? 'block' : 'hidden'}`}>
           <Suspense fallback={<div className="flex h-full items-center justify-center text-sm text-zinc-500">Loading Downloads…</div>}>
             <DownloadsView onRefreshLibrary={handleRefreshLibrary} folders={visibleFolders} />
           </Suspense>

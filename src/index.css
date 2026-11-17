@@ -78,33 +78,39 @@
   user-select: none;
 }
 
-/* Let Chromium defer layout and painting for long catalog pages and rails. */
-.anime-card {
-  content-visibility: auto;
-  contain-intrinsic-size: 180px 330px;
-  contain: layout style paint;
-}
-@media (min-width: 1280px) {
-  .anime-card {
-    contain-intrinsic-size: 192px 346px;
-  }
+/* Promote main tab scroll containers and horizontal rails to dedicated
+   compositor scroll layers so scrolling beneath the blurred navbar stays on
+   the GPU compositor thread without per-frame tile re-rasterization. */
+.scroll-composited {
+  will-change: scroll-position;
+  overscroll-behavior: contain;
 }
 
-/* While a page is actively scrolling, silence hover machinery on the content
-   streaming under a stationary cursor using O(1) direct-child pointer-events
-   inheritance instead of a universal `*` selector over thousands of nodes. */
-[data-scrolling] > * {
-  pointer-events: none !important;
+.horizontal-rail {
+  will-change: scroll-position;
+  overscroll-behavior-x: contain;
 }
-[data-scrolling] .anime-card,
-[data-scrolling] .anime-card img,
-[data-scrolling] .episode-card {
-  transition: none !important;
+
+.horizontal-scroller-btn {
+  display: none;
+}
+.horizontal-scroller-wrap[data-scrollable='true']:hover:not([data-dragging='true']) .horizontal-scroller-btn,
+.horizontal-scroller-wrap[data-scrollable='true'] .horizontal-scroller-btn:focus-visible {
+  display: flex;
+}
+[data-dragging='true'] .horizontal-rail {
+  cursor: grabbing !important;
+  user-select: none;
+}
+
+/* Isolate card layout/paint without content-visibility:auto display-lock
+   churn: un-skipping and re-skipping cards during scroll caused synchronous
+   layout/paint bursts, lazy image decode stalls, and GPU flush spikes. */
+.anime-card {
+  contain: layout style paint;
 }
 
 .home-rail-section {
-  content-visibility: auto;
-  contain-intrinsic-size: 0 385px;
   contain: layout style;
 }
 

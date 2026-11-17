@@ -355,13 +355,7 @@ const UpNextWidgetImpl: React.FC<UpNextWidgetProps> = ({ data, onPlay, onOpenDet
       className="group relative mb-2 w-full overflow-hidden"
     >
       {/* Full-bleed banner art dissolved smoothly into --bg-void at the bottom. */}
-      <div
-        className="pointer-events-none absolute inset-0 overflow-hidden"
-        style={{
-          maskImage: 'linear-gradient(to bottom, black 0%, black 76%, transparent 99%)',
-          WebkitMaskImage: 'linear-gradient(to bottom, black 0%, black 76%, transparent 99%)',
-        }}
-      >
+      <div className="pointer-events-none absolute inset-0 overflow-hidden">
         {posterSrc && !(bannerLoaded && activeBannerUrl) && (
           <img
             src={posterSrc}
@@ -370,7 +364,7 @@ const UpNextWidgetImpl: React.FC<UpNextWidgetProps> = ({ data, onPlay, onOpenDet
             loading="lazy"
             decoding="async"
             onError={() => setPosterIdx((i) => i + 1)}
-            className="pointer-events-none absolute inset-0 h-full w-full scale-115 object-cover object-[center_24%] opacity-25 blur-2xl saturate-[1.2] transition-opacity duration-300 select-none"
+            className="pointer-events-none absolute inset-0 h-full w-full scale-115 object-cover object-[center_24%] opacity-25 blur-2xl saturate-[1.2] transition-opacity duration-300 select-none transform-gpu"
           />
         )}
         {activeBannerUrl && (
@@ -392,9 +386,9 @@ const UpNextWidgetImpl: React.FC<UpNextWidgetProps> = ({ data, onPlay, onOpenDet
         )}
       </div>
       <div className="pointer-events-none absolute inset-0 bg-[linear-gradient(90deg,rgba(7,6,10,0.88)_0%,rgba(7,6,10,0.46)_34%,rgba(7,6,10,0.04)_68%)]" />
-      <div className="pointer-events-none absolute inset-0 bg-[linear-gradient(180deg,rgba(7,6,10,0.46)_0%,rgba(7,6,10,0.0)_22%,rgba(7,6,10,0.18)_54%,rgba(7,6,10,0.78)_82%,#07060A_100%)]" />
+      <div className="pointer-events-none absolute inset-0 bg-[linear-gradient(180deg,rgba(7,6,10,0.46)_0%,rgba(7,6,10,0.0)_22%,rgba(7,6,10,0.18)_54%,rgba(7,6,10,0.78)_80%,rgba(7,6,10,0.96)_92%,#07060A_100%)]" />
       <div className="pointer-events-none absolute inset-0" style={{ background: 'radial-gradient(ellipse 56% 78% at 10% 92%, rgba(7,6,10,0.82) 0%, rgba(7,6,10,0.38) 55%, transparent 100%)' }} />
-      <div className="pointer-events-none absolute inset-0 mix-blend-screen" style={{ background: `radial-gradient(ellipse at 80% 18%, hsla(${themeHue}, 90%, 58%, .18), transparent 58%)` }} />
+      <div className="pointer-events-none absolute inset-0" style={{ background: `radial-gradient(ellipse at 80% 18%, hsla(${themeHue}, 90%, 58%, .2), transparent 58%)` }} />
 
       <div
         style={{ minHeight: heroMinHeight }}
@@ -475,7 +469,7 @@ const UpNextWidgetImpl: React.FC<UpNextWidgetProps> = ({ data, onPlay, onOpenDet
           <div className="mb-2 flex items-center justify-between font-mono text-xs text-zinc-200 [text-shadow:0_1px_6px_rgba(0,0,0,0.95)]">
             <span>{percent}% completed</span><span>{formatTime(remaining)} remaining</span>
           </div>
-          <div className="h-2.5 overflow-hidden rounded-full border border-white/10 bg-black/55 p-[2px] backdrop-blur">
+          <div className="h-2.5 overflow-hidden rounded-full border border-white/10 bg-black/70 p-[2px]">
             <div className="h-full rounded-full transition-all" style={{ width: `${percent}%`, background: 'linear-gradient(90deg, #9E1148, #FF1E6D)', boxShadow: '0 0 16px rgba(255, 30, 109, 0.45)' }} />
           </div>
         </div>

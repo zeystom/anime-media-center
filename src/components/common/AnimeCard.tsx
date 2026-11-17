@@ -5,6 +5,7 @@ import type { LocalBadgeState } from '../../hooks/useLocalStatus'
 import { StatusBadges } from './StatusBadges'
 import { normalizeAgeRating } from '../../utils/ageRating'
 import { resolveAnimeTitle, type TitleLanguagePreference } from '../../utils/title'
+import { isScrollActive } from '../../utils/scrollState'
 
 export interface AnimeCardProps {
   item: RailItem
@@ -89,7 +90,7 @@ const AnimeCardImpl: React.FC<AnimeCardProps> = ({ item, badgeState = null, show
     <div
       onClick={() => onClick(item)}
       onMouseEnter={() => {
-        if (item.anilistId == null || warmTimer.current) return
+        if (isScrollActive() || item.anilistId == null || warmTimer.current) return
         warmTimer.current = setTimeout(() => {
           warmTimer.current = null
           window.electronAPI?.warmRemoteEpisodes?.(item.anilistId as number)
