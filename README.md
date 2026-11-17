@@ -62,37 +62,6 @@ Torrent downloads are an optional feature. The application includes a built-in W
 
 For a magnet link that contains no tracker address, the engine appends a small list of public tracker addresses bundled with the app to improve peer discovery. Magnets that already contain trackers keep their own tracker list. Trackers only help peers find each other; they do not provide search results or host download content. You are responsible for the sources you configure and the material you download or share; check the laws that apply where you live.
 
-## What's new in 4.0.0
-
-- **Full-Width UI Overhaul & Larger Discovery Rails:** removed narrow width caps across Home, Discover, Library, Schedule, Downloads, and Overview so the interface scales edge-to-edge on 1080p, 1440p, and ultrawide monitors; raised the full-bleed Home hero banner for cleaner hierarchy (removing redundant top episode pills), widened anime card descriptions, added up to 5-column grids on ultra-wide displays, and expanded Home genre shelves to 24 titles (`DEFAULT_LIST_PER_PAGE = 36`, `DISCOVER_PAGE_SIZE = 30`).
-- **Unified Crisp Widescreen Hero Banners + TVDB Season Backgrounds:** replaced blurry 400px strips and 4:3 cropped covers (`aspect < 1.6`) with a unified aspect- and resolution-verified selector (`heroBanner.ts`, `aniZip.ts`) prioritizing per-season Kitsu art and official **TheTVDB Season Backgrounds** before falling back to 1080p–4K franchise backdrops; added a dedicated `<200 ms` `getFastHeroBannerSources` IPC path, disk persistence (`hero_banners_v2.json`, `tvdb_season_cache_v1.json`) for instant restarts, clean blurred poster fallback on unbannered titles, and synced `Navbar` glass backdrop via `useActiveHeroBannerUrl`.
-- **Home Schedule Radar Priority & Hover Pre-Warming:** `HomeSchedulePreview` now prioritizes followed anime ahead of regular airings with `Bell` counters and row highlights matching the full Schedule view, and `FolderBrowser` cards pre-warm episode metadata on 180 ms hover.
-- **Home Performance & Scrolling Optimization:** fixed `HomeView` `React.memo` invalidation (`homeUpNextData`), memoized rails/scrollers/callbacks, added progressive right-tail card mounting in `CatalogRail`, removed idle `backdrop-blur` layers and unused GPU blur fallbacks, throttled Home scroll geometry reads via `requestAnimationFrame`, and replaced `[data-scrolling] *` with an `O(1)` selector and explicit `contain-intrinsic-size` hints.
-
-## What's new in 3.3.1
-
-- **Whisper OP/ED Filtering & Controls:** added visible **Skip Opening & Ending (OP / ED)** controls powered by MKV chapters and AniSkip (with 1.5s boundary protection for adjacent dialogue), `--hallucination_silence_threshold 2`, and `--initial_prompt None` when unset to prevent gibberish lyrics and leaked prompt text during openings and endings.
-- **Balanced Music Suppression (`Off` · `Balanced` · `Strict`):** added a gentle **`Balanced`** mode (`arnndn mix=0.6` via FFmpeg with `--ff_fftdn 12` fallback) that dampens background music and noise without erasing quiet, high-pitched, or slow anime speech, alongside **`Strict`** for heavy insert songs.
-- **Punctuation & Syntactic Cue Splitting Fixes:** fixed the inverted `antiStutter` context-reset setting (`--max_gap 1.0`), restored missed periods between sentences (`restoreMissingSentenceBreaks`), and added syntax-aware cross-cue rebalancing (`rebalanceSubtitleCues`) so lines and cues split cleanly at clause boundaries instead of stranding short glue phrases.
-
-## What's new in 3.3.0
-
-- **Automatic Background Signs & Songs:** when no dedicated Signs/Forced track is active and Main Subtitle is not already ASS/SSA (for instance, English Dub with Whisper SRT or no dialogue subs), Kaiko automatically extracts a standalone `.en.signs.ass` track from eligible embedded ASS/SSA tracks or fetches high-confidence online Signs/ASS subtitles in the background — while respecting explicit `OFF` preferences.
-- **1-Click Local ASS Extractor & Online Subtitle Search:** extract typeset signs, titles, notes, credits, and OP/ED karaoke cleanly from embedded ASS/SSA tracks (`electron/assSignsExtractor.ts`), or search keyless online via **TsukiHime** (with `.xz` decompression and font attachment downloading for JASSUB) plus optional **SubSource**, **SubDL**, and **OpenSubtitles** keys.
-- **MKV Track Probing & Font Matching Fixes:** fixed FFmpeg `Metadata: title` parsing so `(Tsundere) Signs & Songs` tracks are detected properly, added explicit `-f ass` / `-f srt` muxer args for reliable embedded extraction, improved Season 1 vs Season 2 batch matching, and raised obfuscated TTF font matching up to 24 fonts.
-
-## What's new in 3.2.1
-
-- **Blu-ray PGS Bitmap Subtitles (`hdmv_pgs_subtitle`):** added native `.sup` parser and RGBA/PNG decoder (`electron/pgs.ts`) with `/pgs` HTTP serving so both `2ND SUB / SIGNS (TOP)` and `MAIN SUBTITLE (BOTTOM)` render Blu-ray bitmap signs and dialogue tracks accurately.
-- **Seek-Window Timestamp & Top-Slot Placement Fixes:** preserved original timestamps (`-copyts`) during 2-minute windowed extraction, added seek-triggered window re-extraction (`seekWindowHandlerRef`) when scrubbing outside cached bounds, centered `2ND SUB / SIGNS (TOP)` PGS bitmaps in the top slot so bottom-authored signs do not collide with main subtitles, and added a clean `PGS` codec badge in the Audio & Subtitle Manager.
-
-## What's new in 3.2.0
-
-- **Whisper Studio & Subtitle Rendering:** switched dialogue presets to `pyannote_v3` VAD to preserve high-pitched and child-voice lines, removed forced synthetic prompt prefixes that caused early-line drops and leaked fragments, restored context conditioning (`condition_on_previous_text`) and comma splitting (`--max_comma_cent 70`), filtered non-Latin gibberish/stutter loops, merged 1-2 word trailing cue spillovers, and widened the player subtitle box (`max-w-[92vw]`) to stop unwanted 3-line wrapping.
-- **Movie Labels (`Movie` / `Resume Movie`):** feature films now display `Movie` and `Resume Movie` instead of `EP` / `Resume EP` across the Home hero banner, Recent Episodes rail, player Episode Drawer, Anime Detail view, and Season Hero chips.
-- **Centered Completion Notification:** fixed the post-episode completion/delete prompt shifting off-center during Framer Motion animation.
-- **Discover Filter Dropdowns:** all single-select filter menus (`Season`, `Year`, `Format`, `Status`, `Minimum score`, `Sort by`, `Age rating`) now close automatically after selection while keeping the multi-select `Genre` picker open.
-
 ## Install the Windows app
 
 Download the `Kaiko-Setup-4.0.0.exe` installer from the project’s GitHub Releases page, run it, and choose an install folder. The installer creates Desktop and Start Menu shortcuts. Updates can also be installed directly from within the app via **Settings -> Application Updates** or the startup update prompt (with rendered GitHub release notes). During a normal uninstall, Kaiko asks separately whether to remove saved settings, anime lists, and watch history, and whether to clear the contents of configured media-library folders. Both choices default to **No**; deleting library contents requires a second confirmation listing the folders. Clearing a library folder removes every file inside it, not just Kaiko downloads, and leaves the folder itself in place. Silent uninstall and app upgrades preserve personal data.
