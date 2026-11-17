@@ -7,7 +7,7 @@
 <p align="center"><strong>Your anime library, player, and subtitle studio — on your PC.</strong></p>
 
 <p align="center">
-  <img src="https://img.shields.io/badge/Version-3.3.1-ec4899?style=flat-square" alt="Version 3.3.1" />
+  <img src="https://img.shields.io/badge/Version-3.3.2-ec4899?style=flat-square" alt="Version 3.3.2" />
   <img src="https://img.shields.io/badge/Platform-Windows%2010%20%2F%2011-blue?style=flat-square" alt="Windows 10 and 11" />
   <img src="https://img.shields.io/badge/Electron-33-47848F?style=flat-square&logo=electron" alt="Electron 33" />
   <img src="https://img.shields.io/badge/License-MIT-green?style=flat-square" alt="MIT License" />
@@ -84,6 +84,12 @@ Torrent downloads are an optional feature. The application includes a built-in W
 
 For a magnet link that contains no tracker address, the engine appends a small list of public tracker addresses bundled with the app to improve peer discovery. Magnets that already contain trackers keep their own tracker list. Trackers only help peers find each other; they do not provide search results or host download content. You are responsible for the sources you configure and the material you download or share; check the laws that apply where you live.
 
+## What's new in 3.3.2
+
+- **Streamlined Whisper Studio Controls:** removed redundant **Quality** presets and **Advanced settings** clutter, locking in optimal high-sensitivity `pyannote_v3` defaults and loop protection under the hood while keeping natural unmerged subtitle pacing by default.
+- **Phone-Gallery Range Selection:** press an episode card and drag directly across rows to select or deselect every episode in the contiguous range (with pullback restoration, edge auto-scrolling, and Shift+Click support).
+- **Symmetrical Layout & Wider Library Grid:** added symmetric scrollbar gutters (`scrollbar-gutter: stable both-edges`) so switching between Library, Schedule, Discover, Home, and Downloads never shifts content sideways, widened containers to `max-w-[2160px] 2xl:px-8` to align cleanly with the Navbar on wide displays, and matched Library's 2XL card grid density.
+
 ## What's new in 3.3.1
 
 - **Whisper OP/ED Filtering & Controls:** added visible **Skip Opening & Ending (OP / ED)** controls powered by MKV chapters and AniSkip (with 1.5s boundary protection for adjacent dialogue), `--hallucination_silence_threshold 2`, and `--initial_prompt None` when unset to prevent gibberish lyrics and leaked prompt text during openings and endings.
@@ -110,7 +116,7 @@ For a magnet link that contains no tracker address, the engine appends a small l
 
 ## Install the Windows app
 
-Download the `Kaiko-Setup-3.3.1.exe` installer from the project’s GitHub Releases page, run it, and choose an install folder. The installer creates Desktop and Start Menu shortcuts. Updates can also be installed directly from within the app via **Settings -> Application Updates** or the startup update prompt (with rendered GitHub release notes). During a normal uninstall, Kaiko asks separately whether to remove saved settings, anime lists, and watch history, and whether to clear the contents of configured media-library folders. Both choices default to **No**; deleting library contents requires a second confirmation listing the folders. Clearing a library folder removes every file inside it, not just Kaiko downloads, and leaves the folder itself in place. Silent uninstall and app upgrades preserve personal data.
+Download the `Kaiko-Setup-3.3.2.exe` installer from the project’s GitHub Releases page, run it, and choose an install folder. The installer creates Desktop and Start Menu shortcuts. Updates can also be installed directly from within the app via **Settings -> Application Updates** or the startup update prompt (with rendered GitHub release notes). During a normal uninstall, Kaiko asks separately whether to remove saved settings, anime lists, and watch history, and whether to clear the contents of configured media-library folders. Both choices default to **No**; deleting library contents requires a second confirmation listing the folders. Clearing a library folder removes every file inside it, not just Kaiko downloads, and leaves the folder itself in place. Silent uninstall and app upgrades preserve personal data.
 
 FFmpeg and a lightweight 7-Zip decompression engine (`7z.exe` + `7z.dll`) are bundled directly into Kaiko for playback, extraction, and automated setup on Windows 10 and Windows 11. The Faster-Whisper-XXL engine can be downloaded and configured in 1 click directly inside Kaiko (or auto-detected from Subtitle Edit / custom paths), along with AI models (`large-v3-turbo`, `medium`, and `small`).
 

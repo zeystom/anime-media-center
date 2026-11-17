@@ -38,12 +38,12 @@ if (!token) {
   process.exit(1);
 }
 
-const RELEASE_BODY = `## Kaiko ${VERSION} — Whisper OP/ED Filtering, Balanced Music Suppression & Syntactic Cue Splitting
+const RELEASE_BODY = `## Kaiko ${VERSION} — Streamlined Whisper Studio, Range Drag Selection & Symmetrical Layout
 
 ### What's New
-- **Opening & Ending Filter (Skip OP / ED):** added visible **Opening & Music Filter** controls in Whisper Studio. Automatically excludes hallucinations inside MKV chapter and AniSkip OP/ED ranges (with a 1.5s safety margin for edge speech), enables \`--hallucination_silence_threshold 2\`, and disables Whisper's leaky auto-prompt over music.
-- **3-Mode Music Suppression (\`Off\` · \`Balanced\` · \`Strict\`):** replaced binary aggressive singing removal with a **\`Balanced\`** FFmpeg RNNoise blend (\`mix=0.6\`, keeping 40% dry voice harmonics with automatic spectral denoise fallback) so quiet, high-pitched, and slow anime voices stay intact while dampening background music, plus **\`Strict\`** for heavy insert songs.
-- **Natural Punctuation & Syntactic Cue Splitting:** fixed inverted \`antiStutter\` context resets and added \`--max_gap 1.0\` to prevent multi-line period loss, conservatively restored missed sentence breaks between glued clauses, and upgraded post-processing to rebalance multi-cue splits at natural grammatical boundaries within 2 lines.
+- **Streamlined Whisper Studio:** removed redundant **Quality** presets and **Advanced settings** clutter, leaving **AI Subtitle Model**, **Character names**, and **Opening & Music Filter** (**Skip OP / ED** + **Off · Balanced · Strict**). Optimal high-sensitivity speech recognition and loop protection remain permanently enabled, and cue merging is now off by default for cleaner, easier-to-read pacing.
+- **Phone-Gallery Range Selection:** press any episode card and drag straight across rows to select or deselect the full contiguous range (with pullback restoration, smooth edge auto-scroll, and Shift+Click support).
+- **Symmetrical Page Width & Scrollbar Alignment:** reserved symmetric scrollbar gutters (\`scrollbar-gutter: stable both-edges\`) across all main views to prevent horizontal shifting or unequal side margins between Library, Schedule, and Discover, and widened main view containers to \`max-w-[2160px] 2xl:px-8\` with balanced Library card columns.
 
 ---
 ### Assets included

@@ -38,6 +38,7 @@ const bundle = await esbuild.build({
       export * from './electron/whisperPrompt.ts';
       export * from './electron/whisperPostProcess.ts';
       export { cleanSubtitleSrt } from './electron/whisper.ts';
+      export { computeRangeDragSelection } from './src/utils/episodeSelection.ts';
     `,
     resolveDir: process.cwd(),
     sourcefile: 'test-whisper-prompt-entry.ts',
@@ -104,6 +105,7 @@ const {
   isCueInSkipRanges,
   normalizeSingingSuppression,
   buildBalancedAudioFilterChain,
+  computeRangeDragSelection,
 } = testedModules;
 
 // ================================================================
@@ -837,6 +839,67 @@ runTest('9.5 Normalizes tri-state singing filter modes and builds soft-blend FFm
     'aresample=48000:async=3600:first_pts=0',
     'arnndn=m=sh.rnnn:mix=0.6',
   ]);
+});
+
+runTest('9.6 Phone-gallery range selection selects/deselects contiguous episodes across rows and restores on pullback', () => {
+  const ordered = Array.from({ length: 13 }, (_, idx) => `ep${idx + 1}.mkv`);
+  const base = new Set(['ep1.mkv', 'ep12.mkv']);
+
+  // Forward drag across rows: ep3 (idx 2) -> ep10 (idx 9)
+  const forward = computeRangeDragSelection({
+    orderedPaths: ordered,
+    baseSelection: base,
+    anchorIndex: 2,
+    targetIndex: 9,
+    select: true,
+  });
+  assert.strictEqual(forward.has('ep1.mkv'), true, 'Pre-selected ep1 must remain selected');
+  assert.strictEqual(forward.has('ep12.mkv'), true, 'Pre-selected ep12 must remain selected');
+  assert.strictEqual(forward.has('ep2.mkv'), false);
+  assert.strictEqual(forward.has('ep11.mkv'), false);
+  for (let i = 2; i <= 9; i++) {
+    assert.strictEqual(forward.has(ordered[i]), true, `Expected ${ordered[i]} inside [3..10] to be selected`);
+  }
+
+  // Pull back while still dragging: ep3 (idx 2) -> ep6 (idx 5)
+  const pulledBack = computeRangeDragSelection({
+    orderedPaths: ordered,
+    baseSelection: base,
+    anchorIndex: 2,
+    targetIndex: 5,
+    select: true,
+  });
+  for (let i = 2; i <= 5; i++) {
+    assert.strictEqual(pulledBack.has(ordered[i]), true);
+  }
+  for (let i = 6; i <= 9; i++) {
+    assert.strictEqual(pulledBack.has(ordered[i]), false, `Expected ${ordered[i]} to revert cleanly on pullback`);
+  }
+
+  // Reverse drag bottom-to-top: ep10 -> ep3
+  const reverse = computeRangeDragSelection({
+    orderedPaths: ordered,
+    baseSelection: new Set(),
+    anchorIndex: 9,
+    targetIndex: 2,
+    select: true,
+  });
+  assert.strictEqual(reverse.size, 8);
+
+  // Deselect drag: ep3 -> ep5 from full selection
+  const full = new Set(ordered);
+  const deselected = computeRangeDragSelection({
+    orderedPaths: ordered,
+    baseSelection: full,
+    anchorIndex: 2,
+    targetIndex: 4,
+    select: false,
+  });
+  assert.strictEqual(deselected.has('ep2.mkv'), true);
+  assert.strictEqual(deselected.has('ep3.mkv'), false);
+  assert.strictEqual(deselected.has('ep4.mkv'), false);
+  assert.strictEqual(deselected.has('ep5.mkv'), false);
+  assert.strictEqual(deselected.has('ep6.mkv'), true);
 });
 
 console.log('\n================================================================');

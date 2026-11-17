@@ -299,7 +299,7 @@ export const FolderBrowser: React.FC<FolderBrowserProps> = ({
   }, [filteredFolders, sortMode, history]);
 
   return (
-    <div className="mx-auto min-h-full w-full max-w-[1800px] px-6 py-7 2xl:px-12">
+    <div className="mx-auto min-h-full w-full max-w-[2160px] px-6 py-7 2xl:px-8">
       <section className="relative mb-6 flex h-[160px] flex-col justify-center overflow-hidden rounded-[26px] border border-white/[0.08] bg-[#0F0B15] px-6 shadow-2xl shadow-black/20 md:h-[168px] md:px-9">
         <div className="pointer-events-none absolute -right-20 -top-32 h-80 w-80 rounded-full bg-rose-500/[0.08] blur-3xl" />
         <div className="pointer-events-none absolute -bottom-36 left-1/3 h-72 w-72 rounded-full bg-violet-500/[0.07] blur-3xl" />
@@ -428,7 +428,7 @@ export const FolderBrowser: React.FC<FolderBrowserProps> = ({
 
           {/* Poster shelf: card click opens the unified title page */}
           {sortedFolders.length > 0 ? (
-            <div className="grid grid-cols-[repeat(auto-fill,minmax(148px,1fr))] gap-5 pt-2 pb-4 sm:grid-cols-[repeat(auto-fill,minmax(168px,1fr))] 2xl:grid-cols-[repeat(auto-fill,minmax(190px,1fr))]">
+            <div className="grid grid-cols-[repeat(auto-fill,minmax(148px,1fr))] gap-5 pt-2 pb-4 sm:grid-cols-[repeat(auto-fill,minmax(168px,1fr))] 2xl:grid-cols-[repeat(auto-fill,minmax(178px,1fr))]">
               {sortedFolders.map((folder) => {
                 const stat = folderWatchStats(folder, history);
                 const displayTitle = folder.canonicalTitle || cleanSeriesTitle(folder.folderName) || folder.folderName;

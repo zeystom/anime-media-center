@@ -31,11 +31,11 @@ import {
   WhisperQueueItem,
   WhisperLiveCue,
   WhisperOptions,
-  WhisperPreset,
   SingingSuppressionMode,
   WhisperEngineDownloadProgress,
 } from '../../types';
 import { cleanSeriesTitle, cleanEpisodeTitle, formatFileSize } from '../../utils/format';
+import { computeRangeDragSelection, resolveEpisodeCardIndexFromPoint } from '../../utils/episodeSelection';
 import { TerminalLog } from './TerminalLog';
 import { LiveDialogueStream } from './LiveDialogueStream';
 import { showGlobalToast } from '../Toast';
@@ -224,7 +224,6 @@ const WhisperStudioImpl: React.FC<WhisperStudioProps> = ({
 
   // UI Drawer State
   const [showTerminal, setShowTerminal] = useState<boolean>(false);
-  const [showAdvanced, setShowAdvanced] = useState<boolean>(false);
   const [isEditingPrompt, setIsEditingPrompt] = useState<boolean>(false);
 
   // Auto-detected Character Names state
@@ -297,17 +296,9 @@ const WhisperStudioImpl: React.FC<WhisperStudioProps> = ({
     refreshModels();
   }, [refreshModels, isActiveTab]);
 
-  // Quality & Tuning State (Human Friendly)
-  // 'anime' = Normal dialogue, 'bgm' = Loud music / action, 'fast' = Quiet & fast, 'custom' = Custom
-  const [qualityOption, setQualityOption] = useState<WhisperPreset>('anime');
-  const [vadSensitivity, setVadSensitivity] = useState<'high' | 'balanced' | 'standard'>('balanced');
-  const [antiStutter, setAntiStutter] = useState<boolean>(true);
-  const [preventSingleWords, setPreventSingleWords] = useState<boolean>(true);
-  const [channelMode, setChannelMode] = useState<'auto' | 'fc'>('auto');
+  // Subtitle Filter & Prompt Preferences
   const [skipOpEd, setSkipOpEd] = useState<boolean>(true);
   const [suppressSinging, setSuppressSinging] = useState<SingingSuppressionMode>('off');
-  const [task, setTask] = useState<'transcribe' | 'translate'>('transcribe');
-  const [language, setLanguage] = useState<string>('en');
 
   // Restore saved tuning preferences from localStorage on mount
   useEffect(() => {
@@ -315,11 +306,6 @@ const WhisperStudioImpl: React.FC<WhisperStudioProps> = ({
       const saved = localStorage.getItem(STORAGE_KEY_WHISPER_TUNING);
       if (saved) {
         const parsed = JSON.parse(saved);
-        if (parsed.preset) setQualityOption(parsed.preset);
-        if (parsed.vadSensitivity) setVadSensitivity(parsed.vadSensitivity);
-        if (parsed.antiStutter !== undefined) setAntiStutter(parsed.antiStutter);
-        if (parsed.preventSingleWords !== undefined) setPreventSingleWords(parsed.preventSingleWords);
-        if (parsed.channelMode) setChannelMode(parsed.channelMode);
         if (parsed.skipOpEd !== undefined) setSkipOpEd(Boolean(parsed.skipOpEd));
         if (parsed.suppressSinging !== undefined) {
           const val = parsed.suppressSinging;
@@ -331,8 +317,6 @@ const WhisperStudioImpl: React.FC<WhisperStudioProps> = ({
               : 'off'
           );
         }
-        if (parsed.task) setTask(parsed.task);
-        if (parsed.language) setLanguage(parsed.language);
         if (typeof parsed.userPromptOverride === 'string') {
           const savedPrompt = parsed.userPromptOverride.trim();
           if (savedPrompt && !/^(?:Dialogue|Characters)\s+from\s+an\s+anime\s+episode\b/i.test(savedPrompt)) {
@@ -349,20 +333,13 @@ const WhisperStudioImpl: React.FC<WhisperStudioProps> = ({
       localStorage.setItem(
         STORAGE_KEY_WHISPER_TUNING,
         JSON.stringify({
-          preset: qualityOption,
-          vadSensitivity,
-          antiStutter,
-          preventSingleWords,
-          channelMode,
           skipOpEd,
           suppressSinging,
-          task,
-          language,
           userPromptOverride,
         })
       );
     } catch {}
-  }, [qualityOption, vadSensitivity, antiStutter, preventSingleWords, channelMode, skipOpEd, suppressSinging, task, language, userPromptOverride]);
+  }, [skipOpEd, suppressSinging, userPromptOverride]);
 
   // Synchronize initialFolder when user opens Whisper from library (unless job is running)
   useEffect(() => {
@@ -693,42 +670,8 @@ const WhisperStudioImpl: React.FC<WhisperStudioProps> = ({
     }
   };
 
-  const handleSelectQuality = (newPreset: 'anime' | 'bgm' | 'fast') => {
-    setQualityOption(newPreset);
-    if (newPreset === 'anime') {
-      setVadSensitivity('balanced');
-      setAntiStutter(true);
-      setPreventSingleWords(true);
-      setChannelMode('auto');
-    } else if (newPreset === 'bgm') {
-      setVadSensitivity('high');
-      setAntiStutter(true);
-      setPreventSingleWords(true);
-      setChannelMode('auto');
-    } else if (newPreset === 'fast') {
-      setVadSensitivity('standard');
-      setAntiStutter(true);
-      setPreventSingleWords(true);
-      setChannelMode('auto');
-    }
-  };
-
   // Optional custom prompt (blank by default so Whisper's auto-prompting avoids leaks/skips)
   const customPrompt = (userPromptOverride || '').trim();
-
-  const isCustomQuality = useMemo(() => {
-    if (qualityOption === 'custom') return true;
-    if (qualityOption === 'anime') {
-      return vadSensitivity !== 'balanced' || !antiStutter || !preventSingleWords || channelMode !== 'auto';
-    }
-    if (qualityOption === 'bgm') {
-      return vadSensitivity !== 'high' || !antiStutter || !preventSingleWords || channelMode !== 'auto';
-    }
-    if (qualityOption === 'fast') {
-      return vadSensitivity !== 'standard' || !antiStutter || !preventSingleWords || channelMode !== 'auto';
-    }
-    return false;
-  }, [qualityOption, vadSensitivity, antiStutter, preventSingleWords, channelMode]);
 
   const buildWhisperOptions = (selectivePaths?: string[]): WhisperOptions => {
     const rawCorrectionNames =
@@ -740,17 +683,17 @@ const WhisperStudioImpl: React.FC<WhisperStudioProps> = ({
     );
 
     return {
-      preset: qualityOption,
+      preset: 'anime',
       model: activeModel || 'large-v3-turbo',
-      language,
-      task,
+      language: 'en',
+      task: 'transcribe',
       vadMethod: 'pyannote_v3',
-      vadThreshold: vadSensitivity === 'high' ? 0.28 : vadSensitivity === 'balanced' ? 0.35 : 0.45,
-      vadMinSpeechDurationMs: vadSensitivity === 'standard' ? 250 : vadSensitivity === 'high' ? 100 : 150,
-      vadSpeechPadMs: vadSensitivity === 'high' ? 1000 : 900,
-      conditionOnPreviousText: !antiStutter,
+      vadThreshold: 0.28,
+      vadMinSpeechDurationMs: 100,
+      vadSpeechPadMs: 1000,
+      conditionOnPreviousText: false,
       compressionRatioThreshold: 2.4,
-      noSpeechThreshold: vadSensitivity === 'high' ? 0.7 : 0.6,
+      noSpeechThreshold: 0.7,
       hallucinationSilenceThreshold: 2,
       initialPrompt: customPrompt || undefined,
       hotwords: detectedHotwords || undefined,
@@ -758,11 +701,11 @@ const WhisperStudioImpl: React.FC<WhisperStudioProps> = ({
       maxLineWidth: 46,
       maxLineCount: 2,
       maxCommaCent: 70,
-      mergeSingleWords: preventSingleWords,
+      mergeSingleWords: false,
       minDistToEnd: 8,
       sentence: true,
-      channelMode,
-      speechNorm: qualityOption === 'bgm',
+      channelMode: 'auto',
+      speechNorm: false,
       skipOpEd,
       suppressSinging,
       animeTitle: currentAnime?.canonicalTitle || cleanSeriesTitle(currentAnime?.folderName || selectedFolder) || undefined,
@@ -786,7 +729,7 @@ const WhisperStudioImpl: React.FC<WhisperStudioProps> = ({
       ...prev,
       {
         type: 'info',
-        text: `Starting Whisper generation for folder: ${selectedFolder} (Audio Track: ${selectedAudioTrackNum}, Quality: ${qualityOption})`,
+        text: `Starting Whisper generation for folder: ${selectedFolder} (Audio Track: ${selectedAudioTrackNum})`,
         timestamp: Date.now(),
       },
     ]);
@@ -885,27 +828,151 @@ const WhisperStudioImpl: React.FC<WhisperStudioProps> = ({
     });
   };
 
-  // Phone-gallery style band selection: press a card to set the sweep mode
-  // (select if it was off, deselect if it was on), then drag across the grid
-  // — every card the pointer passes over joins the sweep. A plain press
-  // without movement is just a click-toggle.
-  const episodeDragRef = useRef<{ active: boolean; select: boolean } | null>(null);
+  const filteredEpisodes =
+    episodeFilter === 'missing'
+      ? episodes.filter((e) => !e.hasWhisperSrt)
+      : episodes;
 
-  const setEpisodePathSelected = (path: string, select: boolean) => {
-    setSelectedEpisodePaths((prev) => {
-      if (select === prev.has(path)) return prev;
-      const next = new Set(prev);
-      if (select) next.add(path);
-      else next.delete(path);
-      return next;
-    });
-  };
+  // Phone-gallery style contiguous range drag selection: press card A to set
+  // anchor + mode (select or deselect), then drag straight to card B across
+  // rows — every episode between A and B updates live, and pulling back reverts.
+  const episodeGridScrollRef = useRef<HTMLDivElement | null>(null);
+  const lastEpisodeAnchorRef = useRef<number | null>(null);
+  const dragPointerPosRef = useRef<{ x: number; y: number } | null>(null);
+  const dragAutoScrollRafRef = useRef<number | null>(null);
+
+  const episodeDragRef = useRef<{
+    active: boolean;
+    select: boolean;
+    anchorIndex: number;
+    lastTargetIndex: number;
+    orderedPaths: string[];
+    baseSelection: Set<string>;
+  } | null>(null);
+
+  const applyRangeTarget = useCallback((targetIndex: number) => {
+    const drag = episodeDragRef.current;
+    if (!drag?.active || targetIndex < 0 || targetIndex >= drag.orderedPaths.length) return;
+    if (drag.lastTargetIndex === targetIndex) return;
+    drag.lastTargetIndex = targetIndex;
+    setSelectedEpisodePaths(
+      computeRangeDragSelection({
+        orderedPaths: drag.orderedPaths,
+        baseSelection: drag.baseSelection,
+        anchorIndex: drag.anchorIndex,
+        targetIndex,
+        select: drag.select,
+      })
+    );
+  }, []);
+
+  const stopDragAutoScroll = useCallback(() => {
+    if (dragAutoScrollRafRef.current !== null) {
+      cancelAnimationFrame(dragAutoScrollRafRef.current);
+      dragAutoScrollRafRef.current = null;
+    }
+  }, []);
+
+  const endEpisodeDrag = useCallback(() => {
+    episodeDragRef.current = null;
+    dragPointerPosRef.current = null;
+    stopDragAutoScroll();
+  }, [stopDragAutoScroll]);
+
+  useEffect(() => {
+    lastEpisodeAnchorRef.current = null;
+    endEpisodeDrag();
+  }, [selectedFolder, episodeFilter, endEpisodeDrag]);
+
+  useEffect(() => {
+    window.addEventListener('pointerup', endEpisodeDrag);
+    window.addEventListener('pointercancel', endEpisodeDrag);
+    return () => {
+      window.removeEventListener('pointerup', endEpisodeDrag);
+      window.removeEventListener('pointercancel', endEpisodeDrag);
+      stopDragAutoScroll();
+    };
+  }, [endEpisodeDrag, stopDragAutoScroll]);
+
+  const stepDragAutoScroll = useCallback(() => {
+    const drag = episodeDragRef.current;
+    const pos = dragPointerPosRef.current;
+    const scrollEl = episodeGridScrollRef.current;
+    if (!drag?.active || !pos || !scrollEl) {
+      dragAutoScrollRafRef.current = null;
+      return;
+    }
+
+    const rect = scrollEl.getBoundingClientRect();
+    const edge = 32;
+    let deltaY = 0;
+    if (pos.y < rect.top + edge) {
+      deltaY = -Math.max(4, Math.round(((rect.top + edge - pos.y) / edge) * 14));
+    } else if (pos.y > rect.bottom - edge) {
+      deltaY = Math.max(4, Math.round(((pos.y - (rect.bottom - edge)) / edge) * 14));
+    }
+
+    if (deltaY !== 0) {
+      const prevTop = scrollEl.scrollTop;
+      scrollEl.scrollTop += deltaY;
+      if (scrollEl.scrollTop !== prevTop) {
+        const targetIndex = resolveEpisodeCardIndexFromPoint(
+          drag.orderedPaths,
+          scrollEl,
+          pos.x,
+          pos.y
+        );
+        if (targetIndex !== -1) applyRangeTarget(targetIndex);
+      }
+      dragAutoScrollRafRef.current = requestAnimationFrame(stepDragAutoScroll);
+    } else {
+      dragAutoScrollRafRef.current = null;
+    }
+  }, [applyRangeTarget]);
 
   const beginEpisodeDrag = (ep: Episode, event: React.PointerEvent<HTMLDivElement>) => {
     if (isProcessing || event.button !== 0) return;
-    const select = !selectedEpisodePaths.has(ep.filePath);
-    episodeDragRef.current = { active: true, select };
-    setEpisodePathSelected(ep.filePath, select);
+    const orderedPaths = filteredEpisodes.map((e) => e.filePath);
+    const clickedIndex = orderedPaths.indexOf(ep.filePath);
+    if (clickedIndex === -1) return;
+
+    const baseSelection = new Set(selectedEpisodePaths);
+    const hasPriorAnchor =
+      event.shiftKey &&
+      lastEpisodeAnchorRef.current !== null &&
+      lastEpisodeAnchorRef.current >= 0 &&
+      lastEpisodeAnchorRef.current < orderedPaths.length;
+
+    const anchorIndex = hasPriorAnchor ? lastEpisodeAnchorRef.current! : clickedIndex;
+    const anchorPath = orderedPaths[anchorIndex];
+    const select = hasPriorAnchor
+      ? baseSelection.has(anchorPath) || !baseSelection.has(ep.filePath)
+      : !baseSelection.has(ep.filePath);
+
+    if (!hasPriorAnchor) {
+      lastEpisodeAnchorRef.current = clickedIndex;
+    }
+
+    episodeDragRef.current = {
+      active: true,
+      select,
+      anchorIndex,
+      lastTargetIndex: clickedIndex,
+      orderedPaths,
+      baseSelection,
+    };
+    dragPointerPosRef.current = { x: event.clientX, y: event.clientY };
+
+    setSelectedEpisodePaths(
+      computeRangeDragSelection({
+        orderedPaths,
+        baseSelection,
+        anchorIndex,
+        targetIndex: clickedIndex,
+        select,
+      })
+    );
+
     try {
       event.currentTarget.setPointerCapture(event.pointerId);
     } catch {}
@@ -914,14 +981,25 @@ const WhisperStudioImpl: React.FC<WhisperStudioProps> = ({
   const handleEpisodeDragMove = (event: React.PointerEvent<HTMLDivElement>) => {
     const drag = episodeDragRef.current;
     if (!drag?.active) return;
-    const target = document.elementFromPoint(event.clientX, event.clientY) as HTMLElement | null;
-    const card = target?.closest('[data-episode-card]') as HTMLElement | null;
-    const path = card?.getAttribute('data-episode-card');
-    if (path) setEpisodePathSelected(path, drag.select);
-  };
 
-  const endEpisodeDrag = () => {
-    episodeDragRef.current = null;
+    dragPointerPosRef.current = { x: event.clientX, y: event.clientY };
+    const scrollEl = episodeGridScrollRef.current;
+    const targetIndex = resolveEpisodeCardIndexFromPoint(
+      drag.orderedPaths,
+      scrollEl,
+      event.clientX,
+      event.clientY
+    );
+    if (targetIndex !== -1) {
+      applyRangeTarget(targetIndex);
+    }
+
+    if (scrollEl && dragAutoScrollRafRef.current === null) {
+      const rect = scrollEl.getBoundingClientRect();
+      if (event.clientY < rect.top + 32 || event.clientY > rect.bottom - 32) {
+        dragAutoScrollRafRef.current = requestAnimationFrame(stepDragAutoScroll);
+      }
+    }
   };
 
   const hasSubtitles = (e: (typeof episodes)[0]) =>
@@ -931,11 +1009,6 @@ const WhisperStudioImpl: React.FC<WhisperStudioProps> = ({
   const existingAnySubCount = episodes.filter(hasSubtitles).length;
   const missingAnySubCount = episodes.length - existingAnySubCount;
   const missingWhisperCount = episodes.length - existingWhisperCount;
-
-  const filteredEpisodes =
-    episodeFilter === 'missing'
-      ? episodes.filter((e) => !e.hasWhisperSrt)
-      : episodes;
 
   const engTrackIndex = sampleAudioTracks.findIndex(
     (t) => t.language === 'eng' || t.language === 'en' || /english/i.test(t.title)
@@ -1283,70 +1356,14 @@ const WhisperStudioImpl: React.FC<WhisperStudioProps> = ({
             )}
           </div>
 
-          {/* Step 3: Quality & Settings */}
+          {/* Step 3: Subtitle Settings */}
           <div className="rounded-2xl glass-panel space-y-3 shadow-md p-4">
-            <div className="flex items-center justify-between">
-              <span className="text-xs font-bold uppercase tracking-wider text-zinc-400 block">
-                3. Quality
-              </span>
-              {isCustomQuality && (
-                <span className="text-[10px] font-mono text-purple-300 bg-purple-500/20 px-2 py-0.5 rounded border border-purple-500/30">
-                  Custom
-                </span>
-              )}
-            </div>
-
-            {/* Segmented 3-option control */}
-            <div className="grid grid-cols-3 gap-1.5 p-1 rounded-xl bg-zinc-900/90 border border-zinc-800">
-              <button
-                type="button"
-                disabled={isProcessing}
-                onClick={() => handleSelectQuality('anime')}
-                className={`py-2 px-1.5 rounded-lg text-xs font-semibold text-center transition-all ${
-                  qualityOption === 'anime' && !isCustomQuality
-                    ? 'bg-indigo-600 text-white shadow-md'
-                    : 'text-zinc-400 hover:text-white hover:bg-zinc-800/60'
-                }`}
-              >
-                Normal dialogue
-              </button>
-              <button
-                type="button"
-                disabled={isProcessing}
-                onClick={() => handleSelectQuality('bgm')}
-                className={`py-2 px-1.5 rounded-lg text-xs font-semibold text-center transition-all ${
-                  qualityOption === 'bgm' && !isCustomQuality
-                    ? 'bg-indigo-600 text-white shadow-md'
-                    : 'text-zinc-400 hover:text-white hover:bg-zinc-800/60'
-                }`}
-              >
-                Loud music / action
-              </button>
-              <button
-                type="button"
-                disabled={isProcessing}
-                onClick={() => handleSelectQuality('fast')}
-                className={`py-2 px-1.5 rounded-lg text-xs font-semibold text-center transition-all ${
-                  qualityOption === 'fast' && !isCustomQuality
-                    ? 'bg-indigo-600 text-white shadow-md'
-                    : 'text-zinc-400 hover:text-white hover:bg-zinc-800/60'
-                }`}
-              >
-                Quiet & fast
-              </button>
-            </div>
-
-            {/* Plain-language explanation line */}
-            <p className="text-[11px] text-zinc-400 leading-normal pt-0.5">
-              {qualityOption === 'bgm'
-                ? 'Boosts quiet speech under loud soundtrack, battle sound effects, and phone calls.'
-                : qualityOption === 'fast'
-                ? 'High-speed recognition for quiet conversational episodes without loud background music.'
-                : 'Recommended for most anime. Protects fast speech, high voices, and stuttering.'}
-            </p>
+            <span className="text-xs font-bold uppercase tracking-wider text-zinc-400 block">
+              3. Subtitles &amp; Filters
+            </span>
 
             {/* Active AI Model Selector */}
-            <div className="pt-2.5 border-t border-zinc-800/60 space-y-2 text-xs">
+            <div className="space-y-2 text-xs">
               <div className="flex items-center justify-between">
                 <div className="flex items-center space-x-1.5">
                   <span className="font-semibold text-zinc-300">AI Subtitle Model</span>
@@ -1607,98 +1624,8 @@ const WhisperStudioImpl: React.FC<WhisperStudioProps> = ({
               </div>
             </div>
 
-            {/* Advanced Settings Link (Collapsed by Default) */}
-            <div className="pt-2 border-t border-zinc-800/60">
-              <button
-                type="button"
-                onClick={() => setShowAdvanced((prev) => !prev)}
-                className="flex items-center space-x-1.5 text-xs text-zinc-400 hover:text-white transition-colors"
-              >
-                <span>Advanced settings</span>
-                {showAdvanced ? <ChevronUp className="w-3.5 h-3.5" /> : <ChevronDown className="w-3.5 h-3.5" />}
-              </button>
-
-              {showAdvanced && (
-                <div className="pt-3 pb-1 space-y-3.5 border-t border-zinc-800/80 mt-2.5">
-                  {/* Voice Sensitivity */}
-                  <div>
-                    <label className="text-[11px] font-bold text-zinc-300 block mb-1">
-                      Speech recognition sensitivity
-                    </label>
-                    <div className="grid grid-cols-3 gap-1.5 text-xs">
-                      {(['high', 'balanced', 'standard'] as const).map((level) => (
-                        <button
-                          key={level}
-                          type="button"
-                          disabled={isProcessing}
-                          onClick={() => {
-                            setVadSensitivity(level);
-                            setQualityOption('custom');
-                          }}
-                          className={`py-1.5 px-2 rounded-lg border font-medium text-center transition-all ${
-                            vadSensitivity === level
-                              ? 'bg-indigo-600/25 border-indigo-500 text-white'
-                              : 'bg-zinc-900 border-zinc-800 text-zinc-400 hover:bg-zinc-800'
-                          }`}
-                        >
-                          {level === 'high' ? 'High' : level === 'balanced' ? 'Balanced' : 'Standard'}
-                        </button>
-                      ))}
-                    </div>
-                    <span className="text-[10px] text-zinc-500 block mt-1">
-                      Higher sensitivity prevents skipping quiet phrases and whispery speech.
-                    </span>
-                  </div>
-
-                  {/* Anti-stutter Protection */}
-                  <label className="flex items-start space-x-2.5 cursor-pointer">
-                    <input
-                      type="checkbox"
-                      disabled={isProcessing}
-                      checked={antiStutter}
-                      onChange={(e) => {
-                        setAntiStutter(e.target.checked);
-                        setQualityOption('custom');
-                      }}
-                      className="w-4 h-4 mt-0.5 rounded bg-zinc-900 border-zinc-700 text-indigo-600 focus:ring-0 cursor-pointer disabled:opacity-50"
-                    />
-                    <div>
-                      <span className="text-xs font-medium text-zinc-200 block">
-                        Stutter & high-pitch loop protection
-                      </span>
-                      <span className="text-[10px] text-zinc-500 block leading-tight">
-                        Prevents repetition loops when characters stutter, squeak, or speak rapidly.
-                      </span>
-                    </div>
-                  </label>
-
-                  {/* Merge Single Words */}
-                  <label className="flex items-start space-x-2.5 cursor-pointer">
-                    <input
-                      type="checkbox"
-                      disabled={isProcessing}
-                      checked={preventSingleWords}
-                      onChange={(e) => {
-                        setPreventSingleWords(e.target.checked);
-                        setQualityOption('custom');
-                      }}
-                      className="w-4 h-4 mt-0.5 rounded bg-zinc-900 border-zinc-700 text-indigo-600 focus:ring-0 cursor-pointer disabled:opacity-50"
-                    />
-                    <div>
-                      <span className="text-xs font-medium text-zinc-200 block">
-                        Merge isolated single words
-                      </span>
-                      <span className="text-[10px] text-zinc-500 block leading-tight">
-                        Keeps whole phrases intact so single words do not fly out onto their own subtitle lines.
-                      </span>
-                    </div>
-                  </label>
-                </div>
-              )}
-            </div>
-
             {/* Subtle Milestone 4 Summary Line */}
-            <div className="pt-2 text-[11px] text-zinc-500 flex items-center space-x-1.5 flex-wrap">
+            <div className="pt-2 border-t border-zinc-800/60 text-[11px] text-zinc-500 flex items-center space-x-1.5 flex-wrap">
               <span>Accurate Timestamps</span>
               <span>·</span>
               <span>English Dialogue</span>
@@ -1825,9 +1752,10 @@ const WhisperStudioImpl: React.FC<WhisperStudioProps> = ({
               </div>
             </div>
 
-            {/* Episode Cards Grid — click toggles; hold + drag sweeps the
-                selection across cards (phone-gallery style). */}
+            {/* Episode Cards Grid — click toggles; hold + drag selects contiguous ranges
+                from start card to target card (phone-gallery style). */}
             <div
+              ref={episodeGridScrollRef}
               className="flex-1 p-3 overflow-y-auto scrollbar-thin select-none"
               onPointerMove={handleEpisodeDragMove}
               onPointerUp={endEpisodeDrag}

@@ -1510,7 +1510,7 @@ export const App: React.FC = () => {
         {/* Home Tab View — pt-[72px]: pages scroll UNDER the floating navbar so
             its backdrop blur catches real scrolled content, not just banners. */}
         {(visitedTabs.has('home') || currentTab === 'home') && <div
-          className={`h-full overflow-y-auto pt-[72px] ${currentTab === 'home' ? 'block' : 'hidden'}`}
+          className={`h-full overflow-y-auto tab-scroll-symmetric pt-[72px] ${currentTab === 'home' ? 'block' : 'hidden'}`}
           onScroll={(event) => {
             markScrolling(event);
             const hero = event.currentTarget.querySelector<HTMLElement>('[data-backdrop-hero]');
@@ -1553,7 +1553,7 @@ export const App: React.FC = () => {
         </div>}
 
         {/* Discover tab: genre-based catalog page with full-library search kept in the navbar. */}
-        {(visitedTabs.has('discover') || currentTab === 'discover') && <div className={`h-full overflow-y-auto pt-[72px] ${currentTab === 'discover' ? 'block' : 'hidden'}`} onScroll={markScrolling}>
+        {(visitedTabs.has('discover') || currentTab === 'discover') && <div className={`h-full overflow-y-auto tab-scroll-symmetric pt-[72px] ${currentTab === 'discover' ? 'block' : 'hidden'}`} onScroll={markScrolling}>
           <Suspense fallback={<div className="flex h-full items-center justify-center text-sm text-zinc-500">Loading Discover…</div>}>
             <DiscoverView
               folders={visibleFolders}
@@ -1570,46 +1570,44 @@ export const App: React.FC = () => {
         </div>}
 
         {/* Library Tab View */}
-        {(visitedTabs.has('library') || currentTab === 'library') && <div className={`h-full overflow-y-auto pt-[72px] ${currentTab === 'library' ? 'block' : 'hidden'}`}>
-          <div className="w-full">
-            {/* Library shelf: cards open the unified title page */}
-            <Suspense fallback={<div className="py-12 text-center text-sm text-zinc-500">Loading Library…</div>}>
-              <FolderBrowser
-                libraryRoot={
-                  settings.libraryFolders && settings.libraryFolders.length > 1
-                    ? `${settings.libraryFolders.length} folders (${settings.libraryFolders.map((f) => getPathBasename(f)).join(', ')})`
-                    : settings.defaultLibraryRoot
+        {(visitedTabs.has('library') || currentTab === 'library') && <div className={`h-full overflow-y-auto tab-scroll-symmetric pt-[72px] ${currentTab === 'library' ? 'block' : 'hidden'}`}>
+          {/* Library shelf: cards open the unified title page */}
+          <Suspense fallback={<div className="py-12 text-center text-sm text-zinc-500">Loading Library…</div>}>
+            <FolderBrowser
+              libraryRoot={
+                settings.libraryFolders && settings.libraryFolders.length > 1
+                  ? `${settings.libraryFolders.length} folders (${settings.libraryFolders.map((f) => getPathBasename(f)).join(', ')})`
+                  : settings.defaultLibraryRoot
+              }
+              folders={visibleFolders}
+              history={history}
+              followedAnime={followedAnime}
+              favouriteAnime={favouriteAnime}
+              userEntries={userEntries}
+              loading={loading}
+              onChangeRoot={handleChangeRoot}
+              onRefresh={handleRefreshLibrary}
+              onOpenFolderDetails={(folder, collectionOnly) => {
+                if (collectionOnly && folder.anilistId != null) {
+                  const item: RailItem = {
+                    anilistId: folder.anilistId,
+                    title: folder.canonicalTitle || folder.folderName,
+                    posterUrl: folder.posterUrl || null,
+                    bannerUrl: folder.bannerUrl || null,
+                    averageScore: folder.averageScore ?? null,
+                    episodesCount: folder.totalEpisodes || null,
+                  };
+                  setDetailSource({ kind: 'catalog', item });
+                } else {
+                  setDetailSource({ kind: 'local', folder });
                 }
-                folders={visibleFolders}
-                history={history}
-                followedAnime={followedAnime}
-                favouriteAnime={favouriteAnime}
-                userEntries={userEntries}
-                loading={loading}
-                onChangeRoot={handleChangeRoot}
-                onRefresh={handleRefreshLibrary}
-                onOpenFolderDetails={(folder, collectionOnly) => {
-                  if (collectionOnly && folder.anilistId != null) {
-                    const item: RailItem = {
-                      anilistId: folder.anilistId,
-                      title: folder.canonicalTitle || folder.folderName,
-                      posterUrl: folder.posterUrl || null,
-                      bannerUrl: folder.bannerUrl || null,
-                      averageScore: folder.averageScore ?? null,
-                      episodesCount: folder.totalEpisodes || null,
-                    };
-                    setDetailSource({ kind: 'catalog', item });
-                  } else {
-                    setDetailSource({ kind: 'local', folder });
-                  }
-                }}
-              />
-            </Suspense>
-          </div>
+              }}
+            />
+          </Suspense>
         </div>}
 
         {/* Schedule Tab View */}
-        {(visitedTabs.has('schedule') || currentTab === 'schedule') && <div className={`h-full overflow-y-auto pt-[72px] ${currentTab === 'schedule' ? 'block' : 'hidden'}`}>
+        {(visitedTabs.has('schedule') || currentTab === 'schedule') && <div className={`h-full overflow-y-auto tab-scroll-symmetric pt-[72px] ${currentTab === 'schedule' ? 'block' : 'hidden'}`}>
           <Suspense fallback={<div className="flex h-full items-center justify-center text-sm text-zinc-500">Loading Schedule…</div>}>
             <ScheduleView
               onSelectItem={handleSelectCatalogItem}
@@ -1620,7 +1618,7 @@ export const App: React.FC = () => {
         </div>}
 
         {/* Downloads Tab View (storage usage + files-only deletion) */}
-        {(visitedTabs.has('downloads') || currentTab === 'downloads') && <div className={`h-full overflow-y-auto pt-[72px] ${currentTab === 'downloads' ? 'block' : 'hidden'}`}>
+        {(visitedTabs.has('downloads') || currentTab === 'downloads') && <div className={`h-full overflow-y-auto tab-scroll-symmetric pt-[72px] ${currentTab === 'downloads' ? 'block' : 'hidden'}`}>
           <Suspense fallback={<div className="flex h-full items-center justify-center text-sm text-zinc-500">Loading Downloads…</div>}>
             <DownloadsView onRefreshLibrary={handleRefreshLibrary} folders={visibleFolders} />
           </Suspense>

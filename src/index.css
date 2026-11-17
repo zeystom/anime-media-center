@@ -64,6 +64,12 @@
   scrollbar-width: none;
 }
 
+/* Reserve symmetric scrollbar gutters on both edges so tabs never jump or
+   shift off-center when a vertical scrollbar appears on one tab but not another. */
+.tab-scroll-symmetric {
+  scrollbar-gutter: stable both-edges;
+}
+
 /* Keep poster images from starting the browser's native image-drag operation.
    The containing rail handles pointer dragging to scroll instead. */
 .horizontal-rail img {

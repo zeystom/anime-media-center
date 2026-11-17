@@ -313,7 +313,7 @@ export const DownloadsView: React.FC<DownloadsViewProps> = ({ onRefreshLibrary, 
     typeof window.electronAPI?.onP2pStateChanged === 'function'
 
   return (
-    <div className="mx-auto min-h-full w-full max-w-[1800px] px-6 py-7 2xl:px-12">
+    <div className="mx-auto min-h-full w-full max-w-[2160px] px-6 py-7 2xl:px-8">
       {/* Symmetrical hero banner matching Discover, Library & Schedule */}
       <section className="relative mb-6 flex h-[160px] flex-col justify-center overflow-hidden rounded-[26px] border border-white/[0.08] bg-[#0F0B15] px-6 shadow-2xl shadow-black/20 md:h-[168px] md:px-9">
         <div className="pointer-events-none absolute -right-20 -top-32 h-80 w-80 rounded-full bg-rose-500/[0.08] blur-3xl" />

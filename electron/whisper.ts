@@ -754,18 +754,14 @@ export class WhisperManager {
         // passing --initial_prompt None when no custom prompt is set prevents Purfview's 'auto' prompt from
         // leaking phrases like "This is the third sentence." during music, and compression_ratio_threshold=2.4 rejects loops.
         const defaultVadMethod = 'pyannote_v3' as const;
-        let defaultVadThreshold = 0.35;
-        let defaultVadMinDuration = 150;
-        let defaultVadPad = 900;
-        let defaultNoSpeech = 0.6;
+        let defaultVadThreshold = 0.28;
+        let defaultVadMinDuration = 100;
+        let defaultVadPad = 1000;
+        let defaultNoSpeech = 0.7;
         const defaultCompressionRatio = 2.4;
         let defaultSpeechNorm = false;
 
         if (preset === 'bgm') {
-          defaultVadThreshold = 0.28;
-          defaultVadMinDuration = 100;
-          defaultVadPad = 1000;
-          defaultNoSpeech = 0.7;
           defaultSpeechNorm = true;
         } else if (preset === 'fast') {
           defaultVadThreshold = 0.45;
@@ -938,7 +934,7 @@ export class WhisperManager {
           hallucinationList: this.activeOptions.hallucinationList,
           maxLineWidth: this.activeOptions.maxLineWidth ?? 46,
           maxLineCount: this.activeOptions.maxLineCount ?? 2,
-          mergeSingleWords: this.activeOptions.mergeSingleWords ?? true,
+          mergeSingleWords: this.activeOptions.mergeSingleWords ?? false,
           skipRanges,
           onOpEdFiltered: (count) => {
             this.sendLog(

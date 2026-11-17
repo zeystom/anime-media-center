@@ -88,7 +88,7 @@ const HomeViewImpl: React.FC<HomeViewProps> = ({
   })), [excludedAnimeIds, genrePicks.rails]);
 
   return (
-    <div className="mx-auto w-full max-w-[1800px] px-6 py-8 2xl:px-12">
+    <div className="mx-auto w-full max-w-[2160px] px-6 py-8 2xl:px-8">
       {upNext && (
         <UpNextWidget
           data={upNext}
