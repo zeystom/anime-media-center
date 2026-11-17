@@ -426,7 +426,7 @@ const DiscoverViewImpl: React.FC<DiscoverViewProps> = ({
   const availableYears = Array.from({ length: Math.max(1, current.year + 2 - 1970) }, (_, index) => current.year + 1 - index)
 
   return (
-    <div className="mx-auto min-h-full w-full max-w-[2160px] px-6 py-7 2xl:px-8">
+    <div className="min-h-full w-full px-6 py-7 2xl:px-8">
       <section className="relative mb-6 flex h-[160px] flex-col justify-center overflow-hidden rounded-[26px] border border-white/[0.08] bg-[#0F0B15] px-6 shadow-2xl shadow-black/20 md:h-[168px] md:px-9">
         <div className="pointer-events-none absolute -right-20 -top-32 h-80 w-80 rounded-full bg-rose-500/[0.08] blur-3xl" />
         <div className="pointer-events-none absolute -bottom-36 left-1/3 h-72 w-72 rounded-full bg-violet-500/[0.07] blur-3xl" />
@@ -726,7 +726,7 @@ const DiscoverViewImpl: React.FC<DiscoverViewProps> = ({
         </div>
       ) : loading ? (
         <div className="grid grid-cols-[repeat(auto-fill,minmax(180px,192px))] justify-between gap-x-4 gap-y-7">
-          {Array.from({ length: 12 }, (_, index) => <div key={index} className="animate-pulse"><div className="aspect-[2/3] rounded-2xl bg-white/[0.045]" /><div className="mt-2 h-3 w-3/4 rounded bg-white/[0.04]" /></div>)}
+          {Array.from({ length: 20 }, (_, index) => <div key={index} className="animate-pulse"><div className="aspect-[2/3] rounded-2xl bg-white/[0.045]" /><div className="mt-2 h-3 w-3/4 rounded bg-white/[0.04]" /></div>)}
         </div>
       ) : ageRating !== 'ALL' && ageRatingsPending && visibleItems.length === 0 ? (
         <div className="rounded-2xl border border-white/[0.08] bg-white/[0.025] py-14 text-center text-xs text-zinc-500">Checking age ratings…</div>

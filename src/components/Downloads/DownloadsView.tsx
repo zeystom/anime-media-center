@@ -313,7 +313,7 @@ export const DownloadsView: React.FC<DownloadsViewProps> = ({ onRefreshLibrary, 
     typeof window.electronAPI?.onP2pStateChanged === 'function'
 
   return (
-    <div className="mx-auto min-h-full w-full max-w-[2160px] px-6 py-7 2xl:px-8">
+    <div className="min-h-full w-full px-6 py-7 2xl:px-8">
       {/* Symmetrical hero banner matching Discover, Library & Schedule */}
       <section className="relative mb-6 flex h-[160px] flex-col justify-center overflow-hidden rounded-[26px] border border-white/[0.08] bg-[#0F0B15] px-6 shadow-2xl shadow-black/20 md:h-[168px] md:px-9">
         <div className="pointer-events-none absolute -right-20 -top-32 h-80 w-80 rounded-full bg-rose-500/[0.08] blur-3xl" />
@@ -424,7 +424,7 @@ export const DownloadsView: React.FC<DownloadsViewProps> = ({ onRefreshLibrary, 
             </p>
           </div>
         ) : (
-          <div className="grid grid-cols-1 gap-3 2xl:grid-cols-2 2xl:gap-3.5">
+          <div className="grid grid-cols-1 gap-3 2xl:grid-cols-2 min-[1800px]:grid-cols-3 2xl:gap-3.5">
             {sortedTitles.map((title) => {
               // The storage overview carries no artwork — match the scanned
               // library folder (same path) for the poster and canonical name.
@@ -523,7 +523,7 @@ export const DownloadsView: React.FC<DownloadsViewProps> = ({ onRefreshLibrary, 
             </p>
           </div>
         ) : (
-          <div className="grid grid-cols-1 gap-3 2xl:grid-cols-2 2xl:gap-3.5">
+          <div className="grid grid-cols-1 gap-3 2xl:grid-cols-2 min-[1800px]:grid-cols-3 2xl:gap-3.5">
             {sortedJobs.map((job) => {
               const chip = jobStatusChip(job.status)
               const canPause =

@@ -91,6 +91,11 @@ export const FolderBrowser: React.FC<FolderBrowserProps> = ({
   const [searchQuery, setSearchQuery] = useState<string>('');
   const [sortMode, setSortMode] = useState<SortMode>('recent');
   const [collectionFilter, setCollectionFilter] = useState<CollectionFilter>('all');
+  const libraryWarmTimerRef = useRef<number | null>(null);
+
+  useEffect(() => () => {
+    if (libraryWarmTimerRef.current != null) window.clearTimeout(libraryWarmTimerRef.current);
+  }, []);
 
   const titleKey = (value: string) => value.toLocaleLowerCase().replace(/\b(season|s)\s*\d+\b/g, '').replace(/[^\p{L}\p{N}]+/gu, '');
   const matchesAnime = (folder: AnimeFolder, item: { anilistId: number | null; title: string; titleKey?: string }) =>
@@ -299,7 +304,7 @@ export const FolderBrowser: React.FC<FolderBrowserProps> = ({
   }, [filteredFolders, sortMode, history]);
 
   return (
-    <div className="mx-auto min-h-full w-full max-w-[2160px] px-6 py-7 2xl:px-8">
+    <div className="min-h-full w-full px-6 py-7 2xl:px-8">
       <section className="relative mb-6 flex h-[160px] flex-col justify-center overflow-hidden rounded-[26px] border border-white/[0.08] bg-[#0F0B15] px-6 shadow-2xl shadow-black/20 md:h-[168px] md:px-9">
         <div className="pointer-events-none absolute -right-20 -top-32 h-80 w-80 rounded-full bg-rose-500/[0.08] blur-3xl" />
         <div className="pointer-events-none absolute -bottom-36 left-1/3 h-72 w-72 rounded-full bg-violet-500/[0.07] blur-3xl" />
@@ -446,6 +451,20 @@ export const FolderBrowser: React.FC<FolderBrowserProps> = ({
                   <div
                     key={folder.folderPath}
                     onClick={() => onOpenFolderDetails(folder, Boolean(folder.collectionOnly))}
+                    onMouseEnter={() => {
+                      if (folder.anilistId == null) return;
+                      if (libraryWarmTimerRef.current != null) window.clearTimeout(libraryWarmTimerRef.current);
+                      const id = folder.anilistId;
+                      libraryWarmTimerRef.current = window.setTimeout(() => {
+                        window.electronAPI?.warmRemoteEpisodes?.(id);
+                      }, 180);
+                    }}
+                    onMouseLeave={() => {
+                      if (libraryWarmTimerRef.current != null) {
+                        window.clearTimeout(libraryWarmTimerRef.current);
+                        libraryWarmTimerRef.current = null;
+                      }
+                    }}
                     className="group relative aspect-[2/3] min-w-0 cursor-pointer select-none transition-transform duration-300 ease-out hover:-translate-y-1 hover:scale-[1.015] active:scale-[0.99]"
                   >
                     {/* Inner Card Container with Guaranteed Chromium Border-Radius Clip */}

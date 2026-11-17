@@ -98,7 +98,7 @@ const AnimeCardImpl: React.FC<AnimeCardProps> = ({ item, badgeState = null, show
       onMouseLeave={cancelWarm}
       className="anime-card group w-[180px] shrink-0 cursor-pointer transition-transform duration-150 hover:-translate-y-0.5 xl:w-[192px]"
     >
-      <div className="relative aspect-[2/3] overflow-hidden rounded-2xl border border-white/[0.09] bg-zinc-900 shadow-lg shadow-black/20 transition-colors group-hover:border-rose-300/40">
+      <div className="relative aspect-[2/3] overflow-hidden rounded-2xl border border-white/[0.09] bg-zinc-900 shadow-md shadow-black/25 transition-colors group-hover:border-rose-300/40">
         {showImage ? (
           <img
             src={item.posterUrl || ''}
@@ -118,12 +118,12 @@ const AnimeCardImpl: React.FC<AnimeCardProps> = ({ item, badgeState = null, show
         {showCatalogBadges && (
           <div className="absolute left-1.5 right-9 top-1.5 flex flex-wrap items-start gap-1">
             {item.seasonYear != null && (
-              <span className="glass-pill inline-flex items-center rounded-md px-1.5 py-1 text-[9px] font-bold leading-none text-zinc-100 shadow-sm">
+              <span className="glass-pill inline-flex items-center rounded-md px-1.5 py-1 text-[9px] font-bold leading-none text-zinc-100">
                 {item.seasonYear}
               </span>
             )}
             {releaseLabel && (
-              <span className={`glass-pill inline-flex items-center rounded-md px-1.5 py-1 text-[9px] font-bold leading-none shadow-sm ${releaseClass}`}>
+              <span className={`glass-pill inline-flex items-center rounded-md px-1.5 py-1 text-[9px] font-bold leading-none ${releaseClass}`}>
                 {releaseLabel}
                 {item.status === 'RELEASING' && item.episodesCount != null && airedEpisodes != null && (
                   <span className="ml-1 font-extrabold text-white">{airedEpisodes}/{item.episodesCount}</span>
@@ -134,13 +134,13 @@ const AnimeCardImpl: React.FC<AnimeCardProps> = ({ item, badgeState = null, show
               </span>
             )}
             {formatLabel && (
-              <span className="glass-pill inline-flex items-center rounded-md px-1.5 py-1 text-[9px] font-bold leading-none text-zinc-100 shadow-sm">
+              <span className="glass-pill inline-flex items-center rounded-md px-1.5 py-1 text-[9px] font-bold leading-none text-zinc-100">
                 {formatLabel}
               </span>
             )}
             <span
               title={ageRatingLoaded ? normalizedAgeRating.description : 'Loading MyAnimeList age rating…'}
-              className={`glass-pill inline-flex items-center rounded-md px-1.5 py-1 text-[9px] font-bold leading-none shadow-sm ${ageRatingTone}`}
+              className={`glass-pill inline-flex items-center rounded-md px-1.5 py-1 text-[9px] font-bold leading-none ${ageRatingTone}`}
             >
               {item.idMal == null ? 'NR' : ageRatingLoaded ? normalizedAgeRating.label : '…'}
             </span>

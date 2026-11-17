@@ -22,7 +22,7 @@ import { parseReleaseCore } from '../src/lib/releaseParser/regexEngine.ts';
 import { checkEpisodeDownloading, isFolderDownloading } from './torrents';
 import { getTrending, getPopularSeason, getAllTimePopular, getAiringSchedule, getRecommendations, getGenrePicks, getDiscoverCatalog, searchCatalog, getCatalogDetails, getCatalogFranchise, getCatalogFranchiseSeasons } from './catalog';
 import { queryAnimeCharacters } from './anilist';
-import { fetchRemoteEpisodes, isAniZipCacheFresh, setRemoteEpisodesUpdateListener } from './aniZip';
+import { fetchRemoteEpisodes, getFastHeroBannerSources, isAniZipCacheFresh, readCachedHeroBanners, saveCachedHeroBanner, setRemoteEpisodesUpdateListener } from './aniZip';
 import { warmFribbIndex } from './fribb';
 import { userLibrary, UserListStatus } from './userLibrary';
 import { getUpdatedAgeRatings, startAgeRatingsUpdater } from './ageRatings';
@@ -1738,6 +1738,18 @@ function setupIpcHandlers() {
 
   ipcMain.handle('metadata:remote-episodes', async (_event, anilistId: number) => {
     return fetchRemoteEpisodes(anilistId);
+  });
+
+  ipcMain.handle('metadata:hero-banners-cache', async () => {
+    return readCachedHeroBanners();
+  });
+
+  ipcMain.handle('metadata:hero-banner-save', async (_event, anilistId: number, bannerUrl: string) => {
+    saveCachedHeroBanner(anilistId, bannerUrl);
+  });
+
+  ipcMain.handle('metadata:hero-banner-sources', async (_event, anilistId: number) => {
+    return getFastHeroBannerSources(anilistId);
   });
 
   // The episodes pipeline pushes progressive payloads: the first usable

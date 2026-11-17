@@ -7,7 +7,7 @@
 <p align="center"><strong>Your anime library, player, and subtitle studio — on your PC.</strong></p>
 
 <p align="center">
-  <img src="https://img.shields.io/badge/Version-3.3.2-ec4899?style=flat-square" alt="Version 3.3.2" />
+  <img src="https://img.shields.io/badge/Version-4.0.0-ec4899?style=flat-square" alt="Version 4.0.0" />
   <img src="https://img.shields.io/badge/Platform-Windows%2010%20%2F%2011-blue?style=flat-square" alt="Windows 10 and 11" />
   <img src="https://img.shields.io/badge/Electron-33-47848F?style=flat-square&logo=electron" alt="Electron 33" />
   <img src="https://img.shields.io/badge/License-MIT-green?style=flat-square" alt="MIT License" />
@@ -17,66 +17,44 @@ Kaiko organizes anime files already on your drives, fetches catalog metadata, an
 
 ## Screenshots
 
-<table>
-  <tr>
-    <td align="center" width="50%">
-      <img src="docs/screenshots/home.jpg" alt="Home view" />
-      <br />
-      <sub><strong>Home</strong> — Continue watching hero banner, recent episodes rail, and airing radar</sub>
-    </td>
-    <td align="center" width="50%">
-      <img src="docs/screenshots/discover.jpg" alt="Discover view" />
-      <br />
-      <sub><strong>Discover</strong> — Seasonal catalog, trending/popular feeds, and multi-criteria filtering</sub>
-    </td>
-  </tr>
-  <tr>
-    <td align="center" width="50%">
-      <img src="docs/screenshots/anime-overview.jpg" alt="Anime overview" />
-      <br />
-      <sub><strong>Anime Overview</strong> — Clearlogo header, synopsis, watchlist status, and episode list</sub>
-    </td>
-    <td align="center" width="50%">
-      <img src="docs/screenshots/library.jpg" alt="Library view" />
-      <br />
-      <sub><strong>Library</strong> — Local collection browser with status filters, badges, and progress tracking</sub>
-    </td>
-  </tr>
-  <tr>
-    <td align="center" width="50%">
-      <img src="docs/screenshots/schedule.jpg" alt="Airing schedule" />
-      <br />
-      <sub><strong>Airing Schedule</strong> — 7-day board, week/date navigation, live search, and followed filter</sub>
-    </td>
-    <td align="center" width="50%">
-      <img src="docs/screenshots/downloads.jpg" alt="Downloads and storage" />
-      <br />
-      <sub><strong>Downloads & Storage</strong> — Disk usage overview, transfer activity, and downloaded titles</sub>
-    </td>
-  </tr>
-  <tr>
-    <td align="center" width="50%">
-      <img src="docs/screenshots/whisper-studio.jpg" alt="Whisper Studio" />
-      <br />
-      <sub><strong>Whisper Studio</strong> — Batch episode selection, dialogue presets, and Faster-Whisper setup</sub>
-    </td>
-    <td align="center" width="50%">
-      <img src="docs/screenshots/player.jpg" alt="Video player" />
-      <br />
-      <sub><strong>Video Player</strong> — Local MKV playback with styled subtitles and quick drawers</sub>
-    </td>
-  </tr>
-</table>
+### Home — Full-bleed hero, recent episodes, weekly radar & 24-card discovery rails
+
+![Home view](docs/screenshots/home.png)
+
+### Discover — Seasonal lineup, trending/popular feeds & multi-criteria filtering
+
+![Discover view](docs/screenshots/discover.png)
+
+### Library — Full-width local collection browser with filters & hover pre-warming
+
+![Library view](docs/screenshots/library.png)
+
+### Airing Schedule — 7-day board, week/date navigation, followed indicators & live search
+
+![Airing schedule](docs/screenshots/schedule.png)
+
+### Downloads & Storage — Library disk usage overview, free drive space & active transfers
+
+![Downloads and storage](docs/screenshots/downloads.png)
+
+### Whisper Studio — Faster-Whisper-XXL subtitle generation & drag range selection
+
+![Whisper Studio](docs/screenshots/whisper-studio.png)
+
+### Video Player — Local HEVC/MKV playback with ASS/SRT/PGS subtitles & quick drawers
+
+![Video player](docs/screenshots/player.png)
 
 ## Features
 
-- **Home & catalog navigation:** hero resume banner with official series clearlogos and current-episode synopses, recent playback rail, weekly airing radar, and horizontal rails with full-strip hover arrows, click-and-drag and two-finger touchpad edge wrap-around with a magnetic progress indicator, and `See all` links that open Discover in the selected category or genre.
-- **Anime discovery & overview:** seasonal, trending, popular, and personalized ("For you") modes; filter by season/year, genre, format, airing status, minimum score, sort order, and age rating. Detailed series pages show clearlogos, synopsis, franchise relations, watchlist status/score controls, and episode lists with 16:9 stills and air dates.
-- **Airing schedule:** switch between a full 7-day board and single-day views, step across weeks (`Last week`, `This week`, `Today`, `Next week`) or jump to any date with the calendar picker, search titles directly inside the schedule, and filter by `Followed only`.
-- **Library & playback:** scan multiple local folders, track progress and watch status without full disk rescans on list edits, and play 10-bit HEVC/MKV files with bundled FFmpeg, styled ASS/SRT/Blu-ray PGS subtitles, chapter/intro skip support, and an episode/subtitle drawer.
-- **Downloads & storage management:** view library disk usage, free drive space, and active transfer speeds; manage P2P episode/season downloads from user-configured RSS/Torznab indexers; delete local series or episodes to free disk space while keeping watch history intact.
-- **Whisper Studio:** batch-generate synchronized English SRT subtitles locally with Faster-Whisper-XXL, automatic English audio track selection, `pyannote_v3` dialogue presets tuned for high/child voices, hallucination/spillover post-processing, optional character name hints, and 1-click in-app engine and model installation.
-- **Windows integration:** animated startup splash screen, native `Kaiko.exe` process identity in Windows Task Manager, fast single-pass parallel auto-updates with in-app release notes, and desktop/Start Menu shortcuts.
+- **Home & catalog navigation:** full-bleed hero resume banner with official series clearlogos, current-episode synopses, recent playback rail, prioritized weekly airing radar with followed-anime badges, and 24-card horizontal genre rails with hover arrows, click-and-drag and touchpad edge wrap-around, and `See all` links into Discover.
+- **Smart season-aware artwork:** resolves crisp widescreen (`>= 1200×680`, aspect `>= 1.6`) backdrops identically across Home, Anime Overview, and the translucent Navbar — prioritizing per-season Kitsu art and official TheTVDB Season Backgrounds before falling back to 1080p–4K franchise fanart, cached persistently on disk (`hero_banners_v2.json` & `tvdb_season_cache_v1.json`) for instant restarts.
+- **Anime discovery & overview:** full-width layouts across Discover, Library, Schedule, Downloads, and Overview pages; seasonal, trending, popular, and personalized ("For you") feeds; multi-criteria filters, franchise relations, watchlist status/score controls, and episode lists with 16:9 stills.
+- **Airing schedule:** switch between a full 7-day board and single-day views, step across weeks or jump via the calendar picker, filter by `Followed only`, and spot followed shows immediately both on Home Weekly Radar and the full Schedule board.
+- **Library & playback:** scan multiple local folders with hover metadata pre-warming, track progress and watch status, and play 10-bit HEVC/MKV files with bundled FFmpeg, styled ASS/SRT/Blu-ray PGS subtitles, chapter/intro skip support, and episode/subtitle drawers.
+- **Downloads & storage management:** view library disk usage, free drive space, and active transfer speeds; manage P2P episode/season downloads from user-configured RSS/Torznab indexers; delete local series or episodes cleanly while keeping watch history intact.
+- **Whisper Studio:** batch-generate synchronized English SRT subtitles locally with Faster-Whisper-XXL, automatic English audio track selection, `pyannote_v3` dialogue presets, OP/ED suppression & 3-mode music filtering (`Off` · `Balanced` · `Strict`), phone-gallery drag range selection, optional character name hints, and 1-click setup.
+- **Windows integration:** animated startup splash screen, native `Kaiko.exe` process identity, fast single-pass parallel auto-updates with in-app release notes, and desktop/Start Menu shortcuts.
 
 ## Torrent and indexer model
 
@@ -84,11 +62,12 @@ Torrent downloads are an optional feature. The application includes a built-in W
 
 For a magnet link that contains no tracker address, the engine appends a small list of public tracker addresses bundled with the app to improve peer discovery. Magnets that already contain trackers keep their own tracker list. Trackers only help peers find each other; they do not provide search results or host download content. You are responsible for the sources you configure and the material you download or share; check the laws that apply where you live.
 
-## What's new in 3.3.2
+## What's new in 4.0.0
 
-- **Streamlined Whisper Studio Controls:** removed redundant **Quality** presets and **Advanced settings** clutter, locking in optimal high-sensitivity `pyannote_v3` defaults and loop protection under the hood while keeping natural unmerged subtitle pacing by default.
-- **Phone-Gallery Range Selection:** press an episode card and drag directly across rows to select or deselect every episode in the contiguous range (with pullback restoration, edge auto-scrolling, and Shift+Click support).
-- **Symmetrical Layout & Wider Library Grid:** added symmetric scrollbar gutters (`scrollbar-gutter: stable both-edges`) so switching between Library, Schedule, Discover, Home, and Downloads never shifts content sideways, widened containers to `max-w-[2160px] 2xl:px-8` to align cleanly with the Navbar on wide displays, and matched Library's 2XL card grid density.
+- **Full-Width UI Overhaul & Larger Discovery Rails:** removed narrow width caps across Home, Discover, Library, Schedule, Downloads, and Overview so the interface scales edge-to-edge on 1080p, 1440p, and ultrawide monitors; raised the full-bleed Home hero banner for cleaner hierarchy (removing redundant top episode pills), widened anime card descriptions, added up to 5-column grids on ultra-wide displays, and expanded Home genre shelves to 24 titles (`DEFAULT_LIST_PER_PAGE = 36`, `DISCOVER_PAGE_SIZE = 30`).
+- **Unified Crisp Widescreen Hero Banners + TVDB Season Backgrounds:** replaced blurry 400px strips and 4:3 cropped covers (`aspect < 1.6`) with a unified aspect- and resolution-verified selector (`heroBanner.ts`, `aniZip.ts`) prioritizing per-season Kitsu art and official **TheTVDB Season Backgrounds** before falling back to 1080p–4K franchise backdrops; added a dedicated `<200 ms` `getFastHeroBannerSources` IPC path, disk persistence (`hero_banners_v2.json`, `tvdb_season_cache_v1.json`) for instant restarts, clean blurred poster fallback on unbannered titles, and synced `Navbar` glass backdrop via `useActiveHeroBannerUrl`.
+- **Home Schedule Radar Priority & Hover Pre-Warming:** `HomeSchedulePreview` now prioritizes followed anime ahead of regular airings with `Bell` counters and row highlights matching the full Schedule view, and `FolderBrowser` cards pre-warm episode metadata on 180 ms hover.
+- **Home Performance & Scrolling Optimization:** fixed `HomeView` `React.memo` invalidation (`homeUpNextData`), memoized rails/scrollers/callbacks, added progressive right-tail card mounting in `CatalogRail`, removed idle `backdrop-blur` layers and unused GPU blur fallbacks, throttled Home scroll geometry reads via `requestAnimationFrame`, and replaced `[data-scrolling] *` with an `O(1)` selector and explicit `contain-intrinsic-size` hints.
 
 ## What's new in 3.3.1
 
@@ -116,7 +95,7 @@ For a magnet link that contains no tracker address, the engine appends a small l
 
 ## Install the Windows app
 
-Download the `Kaiko-Setup-3.3.2.exe` installer from the project’s GitHub Releases page, run it, and choose an install folder. The installer creates Desktop and Start Menu shortcuts. Updates can also be installed directly from within the app via **Settings -> Application Updates** or the startup update prompt (with rendered GitHub release notes). During a normal uninstall, Kaiko asks separately whether to remove saved settings, anime lists, and watch history, and whether to clear the contents of configured media-library folders. Both choices default to **No**; deleting library contents requires a second confirmation listing the folders. Clearing a library folder removes every file inside it, not just Kaiko downloads, and leaves the folder itself in place. Silent uninstall and app upgrades preserve personal data.
+Download the `Kaiko-Setup-4.0.0.exe` installer from the project’s GitHub Releases page, run it, and choose an install folder. The installer creates Desktop and Start Menu shortcuts. Updates can also be installed directly from within the app via **Settings -> Application Updates** or the startup update prompt (with rendered GitHub release notes). During a normal uninstall, Kaiko asks separately whether to remove saved settings, anime lists, and watch history, and whether to clear the contents of configured media-library folders. Both choices default to **No**; deleting library contents requires a second confirmation listing the folders. Clearing a library folder removes every file inside it, not just Kaiko downloads, and leaves the folder itself in place. Silent uninstall and app upgrades preserve personal data.
 
 FFmpeg and a lightweight 7-Zip decompression engine (`7z.exe` + `7z.dll`) are bundled directly into Kaiko for playback, extraction, and automated setup on Windows 10 and Windows 11. The Faster-Whisper-XXL engine can be downloaded and configured in 1 click directly inside Kaiko (or auto-detected from Subtitle Edit / custom paths), along with AI models (`large-v3-turbo`, `medium`, and `small`).
 

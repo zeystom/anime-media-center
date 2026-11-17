@@ -5,6 +5,7 @@ interface HorizontalScrollerProps {
   children: React.ReactNode
   className?: string
   label?: string
+  onEngageScroll?: () => void
 }
 
 interface OverscrollState {
@@ -35,8 +36,14 @@ function wrapScrollToEdge(element: HTMLDivElement, side: 'left' | 'right') {
   element.scrollTo({ left: side === 'right' ? 0 : maxScroll, behavior: 'smooth' })
 }
 
-export const HorizontalScroller: React.FC<HorizontalScrollerProps> = ({ children, className = '', label = 'Scrollable items' }) => {
+const HorizontalScrollerImpl: React.FC<HorizontalScrollerProps> = ({ children, className = '', label = 'Scrollable items', onEngageScroll }) => {
   const scrollRef = useRef<HTMLDivElement>(null)
+  const engagedRef = useRef(false)
+  const notifyEngage = useCallback(() => {
+    if (engagedRef.current) return
+    engagedRef.current = true
+    onEngageScroll?.()
+  }, [onEngageScroll])
   const dragRef = useRef<{ pointerId: number; startX: number; startScroll: number; moved: boolean } | null>(null)
   const overscrollRef = useRef<OverscrollState>(EMPTY_OVERSCROLL)
   const suppressClickRef = useRef(false)
@@ -93,6 +100,7 @@ export const HorizontalScroller: React.FC<HorizontalScrollerProps> = ({ children
   }, [updateEdges])
 
   const scrollByPage = (direction: -1 | 1) => {
+    notifyEngage()
     const element = scrollRef.current
     if (!element) return
     const maxScroll = element.scrollWidth - element.clientWidth
@@ -109,6 +117,7 @@ export const HorizontalScroller: React.FC<HorizontalScrollerProps> = ({ children
 
   const onPointerDown = (event: React.PointerEvent<HTMLDivElement>) => {
     if (event.button !== 0) return
+    notifyEngage()
     const element = scrollRef.current
     if (!element) return
     dragRef.current = { pointerId: event.pointerId, startX: event.clientX, startScroll: element.scrollLeft, moved: false }
@@ -203,6 +212,7 @@ export const HorizontalScroller: React.FC<HorizontalScrollerProps> = ({ children
       const rawDx = (event.deltaX * scale) || (event.shiftKey ? event.deltaY * scale : 0)
       const effectiveDy = event.shiftKey && event.deltaX === 0 ? 0 : event.deltaY * scale
       if (Math.abs(rawDx) < 0.5 || Math.abs(rawDx) <= Math.abs(effectiveDy)) return
+      notifyEngage()
 
       if (Date.now() < wheelCooldownUntilRef.current) {
         event.preventDefault()
@@ -262,7 +272,7 @@ export const HorizontalScroller: React.FC<HorizontalScrollerProps> = ({ children
         wheelReleaseTimerRef.current = null
       }
     }
-  }, [scheduleEdgeUpdate, updateOverscroll])
+  }, [scheduleEdgeUpdate, updateOverscroll, notifyEngage])
 
   const isRightOverscroll = overscroll.side === 'right'
   const isOverscrollArmed = overscroll.progress >= 1
@@ -299,7 +309,10 @@ export const HorizontalScroller: React.FC<HorizontalScrollerProps> = ({ children
             event.stopPropagation()
           }
         }}
-        onScroll={scheduleEdgeUpdate}
+        onScroll={(event) => {
+          if (event.currentTarget.scrollLeft > 4) notifyEngage()
+          scheduleEdgeUpdate()
+        }}
         style={{
           transform: overscroll.railShiftPx > 0 ? `translate3d(${isRightOverscroll ? -overscroll.railShiftPx : overscroll.railShiftPx}px, 0, 0)` : undefined,
           transition: dragging || wheelPulling ? 'none' : 'transform 220ms cubic-bezier(0.22, 1, 0.36, 1)',
@@ -311,12 +324,12 @@ export const HorizontalScroller: React.FC<HorizontalScrollerProps> = ({ children
       {overscroll.side !== null && overscroll.progress > 0.02 && (
         <div
           aria-hidden="true"
-          className={`pointer-events-none absolute top-1/2 z-30 flex h-12 w-12 items-center justify-center rounded-full border backdrop-blur-md transition-[border-color,background-color,box-shadow] duration-150 ${
+          className={`pointer-events-none absolute top-1/2 z-30 flex h-12 w-12 items-center justify-center rounded-full border transition-[border-color,background-color,box-shadow] duration-150 ${
             isRightOverscroll ? 'right-2' : 'left-2'
           } ${
             isOverscrollArmed
-              ? 'border-rose-400/70 bg-rose-500/20 text-rose-200'
-              : 'border-white/15 bg-[#0F0B15]/90 text-zinc-200'
+              ? 'border-rose-400/70 bg-rose-500/25 text-rose-200'
+              : 'border-white/15 bg-[#0F0B15]/95 text-zinc-200'
           }`}
           style={{
             opacity: Math.min(1, overscroll.progress * 2.2),
@@ -355,8 +368,14 @@ export const HorizontalScroller: React.FC<HorizontalScrollerProps> = ({ children
           />
         </div>
       )}
-      <button type="button" aria-label="Scroll left" onPointerDown={(e) => e.stopPropagation()} onClick={() => scrollByPage(-1)} className={`absolute left-1 top-1/2 z-20 flex h-10 w-10 -translate-y-1/2 items-center justify-center rounded-full border border-white/15 bg-[#0F0B15]/90 text-zinc-100 shadow-lg backdrop-blur transition-all hover:border-white/30 hover:bg-[#1D1826] ${edges.left && !dragging ? 'scale-100 opacity-100' : 'pointer-events-none scale-90 opacity-0'}`}><ChevronLeft className="h-5 w-5" /></button>
-      <button type="button" aria-label="Scroll right" onPointerDown={(e) => e.stopPropagation()} onClick={() => scrollByPage(1)} className={`absolute right-1 top-1/2 z-20 flex h-10 w-10 -translate-y-1/2 items-center justify-center rounded-full border border-white/15 bg-[#0F0B15]/90 text-zinc-100 shadow-lg backdrop-blur transition-all hover:border-white/30 hover:bg-[#1D1826] ${edges.right && !dragging ? 'scale-100 opacity-100' : 'pointer-events-none scale-90 opacity-0'}`}><ChevronRight className="h-5 w-5" /></button>
+      {edges.left && !dragging && (
+        <button type="button" aria-label="Scroll left" onPointerDown={(e) => e.stopPropagation()} onClick={() => scrollByPage(-1)} className="absolute left-1 top-1/2 z-20 flex h-10 w-10 -translate-y-1/2 items-center justify-center rounded-full border border-white/15 bg-[#0F0B15]/95 text-zinc-100 shadow-lg transition hover:border-white/30 hover:bg-[#1D1826]"><ChevronLeft className="h-5 w-5" /></button>
+      )}
+      {edges.right && !dragging && (
+        <button type="button" aria-label="Scroll right" onPointerDown={(e) => e.stopPropagation()} onClick={() => scrollByPage(1)} className="absolute right-1 top-1/2 z-20 flex h-10 w-10 -translate-y-1/2 items-center justify-center rounded-full border border-white/15 bg-[#0F0B15]/95 text-zinc-100 shadow-lg transition hover:border-white/30 hover:bg-[#1D1826]"><ChevronRight className="h-5 w-5" /></button>
+      )}
     </div>
   )
 }
+
+export const HorizontalScroller = React.memo(HorizontalScrollerImpl)

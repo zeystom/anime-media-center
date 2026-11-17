@@ -1,5 +1,6 @@
-import React, { useMemo } from 'react';
+import React, { useCallback, useMemo } from 'react';
 import { AnimeFolder, DiscoverMode, Episode, PlaybackProgress, UserLibraryEntry } from '../../types';
+import type { FollowedAnime } from '../../types/notifications';
 import { RailItem, useCatalogSection, useGenrePicks } from '../../hooks/useCatalog';
 import { useLocalStatus } from '../../hooks/useLocalStatus';
 import { UpNextWidget, UpNextData } from './UpNextWidget';
@@ -17,6 +18,7 @@ interface HomeViewProps {
   folders: AnimeFolder[];
   history: Record<string, PlaybackProgress>;
   userEntries: Record<number, UserLibraryEntry>;
+  followedAnime?: FollowedAnime[];
   onPlayEpisode: (episode: Episode, startAt?: number) => void;
   onSelectCatalogItem: (item: RailItem) => void;
   onSelectLocalFolder: (folder: AnimeFolder) => void;
@@ -29,6 +31,7 @@ const HomeViewImpl: React.FC<HomeViewProps> = ({
   folders,
   history,
   userEntries,
+  followedAnime,
   onPlayEpisode,
   onSelectCatalogItem,
   onSelectLocalFolder,
@@ -87,69 +90,86 @@ const HomeViewImpl: React.FC<HomeViewProps> = ({
     items: rail.items.filter((item) => !excludedAnimeIds.has(item.anilistId)),
   })), [excludedAnimeIds, genrePicks.rails]);
 
+  const handleOpenUpNextDetails = useCallback(() => {
+    if (!upNext) return;
+    const folder = sortedFolders.find((item) =>
+      item.folderPath === upNext.progress.folderPath ||
+      item.folderName === upNext.seasonName ||
+      item.canonicalTitle === upNext.seasonName
+    );
+    if (folder) onSelectLocalFolder(folder);
+  }, [upNext, sortedFolders, onSelectLocalFolder]);
+
+  const handleSeeSeason = useCallback(() => onOpenDiscover({ mode: 'season' }), [onOpenDiscover]);
+  const handleSeeTrending = useCallback(() => onOpenDiscover({ mode: 'trending' }), [onOpenDiscover]);
+  const handleSeeAllTime = useCallback(() => onOpenDiscover({ mode: 'popular' }), [onOpenDiscover]);
+  const genreSeeMoreCallbacks = useMemo(
+    () => new Map(genrePicks.rails.map((rail) => [rail.genre, () => onOpenDiscover({ genre: rail.genre })])),
+    [genrePicks.rails, onOpenDiscover],
+  );
+
   return (
-    <div className="mx-auto w-full max-w-[2160px] px-6 py-8 2xl:px-8">
+    <div className="w-full">
       {upNext && (
         <UpNextWidget
           data={upNext}
           onPlay={onPlayEpisode}
-          onOpenDetails={() => {
-            const folder = sortedFolders.find((item) =>
-              item.folderPath === upNext.progress.folderPath ||
-              item.folderName === upNext.seasonName ||
-              item.canonicalTitle === upNext.seasonName
-            )
-            if (folder) onSelectLocalFolder(folder)
-          }}
+          onOpenDetails={handleOpenUpNextDetails}
         />
       )}
 
-      <RecentEpisodesRail folders={folders} history={history} onPlay={onPlayEpisode} />
+      <div className={`w-full px-6 pb-10 2xl:px-8 ${upNext ? 'pt-0' : 'pt-8'}`}>
+        <RecentEpisodesRail folders={folders} history={history} onPlay={onPlayEpisode} />
 
-      <HomeSchedulePreview onSelect={onSelectCatalogItem} onOpenSchedule={onOpenSchedule} />
+        <HomeSchedulePreview
+          followedAnime={followedAnime}
+          onSelect={onSelectCatalogItem}
+          onOpenSchedule={onOpenSchedule}
+        />
 
-      <CatalogRail
-        title="Popular This Season"
-        items={season.items}
-        loading={season.loading}
-        emptyHint="Nothing popular this season yet"
-        onSelect={onSelectCatalogItem}
-        statusFor={statusFor}
-        onSeeMore={() => onOpenDiscover({ mode: 'season' })}
-      />
-
-      <CatalogRail
-        title="Trending Now"
-        items={trending.items}
-        loading={trending.loading}
-        emptyHint="Nothing trending right now"
-        onSelect={onSelectCatalogItem}
-        statusFor={statusFor}
-        onSeeMore={() => onOpenDiscover({ mode: 'trending' })}
-      />
-
-      {visibleGenreRails.map((rail) => (genrePicks.loading || rail.items.length > 0) && (
         <CatalogRail
-          key={rail.genre}
-          title={rail.genre}
-          items={rail.items}
-          loading={genrePicks.loading}
-          emptyHint={`No ${rail.genre.toLowerCase()} anime to show`}
+          title="Popular This Season"
+          items={season.items}
+          loading={season.loading}
+          emptyHint="Nothing popular this season yet"
           onSelect={onSelectCatalogItem}
           statusFor={statusFor}
-          onSeeMore={() => onOpenDiscover({ genre: rail.genre })}
+          onSeeMore={handleSeeSeason}
         />
-      ))}
 
-      <CatalogRail
-        title="All Time Popular"
-        items={allTime.items}
-        loading={allTime.loading}
-        emptyHint="Nothing to show yet"
-        onSelect={onSelectCatalogItem}
-        statusFor={statusFor}
-        onSeeMore={() => onOpenDiscover({ mode: 'popular' })}
-      />
+        <CatalogRail
+          title="Trending Now"
+          items={trending.items}
+          loading={trending.loading}
+          emptyHint="Nothing trending right now"
+          onSelect={onSelectCatalogItem}
+          statusFor={statusFor}
+          onSeeMore={handleSeeTrending}
+        />
+
+        {visibleGenreRails.map((rail) => (genrePicks.loading || rail.items.length > 0) && (
+          <CatalogRail
+            key={rail.genre}
+            title={rail.genre}
+            items={rail.items}
+            loading={genrePicks.loading}
+            emptyHint={`No ${rail.genre.toLowerCase()} anime to show`}
+            onSelect={onSelectCatalogItem}
+            statusFor={statusFor}
+            onSeeMore={genreSeeMoreCallbacks.get(rail.genre)}
+          />
+        ))}
+
+        <CatalogRail
+          title="All Time Popular"
+          items={allTime.items}
+          loading={allTime.loading}
+          emptyHint="Nothing to show yet"
+          onSelect={onSelectCatalogItem}
+          statusFor={statusFor}
+          onSeeMore={handleSeeAllTime}
+        />
+      </div>
     </div>
   );
 };

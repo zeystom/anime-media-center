@@ -231,6 +231,17 @@ runTest('4.3 App renders HomeView on the home tab only and no longer references 
   );
 });
 
+runTest('4.4 App forwards followedAnime into HomeView for Weekly Radar priority badges', () => {
+  assert(
+    appSrc.includes('followedAnime={followedAnime}'),
+    'App.tsx must pass followedAnime into HomeView/ScheduleView'
+  );
+  assert(
+    homeViewSrc.includes('followedAnime={followedAnime}'),
+    'HomeView must pass followedAnime to HomeSchedulePreview'
+  );
+});
+
 console.log('\n--- TEST GROUP 5: SettingsModal Accidental Deletion Prevention ---');
 
 runTest('5.1 SettingsModal has confirmation state before removing media folder', () => {

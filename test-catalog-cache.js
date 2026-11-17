@@ -204,6 +204,20 @@ function anilistHandler(url, init) {
       },
     });
   }
+  if (query.includes('genre0:')) {
+    const data = {};
+    for (let g = 0; g < 5; g++) {
+      const genre = vars[`genre${g}`] || `Genre${g}`;
+      const list = [];
+      for (let i = 0; i < 40; i++) {
+        const id = 80000 + g * 100 + i;
+        const averageScore = i < 30 ? 85 - (i % 15) : i < 36 ? 55 : null;
+        list.push(rawMedia(id, { genres: [genre], averageScore }));
+      }
+      data[`genre${g}`] = { media: list };
+    }
+    return jsonResponse(200, { data });
+  }
   if (query.includes('TRENDING_DESC')) {
     return jsonResponse(200, { data: { Page: { media: TRENDING_FIXTURE.slice((page - 1) * perPage, page * perPage) } } });
   }
@@ -612,6 +626,21 @@ await runTest('getAiringWeekRange math (Monday 00:00 local, 7 days, offset)', as
     resetFetchCalls();
     assert.deepStrictEqual(await catalog.searchCatalog('   '), []);
     assert.strictEqual(anilistCalls().length, 0);
+  });
+
+  await runTest('getGenrePicks returns 24 unique items per genre rail for wide horizontal scrolling', async () => {
+    resetFetchCalls();
+    const rails = await catalog.getGenrePicks();
+    assert.strictEqual(rails.length, 5);
+    const seenIds = new Set();
+    for (const rail of rails) {
+      assert.strictEqual(rail.items.length, 24, `expected 24 items in ${rail.genre} rail`);
+      for (const item of rail.items) {
+        assert.ok(!seenIds.has(item.anilistId), `duplicate anilistId ${item.anilistId} across genre rails`);
+        seenIds.add(item.anilistId);
+      }
+    }
+    assert.ok(fs.existsSync(diskCacheFile('catalog_home_genre_picks_v2.json')), 'genre picks cache v2 file must be written');
   });
 }
 
@@ -1324,6 +1353,8 @@ const FRIEREN_PAYLOAD = {
         return jsonResponse(200, {
           mappings: { imdb_id: 'tt35769369' },
           images: [
+            { coverType: 'Banner', url: 'https://artworks.thetvdb.com/banners/graphical/453057-g.jpg' },
+            { coverType: 'Fanart', url: 'https://artworks.thetvdb.com/banners/v4/series/453057/backgrounds/fanart.jpg' },
             { coverType: 'Clearlogo', url: 'https://artworks.thetvdb.com/banners/v4/series/453057/clearlogo/logo.png' },
           ],
           episodes: {
@@ -1335,6 +1366,7 @@ const FRIEREN_PAYLOAD = {
         return jsonResponse(200, {
           mappings: {},
           images: [
+            { coverType: 'Banner', url: 'https://artworks.thetvdb.com/banners/graphical/123-g.jpg' },
             { coverType: 'Clearlogo', url: 'https://artworks.thetvdb.com/banners/v4/series/123/icons/icon.jpg' },
             { coverType: 'ClearLogo', url: 'https://artworks.thetvdb.com/banners/v4/series/123/icons/square.png' },
           ],
@@ -1347,6 +1379,7 @@ const FRIEREN_PAYLOAD = {
         return jsonResponse(200, {
           mappings: {},
           images: [
+            { coverType: 'Fanart', url: 'https://artworks.thetvdb.com/banners/v4/series/777/backgrounds/fanart777.jpg' },
             { coverType: 'Clearlogo', url: 'https://artworks.thetvdb.com/banners/v4/series/777/clearlogo/67890.png' },
           ],
           episodes: {
@@ -1360,14 +1393,85 @@ const FRIEREN_PAYLOAD = {
     const withImdb = await aniZip.fetchRemoteEpisodes(999101);
     assert.strictEqual(withImdb.logoUrl, 'https://images.metahub.space/logo/medium/tt35769369/img');
     assert.strictEqual(withImdb.fallbackLogoUrl, 'https://artworks.thetvdb.com/banners/v4/series/453057/clearlogo/logo.png');
+    assert.strictEqual(withImdb.bannerUrl, 'https://images.metahub.space/background/large/tt35769369/img');
+    assert.strictEqual(withImdb.fallbackBannerUrl, 'https://artworks.thetvdb.com/banners/v4/series/453057/backgrounds/fanart.jpg');
 
     const iconsOnly = await aniZip.fetchRemoteEpisodes(999102);
     assert.strictEqual(iconsOnly.logoUrl, null);
     assert.strictEqual(iconsOnly.fallbackLogoUrl, null);
+    assert.strictEqual(iconsOnly.bannerUrl, null, 'low-res TVDB Banner strips must be rejected');
 
     const tvdbFallback = await aniZip.fetchRemoteEpisodes(999103);
     assert.strictEqual(tvdbFallback.logoUrl, 'https://artworks.thetvdb.com/banners/v4/series/777/clearlogo/67890.png');
     assert.strictEqual(tvdbFallback.fallbackLogoUrl, null);
+    assert.strictEqual(tvdbFallback.bannerUrl, 'https://artworks.thetvdb.com/banners/v4/series/777/backgrounds/fanart777.jpg');
+    assert.strictEqual(tvdbFallback.fallbackBannerUrl, null);
+  });
+}
+
+{
+  const aniZip = await freshAniZip();
+  resetFetchCalls();
+  resetDiskCache();
+  await runTest('extractTvdbSeasonNumber, parseTvdbSeasonBackgrounds & getFastHeroBannerSources resolve & cache TVDB official season background', async () => {
+    assert.strictEqual(
+      aniZip.extractTvdbSeasonNumber({
+        episodes: {
+          '0': { seasonNumber: 0 },
+          S1: { seasonNumber: 0 },
+          '1': { seasonNumber: 4 },
+          '2': { seasonNumber: 4 },
+        },
+      }),
+      4,
+      'must pick dominant regular-episode TVDB seasonNumber and ignore specials'
+    );
+
+    const sampleHtml = [
+      '<img src="https://artworks.thetvdb.com/banners/series/348545/backgrounds/series-wide.jpg">',
+      '<a href="https://artworks.thetvdb.com/banners/v4/season/1987357/backgrounds/thumb_t.jpg"></a>',
+      '<a href="https://artworks.thetvdb.com/banners/v4/season/1987357/backgrounds/68e6b0410943d.jpg" rel="artwork_backgrounds"></a>',
+      '<a href="https://artworks.thetvdb.com/banners/v4/season/1987357/backgrounds/63de60ea560aa.jpg" rel="artwork_backgrounds"></a>',
+    ].join('\n');
+    assert.deepStrictEqual(aniZip.parseTvdbSeasonBackgrounds(sampleHtml), [
+      'https://artworks.thetvdb.com/banners/v4/season/1987357/backgrounds/68e6b0410943d.jpg',
+      'https://artworks.thetvdb.com/banners/v4/season/1987357/backgrounds/63de60ea560aa.jpg',
+    ]);
+
+    fetchHandler = (url) => {
+      if (url.includes('anime-list-mini.json')) return jsonResponse(200, []);
+      if (url.includes('anilist_id=145139')) {
+        return jsonResponse(200, {
+          mappings: { thetvdb_id: 348545, imdb_id: 'tt9335498', kitsu_id: 45866 },
+          images: [{ coverType: 'Fanart', url: 'https://artworks.thetvdb.com/banners/v4/series/348545/backgrounds/series.jpg' }],
+          episodes: { '1': { seasonNumber: 4, episode: '1', title: { en: 'Someone`s Dream' } } },
+        });
+      }
+      if (url.includes('/anime/45866')) {
+        return jsonResponse(200, { data: { attributes: { coverImage: { original: 'https://media.kitsu.app/anime/45866/cover_image/s4.jpg' } } } });
+      }
+      if (url === 'https://thetvdb.com/dereferrer/series/348545') {
+        return { ok: true, status: 200, url: 'https://thetvdb.com/series/demon-slayer-kimetsu-no-yaiba', headers: { get: () => null }, text: async () => '' };
+      }
+      if (url === 'https://thetvdb.com/series/demon-slayer-kimetsu-no-yaiba/seasons/official/4') {
+        return { ok: true, status: 200, url, headers: { get: () => null }, text: async () => sampleHtml };
+      }
+      return jsonResponse(404, {});
+    };
+
+    const fast = await aniZip.getFastHeroBannerSources(145139);
+    assert.strictEqual(fast.tvdbSeasonBannerUrl, 'https://artworks.thetvdb.com/banners/v4/season/1987357/backgrounds/68e6b0410943d.jpg');
+    assert.strictEqual(fast.kitsuBannerUrl, 'https://media.kitsu.app/anime/45866/cover_image/s4.jpg');
+    assert.strictEqual(fast.bannerUrl, 'https://images.metahub.space/background/large/tt9335498/img');
+    assert.ok(fs.existsSync(diskCacheFile('tvdb_season_cache_v1.json')), 'TVDB season cache must persist on disk');
+
+    // Second call with offline fetch confirms cached TVDB season banner & metadata
+    const reloaded = await freshAniZip();
+    resetFetchCalls();
+    fetchHandler = () => jsonResponse(404, {});
+    const cachedFast = await reloaded.getFastHeroBannerSources(145139);
+    assert.strictEqual(cachedFast.tvdbSeasonBannerUrl, 'https://artworks.thetvdb.com/banners/v4/season/1987357/backgrounds/68e6b0410943d.jpg');
+    assert.strictEqual(fetchCalls.filter((c) => c.url.includes('thetvdb.com')).length, 0, 'cached TVDB season banner must hit 0 TVDB requests on reload');
   });
 }
 

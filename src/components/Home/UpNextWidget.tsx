@@ -1,8 +1,9 @@
 import React, { useEffect, useMemo, useRef, useState } from 'react';
 import { motion } from 'framer-motion';
 import { ArrowRight, Play, X } from 'lucide-react';
-import { Episode, PlaybackProgress, RemoteEpisodesResult } from '../../types';
+import { Episode, HeroBannerSources, PlaybackProgress, RemoteEpisodesResult } from '../../types';
 import { formatTime, cleanSeriesTitle, cleanEpisodeTitle, resolveEpisodeBadgeLabel, resolveResumeUnitLabel } from '../../utils/format';
+import { buildHeroBannerCandidates, invalidateResolvedHeroBanner, useResolvedHeroBanner } from '../../utils/heroBanner';
 
 export interface UpNextData {
   progress: PlaybackProgress;
@@ -21,7 +22,9 @@ interface UpNextWidgetProps {
   onOpenDetails?: () => void;
 }
 
-export const UpNextWidget: React.FC<UpNextWidgetProps> = ({ data, onPlay, onOpenDetails }) => {
+const hueByUrlCache = new Map<string, number | null>();
+
+const UpNextWidgetImpl: React.FC<UpNextWidgetProps> = ({ data, onPlay, onOpenDetails }) => {
   const { progress, episode, seasonName, posterUrl, bannerUrl, anilistId, isUpNext } = data;
 
   // Use hosted artwork only. The local thumbnail endpoint may need to seek and
@@ -38,13 +41,100 @@ export const UpNextWidget: React.FC<UpNextWidgetProps> = ({ data, onPlay, onOpen
     setPosterIdx(0);
   }, [posterCandidates]);
 
+  const [remoteBannerArtwork, setRemoteBannerArtwork] = useState<{
+    id: number | null;
+    bannerUrl: string | null;
+    fallbackBannerUrl: string | null;
+    kitsuBannerUrl: string | null;
+    tvdbSeasonBannerUrl: string | null;
+    aniListBannerUrl: string | null;
+  }>({ id: null, bannerUrl: null, fallbackBannerUrl: null, kitsuBannerUrl: null, tvdbSeasonBannerUrl: null, aniListBannerUrl: null });
+  const [settledBannerAnimeId, setSettledBannerAnimeId] = useState<number | null>(null);
   const [bannerFailed, setBannerFailed] = useState(false);
   const [bannerLoaded, setBannerLoaded] = useState(false);
   const [artworkHue, setArtworkHue] = useState<number | null>(null);
+
+  const activeArtwork = remoteBannerArtwork.id === (anilistId ?? null) ? remoteBannerArtwork : null;
+  const heroSourcesSettled =
+    anilistId == null ||
+    typeof window === 'undefined' ||
+    settledBannerAnimeId === anilistId ||
+    (!window.electronAPI?.getFastHeroBannerSources && !window.electronAPI?.getRemoteEpisodes);
+
+  const bannerCandidates = useMemo(
+    () =>
+      buildHeroBannerCandidates(
+        [
+          activeArtwork?.kitsuBannerUrl,
+          activeArtwork?.tvdbSeasonBannerUrl,
+          activeArtwork?.aniListBannerUrl,
+          bannerUrl,
+        ],
+        [activeArtwork?.bannerUrl, activeArtwork?.fallbackBannerUrl],
+      ),
+    [activeArtwork, bannerUrl],
+  );
+  const { bannerUrl: resolvedBannerUrl } = useResolvedHeroBanner({
+    anilistId,
+    settled: heroSourcesSettled,
+    candidates: bannerCandidates,
+  });
+  const activeBannerUrl = !bannerFailed ? resolvedBannerUrl : null;
+
+  const mergeBannerArtwork = (targetId: number, artwork?: Partial<HeroBannerSources> | null) => {
+    if (!artwork) return;
+    setRemoteBannerArtwork((prev) => {
+      const sameId = prev.id === targetId;
+      const kitsuBannerUrl = artwork.kitsuBannerUrl ?? (sameId ? prev.kitsuBannerUrl : null);
+      const tvdbSeasonBannerUrl = artwork.tvdbSeasonBannerUrl ?? (sameId ? prev.tvdbSeasonBannerUrl : null);
+      const aniListBannerUrl = artwork.aniListBannerUrl ?? (sameId ? prev.aniListBannerUrl : null);
+      const nextBannerUrl = artwork.bannerUrl ?? (sameId ? prev.bannerUrl : null);
+      const fallbackBannerUrl = artwork.fallbackBannerUrl ?? (sameId ? prev.fallbackBannerUrl : null);
+      if (
+        sameId &&
+        kitsuBannerUrl === prev.kitsuBannerUrl &&
+        tvdbSeasonBannerUrl === prev.tvdbSeasonBannerUrl &&
+        aniListBannerUrl === prev.aniListBannerUrl &&
+        nextBannerUrl === prev.bannerUrl &&
+        fallbackBannerUrl === prev.fallbackBannerUrl
+      ) {
+        return prev;
+      }
+      return {
+        id: targetId,
+        bannerUrl: nextBannerUrl,
+        fallbackBannerUrl,
+        kitsuBannerUrl,
+        tvdbSeasonBannerUrl,
+        aniListBannerUrl,
+      };
+    });
+  };
+
   useEffect(() => {
     setBannerFailed(false);
     setBannerLoaded(false);
-  }, [bannerUrl]);
+  }, [resolvedBannerUrl]);
+
+  // Fast hero artwork resolution (<200 ms on cold titles, ~1 ms cached) — never
+  // stalled behind remote episode list/pagination queues.
+  useEffect(() => {
+    if (!anilistId) return;
+    const fastFetch = window.electronAPI?.getFastHeroBannerSources;
+    if (!fastFetch) return;
+    let cancelled = false;
+    fastFetch(anilistId)
+      .then((artwork) => {
+        if (!cancelled) mergeBannerArtwork(anilistId, artwork);
+      })
+      .catch(() => {})
+      .finally(() => {
+        if (!cancelled) setSettledBannerAnimeId(anilistId);
+      });
+    return () => {
+      cancelled = true;
+    };
+  }, [anilistId]);
 
   // Give the home hero the title's own color palette. Hosts that disallow
   // canvas reads simply keep the deterministic per-title fallback.
@@ -66,9 +156,12 @@ export const UpNextWidget: React.FC<UpNextWidgetProps> = ({ data, onPlay, onOpen
     setApiLogoUrls([]);
     setLogoIdx(0);
     setLogoLoaded(false);
-    if (!anilistId) return;
+    if (!anilistId || !window.electronAPI?.getRemoteEpisodes) {
+      return;
+    }
     let cancelled = false;
     let lastLogosKey = '';
+    const hasFastHeroApi = Boolean(window.electronAPI?.getFastHeroBannerSources);
     const parsedNumber = cleanEpisodeTitle(episode.fileName).episodeNumber;
 
     const applyRemoteResult = (result?: RemoteEpisodesResult | null) => {
@@ -76,6 +169,7 @@ export const UpNextWidget: React.FC<UpNextWidgetProps> = ({ data, onPlay, onOpen
       const match = (result.episodes ?? []).find((item) => item.number === parsedNumber);
       if (match?.title) setApiEpisodeTitle(match.title);
       if (match?.synopsis) setApiEpisodeSynopsis(match.synopsis);
+      mergeBannerArtwork(anilistId, result);
       const nextLogos = Array.from(
         new Set(
           [result.logoUrl, result.fallbackLogoUrl].filter(
@@ -92,11 +186,12 @@ export const UpNextWidget: React.FC<UpNextWidgetProps> = ({ data, onPlay, onOpen
       }
     };
 
-    if (window.electronAPI?.getRemoteEpisodes) {
-      window.electronAPI.getRemoteEpisodes(anilistId)
-        .then((result) => applyRemoteResult(result))
-        .catch(() => {});
-    }
+    window.electronAPI.getRemoteEpisodes(anilistId)
+      .then((result) => applyRemoteResult(result))
+      .catch(() => {})
+      .finally(() => {
+        if (!cancelled && !hasFastHeroApi) setSettledBannerAnimeId(anilistId);
+      });
     const unsubscribe = window.electronAPI?.onRemoteEpisodesUpdated?.((updatedId, result) => {
       if (updatedId === anilistId) applyRemoteResult(result);
     });
@@ -176,10 +271,29 @@ export const UpNextWidget: React.FC<UpNextWidgetProps> = ({ data, onPlay, onOpen
   const startAt = !progress.completed ? progress.currentTime || 0 : 0;
   const posterSrc = posterCandidates[posterIdx] || null;
   const themeHue = artworkHue ?? fallbackHue;
-  useEffect(() => setArtworkHue(null), [bannerUrl, posterSrc]);
-  // Read colors from the image already displayed in the hero instead of
-  // creating a second Image request/decode for the same large banner.
-  const updateArtworkHue = (image: HTMLImageElement) => {
+  // Read dominant theme hue safely on a separate CORS-enabled probe so
+  // non-CORS image hosts never block rendering of the visible hero <img>.
+  useEffect(() => {
+    setArtworkHue(null);
+    const source = activeBannerUrl || posterSrc;
+    if (!source || typeof Image === 'undefined') return;
+    if (hueByUrlCache.has(source)) {
+      setArtworkHue(hueByUrlCache.get(source) ?? null);
+      return;
+    }
+    let cancelled = false;
+    const probe = new Image();
+    probe.crossOrigin = 'anonymous';
+    probe.onload = () => {
+      if (!cancelled) updateArtworkHue(probe, source);
+    };
+    probe.onerror = () => {
+      hueByUrlCache.set(source, null);
+    };
+    probe.src = source;
+    return () => { cancelled = true; };
+  }, [activeBannerUrl, posterSrc]);
+  const updateArtworkHue = (image: HTMLImageElement, sourceUrl: string) => {
     try {
       const canvas = document.createElement('canvas');
       canvas.width = 24;
@@ -203,9 +317,11 @@ export const UpNextWidget: React.FC<UpNextWidgetProps> = ({ data, onPlay, onOpen
         bins[Math.floor(hue / 20) % bins.length] += saturation * (1 - Math.abs(light - 0.5));
       }
       const strongest = bins.indexOf(Math.max(...bins));
-      if (strongest >= 0 && bins[strongest] > 0) setArtworkHue(strongest * 20 + 10);
+      const hue = strongest >= 0 && bins[strongest] > 0 ? strongest * 20 + 10 : null;
+      hueByUrlCache.set(sourceUrl, hue);
+      if (hue != null) setArtworkHue(hue);
     } catch {
-      // Cross-origin image hosts may deny pixel access; keep the fallback.
+      hueByUrlCache.set(sourceUrl, null);
     }
   };
   const remaining = Math.max(0, progress.duration - progress.currentTime);
@@ -220,6 +336,9 @@ export const UpNextWidget: React.FC<UpNextWidgetProps> = ({ data, onPlay, onOpen
     || (isMovie && badgeLabel === 'Movie' ? 'Movie' : `Episode ${progress.episodeNumber || episode.episodeNumber || ''}`.trim());
   const activeLogoUrl = apiLogoUrls[logoIdx] ?? null;
   const showLogo = Boolean(activeLogoUrl && logoLoaded);
+  // Size the hero so it fills the top fold alongside Recently Watched while
+  // keeping the Weekly Radar schedule comfortably below the initial scroll fold.
+  const heroMinHeight = 'clamp(540px, calc(100vh - 275px), 1200px)';
 
   return (
     <>
@@ -230,52 +349,64 @@ export const UpNextWidget: React.FC<UpNextWidgetProps> = ({ data, onPlay, onOpen
       transition={{ duration: 0.35, ease: 'easeOut' }}
       style={{
         '--anime-hue': themeHue,
-        background: `radial-gradient(ellipse at 78% 20%, hsla(${themeHue}, 80%, 48%, .2), transparent 52%), #07060A`,
-        borderColor: `hsla(${themeHue}, 65%, 68%, .24)`,
-        boxShadow: `0 28px 90px rgba(0,0,0,.45), 0 0 58px hsla(${themeHue}, 78%, 48%, .16)`,
+        minHeight: heroMinHeight,
+        background: `radial-gradient(ellipse at 78% 24%, hsla(${themeHue}, 80%, 48%, .2), transparent 56%), #07060A`,
       } as React.CSSProperties}
-      className="group relative mb-10 min-h-[360px] overflow-hidden rounded-3xl border shadow-[0_28px_90px_rgba(0,0,0,0.45)] md:min-h-[440px] 2xl:min-h-[500px]"
+      className="group relative mb-2 w-full overflow-hidden"
     >
-      {/* Full-bleed banner art with a deep cinematic fade for readable text. */}
-      {posterSrc && (
-        <img
-          crossOrigin="anonymous"
-          src={posterSrc}
-          alt=""
-          aria-hidden
-          loading="eager"
-          decoding="async"
-          fetchPriority="high"
-          onLoad={(event) => updateArtworkHue(event.currentTarget)}
-          onError={() => setPosterIdx((i) => i + 1)}
-          className={`pointer-events-none absolute inset-0 h-full w-full object-cover object-[center_30%] saturate-[1.12] transition-[opacity,transform] duration-500 group-hover:scale-[1.025] select-none ${bannerLoaded && !bannerFailed ? 'opacity-0' : 'opacity-90'}`}
-        />
-      )}
-      {bannerUrl && !bannerFailed && (
-        <img
-          crossOrigin="anonymous"
-          src={bannerUrl}
-          alt=""
-          aria-hidden
-          loading="eager"
-          decoding="async"
-          fetchPriority="low"
-          onLoad={(event) => { setBannerLoaded(true); updateArtworkHue(event.currentTarget); }}
-          onError={() => setBannerFailed(true)}
-          className={`pointer-events-none absolute inset-0 h-full w-full object-cover object-[center_30%] saturate-[1.18] transition-[opacity,transform] duration-700 group-hover:scale-[1.025] select-none ${bannerLoaded ? 'opacity-90' : 'opacity-0'}`}
-        />
-      )}
-      <div className="pointer-events-none absolute inset-0 bg-[linear-gradient(90deg,rgba(7,8,12,0.88)_0%,rgba(7,8,12,0.62)_42%,rgba(7,8,12,0.06)_100%)]" />
-      <div className="pointer-events-none absolute inset-0 bg-gradient-to-t from-[#07060A]/90 via-transparent to-[#07060A]/10" />
+      {/* Full-bleed banner art dissolved smoothly into --bg-void at the bottom. */}
+      <div
+        className="pointer-events-none absolute inset-0 overflow-hidden"
+        style={{
+          maskImage: 'linear-gradient(to bottom, black 0%, black 76%, transparent 99%)',
+          WebkitMaskImage: 'linear-gradient(to bottom, black 0%, black 76%, transparent 99%)',
+        }}
+      >
+        {posterSrc && !(bannerLoaded && activeBannerUrl) && (
+          <img
+            src={posterSrc}
+            alt=""
+            aria-hidden
+            loading="lazy"
+            decoding="async"
+            onError={() => setPosterIdx((i) => i + 1)}
+            className="pointer-events-none absolute inset-0 h-full w-full scale-115 object-cover object-[center_24%] opacity-25 blur-2xl saturate-[1.2] transition-opacity duration-300 select-none"
+          />
+        )}
+        {activeBannerUrl && (
+          <img
+            key={activeBannerUrl}
+            src={activeBannerUrl}
+            alt=""
+            aria-hidden
+            loading="eager"
+            decoding="async"
+            fetchPriority="high"
+            onLoad={() => setBannerLoaded(true)}
+            onError={() => {
+              invalidateResolvedHeroBanner(anilistId, activeBannerUrl);
+              setBannerFailed(true);
+            }}
+            className={`pointer-events-none absolute inset-0 h-full w-full object-cover object-[center_24%] saturate-[1.18] transition-[opacity,transform] duration-200 group-hover:scale-[1.02] select-none ${bannerLoaded ? 'opacity-90' : 'opacity-0'}`}
+          />
+        )}
+      </div>
+      <div className="pointer-events-none absolute inset-0 bg-[linear-gradient(90deg,rgba(7,6,10,0.88)_0%,rgba(7,6,10,0.46)_34%,rgba(7,6,10,0.04)_68%)]" />
+      <div className="pointer-events-none absolute inset-0 bg-[linear-gradient(180deg,rgba(7,6,10,0.46)_0%,rgba(7,6,10,0.0)_22%,rgba(7,6,10,0.18)_54%,rgba(7,6,10,0.78)_82%,#07060A_100%)]" />
+      <div className="pointer-events-none absolute inset-0" style={{ background: 'radial-gradient(ellipse 56% 78% at 10% 92%, rgba(7,6,10,0.82) 0%, rgba(7,6,10,0.38) 55%, transparent 100%)' }} />
       <div className="pointer-events-none absolute inset-0 mix-blend-screen" style={{ background: `radial-gradient(ellipse at 80% 18%, hsla(${themeHue}, 90%, 58%, .18), transparent 58%)` }} />
 
-      <div className="relative z-10 flex min-h-[360px] max-w-3xl flex-col justify-end p-7 md:min-h-[440px] md:p-10 2xl:min-h-[500px] 2xl:p-14">
-        <div className="mb-4 flex flex-wrap items-center gap-2">
-          <span className="inline-flex items-center gap-2 rounded-full border px-3 py-1 text-[10px] font-extrabold uppercase tracking-[0.14em] shadow-[0_0_24px_rgba(244,63,94,0.12)]" style={{ borderColor: `hsla(${themeHue}, 78%, 70%, .38)`, backgroundColor: `hsla(${themeHue}, 78%, 55%, .17)`, color: `hsl(${themeHue} 85% 82%)` }}>
-            <span className="h-1.5 w-1.5 animate-pulse rounded-full" style={{ backgroundColor: `hsl(${themeHue} 88% 72%)` }} />{isUpNext ? 'Up next' : 'Continue playing'}
+      <div
+        style={{ minHeight: heroMinHeight }}
+        className="relative z-10 flex w-full flex-col justify-end px-6 pb-7 pt-28 md:pb-9 md:pt-32 2xl:px-8 2xl:pb-10"
+      >
+        <div className="flex max-w-3xl flex-col">
+        <div className="mb-3.5 flex flex-wrap items-center gap-2.5">
+          <span className="inline-flex items-center gap-2 rounded-full border px-3.5 py-1.5 text-[11px] font-extrabold uppercase tracking-[0.14em] shadow-[0_0_24px_rgba(244,63,94,0.12)]" style={{ borderColor: `hsla(${themeHue}, 78%, 70%, .38)`, backgroundColor: `hsla(${themeHue}, 78%, 55%, .17)`, color: `hsl(${themeHue} 85% 82%)` }}>
+            <span className="h-2 w-2 rounded-full shadow-[0_0_8px_currentColor]" style={{ backgroundColor: `hsl(${themeHue} 88% 72%)` }} />{isUpNext ? 'Up next' : 'Continue playing'}
           </span>
-          {badgeLabel && <span className="rounded-md border border-white/15 bg-black/35 px-2.5 py-1 font-mono text-[11px] font-semibold text-zinc-200 backdrop-blur">{badgeLabel}</span>}
-          <span className="rounded-md border border-white/15 bg-black/35 px-2.5 py-1 font-mono text-[11px] text-zinc-300 backdrop-blur">{formatTime(progress.currentTime)} / {formatTime(progress.duration)}</span>
+          {isMovie && badgeLabel && <span className="rounded-md border border-white/15 bg-black/35 px-3 py-1.5 font-mono text-xs font-semibold text-zinc-200 backdrop-blur">{badgeLabel}</span>}
+          <span className="rounded-md border border-white/15 bg-black/35 px-3 py-1.5 font-mono text-xs text-zinc-300 backdrop-blur">{formatTime(progress.currentTime)} / {formatTime(progress.duration)}</span>
         </div>
 
         {activeLogoUrl && (
@@ -300,7 +431,7 @@ export const UpNextWidget: React.FC<UpNextWidgetProps> = ({ data, onPlay, onOpen
             }}
             className={
               showLogo
-                ? 'mb-1 max-h-20 w-auto max-w-[min(100%,380px)] self-start object-contain object-left drop-shadow-[0_10px_28px_rgba(0,0,0,0.85)] transition-opacity duration-300 select-none md:max-h-28 md:max-w-[460px] 2xl:max-h-32 2xl:max-w-[520px]'
+                ? 'mb-1.5 max-h-24 w-auto max-w-[min(100%,420px)] self-start object-contain object-left drop-shadow-[0_10px_28px_rgba(0,0,0,0.85)] transition-opacity duration-300 select-none md:max-h-32 md:max-w-[520px] 2xl:max-h-36 2xl:max-w-[580px]'
                 : 'pointer-events-none absolute h-0 w-0 overflow-hidden opacity-0'
             }
           />
@@ -315,15 +446,15 @@ export const UpNextWidget: React.FC<UpNextWidgetProps> = ({ data, onPlay, onOpen
         >
           {displayTitle}
         </h2>
-        <p className="mt-2 text-lg font-semibold text-zinc-200 md:text-xl">{episodeTitle}</p>
+        <p className="mt-2 text-lg font-bold text-zinc-100 [text-shadow:0_2px_10px_rgba(0,0,0,0.9)] md:text-xl 2xl:text-2xl">{episodeTitle}</p>
         {description && (
           <>
             <p
               ref={descriptionRef}
               onClick={() => { if (descriptionClamped) setDescriptionReaderOpen(true) }}
               title={descriptionClamped ? 'Show full description' : undefined}
-              className={`mt-3 max-w-2xl text-[13px] leading-relaxed text-zinc-300/85 drop-shadow-md transition-colors md:text-sm line-clamp-3 ${
-                descriptionClamped ? 'cursor-pointer hover:text-zinc-200' : ''
+              className={`mt-2.5 max-w-2xl text-sm leading-relaxed text-zinc-200/90 [text-shadow:0_2px_8px_rgba(0,0,0,0.95)] transition-colors md:text-[15px] 2xl:text-base line-clamp-2 ${
+                descriptionClamped ? 'cursor-pointer hover:text-white' : ''
               }`}
             >
               {description}
@@ -332,7 +463,7 @@ export const UpNextWidget: React.FC<UpNextWidgetProps> = ({ data, onPlay, onOpen
               <button
                 type="button"
                 onClick={() => setDescriptionReaderOpen(true)}
-                className="self-start text-[11px] font-semibold text-zinc-400 transition-colors hover:text-zinc-200"
+                className="mt-1 self-start text-xs font-semibold text-zinc-300 [text-shadow:0_1px_6px_rgba(0,0,0,0.95)] transition-colors hover:text-white"
               >
                 Show more
               </button>
@@ -340,22 +471,23 @@ export const UpNextWidget: React.FC<UpNextWidgetProps> = ({ data, onPlay, onOpen
           </>
         )}
 
-        <div className={`max-w-xl ${description ? 'mt-4' : 'mt-5'}`}>
-          <div className="mb-2 flex items-center justify-between font-mono text-[11px] text-zinc-300">
+        <div className={`max-w-lg 2xl:max-w-xl ${description ? 'mt-4' : 'mt-5'}`}>
+          <div className="mb-2 flex items-center justify-between font-mono text-xs text-zinc-200 [text-shadow:0_1px_6px_rgba(0,0,0,0.95)]">
             <span>{percent}% completed</span><span>{formatTime(remaining)} remaining</span>
           </div>
-          <div className="h-2 overflow-hidden rounded-full border border-white/10 bg-black/45 p-[2px] backdrop-blur">
+          <div className="h-2.5 overflow-hidden rounded-full border border-white/10 bg-black/55 p-[2px] backdrop-blur">
             <div className="h-full rounded-full transition-all" style={{ width: `${percent}%`, background: 'linear-gradient(90deg, #9E1148, #FF1E6D)', boxShadow: '0 0 16px rgba(255, 30, 109, 0.45)' }} />
           </div>
         </div>
 
-        <div className="mt-6 flex flex-wrap items-center gap-3">
-          <button onClick={() => onPlay(episode, startAt)} className="btn-hue inline-flex items-center gap-2.5 rounded-2xl px-6 py-3.5 text-sm font-extrabold text-white transition hover:-translate-y-0.5 active:translate-y-0" title={`Resume ${resumeTarget}`}>
-            <Play className="h-4 w-4 fill-current" /> Resume {resumeTarget}
+        <div className="mt-5 flex flex-wrap items-center gap-3.5">
+          <button onClick={() => onPlay(episode, startAt)} className="btn-hue inline-flex items-center gap-2.5 rounded-2xl px-7 py-4 text-[15px] font-extrabold text-white transition hover:-translate-y-0.5 active:translate-y-0" title={`Resume ${resumeTarget}`}>
+            <Play className="h-[18px] w-[18px] fill-current" /> Resume {resumeTarget}
           </button>
-          {onOpenDetails && <button onClick={onOpenDetails} className="inline-flex items-center gap-2 rounded-2xl border border-white/15 bg-white/[0.06] px-5 py-3.5 text-sm font-semibold text-zinc-100 backdrop-blur transition hover:bg-white/10">
-            Anime overview <ArrowRight className="h-4 w-4" />
+          {onOpenDetails && <button onClick={onOpenDetails} className="inline-flex items-center gap-2 rounded-2xl border border-white/15 bg-white/[0.06] px-6 py-4 text-[15px] font-semibold text-zinc-100 backdrop-blur transition hover:bg-white/10">
+            Anime overview <ArrowRight className="h-[18px] w-[18px]" />
           </button>}
+        </div>
         </div>
       </div>
     </motion.div>
@@ -409,3 +541,5 @@ export const UpNextWidget: React.FC<UpNextWidgetProps> = ({ data, onPlay, onOpen
     </>
   );
 };
+
+export const UpNextWidget = React.memo(UpNextWidgetImpl);

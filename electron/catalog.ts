@@ -109,7 +109,7 @@ const TTL_SEARCH_MS = 5 * 60 * 1000; // 5 minutes (memory only)
 const TTL_DETAILS_MS = 24 * 60 * 60 * 1000; // 24 hours
 const TTL_GENRE_PICKS_MS = 3 * 24 * 60 * 60 * 1000; // refresh every three days
 
-const DEFAULT_LIST_PER_PAGE = 24;
+const DEFAULT_LIST_PER_PAGE = 36;
 
 /**
  * Reads a disk cache entry (catalog_<name>.json). Returns null on any
@@ -336,7 +336,7 @@ export async function getPopularSeason(perPage = DEFAULT_LIST_PER_PAGE): Promise
   }, { emptyValue: [] });
 }
 
-const DISCOVER_PAGE_SIZE = 24;
+const DISCOVER_PAGE_SIZE = 30;
 const DISCOVER_FILTERED_PAGE_SIZE = 50;
 const DISCOVER_FILTERED_PAGE_COUNT = 5;
 
@@ -432,8 +432,10 @@ const HOME_PICK_GENRES = ['Action', 'Fantasy', 'Comedy', 'Drama', 'Sci-Fi'];
  * Each rail favors scores >=65 and reserves up to two slots for lower-scored
  * titles, while excluding adult entries and duplicate titles across rails.
  */
+const HOME_GENRE_RAIL_SIZE = 24;
+
 export async function getGenrePicks(): Promise<GenrePickRail[]> {
-  return cachedServiceCall('home_genre_picks_v1', TTL_GENRE_PICKS_MS, async () => {
+  return cachedServiceCall('home_genre_picks_v2', TTL_GENRE_PICKS_MS, async () => {
     const candidates = await queryGenreCandidates(
       HOME_PICK_GENRES.map((genre) => ({ genre, page: 1 + Math.floor(Math.random() * 16) })),
       50
@@ -450,16 +452,25 @@ export async function getGenrePicks(): Promise<GenrePickRail[]> {
         .sort(randomScoreOrder);
       const hiddenGems = pool.filter((media) => typeof media.averageScore === 'number' && media.averageScore >= 40 && media.averageScore < 65)
         .sort(() => Math.random() - 0.5);
-      const selected = [...wellRated.slice(0, 8), ...hiddenGems.slice(0, 2)];
+      const selected = [...wellRated.slice(0, 20), ...hiddenGems.slice(0, 4)];
 
-      // Fill short rails with other rated titles, preserving the score bias.
-      if (selected.length < 10) {
+      // Fill short rails with other rated titles first, then remaining pool titles so
+      // wide screens still get rich horizontal scrolling.
+      if (selected.length < HOME_GENRE_RAIL_SIZE) {
         const selectedIds = new Set(selected.map((media) => media.id));
-        const fill = pool
+        const ratedFill = pool
           .filter((media) => typeof media.averageScore === 'number' && !selectedIds.has(media.id))
           .sort(randomScoreOrder)
-          .slice(0, 10 - selected.length);
-        selected.push(...fill);
+          .slice(0, HOME_GENRE_RAIL_SIZE - selected.length);
+        selected.push(...ratedFill);
+        ratedFill.forEach((media) => selectedIds.add(media.id));
+
+        if (selected.length < HOME_GENRE_RAIL_SIZE) {
+          const fallbackFill = pool
+            .filter((media) => !selectedIds.has(media.id))
+            .slice(0, HOME_GENRE_RAIL_SIZE - selected.length);
+          selected.push(...fallbackFill);
+        }
       }
 
       selected.forEach((media) => used.add(media.id));

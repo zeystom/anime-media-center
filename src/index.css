@@ -81,22 +81,31 @@
 /* Let Chromium defer layout and painting for long catalog pages and rails. */
 .anime-card {
   content-visibility: auto;
-  contain-intrinsic-size: auto 330px;
+  contain-intrinsic-size: 180px 330px;
+  contain: layout style paint;
+}
+@media (min-width: 1280px) {
+  .anime-card {
+    contain-intrinsic-size: 192px 346px;
+  }
 }
 
 /* While a page is actively scrolling, silence hover machinery on the content
-   streaming under a stationary cursor: every card passing under the pointer
-   fired enter/leave and started scale/border-color transitions (layer churn
-   that ate FPS in card-dense areas). pointer-events:none also stops hover
-   from applying at all; the flag clears ~150ms after the last scroll event. */
-[data-scrolling] * {
+   streaming under a stationary cursor using O(1) direct-child pointer-events
+   inheritance instead of a universal `*` selector over thousands of nodes. */
+[data-scrolling] > * {
   pointer-events: none !important;
+}
+[data-scrolling] .anime-card,
+[data-scrolling] .anime-card img,
+[data-scrolling] .episode-card {
   transition: none !important;
 }
 
 .home-rail-section {
   content-visibility: auto;
-  contain-intrinsic-size: auto 400px;
+  contain-intrinsic-size: 0 385px;
+  contain: layout style;
 }
 
 /* Episode/library cards: a subtle banner-accent glow along the top edge that

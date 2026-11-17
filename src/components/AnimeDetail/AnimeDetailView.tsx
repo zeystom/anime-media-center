@@ -16,6 +16,7 @@ import type {
   CatalogRelatedTitle,
   FranchiseSeasonInfo,
   Episode,
+  HeroBannerSources,
   P2pState,
   PlaybackProgress,
   ReleaseSearchResult,
@@ -33,6 +34,7 @@ import { ReleasePickerModal } from '../P2P/ReleasePickerModal'
 import { classifyRelease, detectSeasonFromTitle, isMultiSeasonCollection, type TorrentLanguageCode } from '../../lib/releaseParser/releaseClassification.ts'
 import { EpisodeRow } from './EpisodeRow'
 import { resolveAnimeTitle } from '../../utils/title'
+import { buildHeroBannerCandidates, invalidateResolvedHeroBanner, useResolvedHeroBanner } from '../../utils/heroBanner'
 // CRITICAL: import the wasm-free regex engine directly — never from
 // ../../lib/releaseParser/index.ts, which pulls native/wasm deps unsuitable
 // for the renderer process.
@@ -44,7 +46,23 @@ import { showGlobalToast } from '../Toast'
 
 export type DetailSource = { kind: 'catalog'; item: RailItem } | { kind: 'local'; folder: AnimeFolder }
 
-const remoteArtworkCache = new Map<number, { bannerUrl: string | null; posterUrl: string | null }>()
+type CachedRemoteArtwork = {
+  bannerUrl: string | null
+  fallbackBannerUrl: string | null
+  kitsuBannerUrl: string | null
+  tvdbSeasonBannerUrl: string | null
+  aniListBannerUrl: string | null
+  posterUrl: string | null
+}
+const EMPTY_REMOTE_ARTWORK: CachedRemoteArtwork = {
+  bannerUrl: null,
+  fallbackBannerUrl: null,
+  kitsuBannerUrl: null,
+  tvdbSeasonBannerUrl: null,
+  aniListBannerUrl: null,
+  posterUrl: null,
+}
+const remoteArtworkCache = new Map<number, CachedRemoteArtwork>()
 
 export interface AnimeDetailViewProps {
   source: DetailSource
@@ -235,15 +253,18 @@ const AnimeDetailViewImpl: React.FC<AnimeDetailViewProps> = ({
   // refreshed when an episode boundary passes). Keeps the grid capped even
   // when the separate details request fails or is still in flight.
   const [remoteAiredThrough, setRemoteAiredThrough] = useState<number | null>(null)
-  // Series artwork from the episodes payload (ani.zip/TVDB) — AniList has no
-  // bannerImage for many airing seasons. Scoped by anilistId + memory cached so
-  // switching titles never flashes stale artwork from a previous entry.
-  const [remoteArtworkState, setRemoteArtworkState] = useState<{ id: number | null; bannerUrl: string | null; posterUrl: string | null }>({ id: null, bannerUrl: null, posterUrl: null })
+  // Series artwork from the episodes payload (Kitsu/AniList/Metahub/TVDB) —
+  // resolved cleanly via shared useResolvedHeroBanner so Home & Card show the exact
+  // same crisp artwork with zero pop-in replacement jumps.
+  const [remoteArtworkState, setRemoteArtworkState] = useState<{ id: number | null } & CachedRemoteArtwork>({ id: null, ...EMPTY_REMOTE_ARTWORK })
   const [copiedTitleText, setCopiedTitleText] = useState<string | null>(null)
   const copyResetTimerRef = useRef<number | null>(null)
+  const relatedWarmTimerRef = useRef<number | null>(null)
   const [remoteEpisodesLoading, setRemoteEpisodesLoading] = useState(false)
+  const [settledBannerAnimeId, setSettledBannerAnimeId] = useState<number | null>(null)
   const [detailsLoading, setDetailsLoading] = useState(false)
-  const [bgFailed, setBgFailed] = useState(false)
+  const [bannerFailed, setBannerFailed] = useState(false)
+  const [posterBgFailed, setPosterBgFailed] = useState(false)
   const [posterFailed, setPosterFailed] = useState(false)
   const [posterAspect, setPosterAspect] = useState<{ url: string; ratio: number } | null>(null)
   const [artworkHue, setArtworkHue] = useState<number | null>(null)
@@ -369,7 +390,7 @@ const AnimeDetailViewImpl: React.FC<AnimeDetailViewProps> = ({
       setFranchiseSeasonInfo(null)
       setRemoteEpisodes([])
       setRemoteAiredThrough(null)
-      setRemoteArtworkState({ id: null, bannerUrl: null, posterUrl: null })
+      setRemoteArtworkState({ id: null, ...EMPTY_REMOTE_ARTWORK })
       setCopiedTitleText(null)
       setDetailsLoading(false)
       setRelatedLoading(false)
@@ -378,7 +399,7 @@ const AnimeDetailViewImpl: React.FC<AnimeDetailViewProps> = ({
     }
     let cancelled = false
     let unsubscribeUpdates: (() => void) | undefined
-    const cachedArtwork = remoteArtworkCache.get(anilistId) ?? { bannerUrl: null, posterUrl: null }
+    const cachedArtwork = remoteArtworkCache.get(anilistId) ?? EMPTY_REMOTE_ARTWORK
     setDetails(null)
     setRelatedTitles([])
     setFranchiseSeasonInfo(null)
@@ -398,9 +419,38 @@ const AnimeDetailViewImpl: React.FC<AnimeDetailViewProps> = ({
           setRelatedTitles([])
           setRemoteEpisodes([])
           setDetailsLoading(false)
+          setRemoteEpisodesLoading(false)
+          setSettledBannerAnimeId(anilistId)
           setRelatedLoading(false)
         }
         return
+      }
+      const applyArtwork = (sourceData?: Partial<HeroBannerSources> | null) => {
+        if (cancelled || !sourceData) return
+        setRemoteArtworkState((prev) => {
+          const sameId = prev.id === anilistId
+          const artwork: CachedRemoteArtwork = {
+            bannerUrl: sourceData.bannerUrl ?? (sameId ? prev.bannerUrl : null),
+            fallbackBannerUrl: sourceData.fallbackBannerUrl ?? (sameId ? prev.fallbackBannerUrl : null),
+            kitsuBannerUrl: sourceData.kitsuBannerUrl ?? (sameId ? prev.kitsuBannerUrl : null),
+            tvdbSeasonBannerUrl: sourceData.tvdbSeasonBannerUrl ?? (sameId ? prev.tvdbSeasonBannerUrl : null),
+            aniListBannerUrl: sourceData.aniListBannerUrl ?? (sameId ? prev.aniListBannerUrl : null),
+            posterUrl: sourceData.posterUrl ?? (sameId ? prev.posterUrl : null),
+          }
+          if (artwork.bannerUrl || artwork.fallbackBannerUrl || artwork.kitsuBannerUrl || artwork.tvdbSeasonBannerUrl || artwork.aniListBannerUrl || artwork.posterUrl) {
+            remoteArtworkCache.set(anilistId, artwork)
+          }
+          return { id: anilistId, ...artwork }
+        })
+      }
+      const hasFastHeroApi = Boolean(api.getFastHeroBannerSources)
+      if (api.getFastHeroBannerSources) {
+        void api.getFastHeroBannerSources(anilistId)
+          .then((result) => applyArtwork(result))
+          .catch(() => {})
+          .finally(() => {
+            if (!cancelled) setSettledBannerAnimeId(anilistId)
+          })
       }
       void api.getCatalogDetails(anilistId).then((result) => {
         if (!cancelled) setDetails(result ?? null)
@@ -413,15 +463,14 @@ const AnimeDetailViewImpl: React.FC<AnimeDetailViewProps> = ({
         if (cancelled) return
         setRemoteEpisodes(Array.isArray(result?.episodes) ? result.episodes : [])
         setRemoteAiredThrough(typeof result?.airedThrough === 'number' ? result.airedThrough : null)
-        const artwork = { bannerUrl: result?.bannerUrl ?? null, posterUrl: result?.posterUrl ?? null }
-        if (artwork.bannerUrl || artwork.posterUrl) {
-          remoteArtworkCache.set(anilistId, artwork)
-          setRemoteArtworkState({ id: anilistId, ...artwork })
-        }
+        applyArtwork(result)
       }).catch((error) => {
         console.warn('[Anime overview] Episode metadata failed:', error)
       }).finally(() => {
-        if (!cancelled) setRemoteEpisodesLoading(false)
+        if (!cancelled) {
+          setRemoteEpisodesLoading(false)
+          if (!hasFastHeroApi) setSettledBannerAnimeId(anilistId)
+        }
       })
       // Progressive pushes: the pipeline delivers its first usable snapshot
       // (~1 s), then hedge/retry/fallback improvements — apply each payload
@@ -430,11 +479,7 @@ const AnimeDetailViewImpl: React.FC<AnimeDetailViewProps> = ({
         if (cancelled || updatedId !== anilistId || !result) return
         setRemoteEpisodes(Array.isArray(result.episodes) ? result.episodes : [])
         setRemoteAiredThrough(typeof result.airedThrough === 'number' ? result.airedThrough : null)
-        const artwork = { bannerUrl: result.bannerUrl ?? null, posterUrl: result.posterUrl ?? null }
-        if (artwork.bannerUrl || artwork.posterUrl) {
-          remoteArtworkCache.set(anilistId, artwork)
-          setRemoteArtworkState({ id: anilistId, ...artwork })
-        }
+        applyArtwork(result)
       })
       void api.getCatalogFranchise(anilistId).then((result) => {
         if (!cancelled) setRelatedTitles(Array.isArray(result) ? result : [])
@@ -477,12 +522,38 @@ const AnimeDetailViewImpl: React.FC<AnimeDetailViewProps> = ({
       .catch(() => {})
   }
 
-  // Hero data: full CatalogItem preferred, RailItem/folder as fallback chain,
-  // with remote TVDB Fanart / Kitsu artwork filling titles that lack an
-  // AniList banner without ever swapping an already-shown AniList banner.
+  // Unified hero backdrop resolution (shared with UpNextWidget): prioritizes
+  // crisp >=680px per-season artwork (Kitsu HD / AniList HD), then Full-HD
+  // franchise backdrops (Metahub 1080p-4K / TVDB Fanart), settling cleanly
+  // before display so uncached pages never flash Banner A -> Banner B.
   const entryIdMal = anilistId != null ? userEntries[anilistId]?.idMal ?? null : null
   const resolvedRemoteArtwork = (remoteArtworkState.id === anilistId ? remoteArtworkState : null) ??
     (anilistId != null ? remoteArtworkCache.get(anilistId) ?? null : null)
+  const heroBannerCandidates = useMemo(
+    () =>
+      buildHeroBannerCandidates(
+        [
+          resolvedRemoteArtwork?.kitsuBannerUrl,
+          resolvedRemoteArtwork?.tvdbSeasonBannerUrl,
+          resolvedRemoteArtwork?.aniListBannerUrl,
+          details?.bannerUrl,
+          railItem?.bannerUrl,
+          localFolder?.bannerUrl,
+        ],
+        [
+          resolvedRemoteArtwork?.bannerUrl,
+          resolvedRemoteArtwork?.fallbackBannerUrl,
+        ],
+      ),
+    [resolvedRemoteArtwork, details?.bannerUrl, railItem?.bannerUrl, localFolder?.bannerUrl],
+  )
+  const { bannerUrl: resolvedBannerUrl, ready: bannerReady } = useResolvedHeroBanner({
+    anilistId,
+    settled: anilistId == null || typeof window === 'undefined' || settledBannerAnimeId === anilistId,
+    candidates: heroBannerCandidates,
+  })
+  const activeBannerUrl = !bannerFailed ? resolvedBannerUrl : null
+
   const hero = useMemo(() => {
     const fallbackTitle = railItem?.title || localFolder?.canonicalTitle || localFolder?.folderName || ''
     const titlePreference = settings?.animeTitleLanguage ?? 'english'
@@ -513,7 +584,7 @@ const AnimeDetailViewImpl: React.FC<AnimeDetailViewProps> = ({
       title,
       secondaryTitle,
       secondaryTitles,
-      bannerUrl: details?.bannerUrl ?? railItem?.bannerUrl ?? localFolder?.bannerUrl ?? resolvedRemoteArtwork?.bannerUrl ?? null,
+      bannerUrl: activeBannerUrl,
       posterUrl: details?.posterUrl ?? railItem?.posterUrl ?? localFolder?.posterUrl ?? resolvedRemoteArtwork?.posterUrl ?? null,
       averageScore: details?.averageScore ?? railItem?.averageScore ?? localFolder?.averageScore ?? null,
       episodesCount: details?.episodesCount ?? railItem?.episodesCount ?? null,
@@ -526,7 +597,7 @@ const AnimeDetailViewImpl: React.FC<AnimeDetailViewProps> = ({
       description: stripHtml(details?.description ?? localFolder?.synopsis ?? null),
       idMal: details?.idMal ?? railItem?.idMal ?? entryIdMal ?? null,
     }
-  }, [details, railItem, localFolder, resolvedRemoteArtwork, entryIdMal, settings?.animeTitleLanguage])
+  }, [details, railItem, localFolder, activeBannerUrl, resolvedRemoteArtwork, entryIdMal, settings?.animeTitleLanguage])
   const posterAspectRatio = posterAspect?.url === hero.posterUrl ? posterAspect.ratio : 2 / 3
 
   // Read a tiny downsample of the banner when the image host permits canvas
@@ -662,9 +733,17 @@ const AnimeDetailViewImpl: React.FC<AnimeDetailViewProps> = ({
   }, [details])
 
   useEffect(() => {
-    setBgFailed(false)
+    setBannerFailed(false)
+  }, [resolvedBannerUrl])
+
+  useEffect(() => {
+    setPosterBgFailed(false)
     setPosterFailed(false)
-  }, [hero.bannerUrl, hero.posterUrl])
+  }, [hero.posterUrl])
+
+  useEffect(() => () => {
+    if (relatedWarmTimerRef.current != null) window.clearTimeout(relatedWarmTimerRef.current)
+  }, [])
 
   const episodeTotal = hero.episodesCount ?? Math.max(
     hero.totalEpisodes,
@@ -1271,7 +1350,7 @@ const AnimeDetailViewImpl: React.FC<AnimeDetailViewProps> = ({
     }
   }
 
-  const showBanner = !!hero.bannerUrl && !bgFailed
+  const showBanner = !!hero.bannerUrl
   const showPoster = !!hero.posterUrl && !posterFailed
   const reportBackdropProgress = (container: HTMLDivElement) => {
     const heroElement = container.querySelector<HTMLElement>('[data-backdrop-hero]')
@@ -1311,22 +1390,26 @@ const AnimeDetailViewImpl: React.FC<AnimeDetailViewProps> = ({
           WebkitMaskImage: 'linear-gradient(to bottom, black 20%, transparent 100%)',
         }}
       >
-        {showBanner ? (
+        {showBanner && hero.bannerUrl ? (
           <img
-            src={hero.bannerUrl || ''}
+            key={`ambient:${hero.bannerUrl}`}
+            src={hero.bannerUrl}
             alt=""
             loading="eager"
             decoding="async"
-            onError={() => setBgFailed(true)}
+            onError={() => {
+              invalidateResolvedHeroBanner(anilistId, hero.bannerUrl)
+              setBannerFailed(true)
+            }}
             className="absolute inset-0 h-full w-full object-cover object-[center_28%] opacity-[0.28] blur-[110px] saturate-[1.9]"
             style={{ transform: 'scale(1.15)' }}
           />
-        ) : hero.posterUrl && !bgFailed ? (
+        ) : bannerReady && hero.posterUrl && !posterBgFailed ? (
           <img
             src={hero.posterUrl || ''}
             alt=""
             loading="lazy"
-            onError={() => setBgFailed(true)}
+            onError={() => setPosterBgFailed(true)}
             className="absolute inset-0 h-full w-full object-cover opacity-[0.24] blur-[110px] saturate-[1.9]"
             style={{ transform: 'scale(1.15)' }}
           />
@@ -1350,36 +1433,40 @@ const AnimeDetailViewImpl: React.FC<AnimeDetailViewProps> = ({
             WebkitMaskImage: 'linear-gradient(to bottom, black 0%, black 70%, transparent 97%)',
           }}
         >
-          {showBanner ? (
+          {showBanner && hero.bannerUrl ? (
             <img
-              src={hero.bannerUrl || ''}
+              key={`hero:${hero.bannerUrl}`}
+              src={hero.bannerUrl}
               alt=""
               loading="eager"
               decoding="async"
-              onError={() => setBgFailed(true)}
-              className="absolute inset-0 h-full w-full object-cover object-[center_28%] opacity-85 saturate-[1.15]"
+              onError={() => {
+              invalidateResolvedHeroBanner(anilistId, hero.bannerUrl)
+              setBannerFailed(true)
+            }}
+              className="absolute inset-0 h-full w-full object-cover object-[center_28%] opacity-85 saturate-[1.15] animate-in fade-in duration-300"
             />
-          ) : hero.posterUrl && !bgFailed ? (
+          ) : bannerReady && hero.posterUrl && !posterBgFailed ? (
             <img
               src={hero.posterUrl || ''}
               alt=""
               loading="lazy"
-              onError={() => setBgFailed(true)}
+              onError={() => setPosterBgFailed(true)}
               className="absolute inset-0 h-full w-full scale-125 object-cover opacity-20 blur-3xl"
             />
           ) : null}
-          {/* Directional text-protection scrim behind the left/center hero
-              content: guaranteed contrast over any banner brightness. */}
-          <div className="pointer-events-none absolute inset-0" style={{ background: 'radial-gradient(circle at 30% 50%, rgba(7, 6, 10, 0.78) 0%, rgba(7, 6, 10, 0.35) 60%, transparent 100%)' }} />
+          {/* Directional text-protection scrim behind the left hero content:
+              smooth contrast from the left poster through metadata without a localized center blob. */}
+          <div className="pointer-events-none absolute inset-0" style={{ background: 'linear-gradient(90deg, rgba(7, 6, 10, 0.88) 0%, rgba(7, 6, 10, 0.68) 34%, rgba(7, 6, 10, 0.22) 64%, transparent 100%)' }} />
           {/* Multi-stop vertical dissolve into --bg-void. Kept gentle so the
-              banner reads clearly; the radial scrim above already guarantees
+              banner reads clearly; the left gradient above already guarantees
               text contrast behind the hero content. */}
-          <div className="pointer-events-none absolute inset-0" style={{ background: 'linear-gradient(180deg, rgba(7, 6, 10, 0.10) 0%, rgba(7, 6, 10, 0.32) 55%, rgba(7, 6, 10, 0.72) 86%, #07060A 100%)' }} />
+          <div className="pointer-events-none absolute inset-0" style={{ background: 'linear-gradient(180deg, rgba(7, 6, 10, 0.12) 0%, rgba(7, 6, 10, 0.28) 54%, rgba(7, 6, 10, 0.74) 86%, #07060A 100%)' }} />
         </div>
 
-        <div className="relative z-10 mx-auto flex w-full max-w-7xl flex-col gap-6 px-6 py-8 sm:flex-row sm:items-stretch">
+        <div className="relative z-10 flex w-full flex-col gap-6 px-6 pb-12 pt-8 sm:flex-row sm:items-stretch 2xl:px-8 2xl:pb-14 2xl:pt-10">
           {/* Poster and personal list controls share one aligned left column. */}
-          <div className="flex w-[180px] shrink-0 flex-col justify-between sm:w-[220px] md:w-[240px]">
+          <div className="flex w-[180px] shrink-0 flex-col justify-between sm:w-[220px] md:w-[240px] 2xl:w-[260px]">
             <div className="w-full shrink-0 overflow-hidden rounded-xl border bg-zinc-900 shadow-2xl" style={{ aspectRatio: posterAspectRatio, borderColor: `hsla(${themeHue}, 70%, 70%, .48)`, boxShadow: `0 18px 55px hsla(${themeHue}, 75%, 35%, .24)` }}>
               {showPoster ? (
                 <img
@@ -1749,10 +1836,12 @@ const AnimeDetailViewImpl: React.FC<AnimeDetailViewProps> = ({
             )}
 
             {hero.description && (
-              <>
+              <div className="mt-4 max-w-2xl rounded-2xl border border-white/[0.08] bg-[#0a070f]/68 px-4 py-3 shadow-lg shadow-black/20 backdrop-blur-xl">
+                {/* Keep line-clamp-4 un-padded on <p> itself: putting py-* on a
+                    -webkit-box line-clamped element slices the last visible line inside padding. */}
                 <p
                   ref={descriptionRef}
-                  className="mt-4 line-clamp-5 max-w-2xl rounded-xl border border-white/[0.08] bg-[rgba(10,7,15,0.72)] px-3.5 py-2.5 text-[13px] leading-relaxed text-zinc-100/95 shadow-lg shadow-black/20 backdrop-blur-[20px]"
+                  className="line-clamp-4 text-[13px] leading-relaxed text-zinc-100/95"
                 >
                   {hero.description}
                 </p>
@@ -1760,12 +1849,12 @@ const AnimeDetailViewImpl: React.FC<AnimeDetailViewProps> = ({
                   <button
                     type="button"
                     onClick={() => setDescriptionReaderOpen(true)}
-                    className="mt-1 inline-flex items-center gap-1 rounded-md px-1 py-0.5 text-[11px] font-semibold text-zinc-300 transition-colors hover:text-white focus:outline-none focus:ring-2 focus:ring-white/30"
+                    className="mt-2 inline-flex items-center gap-1 rounded-md text-[11px] font-semibold text-rose-300/90 transition-colors hover:text-rose-200 focus:outline-none focus:ring-2 focus:ring-white/30"
                   >
                     Read full description <span aria-hidden="true">↗</span>
                   </button>
                 )}
-              </>
+              </div>
             )}
 
             {/* Actions row */}
@@ -1975,7 +2064,7 @@ const AnimeDetailViewImpl: React.FC<AnimeDetailViewProps> = ({
       {!isFeatureFilm && !isSingleEpisodeEntry && <>
       <section
         ref={episodesSectionRef}
-        className="relative z-10 mx-auto w-full max-w-7xl scroll-mt-4 px-6 pb-16"
+        className="relative z-10 w-full scroll-mt-4 px-6 pb-16 2xl:px-8"
       >
         <div className="mb-3 flex items-center justify-between">
           <div>
@@ -1998,7 +2087,7 @@ const AnimeDetailViewImpl: React.FC<AnimeDetailViewProps> = ({
           </p>
         ) : (
           <>
-            <div className="grid gap-3 grid-cols-1 sm:grid-cols-2 xl:grid-cols-3 2xl:grid-cols-4">
+            <div className="grid gap-3 grid-cols-1 sm:grid-cols-2 lg:grid-cols-3 xl:grid-cols-4 min-[1800px]:grid-cols-5">
               {visibleEpisodeRows.map((row) => {
                 const local = row.local
                 const progress = local ? history[local.filePath] : undefined
@@ -2096,7 +2185,7 @@ const AnimeDetailViewImpl: React.FC<AnimeDetailViewProps> = ({
       </section>
       </>}
 
-      <section className="relative z-10 mx-auto w-full max-w-7xl px-6 pb-16">
+      <section className="relative z-10 w-full px-6 pb-16 2xl:px-8">
         <div className="mb-4 flex items-end justify-between gap-4">
           <div>
             <h2 className="text-xl font-black text-white">Related</h2>
@@ -2107,7 +2196,7 @@ const AnimeDetailViewImpl: React.FC<AnimeDetailViewProps> = ({
         {relatedLoading ? <div className="h-36 animate-pulse rounded-2xl border border-white/10 bg-white/[0.03]" /> : orderedRelated.length === 0 ? (
           <p className="rounded-xl border border-white/[0.08] bg-white/[0.02] px-4 py-6 text-center text-sm text-zinc-500">No related titles were returned by AniList.</p>
         ) : (
-          <div className="grid grid-cols-2 gap-3 sm:grid-cols-3 xl:grid-cols-5">
+          <div className="grid grid-cols-[repeat(auto-fill,minmax(168px,196px))] gap-3.5">
             {orderedRelated.map((item) => {
               const title = item.title.english || item.title.romaji || `Anime ${item.anilistId}`
               const isCurrent = item.anilistId === details?.anilistId
@@ -2128,7 +2217,24 @@ const AnimeDetailViewImpl: React.FC<AnimeDetailViewProps> = ({
                   {card}
                 </div>
               ) : (
-                <button key={item.anilistId} type="button" onClick={() => onOpenRelated(item)} className="group overflow-hidden rounded-xl border border-white/10 bg-elevated text-left transition hover:-translate-y-0.5 hover:border-rose-300/40 hover:shadow-lg hover:shadow-rose-950/20">
+                <button
+                  key={item.anilistId}
+                  type="button"
+                  onClick={() => onOpenRelated(item)}
+                  onMouseEnter={() => {
+                    if (relatedWarmTimerRef.current != null) window.clearTimeout(relatedWarmTimerRef.current)
+                    relatedWarmTimerRef.current = window.setTimeout(() => {
+                      window.electronAPI?.warmRemoteEpisodes?.(item.anilistId)
+                    }, 180)
+                  }}
+                  onMouseLeave={() => {
+                    if (relatedWarmTimerRef.current != null) {
+                      window.clearTimeout(relatedWarmTimerRef.current)
+                      relatedWarmTimerRef.current = null
+                    }
+                  }}
+                  className="group overflow-hidden rounded-xl border border-white/10 bg-elevated text-left transition hover:-translate-y-0.5 hover:border-rose-300/40 hover:shadow-lg hover:shadow-rose-950/20"
+                >
                   {card}
                 </button>
               )

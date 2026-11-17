@@ -1,4 +1,4 @@
-import React, { useMemo } from 'react';
+import React, { useCallback, useMemo, useState } from 'react';
 import { RailItem } from '../../hooks/useCatalog';
 import { LocalBadgeState } from '../../hooks/useLocalStatus';
 import { AnimeCard } from '../common/AnimeCard';
@@ -15,7 +15,10 @@ interface CatalogRailProps {
   onSeeMore?: () => void;
 }
 
-const SKELETON_COUNT = 6;
+const SKELETON_COUNT = 12;
+const INITIAL_VISIBLE_CARDS = typeof window !== 'undefined'
+  ? Math.max(12, Math.ceil(window.innerWidth / 192) + 2)
+  : 12;
 
 const SkeletonCard: React.FC = () => (
   <div className="w-[180px] shrink-0">
@@ -25,7 +28,7 @@ const SkeletonCard: React.FC = () => (
   </div>
 );
 
-export const CatalogRail: React.FC<CatalogRailProps> = ({
+const CatalogRailImpl: React.FC<CatalogRailProps> = ({
   title,
   items,
   loading = false,
@@ -35,10 +38,17 @@ export const CatalogRail: React.FC<CatalogRailProps> = ({
   onSeeMore,
 }) => {
   const skeletons = useMemo(() => Array.from({ length: SKELETON_COUNT }, (_, i) => i), []);
+  const [expanded, setExpanded] = useState(false);
+  const engage = useCallback(() => setExpanded(true), []);
   const { ratings } = useAgeRatings(items);
+  const tailCutoff = expanded ? items.length : INITIAL_VISIBLE_CARDS;
 
   return (
-    <section className="home-rail-section mb-10">
+    <section
+      onPointerEnter={!expanded && items.length > INITIAL_VISIBLE_CARDS ? engage : undefined}
+      onFocusCapture={!expanded && items.length > INITIAL_VISIBLE_CARDS ? engage : undefined}
+      className="home-rail-section mb-10"
+    >
       <div className="mb-4 flex items-center justify-between gap-2.5">
         <div className="flex items-center gap-2.5">
           <span className="h-2 w-2 rounded-full bg-rose-400 shadow-[0_0_10px_rgba(255,30,109,0.65)]" />
@@ -58,24 +68,32 @@ export const CatalogRail: React.FC<CatalogRailProps> = ({
           {emptyHint || 'Nothing here yet'}
         </p>
       ) : (
-        <HorizontalScroller label={`${title} anime`} className="flex gap-4 overflow-x-auto pb-3">
-          {items.map((item) => (
-            <AnimeCard
-              key={item.anilistId}
-              item={item}
-              showCatalogBadges
-              ageRating={item.idMal != null ? ratings[item.idMal] : null}
-              ageRatingLoaded={item.idMal == null || Object.prototype.hasOwnProperty.call(ratings, item.idMal)}
-              badgeState={statusFor({
-                anilistId: item.anilistId,
-                title: item.title,
-                apiEpisodesCount: item.episodesCount ?? null,
-              })}
-              onClick={onSelect}
-            />
-          ))}
+        <HorizontalScroller label={`${title} anime`} onEngageScroll={engage} className="flex gap-4 overflow-x-auto pb-3">
+          {items.map((item, idx) =>
+            idx < tailCutoff ? (
+              <AnimeCard
+                key={item.anilistId}
+                item={item}
+                showCatalogBadges
+                ageRating={item.idMal != null ? ratings[item.idMal] : null}
+                ageRatingLoaded={item.idMal == null || Object.prototype.hasOwnProperty.call(ratings, item.idMal)}
+                badgeState={statusFor({
+                  anilistId: item.anilistId,
+                  title: item.title,
+                  apiEpisodesCount: item.episodesCount ?? null,
+                })}
+                onClick={onSelect}
+              />
+            ) : (
+              <div key={item.anilistId} aria-hidden="true" className="anime-card w-[180px] shrink-0 xl:w-[192px]">
+                <div className="aspect-[2/3] w-full rounded-2xl bg-zinc-900/40" />
+              </div>
+            )
+          )}
         </HorizontalScroller>
       )}
     </section>
   );
 };
+
+export const CatalogRail = React.memo(CatalogRailImpl);

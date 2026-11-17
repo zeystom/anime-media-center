@@ -27,7 +27,7 @@ function titleLooksLikeRelease(value: string): boolean {
   return /[\[\]]/.test(value) || /\b(?:2160p|1080p|720p|web[- ]?rip|web[- ]?dl|bluray|h\.?265|x265|hevc|e[- ]?ac[- ]?3|multi[- ]audio|dual[- ]audio|repack)\b/i.test(value)
 }
 
-export const RecentEpisodesRail: React.FC<RecentEpisodesRailProps> = ({ folders, history, onPlay }) => {
+const RecentEpisodesRailImpl: React.FC<RecentEpisodesRailProps> = ({ folders, history, onPlay }) => {
   const recent = useMemo(() => {
     const episodesByPath = new Map<string, { folder: AnimeFolder; episode: Episode }>()
     for (const folder of folders) {
@@ -48,7 +48,7 @@ export const RecentEpisodesRail: React.FC<RecentEpisodesRailProps> = ({ folders,
         if (!match || match.episode.isDownloading) return []
         return [{ ...match, progress }]
       })
-      .slice(0, 12)
+      .slice(0, 20)
   }, [folders, history])
 
   // API enrichment: local titles/thumbnails are often missing (release-name
@@ -123,7 +123,7 @@ export const RecentEpisodesRail: React.FC<RecentEpisodesRailProps> = ({ folders,
       lastSignatureRef.current = '';
       setEnrichVersion((version) => version + 1);
     });
-  }, [recent]);
+  }, []);
 
   if (recent.length === 0) return null
 
@@ -191,3 +191,5 @@ export const RecentEpisodesRail: React.FC<RecentEpisodesRailProps> = ({ folders,
     </section>
   )
 }
+
+export const RecentEpisodesRail = React.memo(RecentEpisodesRailImpl)

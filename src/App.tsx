@@ -11,6 +11,7 @@ import { ToastProvider, showGlobalToast } from './components/Toast';
 import { getPathBasename, getPathDirname, formatFileSize, cleanSeriesTitle, cleanEpisodeTitle, isFolderMovie } from './utils/format';
 import { toRailItem } from './hooks/useCatalog';
 import type { RailItem } from './hooks/useCatalog';
+import { useActiveHeroBannerUrl } from './utils/heroBanner';
 import type { AppNotification, FavouriteAnime, FollowedAnime } from './types/notifications';
 import { UpdatePromptModal } from './components/UpdatePromptModal';
 
@@ -171,13 +172,18 @@ export const App: React.FC = () => {
     emitter.listeners.forEach((listener) => listener(next));
   }, []);
 
+  const homeBackdropRafRef = useRef<number | null>(null);
+  const homeHeroElRef = useRef<HTMLElement | null>(null);
+
+  useEffect(() => () => {
+    if (homeBackdropRafRef.current != null) window.cancelAnimationFrame(homeBackdropRafRef.current);
+  }, []);
+
   // Marks a scroll container as actively scrolling for ~150ms after the last
-  // scroll event. CSS keys off [data-scrolling] to suppress hover transitions
-  // on the cards streaming under a stationary cursor (enter/leave transition
-  // storms were eating FPS in card-dense areas).
+  // scroll event without churning the attribute when it is already active.
   const markScrolling = useCallback((event: React.UIEvent<HTMLDivElement>) => {
     const el = event.currentTarget as HTMLDivElement & { __scrollIdle?: number };
-    el.setAttribute('data-scrolling', 'true');
+    if (!el.hasAttribute('data-scrolling')) el.setAttribute('data-scrolling', 'true');
     window.clearTimeout(el.__scrollIdle);
     el.__scrollIdle = window.setTimeout(() => el.removeAttribute('data-scrolling'), 150);
   }, []);
@@ -1467,6 +1473,42 @@ export const App: React.FC = () => {
     return { enabled: true, status: 'Idle', icon: 'ShieldCheck', bgColor: 'bg-zinc-700', textColor: 'text-zinc-300' }
   }, [p2pState]);
 
+  const navbarAnimeId = activePlayerEpisode
+    ? null
+    : detailSource
+      ? detailSource.kind === 'catalog'
+        ? detailSource.item.anilistId
+        : detailSource.folder.anilistId ?? null
+      : currentTab === 'home'
+        ? mostRecentWatched?.folder?.anilistId ?? null
+        : null;
+  const navbarFallbackImage = activePlayerEpisode
+    ? null
+    : detailSource
+      ? detailSource.kind === 'catalog'
+        ? (detailSource.item.anilistId ? detailSource.item.posterUrl : detailSource.item.bannerUrl || detailSource.item.posterUrl)
+        : (detailSource.folder.anilistId ? detailSource.folder.posterUrl : detailSource.folder.bannerUrl || detailSource.folder.posterUrl)
+      : currentTab === 'home'
+        ? (mostRecentWatched?.folder?.anilistId ? mostRecentWatched?.folder?.posterUrl : mostRecentWatched?.folder?.bannerUrl || mostRecentWatched?.folder?.posterUrl)
+        : null;
+  const navbarBackdropImage = useActiveHeroBannerUrl(navbarAnimeId, navbarFallbackImage);
+  const homeUpNextData = useMemo(
+    () =>
+      mostRecentWatched
+        ? {
+            progress: mostRecentWatched.progress,
+            episode: mostRecentWatched.episode,
+            seasonName: mostRecentWatched.seasonName,
+            posterUrl: mostRecentWatched.folder?.posterUrl,
+            bannerUrl: mostRecentWatched.folder?.bannerUrl,
+            anilistId: mostRecentWatched.folder?.anilistId,
+            isUpNext: mostRecentWatched.isUpNext,
+            isMovie: mostRecentWatched.folder ? isFolderMovie(mostRecentWatched.folder) : false,
+          }
+        : null,
+    [mostRecentWatched],
+  );
+
   return (
     <ToastProvider>
       <div className="animate-app-enter relative flex h-screen w-screen flex-col overflow-hidden bg-[#07060A] font-sans text-zinc-100">
@@ -1475,13 +1517,7 @@ export const App: React.FC = () => {
         <>
           <Navbar
             currentTab={currentTab}
-            backdropImage={detailSource
-              ? detailSource.kind === 'catalog'
-                ? detailSource.item.bannerUrl || detailSource.item.posterUrl
-                : detailSource.folder.bannerUrl || detailSource.folder.posterUrl
-              : currentTab === 'home'
-                ? mostRecentWatched?.folder?.bannerUrl || mostRecentWatched?.folder?.posterUrl
-                : null}
+            backdropImage={navbarBackdropImage}
             backdropMode={detailSource ? 'anime' : 'ambient'}
             backdropEmitter={navbarProgressEmitter}
             blurEnabled={settings.navbarBlur ?? true}
@@ -1507,43 +1543,44 @@ export const App: React.FC = () => {
           activePlayerEpisode ? 'hidden' : 'block'
         }`}
       >
-        {/* Home Tab View — pt-[72px]: pages scroll UNDER the floating navbar so
-            its backdrop blur catches real scrolled content, not just banners. */}
+        {/* Home Tab View — full-bleed hero starts beneath the translucent navbar
+            when UpNext is mounted; otherwise pt-[72px] keeps rails clear of it. */}
         {(visitedTabs.has('home') || currentTab === 'home') && <div
-          className={`h-full overflow-y-auto tab-scroll-symmetric pt-[72px] ${currentTab === 'home' ? 'block' : 'hidden'}`}
+          className={`h-full overflow-y-auto ${mostRecentWatched ? '' : 'pt-[72px]'} ${currentTab === 'home' ? 'block' : 'hidden'}`}
           onScroll={(event) => {
             markScrolling(event);
-            const hero = event.currentTarget.querySelector<HTMLElement>('[data-backdrop-hero]');
-            if (!hero) {
+            const container = event.currentTarget;
+            if (container.scrollTop > 1300) {
               updateNavbarBackdropProgress(0);
               return;
             }
-            const heroRect = hero.getBoundingClientRect();
-            const containerTop = event.currentTarget.getBoundingClientRect().top;
-            const progress = heroRect.height > 0
-              ? Math.max(0, Math.min(1, (heroRect.bottom - containerTop) / heroRect.height))
-              : 0;
-            updateNavbarBackdropProgress(progress);
+            if (homeBackdropRafRef.current != null) return;
+            homeBackdropRafRef.current = window.requestAnimationFrame(() => {
+              homeBackdropRafRef.current = null;
+              let hero = homeHeroElRef.current;
+              if (!hero || !container.contains(hero)) {
+                hero = container.querySelector<HTMLElement>('[data-backdrop-hero]');
+                homeHeroElRef.current = hero;
+              }
+              if (!hero) {
+                updateNavbarBackdropProgress(0);
+                return;
+              }
+              const heroRect = hero.getBoundingClientRect();
+              const containerTop = container.getBoundingClientRect().top;
+              const progress = heroRect.height > 0
+                ? Math.max(0, Math.min(1, (heroRect.bottom - containerTop) / heroRect.height))
+                : 0;
+              updateNavbarBackdropProgress(progress);
+            });
           }}
         >
           <HomeView
-            upNext={
-              mostRecentWatched
-                ? {
-                    progress: mostRecentWatched.progress,
-                    episode: mostRecentWatched.episode,
-                    seasonName: mostRecentWatched.seasonName,
-                    posterUrl: mostRecentWatched.folder?.posterUrl,
-                    bannerUrl: mostRecentWatched.folder?.bannerUrl,
-                    anilistId: mostRecentWatched.folder?.anilistId,
-                    isUpNext: mostRecentWatched.isUpNext,
-                    isMovie: mostRecentWatched.folder ? isFolderMovie(mostRecentWatched.folder) : false,
-                  }
-                : null
-            }
+            upNext={homeUpNextData}
             folders={visibleFolders}
             history={history}
             userEntries={userEntries}
+            followedAnime={followedAnime}
             onPlayEpisode={handlePlayEpisode}
             onSelectCatalogItem={handleSelectCatalogItem}
             onSelectLocalFolder={handleSelectLocalFolder}

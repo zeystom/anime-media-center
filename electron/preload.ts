@@ -170,6 +170,9 @@ contextBridge.exposeInMainWorld('electronAPI', {
   getCatalogFranchise: (anilistId: number) => ipcRenderer.invoke('catalog:franchise', anilistId),
   getCatalogFranchiseSeasons: (anilistId: number) => ipcRenderer.invoke('catalog:franchise-season', anilistId),
   getRemoteEpisodes: (anilistId: number) => ipcRenderer.invoke('metadata:remote-episodes', anilistId),
+  getCachedHeroBanners: () => ipcRenderer.invoke('metadata:hero-banners-cache'),
+  saveCachedHeroBanner: (anilistId: number, bannerUrl: string) => ipcRenderer.invoke('metadata:hero-banner-save', anilistId, bannerUrl),
+  getFastHeroBannerSources: (anilistId: number) => ipcRenderer.invoke('metadata:hero-banner-sources', anilistId),
   // User Library
   getUserLibrary: () => ipcRenderer.invoke('user-library:get-all'),
   setUserLibraryStatus: (

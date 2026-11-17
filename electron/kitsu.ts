@@ -772,7 +772,7 @@ export async function getKitsuMetadata(rawSeriesName: string, expectedEpisodes: 
 
       const malId = aniList?.malId || null;
       const anilistId = aniList?.anilistId ?? null;
-      const bannerUrl = aniList?.bannerUrl || kitsu?.bannerUrl || null;
+      const bannerUrl = kitsu?.bannerUrl || aniList?.bannerUrl || null;
       const synopsis = aniList?.synopsis || kitsu?.synopsis || null;
       const genres = aniList?.genres || [];
       const averageScore = aniList?.averageScore || null;

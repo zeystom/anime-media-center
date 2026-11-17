@@ -401,7 +401,7 @@ const NavbarImpl: React.FC<NavbarProps> = ({
         </div>
       </div>
 
-      <div ref={searchBoxRef} className="relative z-10 hidden min-w-[140px] max-w-[420px] flex-1 xl:block 2xl:mx-2 [-webkit-app-region:no-drag]">
+      <div ref={searchBoxRef} className="relative z-10 hidden min-w-[140px] max-w-[420px] xl:max-w-[480px] 2xl:max-w-[560px] flex-1 xl:block 2xl:mx-2 [-webkit-app-region:no-drag]">
         <Search className="pointer-events-none absolute left-4 top-1/2 h-4 w-4 -translate-y-1/2 text-zinc-500" />
         <input
           value={query}

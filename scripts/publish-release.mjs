@@ -38,12 +38,13 @@ if (!token) {
   process.exit(1);
 }
 
-const RELEASE_BODY = `## Kaiko ${VERSION} — Streamlined Whisper Studio, Range Drag Selection & Symmetrical Layout
+const RELEASE_BODY = `## Kaiko ${VERSION} — Full-Width UI Overhaul, Smart Season Hero Banners & Home FPS Boost
 
 ### What's New
-- **Streamlined Whisper Studio:** removed redundant **Quality** presets and **Advanced settings** clutter, leaving **AI Subtitle Model**, **Character names**, and **Opening & Music Filter** (**Skip OP / ED** + **Off · Balanced · Strict**). Optimal high-sensitivity speech recognition and loop protection remain permanently enabled, and cue merging is now off by default for cleaner, easier-to-read pacing.
-- **Phone-Gallery Range Selection:** press any episode card and drag straight across rows to select or deselect the full contiguous range (with pullback restoration, smooth edge auto-scroll, and Shift+Click support).
-- **Symmetrical Page Width & Scrollbar Alignment:** reserved symmetric scrollbar gutters (\`scrollbar-gutter: stable both-edges\`) across all main views to prevent horizontal shifting or unequal side margins between Library, Schedule, and Discover, and widened main view containers to \`max-w-[2160px] 2xl:px-8\` with balanced Library card columns.
+- **Full-Width Layout & Expanded Discovery Rails:** removed narrow max-width constraints across Home, Discover, Library, Schedule, Downloads, and Overview for clean full-screen presentation on 1080p, 1440p, and ultrawide monitors; enlarged the Home hero banner (without duplicate top episode pills), balanced synopsis readability, and expanded Home genre rails to 24 titles each.
+- **Smart Widescreen Hero Banners + TVDB Season Backgrounds:** unified hero artwork resolution across Home, Overview, and the translucent Navbar (`hero_banners_v2.json`, `useActiveHeroBannerUrl`) with strict aspect/resolution checks (\`>= 1200x680\`, aspect \`>= 1.6\`). Prioritizes per-season Kitsu art and official **TheTVDB Season Backgrounds** (\`tvdb_season_cache_v1.json\`) before falling back to 1080p–4K franchise fanart, loads rapidly over \`getFastHeroBannerSources\`, persists instantly across restarts, and keeps unbannered titles cleanly blurred.
+- **Followed-Anime Radar Priority & Library Hover Pre-Warming:** Home Weekly Radar now prioritizes followed shows ahead of regular airings with matching bell counters and indicators, and Library cards warm metadata smoothly on hover.
+- **Home Performance & Scroll FPS Optimization:** fixed \`HomeView\` memoization and callback stability, added progressive off-edge card mounting in \`CatalogRail\`, removed heavy idle \`backdrop-blur\` compositor passes and hidden GPU blur textures, throttled scroll geometry reads with \`requestAnimationFrame\`, and replaced \`[data-scrolling] *\` with an \`O(1)\` CSS containment rule.
 
 ---
 ### Assets included

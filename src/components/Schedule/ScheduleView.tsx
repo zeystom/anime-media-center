@@ -16,6 +16,7 @@ import type { RailItem } from '../../hooks/useCatalog'
 import { toRailItem, useAiringSchedule } from '../../hooks/useCatalog'
 import type { LocalBadgeState, LocalStatusRef } from '../../hooks/useLocalStatus'
 import type { FollowedAnime } from '../../types/notifications'
+import { buildFollowedScheduleLookup, isFollowedScheduleEntry } from '../../utils/schedule'
 import { StatusBadges } from '../common/StatusBadges'
 
 export interface ScheduleViewProps {
@@ -111,9 +112,6 @@ function buildCalendarCells(viewDate: Date): Date[] {
     return cell
   })
 }
-
-const titleKey = (value: string): string =>
-  value.toLocaleLowerCase().replace(/\b(season|s)\s*\d+\b/g, '').replace(/[^\p{L}\p{N}]+/gu, '')
 
 /**
  * One airing entry inside a day card: 40px poster, EP chip + local time,
@@ -308,29 +306,16 @@ export const ScheduleView: React.FC<ScheduleViewProps> = ({ onSelectItem, status
     [selectedDayIndex]
   )
 
-  const followedSet = useMemo(() => {
-    if (!followedAnime || followedAnime.length === 0) return null
-    const idSet = new Set<number>()
-    const keySet = new Set<string>()
-    for (const f of followedAnime) {
-      if (f.anilistId) idSet.add(f.anilistId)
-      if (f.title) {
-        const key = titleKey(f.title)
-        if (key) keySet.add(key)
-      }
-    }
-    return { idSet, keySet }
-  }, [followedAnime])
+  const followedSet = useMemo(() => buildFollowedScheduleLookup(followedAnime), [followedAnime])
 
   const checkIsFollowed = useCallback(
-    (item: ScheduleEntry): boolean => {
-      if (!followedSet) return false
-      const targetId = item.entry.anilistId || item.rail.anilistId
-      if (targetId && followedSet.idSet.has(targetId)) return true
-      const rawTitle = item.rail.title || item.entry.title || ''
-      const key = titleKey(rawTitle)
-      return !!(key && followedSet.keySet.has(key))
-    },
+    (item: ScheduleEntry): boolean =>
+      isFollowedScheduleEntry(
+        followedSet,
+        item.entry.anilistId || item.rail.anilistId,
+        item.rail.title,
+        item.entry.title
+      ),
     [followedSet]
   )
 
@@ -402,7 +387,7 @@ export const ScheduleView: React.FC<ScheduleViewProps> = ({ onSelectItem, status
   const focusedDayKey = selectedDayIndex !== null ? dayKey(dayDates[selectedDayIndex]) : null
 
   return (
-    <div className="mx-auto min-h-full w-full max-w-[2160px] px-6 py-7 2xl:px-8">
+    <div className="min-h-full w-full px-6 py-7 2xl:px-8">
       {/* Symmetrical hero banner matching Discover and Library */}
       <section className="relative mb-6 flex h-[160px] flex-col justify-center overflow-hidden rounded-[26px] border border-white/[0.08] bg-[#0F0B15] px-6 shadow-2xl shadow-black/20 md:h-[168px] md:px-9">
         <div className="pointer-events-none absolute -right-20 -top-32 h-80 w-80 rounded-full bg-rose-500/[0.08] blur-3xl" />
@@ -1006,7 +991,7 @@ export const ScheduleView: React.FC<ScheduleViewProps> = ({ onSelectItem, status
                   </div>
                 </div>
               ) : (
-                <div className="grid grid-cols-1 gap-3 md:grid-cols-2 xl:grid-cols-3 2xl:grid-cols-4">
+                <div className="grid grid-cols-1 gap-3 md:grid-cols-2 xl:grid-cols-3 2xl:grid-cols-4 min-[1800px]:grid-cols-5">
                   {dayEntries.map((item) => (
                     <ScheduleEntryRow
                       key={`${item.entry.anilistId}-${item.entry.airingAt}`}

@@ -52,9 +52,14 @@ export interface RemoteEpisodesResult {
   airedThrough: number | null;
   /** Next scheduled airing (ms epoch) or null. */
   nextAiringAt: number | null;
-  /** Series artwork from ani.zip/TVDB — AniList has no bannerImage for many
-   *  airing seasons; this powers the hero backdrop fallback. */
+  /** Preferred series backdrop (Metahub 16:9 background or TVDB Fanart)
+   *  and optional fallback backdrop URL. */
   bannerUrl: string | null;
+  fallbackBannerUrl: string | null;
+  /** Per-season banner sources (Kitsu, TVDB official season background, AniList). */
+  kitsuBannerUrl: string | null;
+  tvdbSeasonBannerUrl: string | null;
+  aniListBannerUrl: string | null;
   posterUrl: string | null;
   /** Preferred transparent title logo (Metahub clearlogo) and optional TVDB clearlogo fallback. */
   logoUrl: string | null;
@@ -192,7 +197,7 @@ export function normalizeAniZipEpisodes(payload: any): RemoteEpisodeInfo[] {
  * Reads the disk cache for an anilist ID. Returns { episodes, fetchedAt } or
  * null; never throws.
  */
-function readDiskCache(anilistId: number): { episodes: RemoteEpisodeInfo[]; fetchedAt: number; kitsuId?: string | null; episodeCount?: number | null; normalizerVersion: number; nextAiringAt: number | null } | null {
+function readDiskCache(anilistId: number): { episodes: RemoteEpisodeInfo[]; fetchedAt: number; kitsuId?: string | null; tvdbId?: string | null; tvdbSeason?: number | null; episodeCount?: number | null; normalizerVersion: number; nextAiringAt: number | null } | null {
   try {
     const cacheFile = path.join(storage.getMetadataCacheDir(), `anizip_${anilistId}.json`);
     if (!fs.existsSync(cacheFile)) return null;
@@ -205,6 +210,9 @@ function readDiskCache(anilistId: number): { episodes: RemoteEpisodeInfo[]; fetc
     const kitsuId = typeof parsed.kitsuId === 'string' || typeof parsed.kitsuId === 'number'
       ? String(parsed.kitsuId)
       : null;
+    const tvdbId = extractTvdbId(parsed.tvdbId);
+    const parsedTvdbSeason = Number(parsed.tvdbSeason);
+    const tvdbSeason = Number.isInteger(parsedTvdbSeason) && parsedTvdbSeason > 0 ? parsedTvdbSeason : null;
     const episodeCount = Number.isInteger(parsed.episodeCount) && parsed.episodeCount > 0 ? parsed.episodeCount : null;
     const nextAiringAt = typeof parsed.nextAiringAt === 'number' && parsed.nextAiringAt > 0 ? parsed.nextAiringAt : null;
     const bannerUrl = typeof parsed.bannerUrl === 'string' && parsed.bannerUrl && !isLowResTvdbGraphicalBanner(parsed.bannerUrl)
@@ -213,25 +221,76 @@ function readDiskCache(anilistId: number): { episodes: RemoteEpisodeInfo[]; fetc
     const posterUrl = typeof parsed.posterUrl === 'string' && parsed.posterUrl ? parsed.posterUrl : null;
     const clearLogoUrl = isValidClearLogoUrl(parsed.clearLogoUrl) ? parsed.clearLogoUrl : null;
     const imdbId = normalizeImdbId(parsed.imdbId);
-    if (bannerUrl || posterUrl || clearLogoUrl || imdbId) {
+    if (bannerUrl || posterUrl || clearLogoUrl || imdbId || tvdbId || tvdbSeason) {
       artworkMemoryCache.set(
         anilistId,
-        mergeArtwork({ bannerUrl, posterUrl, clearLogoUrl, imdbId }, artworkMemoryCache.get(anilistId)),
+        mergeArtwork({ bannerUrl, posterUrl, clearLogoUrl, imdbId, tvdbId, tvdbSeason }, artworkMemoryCache.get(anilistId)),
       );
     }
     if (episodeCount) aniZipEpisodeCountCache.set(anilistId, episodeCount);
-    return { episodes, fetchedAt: parsed.fetchedAt, kitsuId, episodeCount, normalizerVersion: Number.isInteger(parsed.normalizerVersion) ? parsed.normalizerVersion : 0, nextAiringAt };
+    return { episodes, fetchedAt: parsed.fetchedAt, kitsuId, tvdbId, tvdbSeason, episodeCount, normalizerVersion: Number.isInteger(parsed.normalizerVersion) ? parsed.normalizerVersion : 0, nextAiringAt };
   } catch {
     return null;
   }
 }
 
-/** Series artwork from the ani.zip payload's TVDB `images` array. */
+/** Series artwork from the ani.zip payload's TVDB `images` & `mappings` metadata. */
 interface AniZipArtwork {
   bannerUrl: string | null;
   posterUrl: string | null;
   clearLogoUrl: string | null;
   imdbId: string | null;
+  tvdbId: string | null;
+  tvdbSeason: number | null;
+}
+
+function extractTvdbId(raw: unknown): string | null {
+  if (typeof raw !== 'string' && typeof raw !== 'number') return null;
+  const trimmed = String(raw).trim();
+  return /^\d+$/.test(trimmed) && Number(trimmed) > 0 ? trimmed : null;
+}
+
+/** Extracts the dominant official TVDB season number across regular numeric episode rows. */
+export function extractTvdbSeasonNumber(payload: any): number | null {
+  if (!payload || typeof payload !== 'object') return null;
+  const data = payload.data && typeof payload.data === 'object' && payload.data.episodes ? payload.data : payload;
+  const rawEpisodes = data.episodes;
+  if (!rawEpisodes || typeof rawEpisodes !== 'object') return null;
+  const entries: [string, any][] = Array.isArray(rawEpisodes)
+    ? rawEpisodes.map((ep, i) => [String(i + 1), ep])
+    : Object.entries(rawEpisodes);
+  const counts = new Map<number, number>();
+  for (const [key, ep] of entries) {
+    if (!/^\d+$/.test(key) || Number(key) <= 0) continue;
+    const sNum = Number(ep?.seasonNumber);
+    if (Number.isInteger(sNum) && sNum > 0) {
+      counts.set(sNum, (counts.get(sNum) ?? 0) + 1);
+    }
+  }
+  let bestSeason: number | null = null;
+  let bestCount = 0;
+  for (const [season, count] of counts) {
+    if (count > bestCount) {
+      bestCount = count;
+      bestSeason = season;
+    }
+  }
+  return bestSeason;
+}
+
+/** Extracts season-scoped full-resolution artwork URLs from a TVDB official season HTML page. */
+export function parseTvdbSeasonBackgrounds(html: string): string[] {
+  if (typeof html !== 'string' || !html) return [];
+  const urls: string[] = [];
+  const anchorRe = /<a[^>]+href=["'](https:\/\/artworks\.thetvdb\.com\/banners\/[^"'\s>]*\/seasons?\/\d+\/backgrounds\/[^"'\s>]+)["'][^>]*>/gi;
+  let match: RegExpExecArray | null;
+  while ((match = anchorRe.exec(html)) !== null) {
+    const url = match[1];
+    if (!/_t\.[a-z0-9]+(?:$|\?)/i.test(url)) urls.push(url);
+  }
+  if (urls.length > 0) return Array.from(new Set(urls));
+  const fallback = html.match(/https:\/\/artworks\.thetvdb\.com\/banners\/[^"'\s>]*\/seasons?\/\d+\/backgrounds\/[^"'\s>]+/gi) || [];
+  return Array.from(new Set(fallback.filter((url) => !/_t\.[a-z0-9]+(?:$|\?)/i.test(url))));
 }
 
 const artworkMemoryCache = new Map<number, AniZipArtwork>();
@@ -265,7 +324,13 @@ function metahubLogoUrl(imdbId: string | null | undefined): string | null {
     : null;
 }
 
-function normalizeArtwork(images: any, mappings?: any): AniZipArtwork {
+function metahubBannerUrl(imdbId: string | null | undefined): string | null {
+  return imdbId && /^tt\d+$/i.test(imdbId)
+    ? `https://images.metahub.space/background/large/${imdbId.toLowerCase()}/img`
+    : null;
+}
+
+function normalizeArtwork(images: any, mappings?: any, tvdbSeason: number | null = null): AniZipArtwork {
   const list = Array.isArray(images) ? images : [];
   const pick = (coverTypes: string[], filter?: (url: string) => boolean): string | null => {
     for (const coverType of coverTypes) {
@@ -280,12 +345,14 @@ function normalizeArtwork(images: any, mappings?: any): AniZipArtwork {
     }
     return null;
   };
-  // Prefer clean Full HD 16:9 TVDB Fanart/Background over legacy 758x140 graphical banners.
+  // Strictly use true 16:9 Fanart/Background artwork; exclude low-res 758x140 Banner strips.
   return {
-    bannerUrl: pick(['Fanart', 'Background', 'Banner'], (url) => !isLowResTvdbGraphicalBanner(url)),
+    bannerUrl: pick(['Fanart', 'Background'], (url) => !isLowResTvdbGraphicalBanner(url)),
     posterUrl: pick(['Poster']),
     clearLogoUrl: pick(['Clearlogo', 'ClearLogo'], (url) => isValidClearLogoUrl(url)),
     imdbId: normalizeImdbId(mappings?.imdb_id),
+    tvdbId: extractTvdbId(mappings?.thetvdb_id),
+    tvdbSeason,
   };
 }
 
@@ -297,6 +364,8 @@ function mergeArtwork(next: AniZipArtwork, prev: AniZipArtwork | undefined | nul
     posterUrl: next.posterUrl ?? prev?.posterUrl ?? null,
     clearLogoUrl: next.clearLogoUrl ?? prev?.clearLogoUrl ?? null,
     imdbId: next.imdbId ?? prev?.imdbId ?? null,
+    tvdbId: next.tvdbId ?? prev?.tvdbId ?? null,
+    tvdbSeason: next.tvdbSeason ?? prev?.tvdbSeason ?? null,
   };
 }
 
@@ -405,12 +474,53 @@ function kitsuCacheFresh(fetchedAt: number, episodes: RemoteEpisodeInfo[], now =
  * start) per id. Stable data — read back whenever the live context query
  * fails, so a rate-limited request cannot blank the schedule.
  */
+const kitsuSeriesBannerCache = new Map<string, string | null>();
+const kitsuSeriesBannerInFlight = new Map<string, Promise<string | null>>();
+
+async function fetchKitsuSeriesBanner(kitsuId: string): Promise<string | null> {
+  if (kitsuSeriesBannerCache.has(kitsuId)) {
+    return kitsuSeriesBannerCache.get(kitsuId) ?? null;
+  }
+  const existing = kitsuSeriesBannerInFlight.get(kitsuId);
+  if (existing) return existing;
+
+  const task = (async (): Promise<string | null> => {
+    try {
+      const response = await fetch(
+        `https://kitsu.io/api/edge/anime/${encodeURIComponent(kitsuId)}`,
+        {
+          headers: { Accept: 'application/vnd.api+json', 'User-Agent': 'AnimeMediaCenter/1.0' },
+          signal: AbortSignal.timeout(REQUEST_TIMEOUT_MS),
+        },
+      );
+      if (!response.ok) return null;
+      const payload = await response.json();
+      const cover = payload?.data?.attributes?.coverImage;
+      const url =
+        (typeof cover?.original === 'string' && cover.original) ||
+        (typeof cover?.large === 'string' && cover.large) ||
+        null;
+      kitsuSeriesBannerCache.set(kitsuId, url);
+      return url;
+    } catch {
+      return null;
+    } finally {
+      kitsuSeriesBannerInFlight.delete(kitsuId);
+    }
+  })();
+
+  kitsuSeriesBannerInFlight.set(kitsuId, task);
+  return task;
+}
+
 interface AiringContextSnapshot {
   airedThrough: number | null;
   nextAiringAt: number | null;
   seasonStartAt: number | null;
   schedule: { episode: number; airingAt: number }[];
   bannerUrl: string | null;
+  kitsuBannerUrl?: string | null;
+  aniListBannerUrl?: string | null;
   posterUrl: string | null;
   clearLogoUrl: string | null;
   imdbId: string | null;
@@ -449,6 +559,10 @@ function readAiringContext(anilistId: number): (AiringContextSnapshot & { fetche
       bannerUrl: typeof parsed.bannerUrl === 'string' && parsed.bannerUrl && !isLowResTvdbGraphicalBanner(parsed.bannerUrl)
         ? parsed.bannerUrl
         : null,
+      kitsuBannerUrl: Object.prototype.hasOwnProperty.call(parsed, 'kitsuBannerUrl')
+        ? (typeof parsed.kitsuBannerUrl === 'string' && parsed.kitsuBannerUrl ? parsed.kitsuBannerUrl : null)
+        : undefined,
+      aniListBannerUrl: typeof parsed.aniListBannerUrl === 'string' && parsed.aniListBannerUrl ? parsed.aniListBannerUrl : null,
       posterUrl: typeof parsed.posterUrl === 'string' && parsed.posterUrl ? parsed.posterUrl : null,
       clearLogoUrl: isValidClearLogoUrl(parsed.clearLogoUrl) ? parsed.clearLogoUrl : null,
       imdbId: normalizeImdbId(parsed.imdbId),
@@ -542,7 +656,11 @@ export async function fetchAniZipMappings(anilistId: number, options: { bypassCa
       const rawEpisodeCount = Number(json?.episodeCount);
       const episodeCount = Number.isInteger(rawEpisodeCount) && rawEpisodeCount > 0 ? rawEpisodeCount : null;
       aniZipEpisodeCountCache.set(id, episodeCount);
-      const mergedArtwork = mergeArtwork(normalizeArtwork(json?.images, json?.mappings), artworkMemoryCache.get(id));
+      const tvdbSeason = extractTvdbSeasonNumber(json);
+      const mergedArtwork = mergeArtwork(
+        normalizeArtwork(json?.images, json?.mappings, tvdbSeason),
+        artworkMemoryCache.get(id),
+      );
       artworkMemoryCache.set(id, mergedArtwork);
       const rawKitsuId = json?.mappings?.kitsu_id;
       const kitsuId = typeof rawKitsuId === 'string' || typeof rawKitsuId === 'number'
@@ -560,6 +678,8 @@ export async function fetchAniZipMappings(anilistId: number, options: { bypassCa
             fetchedAt: Date.now(),
             normalizerVersion: ANI_ZIP_CACHE_NORMALIZER_VERSION,
             kitsuId: kitsuId || null,
+            tvdbId: mergedArtwork.tvdbId,
+            tvdbSeason: mergedArtwork.tvdbSeason,
             episodeCount,
             nextAiringAt: disk?.nextAiringAt ?? null,
             bannerUrl: mergedArtwork.bannerUrl,
@@ -639,15 +759,26 @@ async function fetchKitsuEpisodes(
 
   if (typeof anilistId === 'number' && Number.isFinite(anilistId)) {
     const kitsuBanner = attrs?.coverImage?.original ?? attrs?.coverImage?.large ?? null;
+    if (typeof kitsuBanner === 'string' && kitsuBanner) {
+      kitsuSeriesBannerCache.set(kitsuId, kitsuBanner);
+    }
     const kitsuPoster = attrs?.posterImage?.large ?? attrs?.posterImage?.original ?? null;
-    if (kitsuBanner || kitsuPoster) {
+    if (kitsuPoster) {
       const prevArtwork = artworkMemoryCache.get(anilistId);
-      artworkMemoryCache.set(anilistId, {
-        bannerUrl: prevArtwork?.bannerUrl ?? (typeof kitsuBanner === 'string' && kitsuBanner ? kitsuBanner : null),
-        posterUrl: prevArtwork?.posterUrl ?? (typeof kitsuPoster === 'string' && kitsuPoster ? kitsuPoster : null),
-        clearLogoUrl: prevArtwork?.clearLogoUrl ?? null,
-        imdbId: prevArtwork?.imdbId ?? null,
-      });
+      artworkMemoryCache.set(
+        anilistId,
+        mergeArtwork(
+          {
+            bannerUrl: null,
+            posterUrl: typeof kitsuPoster === 'string' && kitsuPoster ? kitsuPoster : null,
+            clearLogoUrl: null,
+            imdbId: null,
+            tvdbId: null,
+            tvdbSeason: null,
+          },
+          prevArtwork,
+        ),
+      );
     }
   }
 
@@ -755,13 +886,13 @@ async function raceEpisodesPipeline(id: number, pipeline: Promise<RemoteEpisodes
     .finally(() => {
       inFlightEpisodesPipeline.delete(id);
     });
-  return { episodes: [], airedThrough: null, nextAiringAt: null, bannerUrl: null, posterUrl: null, logoUrl: null, fallbackLogoUrl: null };
+  return { episodes: [], airedThrough: null, nextAiringAt: null, bannerUrl: null, fallbackBannerUrl: null, kitsuBannerUrl: null, tvdbSeasonBannerUrl: null, aniListBannerUrl: null, posterUrl: null, logoUrl: null, fallbackLogoUrl: null };
 }
 
 export async function fetchRemoteEpisodes(anilistId: number): Promise<RemoteEpisodesResult> {
   const id = Math.trunc(Number(anilistId));
   if (!Number.isFinite(id) || id <= 0) {
-    return { episodes: [], airedThrough: null, nextAiringAt: null, bannerUrl: null, posterUrl: null, logoUrl: null, fallbackLogoUrl: null };
+    return { episodes: [], airedThrough: null, nextAiringAt: null, bannerUrl: null, fallbackBannerUrl: null, kitsuBannerUrl: null, tvdbSeasonBannerUrl: null, aniListBannerUrl: null, posterUrl: null, logoUrl: null, fallbackLogoUrl: null };
   }
   const existing = inFlightEpisodesPipeline.get(id);
   if (existing) return raceEpisodesPipeline(id, existing);
@@ -808,6 +939,8 @@ async function runRemoteEpisodesPipeline(anilistId: number, notify: (payload: Re
   // query must not strip the schedule from the payload (one 429 otherwise
   // blanks the grid — observed live during startup request storms).
   const cachedContext = readAiringContext(id);
+  let kitsuBannerUrl: string | null | undefined = cachedContext?.kitsuBannerUrl;
+  let aniListBannerUrl: string | null = cachedContext?.aniListBannerUrl ?? null;
   let nextAiringAt = cachedContext?.nextAiringAt ?? readDiskCache(id)?.nextAiringAt ?? null;
   // First-episode air date (ms epoch). ani.zip crosswalks occasionally point at
   // the WRONG season of a franchise (observed live: AniList 195516, Kusuriya
@@ -827,6 +960,17 @@ async function runRemoteEpisodesPipeline(anilistId: number, notify: (payload: Re
   }
   let identity: { titles: string[]; episodeCount: number | null; season: number | null } = { titles: [], episodeCount: null, season: null };
   let relatedAnimeIds: number[] = cachedContext?.relatedAnimeIds || [];
+
+  // Kick off the lightweight Kitsu per-season coverImage lookup in parallel if
+  // Fribb already maps this anilistId to a Kitsu ID and it isn't cached yet.
+  const kitsuBannerTask: Promise<void> = kitsuBannerUrl !== undefined
+    ? Promise.resolve()
+    : fribbPromise.then(async () => {
+        const mappedKitsuId = kitsuIdMemoryCache.get(id) ?? (lookupFribbIds(id)?.kitsuId != null ? String(lookupFribbIds(id)!.kitsuId) : null);
+        if (!mappedKitsuId) return;
+        const fetched = await fetchKitsuSeriesBanner(mappedKitsuId);
+        if (fetched !== undefined) kitsuBannerUrl = fetched;
+      }).catch(() => {});
   // Skip the live context query while the persisted one still stands: the
   // schedule and airing pointer are stable until the next airing event, and a
   // context query on every view open trips AniList's rate limit when browsing
@@ -848,6 +992,7 @@ async function runRemoteEpisodesPipeline(anilistId: number, notify: (payload: Re
     Media?: {
       episodes?: number | null;
       status?: string | null;
+      bannerImage?: string | null;
       startDate?: { year?: number | null; month?: number | null; day?: number | null } | null;
       nextAiringEpisode?: { episode?: number | null; airingAt?: number | null } | null;
       airingSchedule?: { nodes?: { episode?: number | null; airingAt?: number | null }[] | null } | null;
@@ -856,7 +1001,7 @@ async function runRemoteEpisodesPipeline(anilistId: number, notify: (payload: Re
       streamingEpisodes?: { title?: string | null; thumbnail?: string | null }[] | null;
       relations?: { edges?: { relationType?: string | null; node?: { id?: number | null; type?: string | null } | null }[] | null } | null;
     } | null;
-  }>(`query ($id: Int) { Media(id: $id, type: ANIME) { episodes status startDate { year month day } nextAiringEpisode { episode airingAt } airingSchedule(page: 1, perPage: 50) { nodes { episode airingAt } } title { english romaji native } synonyms streamingEpisodes { title thumbnail } relations { edges { relationType node { id type } } } } }`, { id });
+  }>(`query ($id: Int) { Media(id: $id, type: ANIME) { episodes status bannerImage startDate { year month day } nextAiringEpisode { episode airingAt } airingSchedule(page: 1, perPage: 50) { nodes { episode airingAt } } title { english romaji native } synonyms streamingEpisodes { title thumbnail } relations { edges { relationType node { id type } } } } }`, { id });
   let contextFailed = false;
   if (!contextStands) {
     try {
@@ -870,6 +1015,9 @@ async function runRemoteEpisodesPipeline(anilistId: number, notify: (payload: Re
         data = await queryContext();
       }
     const media = data.Media;
+    if (typeof media?.bannerImage === 'string' && media.bannerImage) {
+      aniListBannerUrl = media.bannerImage;
+    }
     aniListCount = typeof media?.episodes === 'number' && Number.isInteger(media.episodes) && media.episodes > 0 ? media.episodes : null;
     if (media?.startDate?.year && media.startDate.month && media.startDate.day) {
       seasonStartAt = Date.UTC(media.startDate.year, media.startDate.month - 1, media.startDate.day);
@@ -1124,6 +1272,10 @@ async function runRemoteEpisodesPipeline(anilistId: number, notify: (payload: Re
       airedThrough,
       nextAiringAt,
       bannerUrl: artwork.bannerUrl,
+      fallbackBannerUrl: artwork.fallbackBannerUrl,
+      kitsuBannerUrl: artwork.kitsuBannerUrl,
+      tvdbSeasonBannerUrl: artwork.tvdbSeasonBannerUrl,
+      aniListBannerUrl,
       posterUrl: artwork.posterUrl,
       logoUrl: artwork.logoUrl,
       fallbackLogoUrl: artwork.fallbackLogoUrl,
@@ -1137,13 +1289,32 @@ async function runRemoteEpisodesPipeline(anilistId: number, notify: (payload: Re
     const relatedFribbImdb = relatedAnimeIds
       .map((relId) => lookupFribbIds(relId)?.imdbId)
       .find((candidate): candidate is string => !!candidate) ?? null;
-    const imdbId = liveArtwork?.imdbId ?? cachedContext?.imdbId ?? ownFribb?.imdbId ?? relatedFribbImdb ?? null;
+    // Own IMDb ID powers Metahub series backdrops (never steal a prequel's IMDb ID
+    // onto unmapped sequels/spinoffs like Edgerunners 2); franchise IMDb remains
+    // allowed for shared ClearLogos.
+    const ownImdbId = liveArtwork?.imdbId ?? cachedContext?.imdbId ?? ownFribb?.imdbId ?? null;
+    const logoImdbId = ownImdbId ?? relatedFribbImdb ?? null;
+    const rawCachedBanner = liveArtwork?.bannerUrl ?? cachedContext?.bannerUrl ?? null;
+    const tvdbBannerUrl = rawCachedBanner && !rawCachedBanner.includes('images.metahub.space')
+      ? rawCachedBanner
+      : null;
+    const metahubBgUrl = metahubBannerUrl(ownImdbId);
     const clearLogoUrl = liveArtwork?.clearLogoUrl ?? cachedContext?.clearLogoUrl ?? null;
-    const metahubUrl = metahubLogoUrl(imdbId);
+    const metahubUrl = metahubLogoUrl(logoImdbId);
+    const resolvedTvdbId = liveArtwork?.tvdbId ?? (ownFribb?.tvdbId != null ? String(ownFribb.tvdbId) : null);
+    const tvdbSeasonBannerUrl = artworkTrusted
+      ? getCachedTvdbSeasonBackground(resolvedTvdbId, liveArtwork?.tvdbSeason ?? null)
+      : null;
     return {
-      bannerUrl: liveArtwork?.bannerUrl ?? cachedContext?.bannerUrl ?? null,
+      tvdbBannerUrl,
+      bannerUrl: metahubBgUrl ?? tvdbBannerUrl ?? null,
+      fallbackBannerUrl: metahubBgUrl && tvdbBannerUrl ? tvdbBannerUrl : null,
+      kitsuBannerUrl: kitsuBannerUrl ?? null,
+      tvdbSeasonBannerUrl,
       posterUrl: liveArtwork?.posterUrl ?? cachedContext?.posterUrl ?? null,
-      imdbId,
+      imdbId: ownImdbId,
+      tvdbId: resolvedTvdbId,
+      tvdbSeason: liveArtwork?.tvdbSeason ?? null,
       clearLogoUrl,
       logoUrl: metahubUrl ?? clearLogoUrl ?? null,
       fallbackLogoUrl: metahubUrl && clearLogoUrl ? clearLogoUrl : null,
@@ -1159,12 +1330,28 @@ async function runRemoteEpisodesPipeline(anilistId: number, notify: (payload: Re
   };
 
   // Stage 2 — the first ani.zip snapshot (or the hedge when it stalls).
+  // Race the fast Kitsu seasonal banner fetch alongside it (up to 700ms) so
+  // Stage 1 already carries seasonal Kitsu HD artwork when available.
   const zipOrHedge = await zipRace;
   let pendingZip: Promise<RemoteEpisodeInfo[]> | null = null;
   if (zipOrHedge.kind === 'zip') {
     acceptPartition(zipOrHedge.rows);
   } else {
     pendingZip = aniZipPromise;
+  }
+  if (kitsuBannerUrl === undefined) {
+    const postZipKitsuId = kitsuIdMemoryCache.get(id) ?? null;
+    if (postZipKitsuId) {
+      await Promise.race([
+        fetchKitsuSeriesBanner(postZipKitsuId).then((fetched) => { kitsuBannerUrl = fetched; }),
+        new Promise((resolve) => setTimeout(resolve, 700)),
+      ]);
+    } else {
+      await Promise.race([
+        kitsuBannerTask,
+        new Promise((resolve) => setTimeout(resolve, 700)),
+      ]);
+    }
   }
   pushBest();
 
@@ -1253,6 +1440,13 @@ async function runRemoteEpisodesPipeline(anilistId: number, notify: (payload: Re
   }
 
   await fribbPromise;
+  await kitsuBannerTask;
+  if (kitsuBannerUrl === undefined) {
+    const finalKitsuId = kitsuIdMemoryCache.get(id) ?? (lookupFribbIds(id)?.kitsuId != null ? String(lookupFribbIds(id)!.kitsuId) : null);
+    if (finalKitsuId) {
+      kitsuBannerUrl = await fetchKitsuSeriesBanner(finalKitsuId);
+    }
+  }
   const resolvedArtwork = resolveArtworkAndLogo();
   const final = buildCurrentPayload();
   if (final.episodes.length > 0) {
@@ -1276,9 +1470,11 @@ async function runRemoteEpisodesPipeline(anilistId: number, notify: (payload: Re
             ? (readDiskCache(id)?.normalizerVersion ?? 0)
             : ANI_ZIP_CACHE_NORMALIZER_VERSION,
           kitsuId: kitsuId ?? null,
+          tvdbId: resolvedArtwork.tvdbId ?? null,
+          tvdbSeason: resolvedArtwork.tvdbSeason ?? null,
           episodeCount: maxEpisode,
           nextAiringAt,
-          bannerUrl: final.bannerUrl ?? null,
+          bannerUrl: resolvedArtwork.tvdbBannerUrl ?? null,
           posterUrl: final.posterUrl ?? null,
           clearLogoUrl: resolvedArtwork.clearLogoUrl ?? null,
           imdbId: resolvedArtwork.imdbId ?? null,
@@ -1292,7 +1488,9 @@ async function runRemoteEpisodesPipeline(anilistId: number, notify: (payload: Re
     airedThrough,
     nextAiringAt,
     seasonStartAt,
-    bannerUrl: final.bannerUrl,
+    bannerUrl: resolvedArtwork.tvdbBannerUrl,
+    kitsuBannerUrl: kitsuBannerUrl ?? null,
+    aniListBannerUrl,
     posterUrl: final.posterUrl,
     clearLogoUrl: resolvedArtwork.clearLogoUrl,
     imdbId: resolvedArtwork.imdbId,
@@ -1307,4 +1505,308 @@ async function runRemoteEpisodesPipeline(anilistId: number, notify: (payload: Re
   });
   pushBest();
   return final;
+}
+
+export interface HeroBannerSources {
+  bannerUrl: string | null;
+  fallbackBannerUrl: string | null;
+  kitsuBannerUrl: string | null;
+  tvdbSeasonBannerUrl: string | null;
+  aniListBannerUrl: string | null;
+  posterUrl: string | null;
+}
+
+const HERO_BANNERS_CACHE_FILE = 'hero_banners_v2.json';
+let heroBannersDiskMemory: Record<string, string> | null = null;
+let heroBannersLoadedDir: string | null = null;
+
+function heroBannersCachePath(): string {
+  return path.join(storage.getMetadataCacheDir(), HERO_BANNERS_CACHE_FILE);
+}
+
+/** Reads the persisted anilistId -> winning hero banner map from disk (<1 ms after first load). */
+export function readCachedHeroBanners(): Record<string, string> {
+  const dir = storage.getMetadataCacheDir();
+  if (heroBannersDiskMemory && heroBannersLoadedDir === dir) return heroBannersDiskMemory;
+  const loaded: Record<string, string> = {};
+  try {
+    const file = heroBannersCachePath();
+    if (fs.existsSync(file)) {
+      const parsed = JSON.parse(fs.readFileSync(file, 'utf-8'));
+      if (parsed && typeof parsed === 'object') {
+        for (const [k, v] of Object.entries(parsed)) {
+          if (/^\d+$/.test(k) && typeof v === 'string' && v.startsWith('http')) {
+            loaded[k] = v;
+          }
+        }
+      }
+    }
+  } catch {}
+  heroBannersDiskMemory = loaded;
+  heroBannersLoadedDir = dir;
+  return loaded;
+}
+
+/** Persists a canonical resolved hero banner URL for an anime ID so restarts render in 0 ms. */
+export function saveCachedHeroBanner(anilistId: number, bannerUrl: string): void {
+  const id = Math.trunc(Number(anilistId));
+  if (!Number.isFinite(id) || id <= 0) return;
+  if (typeof bannerUrl !== 'string' || !bannerUrl.startsWith('http')) return;
+  const map = readCachedHeroBanners();
+  if (map[String(id)] === bannerUrl) return;
+  map[String(id)] = bannerUrl;
+  try {
+    fs.writeFileSync(heroBannersCachePath(), JSON.stringify(map, null, 2), 'utf-8');
+  } catch {}
+}
+
+const TVDB_SEASON_CACHE_FILE = 'tvdb_season_cache_v1.json';
+const TVDB_WEB_TIMEOUT_MS = 2800;
+const TVDB_SEASON_TTL_MS = 7 * 24 * 60 * 60 * 1000;
+
+interface TvdbSeasonDiskCache {
+  seasonsByAniId: Record<string, { tvdbId: string | null; tvdbSeason: number | null; fetchedAt: number }>;
+  slugsByTvdbId: Record<string, { slugUrl: string | null; fetchedAt: number }>;
+  bgBySeasonKey: Record<string, { url: string | null; fetchedAt: number }>;
+}
+
+let tvdbSeasonDiskMemory: TvdbSeasonDiskCache | null = null;
+let tvdbSeasonLoadedDir: string | null = null;
+const tvdbSlugInFlight = new Map<string, Promise<string | null>>();
+const tvdbSeasonBgInFlight = new Map<string, Promise<string | null>>();
+const aniZipSeasonMetaInFlight = new Map<number, Promise<{ tvdbId: string | null; tvdbSeason: number | null }>>();
+
+function tvdbSeasonCachePath(): string {
+  return path.join(storage.getMetadataCacheDir(), TVDB_SEASON_CACHE_FILE);
+}
+
+function readTvdbSeasonDiskCache(): TvdbSeasonDiskCache {
+  const dir = storage.getMetadataCacheDir();
+  if (tvdbSeasonDiskMemory && tvdbSeasonLoadedDir === dir) return tvdbSeasonDiskMemory;
+  const empty: TvdbSeasonDiskCache = { seasonsByAniId: {}, slugsByTvdbId: {}, bgBySeasonKey: {} };
+  try {
+    const file = tvdbSeasonCachePath();
+    if (fs.existsSync(file)) {
+      const parsed = JSON.parse(fs.readFileSync(file, 'utf-8'));
+      if (parsed && typeof parsed === 'object') {
+        if (parsed.seasonsByAniId && typeof parsed.seasonsByAniId === 'object') empty.seasonsByAniId = parsed.seasonsByAniId;
+        if (parsed.slugsByTvdbId && typeof parsed.slugsByTvdbId === 'object') empty.slugsByTvdbId = parsed.slugsByTvdbId;
+        if (parsed.bgBySeasonKey && typeof parsed.bgBySeasonKey === 'object') empty.bgBySeasonKey = parsed.bgBySeasonKey;
+      }
+    }
+  } catch {}
+  tvdbSeasonDiskMemory = empty;
+  tvdbSeasonLoadedDir = dir;
+  return empty;
+}
+
+function writeTvdbSeasonDiskCache(cache: TvdbSeasonDiskCache): void {
+  try {
+    fs.writeFileSync(tvdbSeasonCachePath(), JSON.stringify(cache, null, 2), 'utf-8');
+  } catch {}
+}
+
+function getCachedTvdbSeasonBackground(tvdbId: string | null | undefined, tvdbSeason: number | null | undefined): string | null {
+  if (!tvdbId || tvdbSeason == null || !Number.isInteger(tvdbSeason) || tvdbSeason <= 0) return null;
+  const entry = readTvdbSeasonDiskCache().bgBySeasonKey[`${tvdbId}:${tvdbSeason}`];
+  if (!entry || Date.now() - entry.fetchedAt >= TVDB_SEASON_TTL_MS) return null;
+  return typeof entry.url === 'string' && entry.url ? entry.url : null;
+}
+
+async function fetchAniZipTvdbSeasonMeta(anilistId: number): Promise<{ tvdbId: string | null; tvdbSeason: number | null }> {
+  const existing = aniZipSeasonMetaInFlight.get(anilistId);
+  if (existing) return existing;
+  const task = (async () => {
+    try {
+      const res = await fetch(`${ANIZIP_ENDPOINT}?anilist_id=${anilistId}`, {
+        headers: { Accept: 'application/json', 'User-Agent': 'AnimeMediaCenter/1.0' },
+        signal: AbortSignal.timeout(1500),
+      });
+      if (!res.ok) return { tvdbId: null, tvdbSeason: null };
+      let json: any = await res.json();
+      if (typeof json === 'string') {
+        try { json = JSON.parse(json); } catch {}
+      }
+      const tvdbId = extractTvdbId(json?.mappings?.thetvdb_id);
+      const tvdbSeason = extractTvdbSeasonNumber(json);
+      const cache = readTvdbSeasonDiskCache();
+      cache.seasonsByAniId[String(anilistId)] = { tvdbId, tvdbSeason, fetchedAt: Date.now() };
+      writeTvdbSeasonDiskCache(cache);
+      artworkMemoryCache.set(
+        anilistId,
+        mergeArtwork(normalizeArtwork(json?.images, json?.mappings, tvdbSeason), artworkMemoryCache.get(anilistId)),
+      );
+      return { tvdbId, tvdbSeason };
+    } catch {
+      return { tvdbId: null, tvdbSeason: null };
+    } finally {
+      aniZipSeasonMetaInFlight.delete(anilistId);
+    }
+  })();
+  aniZipSeasonMetaInFlight.set(anilistId, task);
+  return task;
+}
+
+async function resolveTvdbSeriesUrl(tvdbId: string): Promise<string | null> {
+  const cache = readTvdbSeasonDiskCache();
+  const cached = cache.slugsByTvdbId[tvdbId];
+  if (cached && Date.now() - cached.fetchedAt < TVDB_SEASON_TTL_MS) {
+    return cached.slugUrl;
+  }
+  const existing = tvdbSlugInFlight.get(tvdbId);
+  if (existing) return existing;
+
+  const task = (async () => {
+    try {
+      const res = await fetch(`https://thetvdb.com/dereferrer/series/${encodeURIComponent(tvdbId)}`, {
+        headers: { 'User-Agent': 'Mozilla/5.0 (Windows NT 10.0; Win64; x64)' },
+        redirect: 'follow',
+        signal: AbortSignal.timeout(TVDB_WEB_TIMEOUT_MS),
+      });
+      if (res.status === 404) {
+        const nextCache = readTvdbSeasonDiskCache();
+        nextCache.slugsByTvdbId[tvdbId] = { slugUrl: null, fetchedAt: Date.now() };
+        writeTvdbSeasonDiskCache(nextCache);
+        return null;
+      }
+      if (!res.ok || !res.url || !res.url.includes('/series/')) return null;
+      const slugUrl = res.url.split('#')[0].split('?')[0].replace(/\/+$/, '');
+      const nextCache = readTvdbSeasonDiskCache();
+      nextCache.slugsByTvdbId[tvdbId] = { slugUrl, fetchedAt: Date.now() };
+      writeTvdbSeasonDiskCache(nextCache);
+      return slugUrl;
+    } catch {
+      return null;
+    } finally {
+      tvdbSlugInFlight.delete(tvdbId);
+    }
+  })();
+  tvdbSlugInFlight.set(tvdbId, task);
+  return task;
+}
+
+async function fetchTvdbSeasonBackground(tvdbId: string, tvdbSeason: number): Promise<string | null> {
+  const key = `${tvdbId}:${tvdbSeason}`;
+  const cache = readTvdbSeasonDiskCache();
+  const cached = cache.bgBySeasonKey[key];
+  if (cached && Date.now() - cached.fetchedAt < TVDB_SEASON_TTL_MS) {
+    return cached.url;
+  }
+  const existing = tvdbSeasonBgInFlight.get(key);
+  if (existing) return existing;
+
+  const task = (async () => {
+    try {
+      const seriesUrl = await resolveTvdbSeriesUrl(tvdbId);
+      if (!seriesUrl) return null;
+      const res = await fetch(`${seriesUrl}/seasons/official/${tvdbSeason}`, {
+        headers: { 'User-Agent': 'Mozilla/5.0 (Windows NT 10.0; Win64; x64)' },
+        signal: AbortSignal.timeout(TVDB_WEB_TIMEOUT_MS),
+      });
+      if (!res.ok && res.status !== 404) return null;
+      const url = res.ok ? (parseTvdbSeasonBackgrounds(await res.text())[0] ?? null) : null;
+      const nextCache = readTvdbSeasonDiskCache();
+      nextCache.bgBySeasonKey[key] = { url, fetchedAt: Date.now() };
+      writeTvdbSeasonDiskCache(nextCache);
+      return url;
+    } catch {
+      return null;
+    } finally {
+      tvdbSeasonBgInFlight.delete(key);
+    }
+  })();
+  tvdbSeasonBgInFlight.set(key, task);
+  return task;
+}
+
+/**
+ * Fast artwork-only resolver (<200 ms cold, 0 ms cached) used by Home and Detail
+ * banners without waiting behind AniList rate-limited context queues or
+ * multi-page episode fetches.
+ */
+export async function getFastHeroBannerSources(anilistId: number): Promise<HeroBannerSources> {
+  const id = Math.trunc(Number(anilistId));
+  if (!Number.isFinite(id) || id <= 0) {
+    return { bannerUrl: null, fallbackBannerUrl: null, kitsuBannerUrl: null, tvdbSeasonBannerUrl: null, aniListBannerUrl: null, posterUrl: null };
+  }
+
+  readDiskCache(id);
+  const cachedContext = readAiringContext(id);
+  if (!artworkMemoryCache.has(id)) {
+    try { await getFribbIndex(); } catch {}
+  }
+
+  const memArt = artworkMemoryCache.get(id) ?? null;
+  const fribb = lookupFribbIds(id);
+  const ownImdbId = memArt?.imdbId ?? cachedContext?.imdbId ?? fribb?.imdbId ?? null;
+  let tvdbBannerUrl = (memArt?.bannerUrl && !memArt.bannerUrl.includes('images.metahub.space') ? memArt.bannerUrl : null)
+    ?? (cachedContext?.bannerUrl && !cachedContext.bannerUrl.includes('images.metahub.space') ? cachedContext.bannerUrl : null)
+    ?? null;
+  let kitsuBannerUrl = cachedContext?.kitsuBannerUrl;
+  const aniListBannerUrl = cachedContext?.aniListBannerUrl ?? null;
+  const kitsuId = kitsuIdMemoryCache.get(id) ?? (fribb?.kitsuId != null ? String(fribb.kitsuId) : null);
+
+  const tvdbCache = readTvdbSeasonDiskCache();
+  const cachedSeasonEntry = tvdbCache.seasonsByAniId[String(id)];
+  const freshSeasonMeta = cachedSeasonEntry && Date.now() - cachedSeasonEntry.fetchedAt < TVDB_SEASON_TTL_MS
+    ? cachedSeasonEntry
+    : null;
+  let resolvedTvdbId = memArt?.tvdbId ?? freshSeasonMeta?.tvdbId ?? (fribb?.tvdbId != null ? String(fribb.tvdbId) : null);
+  let resolvedTvdbSeason = memArt?.tvdbSeason ?? freshSeasonMeta?.tvdbSeason ?? null;
+
+  const kitsuTask = kitsuBannerUrl === undefined && kitsuId
+    ? fetchKitsuSeriesBanner(kitsuId).then((url) => { kitsuBannerUrl = url; }).catch(() => { kitsuBannerUrl = null; })
+    : Promise.resolve();
+
+  // Only hit ani.zip on cold cache (or when upgraded anizip cache has no tvdbSeason yet).
+  const aniZipTask = (!tvdbBannerUrl && !ownImdbId)
+    ? Promise.race([
+        fetchAniZipMappings(id).catch(() => []),
+        new Promise<never>((resolve) => setTimeout(() => resolve([] as never), 1500)),
+      ])
+    : resolvedTvdbSeason == null && !freshSeasonMeta
+      ? fetchAniZipTvdbSeasonMeta(id).then((meta) => {
+          if (!resolvedTvdbId && meta.tvdbId) resolvedTvdbId = meta.tvdbId;
+          if (resolvedTvdbSeason == null && meta.tvdbSeason != null) resolvedTvdbSeason = meta.tvdbSeason;
+        })
+      : Promise.resolve();
+
+  await Promise.all([kitsuTask, aniZipTask]);
+
+  const refreshedMem = artworkMemoryCache.get(id) ?? null;
+  const finalImdbId = ownImdbId ?? refreshedMem?.imdbId ?? null;
+  if (!tvdbBannerUrl && refreshedMem?.bannerUrl && !refreshedMem.bannerUrl.includes('images.metahub.space')) {
+    tvdbBannerUrl = refreshedMem.bannerUrl;
+  }
+  if (!resolvedTvdbId) {
+    resolvedTvdbId = refreshedMem?.tvdbId ?? (lookupFribbIds(id)?.tvdbId != null ? String(lookupFribbIds(id)!.tvdbId) : null);
+  }
+  if (resolvedTvdbSeason == null && refreshedMem?.tvdbSeason != null) {
+    resolvedTvdbSeason = refreshedMem.tvdbSeason;
+  }
+  if (kitsuBannerUrl === undefined) {
+    const postKitsuId = kitsuIdMemoryCache.get(id) ?? (lookupFribbIds(id)?.kitsuId != null ? String(lookupFribbIds(id)!.kitsuId) : null);
+    if (postKitsuId) {
+      kitsuBannerUrl = await fetchKitsuSeriesBanner(postKitsuId).catch(() => null);
+    }
+  }
+
+  let tvdbSeasonBannerUrl: string | null = null;
+  if (resolvedTvdbId && resolvedTvdbSeason != null && resolvedTvdbSeason > 0) {
+    tvdbSeasonBannerUrl = await Promise.race([
+      fetchTvdbSeasonBackground(resolvedTvdbId, resolvedTvdbSeason),
+      new Promise<null>((resolve) => setTimeout(() => resolve(null), 1800)),
+    ]);
+  }
+
+  const metahubBgUrl = metahubBannerUrl(finalImdbId);
+
+  return {
+    bannerUrl: metahubBgUrl ?? tvdbBannerUrl ?? null,
+    fallbackBannerUrl: metahubBgUrl && tvdbBannerUrl ? tvdbBannerUrl : null,
+    kitsuBannerUrl: kitsuBannerUrl ?? null,
+    tvdbSeasonBannerUrl,
+    aniListBannerUrl,
+    posterUrl: refreshedMem?.posterUrl ?? cachedContext?.posterUrl ?? null,
+  };
 }

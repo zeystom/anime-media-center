@@ -56,6 +56,8 @@ await esbuild.build({
   entryPoints: {
     UpNextWidget: './src/components/Home/UpNextWidget.tsx',
     WhisperStudio: './src/components/WhisperStudio/WhisperStudio.tsx',
+    ScheduleUtils: './src/utils/schedule.ts',
+    HeroBannerUtils: './src/utils/heroBanner.ts',
   },
   bundle: true,
   format: 'esm',
@@ -66,6 +68,8 @@ await esbuild.build({
 
 const { UpNextWidget } = await import(`file://${path.join(tempDir, 'UpNextWidget.js').replace(/\\/g, '/')}`);
 const { WhisperStudio } = await import(`file://${path.join(tempDir, 'WhisperStudio.js').replace(/\\/g, '/')}`);
+const { buildFollowedScheduleLookup, isFollowedScheduleEntry } = await import(`file://${path.join(tempDir, 'ScheduleUtils.js').replace(/\\/g, '/')}`);
+const { buildHeroBannerCandidates, selectBestHeroBanner } = await import(`file://${path.join(tempDir, 'HeroBannerUtils.js').replace(/\\/g, '/')}`);
 
 // Cleanup bundle artifacts
 try {
@@ -726,6 +730,9 @@ runTest('6.1 UpNextWidget renders Movie / Resume Movie instead of EP when isMovi
     assert(html.includes('title="Resume Movie"'), `Expected "Resume Movie" tooltip when isMovie=true`);
     assert(!html.includes('Resume EP'), `Must not emit "Resume EP" for a movie`);
   }
+  const epHtml = cleanSsr(renderUpNext(upNextPayload({ progress: { episodeNumber: 'E05' }, isMovie: false })));
+  assert(!epHtml.includes('>E05<'), 'Series episodes must omit redundant top episode pill badge when Resume E05 shows it');
+  assert(epHtml.includes('Resume E05'), 'Expected "Resume E05" button for series episode');
 });
 
 runTest('6.2 CompletionPrompt centers via flex wrapper instead of conflicting transform with motion.div', () => {
@@ -745,6 +752,84 @@ runTest('6.3 Discover SelectField avoids <label> re-toggle while Genre multi-sel
   assert(glassSelectSrc.includes('event.stopPropagation()'), 'GlassSelect option clicks must call stopPropagation()');
   const toggleGenreMatch = discoverSrc.match(/const toggleGenre = [\s\S]*?\n  \}/);
   assert(toggleGenreMatch && !toggleGenreMatch[0].includes('setIsGenrePickerOpen(false)'), 'Genre multi-select must stay open after toggling a genre');
+});
+
+runTest('6.4 HomeSchedulePreview prioritizes followed anime and matches IDs or normalized titles', () => {
+  const homePreviewSrc = fs.readFileSync(path.join(__dirname, 'src', 'components', 'Home', 'HomeSchedulePreview.tsx'), 'utf-8');
+  const homeViewSrc = fs.readFileSync(path.join(__dirname, 'src', 'components', 'Home', 'HomeView.tsx'), 'utf-8');
+  assert(homeViewSrc.includes('followedAnime={followedAnime}'), 'HomeView must forward followedAnime to HomeSchedulePreview');
+  assert(homePreviewSrc.includes('isFollowedScheduleEntry') && homePreviewSrc.includes('Bell'), 'HomeSchedulePreview must prioritize followed entries and render Bell indicators');
+  assert(isFollowedScheduleEntry(null, 154587, 'Frieren') === false, 'null lookup must never match');
+  const lookup = buildFollowedScheduleLookup([
+    { anilistId: 101, title: 'Clevatess Season 2', posterUrl: null },
+  ]);
+  assert(isFollowedScheduleEntry(lookup, 101, 'Other') === true, 'AniList ID must match followed anime');
+  assert(isFollowedScheduleEntry(lookup, 999, 'Clevatess') === true, 'Normalized title must match without season suffix');
+  assert(isFollowedScheduleEntry(lookup, 999, 'K-ON!') === false, 'Unrelated anime must not match');
+});
+
+runTest('6.5 Unified hero banner selection picks per-season HD first, then series 16:9 HD, then fallback', () => {
+  // Case 1: Season-specific HD (e.g. Kitsu AoT S3 Part 2 1920x1080) beats series Metahub 1920x1080
+  const seasonHdCandidates = buildHeroBannerCandidates(
+    ['https://kitsu/aot-s3p2.jpg', 'https://anilist/aot-s3p2-550.jpg'],
+    ['https://metahub/aot-s1.jpg', 'https://tvdb/aot-fanart.jpg']
+  );
+  const dimSeasonHd = new Map([
+    ['https://kitsu/aot-s3p2.jpg', { w: 1920, h: 1080 }],
+    ['https://anilist/aot-s3p2-550.jpg', { w: 1900, h: 550 }],
+    ['https://metahub/aot-s1.jpg', { w: 1920, h: 1080 }],
+    ['https://tvdb/aot-fanart.jpg', { w: 1920, h: 1080 }],
+  ]);
+  assert.strictEqual(selectBestHeroBanner(seasonHdCandidates, dimSeasonHd), 'https://kitsu/aot-s3p2.jpg');
+
+  // Case 2: Compressed 400px-640px season strips lose to Full-HD 1080p Metahub/TVDB series artwork
+  const compressedSeasonCandidates = buildHeroBannerCandidates(
+    ['https://kitsu/kusuriya-640.jpg', 'https://anilist/kusuriya-400.jpg'],
+    ['https://metahub/kusuriya-1080.jpg', 'https://tvdb/kusuriya-fanart.jpg']
+  );
+  const dimCompressed = new Map([
+    ['https://kitsu/kusuriya-640.jpg', { w: 1920, h: 640 }],
+    ['https://anilist/kusuriya-400.jpg', { w: 1900, h: 400 }],
+    ['https://metahub/kusuriya-1080.jpg', { w: 1920, h: 1080 }],
+    ['https://tvdb/kusuriya-fanart.jpg', { w: 1920, h: 1080 }],
+  ]);
+  assert.strictEqual(selectBestHeroBanner(compressedSeasonCandidates, dimCompressed), 'https://metahub/kusuriya-1080.jpg');
+
+  // Case 3: Failed Metahub falls back cleanly to TVDB Fanart 1080p
+  dimCompressed.set('https://metahub/kusuriya-1080.jpg', null);
+  assert.strictEqual(selectBestHeroBanner(compressedSeasonCandidates, dimCompressed), 'https://tvdb/kusuriya-fanart.jpg');
+
+  // Case 4: When only season strips exist, falls back cleanly without failing
+  const fallbackOnly = new Map([
+    ['https://kitsu/kusuriya-640.jpg', { w: 1920, h: 640 }],
+    ['https://anilist/kusuriya-400.jpg', { w: 1900, h: 400 }],
+    ['https://metahub/kusuriya-1080.jpg', null],
+    ['https://tvdb/kusuriya-fanart.jpg', null],
+  ]);
+  assert.strictEqual(selectBestHeroBanner(compressedSeasonCandidates, fallbackOnly), 'https://kitsu/kusuriya-640.jpg');
+
+  // Case 5: Boxy 4:3 illustrations (e.g. K-ON! S2 Kitsu 2048x1536, aspect 1.33 < 1.6)
+  // are skipped in favor of true widescreen 16:9 Full-HD backdrops
+  const konS2Candidates = buildHeroBannerCandidates(
+    ['https://kitsu/kon-s2-2048x1536.jpg'],
+    ['https://metahub/kon-1920x1080.jpg', 'https://tvdb/kon-fanart.jpg']
+  );
+  const dimKonS2 = new Map([
+    ['https://kitsu/kon-s2-2048x1536.jpg', { w: 2048, h: 1536 }],
+    ['https://metahub/kon-1920x1080.jpg', { w: 1920, h: 1080 }],
+    ['https://tvdb/kon-fanart.jpg', { w: 1920, h: 1080 }],
+  ]);
+  assert.strictEqual(selectBestHeroBanner(konS2Candidates, dimKonS2), 'https://metahub/kon-1920x1080.jpg');
+
+  // Case 6: Home & AnimeDetailView share getFastHeroBannerSources, invalidation & blurred poster fallback
+  const upNextSrc = fs.readFileSync(path.join(__dirname, 'src', 'components', 'Home', 'UpNextWidget.tsx'), 'utf-8');
+  const detailSrc = fs.readFileSync(path.join(__dirname, 'src', 'components', 'AnimeDetail', 'AnimeDetailView.tsx'), 'utf-8');
+  const appSrc = fs.readFileSync(path.join(__dirname, 'src', 'App.tsx'), 'utf-8');
+  assert(upNextSrc.includes('getFastHeroBannerSources') && detailSrc.includes('getFastHeroBannerSources'), 'Both heroes must fetch fast banner artwork without episode pagination stalls');
+  assert(upNextSrc.includes('tvdbSeasonBannerUrl') && detailSrc.includes('tvdbSeasonBannerUrl'), 'Both heroes must prioritize TVDB official season backgrounds');
+  assert(appSrc.includes('useActiveHeroBannerUrl') && appSrc.includes('backdropImage={navbarBackdropImage}'), 'Navbar glass strip must sync with the resolved hero banner URL instead of rendering a mismatched unprobed strip');
+  assert(upNextSrc.includes('invalidateResolvedHeroBanner') && detailSrc.includes('invalidateResolvedHeroBanner'), 'Both heroes must invalidate broken cached banners on error');
+  assert((upNextSrc.includes('blur-2xl') || upNextSrc.includes('blur-3xl')) && upNextSrc.includes('opacity-25'), 'UpNextWidget must blur posterSrc fallback instead of stretching sharp portrait art');
 });
 
 console.log('\n================================================================');

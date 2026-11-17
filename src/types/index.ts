@@ -10,7 +10,7 @@ export type {
   CatalogNextAiringEpisode,
   GenrePickRail,
 } from '../../electron/catalog';
-export type { RemoteEpisodeInfo, RemoteEpisodesResult } from '../../electron/aniZip';
+export type { HeroBannerSources, RemoteEpisodeInfo, RemoteEpisodesResult } from '../../electron/aniZip';
 export type { UserLibraryEntry, UserListStatus } from '../../electron/userLibrary';
 
 // Storage overview shapes (implemented by electron/libraryManager.ts — structurally identical)
@@ -31,7 +31,7 @@ export interface StorageOverview {
 }
 
 import type { CatalogItem, CatalogRelatedTitle, AiringEntry, DiscoverCatalogPage, GenrePickRail, FranchiseSeasonEntry } from '../../electron/catalog';
-import type { RemoteEpisodeInfo, RemoteEpisodesResult } from '../../electron/aniZip';
+import type { HeroBannerSources, RemoteEpisodeInfo, RemoteEpisodesResult } from '../../electron/aniZip';
 import type { UserLibraryEntry, UserListStatus } from '../../electron/userLibrary';
 import type {
   P2pState,
@@ -175,6 +175,9 @@ export interface ElectronAPI {
   onAgeRatingsUpdated: (callback: (ratings: Record<string, number>) => void) => () => void;
   getCatalogFranchise: (anilistId: number) => Promise<CatalogRelatedTitle[]>;
   getRemoteEpisodes: (anilistId: number) => Promise<RemoteEpisodesResult>;
+  getCachedHeroBanners: () => Promise<Record<string, string>>;
+  saveCachedHeroBanner: (anilistId: number, bannerUrl: string) => Promise<void>;
+  getFastHeroBannerSources: (anilistId: number) => Promise<HeroBannerSources>;
   // User Library
   getUserLibrary: () => Promise<Record<number, UserLibraryEntry>>;
   setUserLibraryStatus: (
