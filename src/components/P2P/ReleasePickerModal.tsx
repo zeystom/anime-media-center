@@ -247,7 +247,10 @@ export const ReleasePickerModal: React.FC<ReleasePickerModalProps> = ({
     [results],
   )
 
-  const effectiveSeason = season ?? (title ? detectSeasonFromTitle(title) : null)
+  const effectiveSeason =
+    mediaFormat?.toUpperCase() === 'MOVIE'
+      ? null
+      : (season ?? (title ? detectSeasonFromTitle(title) : null))
 
   // Preserve backend's match ordering inside each audio/subtitle priority group.
   const languageSorted = useMemo(() => [...classified].sort((a, b) => {
@@ -327,7 +330,15 @@ export const ReleasePickerModal: React.FC<ReleasePickerModalProps> = ({
   if (!open) return null
 
   const scopeLabel =
-    episode != null ? `Episode ${episode}` : mediaFormat?.toUpperCase() === 'OVA' ? `OVA${effectiveSeason != null ? ` · Season ${effectiveSeason}` : ''}` : effectiveSeason != null ? `Season ${effectiveSeason}` : 'Season pack'
+    episode != null
+      ? `Episode ${episode}`
+      : mediaFormat?.toUpperCase() === 'MOVIE'
+        ? 'Movie'
+        : mediaFormat?.toUpperCase() === 'OVA'
+          ? `OVA${effectiveSeason != null ? ` · Season ${effectiveSeason}` : ''}`
+          : effectiveSeason != null
+            ? `Season ${effectiveSeason}`
+            : 'Season pack'
 
   // Results-area state machine (see file header): loading -> fatal / all
   // providers failed -> no indexers -> some ok but zero results -> results.

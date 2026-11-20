@@ -2,7 +2,7 @@ import assert from 'assert';
 import fs from 'fs';
 import os from 'os';
 import path from 'path';
-import { computeDiskUsage, computeStorageOverview, deleteAnime, deleteEpisodes } from './electron/libraryManager.ts';
+import { computeDiskUsage, computeFoldersDiskSpace, computeStorageOverview, deleteAnime, deleteEpisodes } from './electron/libraryManager.ts';
 
 console.log('Testing libraryManager disk usage + explicit deletion (offline sandbox)...');
 
@@ -260,6 +260,30 @@ try {
     assert.strictEqual(noRootsRes.success, false);
     assert.ok(/roots/i.test(noRootsRes.error || ''), `error should mention roots, got: ${noRootsRes.error}`);
     assert.ok(fs.existsSync(path.join(root, 'Show A', 'Episode 01.srt')), 'file must be untouched');
+  });
+
+  await check('computeFoldersDiskSpace reports driveLabel and free/total bytes for folders and null for missing volumes', async () => {
+    const futureSubdir = path.join(root, 'FutureSubfolder', 'Nested');
+    let missingRoot = '/nonexistent-volume-amc-test-xyz/anime';
+    if (process.platform === 'win32') {
+      const unmounted = 'ZYXWVUTSRQPONMLK'.split('').find((letter) => !fs.existsSync(`${letter}:\\`));
+      if (unmounted) missingRoot = `${unmounted}:\\Missing\\Anime`;
+    }
+    const spaces = await computeFoldersDiskSpace([root, futureSubdir, missingRoot]);
+    assert.strictEqual(spaces.length, 3);
+    assert.strictEqual(spaces[0].folderPath, root);
+    assert.ok(spaces[0].freeBytes != null && spaces[0].freeBytes >= 0, 'existing root must report non-negative freeBytes');
+    assert.ok(spaces[0].totalBytes != null && spaces[0].totalBytes >= spaces[0].freeBytes, 'totalBytes must be >= freeBytes');
+    if (process.platform === 'win32') {
+      assert.match(spaces[0].driveLabel, /^[A-Z]:$/);
+    } else {
+      assert.ok(spaces[0].driveLabel.length > 0);
+    }
+    assert.strictEqual(spaces[1].freeBytes, spaces[0].freeBytes, 'nonexistent nested subfolder falls back to volume stats');
+    if (process.platform === 'win32' && /^[A-Z]:/.test(missingRoot)) {
+      assert.strictEqual(spaces[2].freeBytes, null);
+      assert.strictEqual(spaces[2].totalBytes, null);
+    }
   });
 
   console.log(`\nResults: ${results.pass} passed, ${results.fail} failed`);

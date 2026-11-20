@@ -229,6 +229,75 @@ async function readFreeBytes(roots: string[]): Promise<number | null> {
   return null;
 }
 
+export interface FolderDiskSpace {
+  folderPath: string;
+  driveLabel: string;
+  freeBytes: number | null;
+  totalBytes: number | null;
+}
+
+function extractDriveLabel(folderPath: string): string {
+  const trimmed = String(folderPath || '').trim();
+  if (!trimmed) return '';
+  const winDrive = /^([A-Za-z]:)/.exec(trimmed);
+  if (winDrive) return winDrive[1].toUpperCase();
+  const uncMatch = /^\\\\([^\\]+)\\([^\\]+)/.exec(trimmed);
+  if (uncMatch) return `\\\\${uncMatch[1]}\\${uncMatch[2]}`;
+  const parsedRoot = path.parse(trimmed).root;
+  return parsedRoot || '/';
+}
+
+async function statFolderFs(folderPath: string): Promise<{ freeBytes: number; totalBytes: number } | null> {
+  const candidates: string[] = [];
+  let current = String(folderPath || '').trim();
+  if (!current) return null;
+  const parsedRoot = path.parse(current).root;
+  while (current) {
+    candidates.push(current);
+    if (current === parsedRoot) break;
+    const parent = path.dirname(current);
+    if (!parent || parent === current) break;
+    current = parent;
+  }
+  for (const candidate of candidates) {
+    try {
+      const stat = await fs.promises.statfs(candidate);
+      const freeBytes = Number(stat.bavail) * Number(stat.bsize);
+      const totalBytes = Number(stat.blocks) * Number(stat.bsize);
+      if (Number.isFinite(freeBytes) && Number.isFinite(totalBytes) && totalBytes > 0) {
+        return { freeBytes, totalBytes };
+      }
+    } catch {
+      // Candidate doesn't exist or isn't mounted yet; walk up to the volume root.
+    }
+  }
+  return null;
+}
+
+export async function computeFoldersDiskSpace(folderPaths: string[]): Promise<FolderDiskSpace[]> {
+  const cache = new Map<string, Promise<{ freeBytes: number; totalBytes: number } | null>>();
+  return Promise.all(
+    (Array.isArray(folderPaths) ? folderPaths : [])
+      .map((raw) => String(raw || '').trim())
+      .filter(Boolean)
+      .map(async (folderPath) => {
+        const key = process.platform === 'win32' ? folderPath.toLowerCase() : folderPath;
+        let pending = cache.get(key);
+        if (!pending) {
+          pending = statFolderFs(folderPath);
+          cache.set(key, pending);
+        }
+        const stats = await pending;
+        return {
+          folderPath,
+          driveLabel: extractDriveLabel(folderPath),
+          freeBytes: stats ? stats.freeBytes : null,
+          totalBytes: stats ? stats.totalBytes : null,
+        };
+      })
+  );
+}
+
 /**
  * Explicitly deletes one release folder (recursively) and returns the number
  * of bytes it occupied. Deletion is ALWAYS an explicit user action triggered

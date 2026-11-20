@@ -5,6 +5,8 @@ export interface AppNotification {
   id: string
   kind: 'download' | 'airing' | 'follow' | 'whisper'
   title: string
+  /** Canonical series title preserved separately from headline (`"New episode aired"`). */
+  animeTitle?: string
   message: string
   createdAt: number
   read: boolean
@@ -29,6 +31,8 @@ export interface FollowedAnime {
   posterUrl: string | null
   status: string
   episodesCount: number | null
+  autoDownload?: boolean
+  preferredDownloadRoot?: string | null
 }
 
 export interface FavouriteAnime {

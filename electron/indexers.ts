@@ -23,8 +23,7 @@
 import { XMLParser, XMLValidator } from 'fast-xml-parser';
 import type { RssProvider, ReleaseSearchResult, ProviderReport } from './types.ts';
 import { parseReleaseSync } from '../src/lib/releaseParser/index.ts';
-import { classifyRelease, detectSeasonFromTitle, isMultiSeasonCollection, qualityRank } from '../src/lib/releaseParser/releaseClassification.ts';
-import { releaseDescriptionToText } from '../src/lib/releaseParser/releaseClassification.ts';
+import { classifyRelease, decodeHtmlEntities, detectSeasonFromTitle, isMultiSeasonCollection, qualityRank, releaseDescriptionToText } from '../src/lib/releaseParser/releaseClassification.ts';
 
 /** Per-request timeout for indexer feeds. */
 const FETCH_TIMEOUT_MS = 12_000;
@@ -61,7 +60,7 @@ export interface ProviderSearchParams {
  * sanitizeSearchQuery swaps them for spaces. The plain hyphen is NOT in this
  * class: intra-word hyphens are meaningful to trackers (see below).
  */
-const QUERY_PUNCTUATION_RE = /[:/\\!?()[\]{}<>"'`,;._–—*|&+]/g;
+const QUERY_PUNCTUATION_RE = /[:/\\!?()[\]{}<>"'`’‘“”,;._–—*|&+×·・：；！？～〜~『』「」【】（）]/g;
 
 /** Letter or digit (unicode-aware): the two halves of a joined hyphen. */
 const QUERY_WORD_CHAR_RE = /[\p{L}\p{N}]/u;
@@ -90,6 +89,84 @@ const sanitizeHyphens = (text: string): string =>
 export function sanitizeSearchQuery(raw: string): string {
   const text = typeof raw === 'string' ? raw : '';
   return sanitizeHyphens(text).replace(QUERY_PUNCTUATION_RE, ' ').replace(/\s+/g, ' ').trim();
+}
+
+const SHORTEN_CJK_RE = /[\u3040-\u30ff\u3400-\u4dbf\u4e00-\u9fff]/;
+const SHORTEN_SEASON_TAIL_RE = /\b(?:season\s*\d+|part\s*\d+|cour\s*\d+|s0*\d+|\d+(?:st|nd|rd|th)\s+season)\b/i;
+
+/**
+ * Generates safer shortened fallback queries for long, subtitle-heavy titles
+ * (e.g. `"JUJUTSU KAISEN: Execution -Shibuya Incident x The Culling Game Begins-"`
+ * -> `"JUJUTSU KAISEN: Execution"`) without stripping season/part markers or
+ * colliding with parent franchise titles passed in `excludeTitles`.
+ */
+export function deriveShortenedTitleQueries(titles: string[], excludeTitles: string[] = []): string[] {
+  const excludedNorm = new Set<string>();
+  for (const excluded of excludeTitles) {
+    if (typeof excluded !== 'string') continue;
+    const norm = normalizeMatch(excluded);
+    if (norm) excludedNorm.add(norm);
+  }
+  const list = Array.isArray(titles) ? titles : [];
+  for (const title of list) {
+    if (typeof title !== 'string') continue;
+    const norm = normalizeMatch(title);
+    if (norm) excludedNorm.add(norm);
+  }
+
+  const emittedNorm = new Set<string>();
+  const out: string[] = [];
+
+  const acceptCandidate = (rawCandidate: string, origWordCount: number): boolean => {
+    const candidate = rawCandidate.trim();
+    if (!candidate || SHORTEN_CJK_RE.test(candidate)) return false;
+    const sanitized = sanitizeSearchQuery(candidate);
+    if (!sanitized) return false;
+    const words = sanitized.split(/\s+/).filter(Boolean);
+    if (words.length < 3 || words.length >= origWordCount) return false;
+    const norm = normalizeMatch(candidate);
+    if (!norm || excludedNorm.has(norm) || emittedNorm.has(norm)) return false;
+    emittedNorm.add(norm);
+    out.push(candidate);
+    return true;
+  };
+
+  for (const rawTitle of list) {
+    if (typeof rawTitle !== 'string') continue;
+    const raw = rawTitle.trim();
+    if (!raw || SHORTEN_CJK_RE.test(raw)) continue;
+    const sanitizedOrig = sanitizeSearchQuery(raw);
+    const origWordCount = sanitizedOrig ? sanitizedOrig.split(/\s+/).filter(Boolean).length : 0;
+    if (origWordCount < 4) continue;
+
+    // 1. Strip trailing delimited secondary subtitle (`-Sub-`, `(Note)`, `[Tag]`)
+    const delimMatch = /^(.+)\s+(?:[-–—~]\s*[^-–—~]+[-–—~]?|\([^)]+\)|\[[^\]]+\])\s*$/.exec(raw);
+    if (delimMatch) {
+      const prefix = delimMatch[1].trim();
+      const tail = raw.slice(delimMatch[1].length);
+      if (!SHORTEN_SEASON_TAIL_RE.test(tail)) {
+        acceptCandidate(prefix, origWordCount);
+      }
+    }
+
+    // 2. Strip trailing Movie / The Movie suffix on long titles (>= 5 words)
+    if (origWordCount >= 5) {
+      const movieMatch = /^(.+?)(?:\s*[:\-–—]\s*|\s+)(?:the\s+)?movie$/i.exec(raw);
+      if (movieMatch) {
+        acceptCandidate(movieMatch[1], origWordCount);
+      }
+    }
+
+    // 3. Take prefix before spaced cross/slash split on very long titles (>= 6 words)
+    if (origWordCount >= 6) {
+      const splitMatch = /^(.+?)\s+(?:\/|×|x)\s+.+$/i.exec(raw);
+      if (splitMatch) {
+        acceptCandidate(splitMatch[1], origWordCount);
+      }
+    }
+  }
+
+  return out;
 }
 
 /** A BitTorrent info hash is 40 hex chars (v1) or 32 base32 chars (v2). */
@@ -395,6 +472,31 @@ export function isExplicitSeasonMismatch(
   return relSeason != null && relSeason !== Number(target);
 }
 
+const REF_SPINOFF_RE = /\b(?:omake|shorts?|mini\s+anime|chibi|picture\s+drama|specials?|ova|oad|gekijou)\b/i;
+const RELEASE_SPINOFF_SHORT_RE = /\b(?:omake(?:\s+shorts?)?|mini\s+anime|chibi\s+(?:chara|theater|shorts?)|picture\s+drama|(?:bonus|extra|mini|omake|special)\s+shorts?)\b/i;
+
+/**
+ * Reject a release clearly labeled as a short/omake spin-off or TVDB Season 0
+ * special (`S00E01`, `Omake Shorts`) when searching for a regular series,
+ * while preserving complete season packs that bundle bonuses alongside main eps.
+ */
+export function isExplicitSpinoffOrSpecialMismatch(
+  result: Pick<ReleaseSearchResult, 'title'> | null | undefined,
+  refs: string[],
+  mediaFormat?: string | null,
+): boolean {
+  if (['OVA', 'SPECIAL'].includes(String(mediaFormat ?? '').toUpperCase())) return false;
+  if (Array.isArray(refs) && refs.some((ref) => typeof ref === 'string' && ref.trim() && REF_SPINOFF_RE.test(ref))) {
+    return false;
+  }
+  const title = typeof result?.title === 'string' ? result.title : '';
+  if (!title || BATCH_TITLE_RE.test(title) || isMultiSeasonCollection(title)) return false;
+  if (/\bS00E\d{1,3}\b/i.test(title)) return true;
+  if (RELEASE_SPINOFF_SHORT_RE.test(title)) return true;
+  if (/(?:^|[\s\-–—([\[])shorts?\s*(?:[-–—]\s*\d+|#?\d+\b)/i.test(title)) return true;
+  return false;
+}
+
 /** A season chain entry's titles (from the AniList franchise graph), used to
  *  catch wrong-season releases whose titles carry no parseable season marker. */
 export interface FranchiseSeasonTitles {
@@ -688,7 +790,7 @@ function normalizeFeedItem(item: Record<string, unknown>, provider: RssProvider)
   const enclosureUrl = enclosure ? readXmlAttribute(enclosure, '@_url').trim() : '';
   const enclosureType = enclosure ? readXmlAttribute(enclosure, '@_type').trim().toLowerCase() : '';
   const link = readXmlText(item.link).trim();
-  const title = readXmlText(item.title).trim();
+  const title = decodeHtmlEntities(readXmlText(item.title)).trim();
   const description = (readXmlText(item.description) || readXmlText(item['content:encoded'])).slice(0, 20_000) || null;
 
   const nyaaInfoHash = toInfoHashOrNull(item['nyaa:infoHash']);
@@ -914,7 +1016,7 @@ function scoreRelease(
     }
   }
   if (refNorm && parsedNorm) {
-    if (parsedNorm === refNorm) {
+    if (parsedNorm === refNorm || titleRelevanceOf(parsedNorm, refNorm) === 'exact') {
       score += 60;
     } else if (titleRelevanceOf(parsedNorm, refNorm) === 'prefix') {
       // Same show with decorations ("Monster S2", "The Apothecary Diaries").
@@ -1047,6 +1149,11 @@ function seasonishTail(tail: string): boolean {
 function titleRelevanceOf(candidate: string, ref: string): TitleRelevance {
   if (!candidate || !ref) return 'none';
   if (candidate === ref) return 'exact';
+  // Romanized compounds are routinely spaced differently across subbers vs
+  // AniList (e.g. "Dark Summoner to Dekite Iru" vs "Dark Summoner to Dekiteiru").
+  const compactCandidate = candidate.replace(/\s+/g, '');
+  const compactRef = ref.replace(/\s+/g, '');
+  if (compactCandidate.length >= 8 && compactCandidate === compactRef) return 'exact';
   // The release extends the show name — only with season/part/year markers.
   // "Monster S2" is a prefix; "Monster Hunter" is another show.
   if (candidate.startsWith(ref) && wordBoundaryAfter(candidate, ref.length) && seasonishTail(candidate.slice(ref.length))) {

@@ -671,6 +671,7 @@ export const VideoPlayer: React.FC<VideoPlayerProps> = ({
 
   // Controls auto-hide
   const [showControls, setShowControls] = useState<boolean>(true);
+  const [isTimelinePreviewVisible, setIsTimelinePreviewVisible] = useState<boolean>(false);
   const hideControlsTimerRef = useRef<any>(null);
 
   const showRipple = useCallback((type: RippleType, text?: string) => {
@@ -1947,6 +1948,8 @@ export const VideoPlayer: React.FC<VideoPlayerProps> = ({
 
   // Controls are visible when mouse moves, or if video is paused, or while loading, or if a modal/drawer is open
   const areControlsVisible = showControls || !isPlaying || loading || isTrackControlsOpen || isEpisodeDrawerOpen;
+  const areBottomControlsVisible = areControlsVisible && !isEpisodeDrawerOpen;
+  const shouldYieldFloatingPrompts = isTimelinePreviewVisible && areBottomControlsVisible;
   const areControlsVisibleRef = useRef(areControlsVisible);
   areControlsVisibleRef.current = areControlsVisible;
   const prevControlsVisibleRef = useRef(areControlsVisible);
@@ -2218,6 +2221,8 @@ export const VideoPlayer: React.FC<VideoPlayerProps> = ({
           serverPort={serverPortRef.current}
           onSeek={handleSeek}
           openingRange={detectedOpening}
+          controlsVisible={areBottomControlsVisible}
+          onPreviewVisibilityChange={setIsTimelinePreviewVisible}
         />
 
         {/* Action Controls Toolbar */}
@@ -2350,8 +2355,13 @@ export const VideoPlayer: React.FC<VideoPlayerProps> = ({
       {/* Floating Skip Intro / Opening Prompt Card */}
       {isIntroActive && detectedOpening && (
         <div
-          className={`absolute left-6 z-40 transition-all duration-300 flex items-center select-none pointer-events-auto animate-in fade-in slide-in-from-bottom-3 ${
-            areControlsVisible ? 'bottom-28 opacity-100 translate-y-0' : 'bottom-10 opacity-90 hover:opacity-100 translate-y-0'
+          aria-hidden={shouldYieldFloatingPrompts || undefined}
+          className={`absolute left-6 transition-all flex items-center select-none animate-in fade-in slide-in-from-bottom-3 ${
+            shouldYieldFloatingPrompts
+              ? 'z-[35] bottom-28 opacity-0 translate-y-2 scale-[0.97] pointer-events-none duration-150'
+              : `z-40 pointer-events-auto duration-300 ${
+                  areBottomControlsVisible ? 'bottom-28 opacity-100 translate-y-0 scale-100' : 'bottom-10 opacity-90 hover:opacity-100 translate-y-0 scale-100'
+                }`
           }`}
         >
           <div className="rounded-full border border-white/[0.12] bg-[#0b0912]/65 backdrop-blur-xl pl-4 pr-2 py-1.5 shadow-2xl flex items-center space-x-2 hover:border-rose-400/45 hover:bg-[#140e1f]/80 transition-all group">
@@ -2388,8 +2398,13 @@ export const VideoPlayer: React.FC<VideoPlayerProps> = ({
 
         return (
           <div
-            className={`absolute right-6 z-40 rounded-2xl border border-white/[0.1] bg-[#0b0912]/70 backdrop-blur-xl p-2.5 pr-3 shadow-2xl flex items-center space-x-3 animate-in fade-in slide-in-from-bottom-4 transition-all duration-300 ${
-              areControlsVisible ? 'bottom-28' : 'bottom-10'
+            aria-hidden={shouldYieldFloatingPrompts || undefined}
+            className={`absolute right-6 rounded-2xl border border-white/[0.1] bg-[#0b0912]/70 backdrop-blur-xl p-2.5 pr-3 shadow-2xl flex items-center space-x-3 animate-in fade-in slide-in-from-bottom-4 transition-all ${
+              shouldYieldFloatingPrompts
+                ? 'z-[35] bottom-28 opacity-0 translate-y-2 scale-[0.97] pointer-events-none duration-150'
+                : `z-40 pointer-events-auto duration-300 opacity-100 translate-y-0 scale-100 ${
+                    areBottomControlsVisible ? 'bottom-28' : 'bottom-10'
+                  }`
             }`}
           >
             <div className="w-16 aspect-video rounded-lg overflow-hidden shrink-0 bg-black border border-white/10 relative">

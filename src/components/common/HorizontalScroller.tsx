@@ -1,6 +1,15 @@
 import React, { useCallback, useEffect, useRef } from 'react'
 import { ChevronLeft, ChevronRight, RotateCcw } from 'lucide-react'
 import { markScrollActivity } from '../../utils/scrollState'
+import {
+  EMPTY_OVERSCROLL,
+  computeOverscrollState,
+  createHorizontalWheelState,
+  finishHorizontalWheelGesture,
+  processHorizontalWheel,
+  resetHorizontalWheelState,
+  type OverscrollState,
+} from '../../utils/horizontalWheel'
 
 interface HorizontalScrollerProps {
   children: React.ReactNode
@@ -9,36 +18,9 @@ interface HorizontalScrollerProps {
   onEngageScroll?: () => void
 }
 
-interface OverscrollState {
-  side: 'left' | 'right' | null
-  progress: number
-  pullPx: number
-  railShiftPx: number
-}
-
-const EMPTY_OVERSCROLL: OverscrollState = { side: null, progress: 0, pullPx: 0, railShiftPx: 0 }
-const PULL_THRESHOLD = 110
-const WHEEL_PULL_THRESHOLD = 160
 const RING_RADIUS = 20
 const RING_CIRCUMFERENCE = 2 * Math.PI * RING_RADIUS
-const WHEEL_RELEASE_MS = 220
-const TOUCHPAD_RELEASE_MS = 420
-const WHEEL_COOLDOWN_MS = 450
 const SCROLL_IDLE_MS = 150
-
-function computeOverscrollState(
-  side: 'left' | 'right',
-  rawOverscroll: number,
-  deadzone: number,
-  threshold: number = PULL_THRESHOLD
-): OverscrollState {
-  const effectivePull = Math.max(0, rawOverscroll - deadzone)
-  const progress = Math.min(1, effectivePull / threshold)
-  const scaledPull = effectivePull * (PULL_THRESHOLD / threshold)
-  const pullPx = scaledPull > 0 ? Math.min(44, Math.pow(scaledPull, 0.72) * 1.45) : 0
-  const railShiftPx = scaledPull > 0 ? Math.min(18, Math.pow(scaledPull, 0.65) * 0.75) : 0
-  return { side, progress, pullPx, railShiftPx }
-}
 
 function wrapScrollToEdge(element: HTMLDivElement, side: 'left' | 'right', maxScroll: number) {
   if (maxScroll <= 2) return
@@ -64,12 +46,8 @@ const HorizontalScrollerImpl: React.FC<HorizontalScrollerProps> = ({ children, c
   const dragCleanupRef = useRef<(() => void) | null>(null)
   const overscrollRef = useRef<OverscrollState>(EMPTY_OVERSCROLL)
   const suppressClickRef = useRef(false)
-  const wheelPullRef = useRef(0)
-  const wheelSideRef = useRef<'left' | 'right' | null>(null)
-  const wheelStartedAtEdgeRef = useRef(false)
-  const wheelActiveRef = useRef(false)
+  const wheelStateRef = useRef(createHorizontalWheelState())
   const wheelReleaseTimerRef = useRef<number | null>(null)
-  const wheelCooldownUntilRef = useRef(0)
 
   const markRailScrolling = useCallback(() => {
     markScrollActivity(SCROLL_IDLE_MS)
@@ -104,6 +82,7 @@ const HorizontalScrollerImpl: React.FC<HorizontalScrollerProps> = ({ children, c
     if (
       prev.side === next.side &&
       (prev.progress >= 1) === (next.progress >= 1) &&
+      (prev.progress > 0.02) === (next.progress > 0.02) &&
       (prev.progress === 0) === (next.progress === 0) &&
       Math.abs(prev.progress - next.progress) < 0.005 &&
       Math.abs(prev.pullPx - next.pullPx) < 0.2 &&
@@ -124,9 +103,17 @@ const HorizontalScrollerImpl: React.FC<HorizontalScrollerProps> = ({ children, c
       }
     }
 
+    const isVisible = next.side !== null && next.progress > 0.02
+    if (wrapperRef.current) {
+      const nextAttr = isVisible ? 'true' : 'false'
+      if (wrapperRef.current.dataset.overscrolling !== nextAttr) {
+        wrapperRef.current.dataset.overscrolling = nextAttr
+      }
+    }
+
     const pill = overscrollWrapRef.current
     if (!pill) return
-    if (next.side === null || next.progress <= 0.02) {
+    if (!isVisible || next.side === null) {
       pill.style.display = 'none'
       return
     }
@@ -157,8 +144,18 @@ const HorizontalScrollerImpl: React.FC<HorizontalScrollerProps> = ({ children, c
     }
   }, [])
 
+  const resetWheelGesture = useCallback(() => {
+    if (wheelReleaseTimerRef.current != null) {
+      window.clearTimeout(wheelReleaseTimerRef.current)
+      wheelReleaseTimerRef.current = null
+    }
+    resetHorizontalWheelState(wheelStateRef.current)
+    applyOverscroll(EMPTY_OVERSCROLL, false)
+  }, [applyOverscroll])
+
   const scrollByPage = (direction: -1 | 1) => {
     notifyEngage()
+    resetWheelGesture()
     const element = scrollRef.current
     if (!element) return
     syncScrollBounds()
@@ -177,6 +174,7 @@ const HorizontalScrollerImpl: React.FC<HorizontalScrollerProps> = ({ children, c
   const onPointerDown = (event: React.PointerEvent<HTMLDivElement>) => {
     if (event.button !== 0) return
     notifyEngage()
+    resetWheelGesture()
     const element = scrollRef.current
     if (!element) return
     syncScrollBounds()
@@ -254,114 +252,65 @@ const HorizontalScrollerImpl: React.FC<HorizontalScrollerProps> = ({ children, c
   }, [])
 
   useEffect(() => {
+    const wrapper = wrapperRef.current
     const element = scrollRef.current
-    if (!element) return
+    if (!wrapper || !element) return
 
     const finishWheelGesture = () => {
       wheelReleaseTimerRef.current = null
-      const currentOverscroll = overscrollRef.current
-      wheelPullRef.current = 0
-      wheelSideRef.current = null
-      wheelActiveRef.current = false
-      applyOverscroll(EMPTY_OVERSCROLL, false)
-
-      if (currentOverscroll.progress >= 1 && currentOverscroll.side) {
-        wheelCooldownUntilRef.current = Date.now() + WHEEL_COOLDOWN_MS
-        wrapScrollToEdge(element, currentOverscroll.side, maxScrollRef.current)
+      const result = finishHorizontalWheelGesture(wheelStateRef.current, Date.now())
+      applyOverscroll(result.overscroll, false)
+      if (result.wrapSide) {
+        wrapScrollToEdge(element, result.wrapSide, maxScrollRef.current)
       }
     }
 
     const onWheel = (event: WheelEvent) => {
       if (dragRef.current) return
-      const scale = event.deltaMode === 1 ? 16 : 1
-      const rawDx = (event.deltaX * scale) || (event.shiftKey ? event.deltaY * scale : 0)
-      const effectiveDy = event.shiftKey && event.deltaX === 0 ? 0 : event.deltaY * scale
-      if (Math.abs(rawDx) < 0.5 || Math.abs(rawDx) <= Math.abs(effectiveDy)) return
-      notifyEngage()
-      markRailScrolling()
-
-      if (Date.now() < wheelCooldownUntilRef.current) {
-        event.preventDefault()
-        return
+      if (!wheelStateRef.current.active || maxScrollRef.current <= 0) {
+        syncScrollBounds()
       }
+      const action = processHorizontalWheel(wheelStateRef.current, {
+        deltaX: event.deltaX,
+        deltaY: event.deltaY,
+        deltaMode: event.deltaMode,
+        shiftKey: event.shiftKey,
+        ctrlKey: event.ctrlKey,
+        scrollLeft: element.scrollLeft,
+        maxScroll: maxScrollRef.current,
+        clientWidth: element.clientWidth,
+        now: Date.now(),
+      })
 
-      const maxScroll = maxScrollRef.current > 0 ? maxScrollRef.current : (element.scrollWidth - element.clientWidth)
-      maxScrollRef.current = maxScroll
-      if (maxScroll <= 2) return
-
-      const isDiscreteWheel = event.deltaMode !== 0 || (event.shiftKey && event.deltaX === 0)
-      const pullThreshold = isDiscreteWheel ? PULL_THRESHOLD : WHEEL_PULL_THRESHOLD
-      const releaseMs = isDiscreteWheel ? WHEEL_RELEASE_MS : TOUCHPAD_RELEASE_MS
-      const minKeepAliveDx = isDiscreteWheel ? 4 : 1.5
-
-      if (!wheelActiveRef.current) {
-        wheelActiveRef.current = true
-        wheelStartedAtEdgeRef.current =
-          (rawDx > 0 && element.scrollLeft >= maxScroll - 2) ||
-          (rawDx < 0 && element.scrollLeft <= 2)
+      if (action.preventDefault && event.cancelable) event.preventDefault()
+      if (action.engageScroll) notifyEngage()
+      if (action.markScrolling) markRailScrolling()
+      if (action.nextScrollLeft !== null) element.scrollLeft = action.nextScrollLeft
+      if (action.overscroll !== null) applyOverscroll(action.overscroll, action.overscrollActive)
+      if (action.clearReleaseTimer && wheelReleaseTimerRef.current != null) {
+        window.clearTimeout(wheelReleaseTimerRef.current)
+        wheelReleaseTimerRef.current = null
       }
-
-      const activeSide = wheelSideRef.current
-      const deadzone = isDiscreteWheel
-        ? (wheelStartedAtEdgeRef.current ? 8 : 30)
-        : (wheelStartedAtEdgeRef.current ? 32 : 90)
-
-      if (activeSide !== null && wheelPullRef.current > 0 && ((activeSide === 'right' && rawDx < 0) || (activeSide === 'left' && rawDx > 0))) {
-        if (wheelPullRef.current <= deadzone) {
-          wheelPullRef.current = 0
-          wheelSideRef.current = null
-          applyOverscroll(EMPTY_OVERSCROLL, false)
-        } else {
-          event.preventDefault()
-          const pullBackGain = isDiscreteWheel ? 1.15 : 0.85
-          wheelPullRef.current = Math.max(0, wheelPullRef.current - Math.abs(rawDx) * pullBackGain)
-          if (wheelPullRef.current > deadzone) {
-            applyOverscroll(computeOverscrollState(activeSide, wheelPullRef.current, deadzone, pullThreshold), true)
-          } else {
-            wheelPullRef.current = 0
-            wheelSideRef.current = null
-            applyOverscroll(EMPTY_OVERSCROLL, false)
-          }
-        }
-      } else {
-        const atRightEdge = element.scrollLeft >= maxScroll - 2 && rawDx > 0
-        const atLeftEdge = element.scrollLeft <= 2 && rawDx < 0
-        if (atRightEdge || atLeftEdge) {
-          event.preventDefault()
-          const side: 'left' | 'right' = atRightEdge ? 'right' : 'left'
-          if (wheelSideRef.current !== side) {
-            wheelSideRef.current = side
-            wheelPullRef.current = 0
-          }
-          const pullGain = isDiscreteWheel
-            ? 1.15
-            : (wheelStartedAtEdgeRef.current ? 0.5 : 0.45)
-          const maxStep = isDiscreteWheel
-            ? 48
-            : (wheelStartedAtEdgeRef.current ? 20 : 18)
-          wheelPullRef.current += Math.min(maxStep, Math.abs(rawDx) * pullGain)
-          applyOverscroll(computeOverscrollState(side, wheelPullRef.current, deadzone, pullThreshold), true)
-        }
-      }
-
-      if (wheelReleaseTimerRef.current == null || overscrollRef.current.progress < 1 || Math.abs(rawDx) >= minKeepAliveDx) {
+      if (action.finishNow) {
+        finishWheelGesture()
+      } else if (action.scheduleReleaseMs !== null) {
         if (wheelReleaseTimerRef.current != null) window.clearTimeout(wheelReleaseTimerRef.current)
-        wheelReleaseTimerRef.current = window.setTimeout(finishWheelGesture, releaseMs)
+        wheelReleaseTimerRef.current = window.setTimeout(finishWheelGesture, action.scheduleReleaseMs)
       }
     }
 
-    element.addEventListener('wheel', onWheel, { passive: false })
+    wrapper.addEventListener('wheel', onWheel, { passive: false })
     return () => {
-      element.removeEventListener('wheel', onWheel)
+      wrapper.removeEventListener('wheel', onWheel)
       if (wheelReleaseTimerRef.current != null) {
         window.clearTimeout(wheelReleaseTimerRef.current)
         wheelReleaseTimerRef.current = null
       }
     }
-  }, [applyOverscroll, markRailScrolling, notifyEngage])
+  }, [applyOverscroll, markRailScrolling, notifyEngage, syncScrollBounds])
 
   return (
-    <div ref={wrapperRef} data-scrollable="false" data-dragging="false" className="horizontal-scroller-wrap group/scroll relative">
+    <div ref={wrapperRef} data-scrollable="false" data-dragging="false" data-overscrolling="false" className="horizontal-scroller-wrap group/scroll relative">
       <div
         ref={scrollRef}
         role="region"

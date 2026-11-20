@@ -151,13 +151,15 @@ async function cachedServiceCall<T>(
   cacheName: string,
   ttlMs: number,
   fetcher: () => Promise<T>,
-  options: { emptyValue: T; useDiskCache?: boolean; throwOnError?: boolean }
+  options: { emptyValue: T; useDiskCache?: boolean; throwOnError?: boolean; isFresh?: (entry: CacheEntry<T>) => boolean }
 ): Promise<T> {
   const useDiskCache = options.useDiskCache !== false;
+  const freshCheck = (entry: CacheEntry<T>) =>
+    Date.now() - entry.fetchedAt < ttlMs && (options.isFresh ? options.isFresh(entry) : true);
 
   // 1. In-memory cache
   const mem = memoryCache.get(cacheName);
-  if (mem && Date.now() - mem.fetchedAt < ttlMs) {
+  if (mem && freshCheck(mem as CacheEntry<T>)) {
     return mem.data as T;
   }
 
@@ -165,7 +167,7 @@ async function cachedServiceCall<T>(
   let disk: CacheEntry<unknown> | null = null;
   if (useDiskCache) {
     disk = readDiskCache(cacheName);
-    if (disk && Date.now() - disk.fetchedAt < ttlMs) {
+    if (disk && freshCheck(disk as CacheEntry<T>)) {
       memoryCache.set(cacheName, disk);
       return disk.data as T;
     }
@@ -589,7 +591,17 @@ export async function getCatalogDetails(anilistId: number): Promise<CatalogItem 
   return cachedServiceCall(`details_${id}`, TTL_DETAILS_MS, async () => {
     const media = await queryDetails(id);
     return media ? normalizeMedia(media) : null;
-  }, { emptyValue: null });
+  }, {
+    emptyValue: null,
+    isFresh: (entry) => {
+      if (entry.data?.status === 'FINISHED') return true;
+      const nextAt = entry.data?.nextAiringEpisode?.airingAt;
+      if (typeof nextAt === 'number' && Number.isFinite(nextAt) && nextAt > 0) {
+        return Date.now() < nextAt * 1000 + 60_000;
+      }
+      return true;
+    },
+  });
 }
 
 /** Returns connected anime titles from AniList's bounded franchise graph. */
@@ -723,12 +735,16 @@ export async function getCatalogFranchiseSeasons(anilistId: number): Promise<Fra
   const id = Math.trunc(Number(anilistId));
   const empty: FranchiseSeasonInfo = { ownSeason: null, chain: [] };
   if (!Number.isFinite(id) || id <= 0) return empty;
-  return cachedServiceCall(`franchise_season_v3_${id}`, TTL_FRANCHISE_SEASON_MS, async () => {
+  return cachedServiceCall(`franchise_season_v4_${id}`, TTL_FRANCHISE_SEASON_MS, async () => {
     // Season numbering is for the TV broadcast chain. OVAs and specials do
     // not consume a season number — they belong to their PARENT TV season.
+    // Movies stand on their own and must never inherit a parent TV season
+    // (which would mislabel a compilation/film as e.g. "Season 2").
     let rootId = id;
     const root = await queryFranchise(rootId);
-    if (!['TV', 'TV_SHORT'].includes(String(root?.format || '').toUpperCase())) {
+    const rootFormat = String(root?.format || '').toUpperCase();
+    if (!['TV', 'TV_SHORT'].includes(rootFormat)) {
+      if (!['OVA', 'SPECIAL'].includes(rootFormat)) return empty;
       const parentEdges = await franchiseAnimeRelations(rootId);
       const parentId = parentEdges.find((edge) => edge.relationType === 'PARENT')?.nodeId ?? null;
       if (parentId == null) return empty;

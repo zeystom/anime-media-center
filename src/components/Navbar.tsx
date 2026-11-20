@@ -298,7 +298,7 @@ const NavbarImpl: React.FC<NavbarProps> = ({
 
   useEffect(() => {
     applyBackdropProgress(backdropEmitter?.current.value ?? 1);
-  }, [backdropImage, backdropMode, backdropEmitter, applyBackdropProgress]);
+  }, [backdropImage, backdropMode, blurEnabled, backdropEmitter, applyBackdropProgress]);
 
   useEffect(() => {
     let mounted = true;
@@ -392,13 +392,11 @@ const NavbarImpl: React.FC<NavbarProps> = ({
         className={`pointer-events-none absolute inset-0 z-0 overflow-hidden [contain:layout_style] ${
           blurEnabled
             ? `backdrop-saturate-[1.35] ${backdropImage ? 'bg-[#0a070e]/55 backdrop-blur-[20px]' : 'bg-[#0a070e]/75 backdrop-blur-[20px]'}`
-            : // No glass blur: the bar goes near-solid so the scrolled content
-              // beneath never muddies it; the banner child keeps its own cheap
-              // self-blur, which is the "banner-only" budget mode.
-              'bg-[#0a070e]/95'
+            : // No glass blur: keep the header fully solid/opaque with no translucent banner bleeding through.
+              'bg-[#0a070e]'
         }`}
       >
-        {backdropImage && (
+        {blurEnabled && backdropImage && (
           <>
             <div
               ref={backdropImgWrapRef}

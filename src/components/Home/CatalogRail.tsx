@@ -1,4 +1,4 @@
-import React, { useCallback, useEffect, useMemo, useRef, useState } from 'react';
+import React, { startTransition, useCallback, useEffect, useMemo, useRef, useState } from 'react';
 import { RailItem } from '../../hooks/useCatalog';
 import { LocalBadgeState } from '../../hooks/useLocalStatus';
 import { AnimeCard } from '../common/AnimeCard';
@@ -46,14 +46,14 @@ const CatalogRailImpl: React.FC<CatalogRailProps> = ({
       window.clearTimeout(hoverExpandTimerRef.current);
       hoverExpandTimerRef.current = null;
     }
-    setExpanded(true);
+    startTransition(() => setExpanded(true));
   }, []);
   const scheduleHoverExpand = useCallback(() => {
     if (expanded || items.length <= INITIAL_VISIBLE_CARDS || isScrollActive()) return;
     if (hoverExpandTimerRef.current != null) return;
     hoverExpandTimerRef.current = window.setTimeout(() => {
       hoverExpandTimerRef.current = null;
-      if (!isScrollActive()) setExpanded(true);
+      if (!isScrollActive()) startTransition(() => setExpanded(true));
     }, 120);
   }, [expanded, items.length]);
   const cancelHoverExpand = useCallback(() => {

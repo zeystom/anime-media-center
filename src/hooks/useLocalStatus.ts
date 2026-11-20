@@ -1,6 +1,14 @@
 import { useMemo } from 'react'
 import type { AnimeFolder, PlaybackProgress, UserLibraryEntry } from '../types'
 import { isFolderMovie } from '../utils/format'
+import {
+  findAllLocalFolders,
+  getFolderAnilistId,
+  mergeLocalFolders,
+  normalizeMatchTitle,
+} from '../utils/releaseSelection'
+
+export { findAllLocalFolders, mergeLocalFolders, normalizeMatchTitle }
 
 export interface LocalBadgeState {
   isOnPc: boolean
@@ -23,32 +31,9 @@ interface LocalStatusResult {
   statusFor: (ref: LocalStatusRef) => LocalBadgeState | null
 }
 
-/**
- * Reads the (optional) exact AniList id off a scanned folder.
- */
-function getFolderAnilistId(folder: AnimeFolder): number | null {
-  const raw = folder.anilistId
-  if (typeof raw !== 'number' || !Number.isFinite(raw) || raw <= 0) return null
-  return Math.trunc(raw)
-}
-
 function normalizeRefAnilistId(anilistId?: number | null): number | null {
   if (typeof anilistId !== 'number' || !Number.isFinite(anilistId) || anilistId <= 0) return null
   return Math.trunc(anilistId)
-}
-
-/**
- * Title normalization for fuzzy folder matching: lowercase, non-alphanumerics
- * collapsed to single spaces, trimmed. Unicode-aware so romaji/Japanese
- * folder names still produce a usable key.
- */
-export function normalizeMatchTitle(s: string): string {
-  if (!s) return ''
-  return s
-    .toLowerCase()
-    .replace(/[^\p{L}\p{N}]+/gu, ' ')
-    .replace(/\s+/g, ' ')
-    .trim()
 }
 
 /**
@@ -63,26 +48,7 @@ export function findLocalFolder(
   folders: AnimeFolder[],
   ref: { anilistId?: number | null; title?: string | null }
 ): AnimeFolder | null {
-  if (!Array.isArray(folders) || folders.length === 0) return null
-
-  const refId = normalizeRefAnilistId(ref?.anilistId)
-  if (refId !== null) {
-    const byId = folders.find((folder) => getFolderAnilistId(folder) === refId)
-    if (byId) return byId
-  }
-
-  const normalizedTitle = normalizeMatchTitle(ref?.title || '')
-  if (normalizedTitle) {
-    const pool = refId !== null
-      ? folders.filter((folder) => getFolderAnilistId(folder) === null)
-      : folders
-    const byTitle = pool.find(
-      (folder) => normalizeMatchTitle(folder.canonicalTitle || folder.folderName) === normalizedTitle
-    )
-    if (byTitle) return byTitle
-  }
-
-  return null
+  return findAllLocalFolders(folders, ref)[0] ?? null
 }
 
 /**
@@ -97,14 +63,32 @@ export function useLocalStatus(
   userEntries: Record<number, UserLibraryEntry>
 ): LocalStatusResult {
   const indexes = useMemo(() => {
-    const byAnilist = new Map<number, AnimeFolder>()
-    const byTitle = new Map<string, AnimeFolder>()
+    const byAnilistGroups = new Map<number, AnimeFolder[]>()
+    const byTitleGroups = new Map<string, AnimeFolder[]>()
     for (const folder of Array.isArray(folders) ? folders : []) {
       if (!folder) continue
       const id = getFolderAnilistId(folder)
-      if (id !== null) byAnilist.set(id, folder)
+      if (id !== null) {
+        const list = byAnilistGroups.get(id)
+        if (list) list.push(folder)
+        else byAnilistGroups.set(id, [folder])
+      }
       const titleKey = normalizeMatchTitle(folder.canonicalTitle || folder.folderName)
-      if (titleKey) byTitle.set(titleKey, folder)
+      if (titleKey) {
+        const list = byTitleGroups.get(titleKey)
+        if (list) list.push(folder)
+        else byTitleGroups.set(titleKey, [folder])
+      }
+    }
+    const byAnilist = new Map<number, AnimeFolder>()
+    for (const [id, list] of byAnilistGroups) {
+      const merged = mergeLocalFolders(list)
+      if (merged) byAnilist.set(id, merged)
+    }
+    const byTitle = new Map<string, AnimeFolder>()
+    for (const [key, list] of byTitleGroups) {
+      const merged = mergeLocalFolders(list)
+      if (merged) byTitle.set(key, merged)
     }
     return { byAnilist, byTitle }
   }, [folders])

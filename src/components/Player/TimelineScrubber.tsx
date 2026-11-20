@@ -13,6 +13,8 @@ interface TimelineScrubberProps {
   serverPort?: number;
   onSeek: (seconds: number) => void;
   openingRange?: TimelineOpeningRange | null;
+  controlsVisible?: boolean;
+  onPreviewVisibilityChange?: (visible: boolean) => void;
 }
 
 const BOX_WIDTH = 176;
@@ -25,6 +27,8 @@ export const TimelineScrubber: React.FC<TimelineScrubberProps> = ({
   serverPort = 0,
   onSeek,
   openingRange = null,
+  controlsVisible = true,
+  onPreviewVisibilityChange,
 }) => {
   const containerRef = useRef<HTMLDivElement>(null);
   const tooltipRef = useRef<HTMLDivElement>(null);
@@ -37,6 +41,23 @@ export const TimelineScrubber: React.FC<TimelineScrubberProps> = ({
   const [isHovering, setIsHovering] = useState<boolean>(false);
   const [isDragging, setIsDragging] = useState<boolean>(false);
   const [displayedThumbUrl, setDisplayedThumbUrl] = useState<string>('');
+  const isPreviewVisible = (isHovering || isDragging) && duration > 0 && controlsVisible;
+
+  useEffect(() => {
+    if (!controlsVisible && !isDragging) {
+      setIsHovering(false);
+    }
+  }, [controlsVisible, isDragging]);
+
+  useEffect(() => {
+    onPreviewVisibilityChange?.(isPreviewVisible);
+  }, [isPreviewVisible, onPreviewVisibilityChange]);
+
+  useEffect(() => {
+    return () => {
+      onPreviewVisibilityChange?.(false);
+    };
+  }, [onPreviewVisibilityChange]);
 
   // Local In-Memory Cache of loaded thumbnails to achieve 0ms instant display on repeat hovers
   const localCacheRef = useRef<Map<number, string>>(new Map());
@@ -232,6 +253,16 @@ export const TimelineScrubber: React.FC<TimelineScrubberProps> = ({
 
       const onGlobalMouseUp = (upEvent: MouseEvent) => {
         setIsDragging(false);
+        const rect = containerRef.current?.getBoundingClientRect();
+        const stillInside = rect
+          ? upEvent.clientX >= rect.left &&
+            upEvent.clientX <= rect.right &&
+            upEvent.clientY >= rect.top &&
+            upEvent.clientY <= rect.bottom
+          : false;
+        if (!stillInside) {
+          setIsHovering(false);
+        }
         const { time: finalTime } = calculateTimeFromX(upEvent.clientX);
         onSeek(finalTime);
         window.removeEventListener('mousemove', onGlobalMouseMove);
@@ -367,7 +398,7 @@ export const TimelineScrubber: React.FC<TimelineScrubberProps> = ({
       >
         <div
           className={`relative p-1 rounded-xl border border-white/[0.12] bg-[#0b0912]/75 backdrop-blur-xl shadow-[0_12px_32px_rgba(0,0,0,0.75)] flex flex-col items-center transition-all duration-200 ease-fluid ${
-            isHovering && duration > 0
+            isPreviewVisible
               ? 'opacity-100 scale-100 -translate-y-0'
               : 'opacity-0 scale-[0.92] translate-y-1.5'
           }`}

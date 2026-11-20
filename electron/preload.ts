@@ -199,6 +199,7 @@ contextBridge.exposeInMainWorld('electronAPI', {
     ipcRenderer.invoke('user-library:remove', anilistId),
   // Library storage management (Phase 4)
   getStorageOverview: () => ipcRenderer.invoke('library:storage-overview'),
+  getFoldersDiskSpace: (folderPaths?: string[]) => ipcRenderer.invoke('library:folders-disk-space', folderPaths),
   getDiskUsage: (folderPath: string) => ipcRenderer.invoke('library:disk-usage', folderPath),
   deleteAnimeFromPC: (folderPath: string) => ipcRenderer.invoke('library:delete-anime', folderPath),
   deleteEpisodesFromPC: (filePaths: string[]) => ipcRenderer.invoke('library:delete-episodes', filePaths),

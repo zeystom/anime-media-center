@@ -27,13 +27,14 @@ import {
   Subtitles,
 } from 'lucide-react';
 import { AppSettings } from '../types';
-import type { P2pState, RssProvider, UpdaterState, UpdateInfoPayload } from '../types';
+import type { P2pState, RssProvider, UpdaterState, UpdateInfoPayload, FolderDiskSpace } from '../types';
 import { showGlobalToast } from './Toast';
 import { GlassSelect } from './common/GlassSelect';
+import { DiskSpaceRing } from './common/DiskSpaceRing';
 import { enableDeveloperMode, useDeveloperMode } from '../utils/devMode';
 import { P2pConsentModal } from './P2P/P2pConsentModal';
 import { UpdatePromptModal } from './UpdatePromptModal';
-import { formatFileSize } from '../utils/format';
+import { extractDriveLabelFromPath, formatDiskSize, formatFileSize, getDiskHealthStyle, getFolderDisplayName } from '../utils/format';
 import { TORRENT_LANGUAGES, type TorrentLanguageCode } from '../lib/releaseParser/releaseClassification';
 
 interface BackupStatusInfo {
@@ -103,6 +104,32 @@ export const SettingsModal: React.FC<SettingsModalProps> = ({
       ? [settings.defaultLibraryRoot]
       : []
   );
+  const [folderDiskSpaces, setFolderDiskSpaces] = useState<Record<string, FolderDiskSpace>>({});
+
+  useEffect(() => {
+    if (!isOpen || libraryFolders.length === 0 || !window.electronAPI?.getFoldersDiskSpace) {
+      setFolderDiskSpaces({});
+      return;
+    }
+    let cancelled = false;
+    window.electronAPI
+      .getFoldersDiskSpace(libraryFolders)
+      .then((entries) => {
+        if (cancelled || !Array.isArray(entries)) return;
+        const map: Record<string, FolderDiskSpace> = {};
+        for (const entry of entries) {
+          map[entry.folderPath] = entry;
+          map[entry.folderPath.toLowerCase()] = entry;
+        }
+        setFolderDiskSpaces(map);
+      })
+      .catch(() => {
+        // Ignore transient disk stats errors in Settings
+      });
+    return () => {
+      cancelled = true;
+    };
+  }, [isOpen, libraryFolders]);
   const [releaseSelectionMode, setReleaseSelectionMode] = useState<'automatic' | 'manual'>(
     settings.releaseSelectionMode ?? 'automatic'
   );
@@ -1274,27 +1301,58 @@ export const SettingsModal: React.FC<SettingsModalProps> = ({
                               </button>
                             </div>
                           </div>
-                        ) : (
-                          <div
-                            key={`${folder}-${index}`}
-                            className="flex items-center justify-between gap-3 px-3.5 py-2.5 rounded-xl bg-white/[0.03] border border-white/[0.08] hover:border-white/15 transition-colors"
-                          >
-                            <div className="flex items-center gap-2.5 min-w-0 flex-1">
-                              <Folder className="w-3.5 h-3.5 text-zinc-400 shrink-0" />
-                              <span className="font-mono text-xs text-zinc-200 truncate select-all" title={folder}>
-                                {folder}
-                              </span>
-                            </div>
-                            <button
-                              type="button"
-                              onClick={() => setConfirmDeleteIndex(index)}
-                              className="p-1 rounded-lg text-zinc-500 hover:text-red-400 hover:bg-red-500/10 transition-colors shrink-0"
-                              title="Remove folder from library"
+                        ) : (() => {
+                          const diskInfo = folderDiskSpaces[folder] ?? folderDiskSpaces[folder.toLowerCase()];
+                          const driveLabel = diskInfo?.driveLabel || extractDriveLabelFromPath(folder);
+                          const freeBytes = diskInfo?.freeBytes ?? null;
+                          const totalBytes = diskInfo?.totalBytes ?? null;
+                          const { textClass: healthTextClass } = getDiskHealthStyle(freeBytes);
+
+                          return (
+                            <div
+                              key={`${folder}-${index}`}
+                              className="flex items-center gap-3.5 px-3.5 py-2.5 rounded-xl bg-white/[0.03] border border-white/[0.08] hover:border-white/15 transition-colors"
                             >
-                              <Trash2 className="w-3.5 h-3.5" />
-                            </button>
-                          </div>
-                        )
+                              <DiskSpaceRing
+                                driveLabel={driveLabel}
+                                freeBytes={freeBytes}
+                                totalBytes={totalBytes}
+                                size={36}
+                              />
+
+                              <div className="min-w-0 flex-1">
+                                <p className="text-[13px] font-medium text-zinc-100 truncate leading-tight">
+                                  {getFolderDisplayName(folder)}
+                                </p>
+                                <p className="mt-0.5 font-mono text-[11px] text-zinc-500 truncate select-all" title={folder}>
+                                  {folder}
+                                </p>
+                              </div>
+
+                              <div className="shrink-0 flex items-center gap-3">
+                                <div className="text-right tabular-nums leading-tight">
+                                  <p className={`text-xs font-medium ${healthTextClass}`}>
+                                    {freeBytes != null ? `${formatDiskSize(freeBytes)} free` : '—'}
+                                  </p>
+                                  {totalBytes != null && totalBytes > 0 && (
+                                    <p className="mt-0.5 text-[10px] text-zinc-500">
+                                      of {formatDiskSize(totalBytes)}
+                                    </p>
+                                  )}
+                                </div>
+                                <div className="h-6 w-px bg-white/[0.06]" />
+                                <button
+                                  type="button"
+                                  onClick={() => setConfirmDeleteIndex(index)}
+                                  className="p-1.5 rounded-lg text-zinc-500 hover:text-rose-400 hover:bg-rose-500/10 transition-colors shrink-0"
+                                  title="Remove folder from library"
+                                >
+                                  <Trash2 className="w-3.5 h-3.5" />
+                                </button>
+                              </div>
+                            </div>
+                          );
+                        })()
                       )
                     )}
                   </div>

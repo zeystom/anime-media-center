@@ -354,8 +354,12 @@ export interface WhisperOptions {
     | 'webrtc';
   vadThreshold?: number;
   vadMinSpeechDurationMs?: number;
+  vadMinSilenceDurationMs?: number;
   vadSpeechPadMs?: number;
+  vadMaxSpeechDurationS?: number;
   conditionOnPreviousText?: boolean;
+  reprompt?: boolean;
+  v3OffsetsOff?: boolean;
   compressionRatioThreshold?: number;
   noSpeechThreshold?: number;
   hallucinationSilenceThreshold?: number;

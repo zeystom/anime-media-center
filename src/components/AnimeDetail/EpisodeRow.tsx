@@ -1,5 +1,6 @@
 import React, { useEffect, useId, useMemo, useState } from 'react'
-import { Check, CheckCircle2, Clock3, Download, Film, MoreHorizontal, Pause, Play, Subtitles, Trash2, Wand2, X } from 'lucide-react'
+import { Check, CheckCircle2, Clock3, Download, Film, Pause, Play, Subtitles, Trash2, Wand2, X } from 'lucide-react'
+import { DownloadFolderMenu } from '../common/DownloadFolderMenu'
 import type { Episode, PlaybackProgress, TorrentJob } from '../../types'
 import { formatRelativeAirDate, formatTime } from '../../utils/format'
 import { parseReleaseCore } from '../../lib/releaseParser/regexEngine.ts'
@@ -59,7 +60,6 @@ export const EpisodeRow: React.FC<EpisodeRowProps> = ({
 }) => {
   const [imgError, setImgError] = useState(false)
   const [activeThumbnail, setActiveThumbnail] = useState(thumbnailUrl || fallbackThumbnailUrl || null)
-  const [folderMenuOpen, setFolderMenuOpen] = useState(false)
   const episodeNumber = Number(number)
   const torrentProgress = fileProgressForEpisode(torrentJob, episodeNumber) ?? downloadProgress
   const torrentActive = !!torrentJob && ['queued', 'connecting', 'downloading', 'paused'].includes(torrentJob.status)
@@ -105,8 +105,8 @@ export const EpisodeRow: React.FC<EpisodeRowProps> = ({
   const relativeAir = useMemo(() => formatRelativeAirDate(airDate), [airDate])
 
   return (
-    <article className={`episode-card group relative overflow-hidden rounded-2xl border bg-elevated shadow-sm transition hover:-translate-y-0.5 hover:shadow-xl hover:shadow-black/30 ${isFeatureFilm ? 'grid grid-cols-1 sm:grid-cols-[minmax(0,1fr)_1.15fr]' : ''} ${downloadActive ? 'border-rose-400/30' : 'border-white/[0.08] hover:border-white/15'}`}>
-      <div className={`relative aspect-video overflow-hidden bg-zinc-950 ${isFeatureFilm ? 'sm:aspect-auto sm:min-h-[250px]' : ''}`}>
+    <article className={`episode-card group relative rounded-2xl border bg-elevated shadow-sm transition hover:-translate-y-0.5 hover:shadow-xl hover:shadow-black/30 ${isFeatureFilm ? 'overflow-visible grid grid-cols-1 sm:grid-cols-[minmax(0,1fr)_1.15fr]' : 'overflow-hidden'} ${downloadActive ? 'border-rose-400/30' : 'border-white/[0.08] hover:border-white/15'}`}>
+      <div className={`relative aspect-video overflow-hidden bg-zinc-950 ${isFeatureFilm ? 'rounded-t-2xl sm:rounded-l-2xl sm:rounded-tr-none sm:aspect-auto sm:min-h-[250px]' : ''}`}>
         {activeThumbnail && !imgError ? (
           <img src={activeThumbnail} alt="" loading="lazy" onError={() => {
             if (activeThumbnail === thumbnailUrl && fallbackThumbnailUrl && fallbackThumbnailUrl !== thumbnailUrl) setActiveThumbnail(fallbackThumbnailUrl)
@@ -203,7 +203,7 @@ export const EpisodeRow: React.FC<EpisodeRowProps> = ({
           <div className="flex flex-wrap items-center gap-2">
             <span className="rounded-full border px-2.5 py-1 text-[10px] font-bold uppercase tracking-[0.16em]" style={{ color: 'var(--anime-accent)', borderColor: 'var(--anime-accent-soft)', backgroundColor: 'var(--anime-accent-soft)' }}>Feature film</span>
             <span className={`rounded-full border px-2.5 py-1 text-[10px] font-semibold ${downloaded ? 'border-emerald-300/20 bg-emerald-300/10 text-emerald-200' : downloadActive ? 'border-rose-300/20 bg-rose-300/10 text-rose-200' : 'border-white/10 bg-black/20 text-zinc-400'}`}>
-              {watched ? 'Watched' : downloaded ? 'Ready to watch' : downloadActive ? 'Downloading' : remoteOnly ? 'Not downloaded' : 'Available'}
+              {watched ? 'Watched' : downloaded ? 'Ready to watch' : downloadActive ? 'Downloading' : unaired ? 'Not yet released' : remoteOnly ? 'Not downloaded' : 'Available'}
             </span>
           </div>
           <h3 className="mt-4 text-2xl font-black tracking-tight text-white sm:text-3xl" title={displayTitle}>Full movie</h3>
@@ -225,13 +225,14 @@ export const EpisodeRow: React.FC<EpisodeRowProps> = ({
             {!downloaded && onDownload && !unaired && <DownloadActionButton type="button" onClick={onDownload} onLongPress={onDownloadLongPress || onDownload} title="Download movie · hold for manual search" className="btn-glass inline-flex items-center gap-2 rounded-xl px-5 py-3 text-sm font-bold text-zinc-200 transition"><Download className="h-4 w-4" />Download movie</DownloadActionButton>}
             {onWhisper && <button type="button" onClick={onWhisper} title="Generate subtitles" className="btn-glass inline-flex items-center gap-2 rounded-xl px-4 py-3 text-xs font-semibold text-zinc-200 transition"><Wand2 className="h-4 w-4 text-rose-300/90" /><span>Subtitles</span></button>}
             {onDelete && <button type="button" onClick={onDelete} title="Delete downloaded movie" className="btn-glass inline-flex items-center gap-2 rounded-xl px-4 py-3 text-xs font-semibold text-zinc-300 transition hover:text-rose-200"><Trash2 className="h-4 w-4 transition-colors group-hover:text-rose-400" /><span>Delete file</span></button>}
-            {onDownload && downloadRoots.length > 1 && <div className="relative">
-              <button type="button" aria-label="Choose download folder" title={`Download folder: ${selectedDownloadRoot || downloadRoots[0]}`} onClick={() => setFolderMenuOpen((open) => !open)} className="flex h-11 w-11 items-center justify-center rounded-xl border border-white/10 text-zinc-300 transition hover:bg-white/5"><MoreHorizontal className="h-4 w-4" /></button>
-              {folderMenuOpen && <div className="glass-dropdown animate-pop-in absolute bottom-full right-0 z-50 mb-2 max-h-52 w-64 overflow-y-auto rounded-xl p-1.5">
-                <p className="px-2 py-1.5 text-[10px] font-bold uppercase tracking-wider text-zinc-500">Download to folder</p>
-                {downloadRoots.map((root) => <button key={root} type="button" title={root} onClick={() => { onSelectDownloadRoot?.(root); setFolderMenuOpen(false) }} className={`block w-full rounded-lg px-2 py-2 text-left text-[11px] transition-colors ${selectedDownloadRoot === root ? 'bg-rose-500/15 text-rose-200' : 'text-zinc-300 hover:bg-white/5'}`}><span className="block truncate font-medium">{root.split(/[\\/]/).filter(Boolean).slice(-1)[0] || root}</span><span className="mt-0.5 block truncate font-mono text-[9px] text-zinc-500">{root}</span></button>)}
-              </div>}
-            </div>}
+            {!downloaded && onDownload && !unaired && downloadRoots.length > 1 && (
+              <DownloadFolderMenu
+                roots={downloadRoots}
+                selectedRoot={selectedDownloadRoot || downloadRoots[0]}
+                onSelect={(root) => onSelectDownloadRoot?.(root)}
+                triggerVariant="standalone"
+              />
+            )}
           </div>
         </div>
       ) : (

@@ -4,7 +4,7 @@ import path from 'path';
 import crypto from 'crypto';
 import os from 'os';
 import { app, BrowserWindow, Notification } from 'electron';
-import { WhisperLogMessage, WhisperQueueItem, WhisperStatus, WhisperOptions, WhisperLiveCue, OpEdSkipRange, VideoChapter } from './types';
+import { WhisperLogMessage, WhisperQueueItem, WhisperStatus, WhisperOptions, WhisperLiveCue, OpEdSkipRange, SingingSuppressionMode, VideoChapter } from './types';
 import { storage } from './storage';
 import { probeMkv, invalidateProbeCache } from './ffmpeg';
 import { hasWhisperSubtitle } from './subtitles';
@@ -63,6 +63,167 @@ import {
   rebalanceSubtitleCues,
   CueBlock,
 } from './whisperPostProcess';
+
+export const DEFAULT_EN_PUNCTUATION_PROMPT = "Hello! Wait, really? Yeah, let's go.";
+
+export interface BuildWhisperCliArgsParams {
+  inputPath: string;
+  tmpDir: string;
+  model: string;
+  audioTrackNum: number;
+  opts: WhisperOptions;
+  isTrackSurround: boolean;
+  alreadyExtracted: boolean;
+  suppressMode: SingingSuppressionMode;
+  balancedFallbackFftdn: boolean;
+}
+
+export function buildWhisperCliArgs(
+  params: BuildWhisperCliArgsParams
+): { args: string[]; usedFrontCenter: boolean; skippedFrontCenter: boolean } {
+  const {
+    inputPath,
+    tmpDir,
+    model,
+    audioTrackNum,
+    opts,
+    isTrackSurround,
+    alreadyExtracted,
+    suppressMode,
+    balancedFallbackFftdn,
+  } = params;
+
+  const preset = opts.preset || 'anime';
+  const defaultVadMethod = 'pyannote_v3' as const;
+  let defaultVadThreshold = 0.28;
+  let defaultVadMinDuration = 100;
+  const defaultVadMinSilence = 800;
+  const defaultVadPad = 350;
+  const defaultVadMaxSpeech = 15;
+  let defaultNoSpeech = 0.7;
+  const defaultCompressionRatio = 2.4;
+  const defaultHallucinationSilence = 0;
+  let defaultSpeechNorm = false;
+
+  if (preset === 'bgm') {
+    defaultSpeechNorm = true;
+  } else if (preset === 'fast') {
+    defaultVadThreshold = 0.45;
+    defaultVadMinDuration = 250;
+    defaultNoSpeech = 0.6;
+  }
+
+  const task = opts.task || 'transcribe';
+  const language = opts.language || 'en';
+  const condition = opts.conditionOnPreviousText ?? false;
+  const vadMethod = opts.vadMethod || defaultVadMethod;
+  const vadThreshold = opts.vadThreshold ?? defaultVadThreshold;
+  const vadMinDuration = opts.vadMinSpeechDurationMs ?? defaultVadMinDuration;
+  const vadMinSilence = opts.vadMinSilenceDurationMs ?? defaultVadMinSilence;
+  const vadPad = opts.vadSpeechPadMs ?? defaultVadPad;
+  const vadMaxSpeech = opts.vadMaxSpeechDurationS ?? defaultVadMaxSpeech;
+  const compressionRatio = opts.compressionRatioThreshold ?? defaultCompressionRatio;
+  const noSpeech = opts.noSpeechThreshold ?? defaultNoSpeech;
+  const hallucinationSilence = opts.hallucinationSilenceThreshold ?? defaultHallucinationSilence;
+  const v3OffsetsOff = opts.v3OffsetsOff ?? true;
+  const rawCustom = opts.initialPrompt ? opts.initialPrompt.trim() : '';
+  let effectivePrompt: string;
+  if (rawCustom === 'None') {
+    effectivePrompt = 'None';
+  } else if (rawCustom.length > 0) {
+    effectivePrompt = /[.!?…]["'”’]?$/.test(rawCustom) ? rawCustom : `${rawCustom}.`;
+  } else if (language === 'en') {
+    effectivePrompt = DEFAULT_EN_PUNCTUATION_PROMPT;
+  } else {
+    effectivePrompt = 'None';
+  }
+  const reprompt = opts.reprompt ?? (effectivePrompt !== 'None');
+  const maxLineWidth = opts.maxLineWidth ?? 46;
+  const maxLineCount = opts.maxLineCount ?? 2;
+  const maxCommaCent = opts.maxCommaCent ?? 70;
+  const minDistToEnd = opts.minDistToEnd ?? 8;
+  const speechNorm = opts.speechNorm ?? defaultSpeechNorm;
+
+  const args = [
+    inputPath,
+    '--model', model,
+    '--task', task,
+    '--language', language,
+    '--vad_filter', 'True',
+    '--vad_method', vadMethod,
+    '--vad_min_speech_duration_ms', vadMinDuration.toString(),
+    '--vad_min_silence_duration_ms', vadMinSilence.toString(),
+    '--vad_speech_pad_ms', vadPad.toString(),
+  ];
+
+  if (vadMaxSpeech > 0) {
+    args.push('--vad_max_speech_duration_s', vadMaxSpeech.toString());
+  }
+
+  args.push(
+    '--condition_on_previous_text', condition ? 'True' : 'False',
+    '--compression_ratio_threshold', compressionRatio.toString(),
+    '--no_speech_threshold', noSpeech.toString(),
+  );
+
+  if (v3OffsetsOff) {
+    args.push('--v3_offsets_off');
+  }
+
+  if (hallucinationSilence > 0) {
+    args.push('--hallucination_silence_threshold', hallucinationSilence.toString());
+  }
+
+  if (vadMethod.startsWith('silero')) {
+    args.push('--vad_threshold', vadThreshold.toString());
+  }
+
+  args.push('--reprompt', reprompt ? 'True' : 'False');
+  if (condition) {
+    args.push('--prompt_reset_on_no_end', '1');
+  }
+
+  args.push('--initial_prompt', effectivePrompt);
+
+  args.push(
+    '--sentence',
+    '--max_gap', '1.0',
+    '--max_line_width', maxLineWidth.toString(),
+    '--max_line_count', maxLineCount.toString(),
+    '--max_comma_cent', maxCommaCent.toString(),
+    '--min_dist_to_end', minDistToEnd.toString(),
+    '--output_format', 'srt',
+    '--output_dir', tmpDir,
+    '--beep_off'
+  );
+
+  if (suppressMode === 'strict') {
+    args.push('--ff_rnndn_sh');
+  } else if (balancedFallbackFftdn) {
+    args.push('--ff_fftdn', '12');
+  }
+
+  if (speechNorm) {
+    args.push('--ff_speechnorm');
+  }
+
+  let usedFrontCenter = false;
+  let skippedFrontCenter = false;
+  if (opts.channelMode === 'fc' && !alreadyExtracted) {
+    if (isTrackSurround) {
+      args.push('--ff_fc');
+      usedFrontCenter = true;
+    } else {
+      skippedFrontCenter = true;
+    }
+  }
+
+  if (!alreadyExtracted) {
+    args.push('--ff_track', audioTrackNum.toString(), '--ff_sync');
+  }
+
+  return { args, usedFrontCenter, skippedFrontCenter };
+}
 
 export interface CleanSubtitleOptions {
   characterNames?: string[];
@@ -126,6 +287,7 @@ export function cleanSubtitleSrt(
         text = cleanJapaneseArtifacts(text)
           .replace(/^(?:Dialogue|Characters)\s+from\s+an\s+anime\s+episode[.!,:\s-]*/i, '')
           .replace(/^This\s+is\s+the\s+(?:first|second|third)\s+(?:sentence|one)[.!,:\s-]*/i, '')
+          .replace(/^Hello!\s+Wait,\s+really\?\s+Yeah,\s+let'?s\s+go[.!,:\s-]*/i, '')
           .trim();
         if (!text) continue;
       }
@@ -749,27 +911,6 @@ export class WhisperManager {
       await new Promise<void>((resolve, reject) => {
         this.liveCues = [];
         const preset = opts.preset || 'anime';
-
-        // Tuned smart defaults by preset. pyannote_v3 avoids Silero dropping high-pitched / child voices,
-        // passing --initial_prompt None when no custom prompt is set prevents Purfview's 'auto' prompt from
-        // leaking phrases like "This is the third sentence." during music, and compression_ratio_threshold=2.4 rejects loops.
-        const defaultVadMethod = 'pyannote_v3' as const;
-        let defaultVadThreshold = 0.28;
-        let defaultVadMinDuration = 100;
-        let defaultVadPad = 1000;
-        let defaultNoSpeech = 0.7;
-        const defaultCompressionRatio = 2.4;
-        let defaultSpeechNorm = false;
-
-        if (preset === 'bgm') {
-          defaultSpeechNorm = true;
-        } else if (preset === 'fast') {
-          defaultVadThreshold = 0.45;
-          defaultVadMinDuration = 250;
-          defaultVadPad = 900;
-          defaultNoSpeech = 0.6;
-        }
-
         let model = opts.model || settings.whisperModel || 'large-v3-turbo';
         if (settings.customModelPath && fs.existsSync(settings.customModelPath)) {
           const customName = path.basename(settings.customModelPath).replace(/^faster-whisper-/, '');
@@ -777,88 +918,25 @@ export class WhisperManager {
             model = settings.customModelPath;
           }
         }
-        const task = opts.task || 'transcribe';
-        const language = opts.language || 'en';
-        const condition = opts.conditionOnPreviousText ?? false;
-        const vadMethod = opts.vadMethod || defaultVadMethod;
-        const vadThreshold = opts.vadThreshold ?? defaultVadThreshold;
-        const vadMinDuration = opts.vadMinSpeechDurationMs ?? defaultVadMinDuration;
-        const vadPad = opts.vadSpeechPadMs ?? defaultVadPad;
-        const compressionRatio = opts.compressionRatioThreshold ?? defaultCompressionRatio;
-        const noSpeech = opts.noSpeechThreshold ?? defaultNoSpeech;
-        const hallucinationSilence = opts.hallucinationSilenceThreshold ?? 2;
-        const prompt = opts.initialPrompt ? opts.initialPrompt.trim() : '';
-        const maxLineWidth = opts.maxLineWidth ?? 46;
-        const maxLineCount = opts.maxLineCount ?? 2;
-        const maxCommaCent = opts.maxCommaCent ?? 70;
-        const minDistToEnd = opts.minDistToEnd ?? 8;
-        const speechNorm = opts.speechNorm ?? defaultSpeechNorm;
 
-        const args = [
+        const { args, usedFrontCenter, skippedFrontCenter } = buildWhisperCliArgs({
           inputPath,
-          '--model', model,
-          '--task', task,
-          '--language', language,
-          '--vad_filter', 'True',
-          '--vad_method', vadMethod,
-          '--vad_min_speech_duration_ms', vadMinDuration.toString(),
-          '--vad_speech_pad_ms', vadPad.toString(),
-          '--condition_on_previous_text', condition ? 'True' : 'False',
-          '--compression_ratio_threshold', compressionRatio.toString(),
-          '--no_speech_threshold', noSpeech.toString(),
-        ];
+          tmpDir,
+          model,
+          audioTrackNum,
+          opts: { ...opts, preset },
+          isTrackSurround,
+          alreadyExtracted,
+          suppressMode,
+          balancedFallbackFftdn,
+        });
 
-        if (hallucinationSilence > 0) {
-          args.push('--hallucination_silence_threshold', hallucinationSilence.toString());
-        }
-
-        if (vadMethod.startsWith('silero')) {
-          args.push('--vad_threshold', vadThreshold.toString());
-        }
-
-        if (!condition) {
-          args.push('--reprompt', 'False');
-        } else {
-          args.push('--prompt_reset_on_no_end', '1');
-        }
-
-        args.push('--initial_prompt', prompt && prompt !== 'None' ? prompt : 'None');
-
-        args.push(
-          '--sentence',
-          '--max_gap', '1.0',
-          '--max_line_width', maxLineWidth.toString(),
-          '--max_line_count', maxLineCount.toString(),
-          '--max_comma_cent', maxCommaCent.toString(),
-          '--min_dist_to_end', minDistToEnd.toString(),
-          '--output_format', 'srt',
-          '--output_dir', tmpDir,
-          '--beep_off'
-        );
-
-        if (suppressMode === 'strict') {
-          args.push('--ff_rnndn_sh');
-        } else if (balancedFallbackFftdn) {
-          args.push('--ff_fftdn', '12');
-        }
-
-        if (speechNorm) {
-          args.push('--ff_speechnorm');
-        }
-
-        if (opts.channelMode === 'fc' && !alreadyExtracted) {
-          if (isTrackSurround) {
-            args.push('--ff_fc');
-            this.sendLog(mainWindow, 'info', 'Surround audio (5.1/7.1) detected: extracting Front Center (FC) dialogue channel');
-          } else {
-            this.sendLog(mainWindow, 'info', 'Stereo/mono audio detected: skipped --ff_fc to prevent muting dialogue');
-          }
+        if (usedFrontCenter) {
+          this.sendLog(mainWindow, 'info', 'Surround audio (5.1/7.1) detected: extracting Front Center (FC) dialogue channel');
+        } else if (skippedFrontCenter) {
+          this.sendLog(mainWindow, 'info', 'Stereo/mono audio detected: skipped --ff_fc to prevent muting dialogue');
         } else if (extractFrontCenter && preFilteredWithBalanced) {
           this.sendLog(mainWindow, 'info', 'Surround audio (5.1/7.1) detected: extracted Front Center (FC) dialogue channel');
-        }
-
-        if (!alreadyExtracted) {
-          args.push('--ff_track', audioTrackNum.toString(), '--ff_sync');
         }
 
         this.sendLog(mainWindow, 'info', `Executing: "${path.basename(whisperExe)}" ${args.slice(1).join(' ')}`);
@@ -934,7 +1012,7 @@ export class WhisperManager {
           hallucinationList: this.activeOptions.hallucinationList,
           maxLineWidth: this.activeOptions.maxLineWidth ?? 46,
           maxLineCount: this.activeOptions.maxLineCount ?? 2,
-          mergeSingleWords: this.activeOptions.mergeSingleWords ?? false,
+          mergeSingleWords: this.activeOptions.mergeSingleWords ?? true,
           skipRanges,
           onOpEdFiltered: (count) => {
             this.sendLog(
@@ -1061,6 +1139,7 @@ export class WhisperManager {
         const cleanedText = isEnglish
           ? cleanJapaneseArtifacts(text)
               .replace(/^This\s+is\s+the\s+(?:first|second|third)\s+(?:sentence|one)[.!,:\s-]*/i, '')
+              .replace(/^Hello!\s+Wait,\s+really\?\s+Yeah,\s+let'?s\s+go[.!,:\s-]*/i, '')
               .trim()
           : text;
         if (!cleanedText) continue;

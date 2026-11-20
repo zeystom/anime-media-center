@@ -45,8 +45,10 @@ import {
   isExplicitEpisodeMismatch,
   isExplicitSeasonMismatch,
   isFranchiseSeasonTitleMismatch,
+  isExplicitSpinoffOrSpecialMismatch,
+  deriveShortenedTitleQueries,
 } from './electron/indexers.ts';
-import { classifyRelease, detectSeasonFromTitle, isMultiSeasonCollection, qualityRank } from './src/lib/releaseParser/releaseClassification.ts';
+import { classifyRelease, decodeHtmlEntities, detectSeasonFromTitle, isMultiSeasonCollection, qualityRank, releaseDescriptionToText } from './src/lib/releaseParser/releaseClassification.ts';
 import { detectVpnStatus, clearVpnCache } from './electron/vpnGuard.ts';
 
 let passed = 0;
@@ -1284,6 +1286,134 @@ async function main() {
     assert.strictEqual(extractInfoHash(''), null);
     assert.strictEqual(extractInfoHash(null), null);
     assert.strictEqual(extractInfoHash(undefined), null);
+  });
+
+  await runAsyncTest('7.6 decodeHtmlEntities & fetchProviderFeed decode single and double-encoded RSS titles', async () => {
+    assert.strictEqual(decodeHtmlEntities("I&#39;m Dating &amp; Learning"), "I'm Dating & Learning");
+    assert.strictEqual(decodeHtmlEntities("I&amp;#39;m"), "I'm");
+
+    const xml = `<?xml version="1.0" encoding="UTF-8"?>
+<rss version="2.0"><channel><title>Feed</title>
+  <item>
+    <title>[Judas] Dark Summoner to Dekite Iru (I&amp;#39;m Dating a Dark Summoner) - S01E01 [Eng-Subs]</title>
+    <link>https://mirror.example/dl/1.torrent</link>
+  </item>
+  <item>
+    <title>[SubsPlus+] I&amp;amp;#39;m Dating a Dark Summoner - S01E01</title>
+    <link>https://mirror.example/dl/2.torrent</link>
+  </item>
+</channel></rss>`;
+    installFetchMock(async () => jsonResponse(200, xml));
+    const items = await fetchProviderFeed(rssProvider, { query: 'Dark Summoner' });
+    assert.strictEqual(items.length, 2);
+    assert.strictEqual(items[0].title, "[Judas] Dark Summoner to Dekite Iru (I'm Dating a Dark Summoner) - S01E01 [Eng-Subs]");
+    assert.strictEqual(items[1].title, "[SubsPlus+] I'm Dating a Dark Summoner - S01E01");
+  });
+
+  runTest('7.7 classifyRelease + releaseDescriptionToText ignore Nyaa nav/select chrome and classify [Eng-Subs] without false English Dub', () => {
+    const nyaaHtml = `<!DOCTYPE html><html><head><title>Nyaa</title></head><body>
+      <nav>Anime - English-translated - Raw Audio - Lossless</nav>
+      <select><option>Literature - English</option><option>Audio - Lossy</option></select>
+      <div id="torrent-description">
+        <div class="markdown"><p><strong>Audio</strong>: Japanese<br><strong>Subtitles</strong>: English</p></div>
+      </div>
+      <footer>Comments</footer>
+    </body></html>`;
+    const descText = releaseDescriptionToText(nyaaHtml);
+    assert.ok(!/English-translated|Literature/i.test(descText), `nav/select chrome leaked into description: ${descText}`);
+    assert.ok(descText.includes('Audio: Japanese') && descText.includes('Subtitles: English'));
+
+    const releaseTitle = "[Judas] Dark Summoner to Dekite Iru (I'm Dating a Dark Summoner) [Uncensored] - S01E01 [1080p][HEVC x265 10bit][Eng-Subs] (Weekly)";
+    const classified = classifyRelease(releaseTitle, descText);
+    assert.deepStrictEqual(classified.audioLanguageCodes, ['ja']);
+    assert.strictEqual(classified.audioLabels.includes('English Dub'), false);
+    assert.deepStrictEqual(classified.subtitleLanguageCodes, ['en']);
+    assert.strictEqual(classified.subtitleLabel, 'English Subs');
+  });
+
+  runTest('7.8 sanitizeSearchQuery strips curly quotes cleanly', () => {
+    assert.strictEqual(sanitizeSearchQuery('I’m Dating a Dark Summoner Omake Shorts'), 'I m Dating a Dark Summoner Omake Shorts');
+    assert.strictEqual(sanitizeSearchQuery('“Test” Show‘s Title'), 'Test Show s Title');
+  });
+
+  runTest('7.9 computeTitleRelevance matches space-collapsed romanized compounds as exact', () => {
+    assert.strictEqual(
+      computeTitleRelevance('[Judas] Dark Summoner to Dekite Iru - S01E01 [1080p]', ['Dark Summoner to Dekiteiru']),
+      'exact'
+    );
+  });
+
+  runTest('7.10 isExplicitSpinoffOrSpecialMismatch filters Omake Shorts & S00E01 from main series search while keeping spin-off searches and full bundles', () => {
+    const omake = makeResult('[ASW] Dark Summoner to Dekiteiru - Omake Shorts - 01 [1080p HEVC x265 10Bit][AAC]', 84);
+    const s00 = makeResult('[Group] Dark Summoner to Dekiteiru - S00E01 [1080p]', 20);
+    const fullBundle = makeResult('[Group] Dark Summoner to Dekiteiru (01-12 + Omake Shorts) [Complete Series] [BD 1080p]', 50);
+
+    assert.strictEqual(
+      isExplicitSpinoffOrSpecialMismatch(omake, ["I'm Dating a Dark Summoner", 'Dark Summoner to Dekiteiru'], 'TV_SHORT'),
+      true
+    );
+    assert.strictEqual(
+      isExplicitSpinoffOrSpecialMismatch(s00, ["I'm Dating a Dark Summoner", 'Dark Summoner to Dekiteiru'], 'TV'),
+      true
+    );
+    assert.strictEqual(
+      isExplicitSpinoffOrSpecialMismatch(fullBundle, ["I'm Dating a Dark Summoner", 'Dark Summoner to Dekiteiru'], 'TV_SHORT'),
+      false
+    );
+    assert.strictEqual(
+      isExplicitSpinoffOrSpecialMismatch(omake, ['I’m Dating a Dark Summoner Omake Shorts', 'Dark Summoner to Dekiteiru Omake Shorts'], 'TV_SHORT'),
+      false
+    );
+  });
+
+  runTest('7.11 sanitizeSearchQuery strips ×, ・, fullwidth colons and brackets', () => {
+    assert.strictEqual(
+      sanitizeSearchQuery('Jujutsu Kaisen: Kaigyoku・Gyokusetsu'),
+      'Jujutsu Kaisen Kaigyoku Gyokusetsu'
+    );
+    assert.strictEqual(sanitizeSearchQuery('A × B'), 'A B');
+    assert.strictEqual(sanitizeSearchQuery('JUJUTSU KAISEN： Execution 【Movie】'), 'JUJUTSU KAISEN Execution Movie');
+  });
+
+  runTest('7.12 deriveShortenedTitleQueries shortens long subtitle-heavy titles safely without stripping seasons or colliding with parent series', () => {
+    const jjkExec = deriveShortenedTitleQueries([
+      'JUJUTSU KAISEN: Execution -Shibuya Incident x The Culling Game Begins-',
+    ]);
+    assert.ok(
+      jjkExec.includes('JUJUTSU KAISEN: Execution'),
+      `expected "JUJUTSU KAISEN: Execution", got: ${JSON.stringify(jjkExec)}`
+    );
+
+    const hiddenInv = deriveShortenedTitleQueries([
+      'JUJUTSU KAISEN: Hidden Inventory / Premature Death – The Movie',
+    ]);
+    assert.ok(
+      hiddenInv.includes('JUJUTSU KAISEN: Hidden Inventory / Premature Death'),
+      `expected without "– The Movie", got: ${JSON.stringify(hiddenInv)}`
+    );
+    assert.ok(
+      hiddenInv.includes('JUJUTSU KAISEN: Hidden Inventory'),
+      `expected slash prefix "JUJUTSU KAISEN: Hidden Inventory", got: ${JSON.stringify(hiddenInv)}`
+    );
+
+    const hashiraExcluded = deriveShortenedTitleQueries(
+      ['Demon Slayer: Kimetsu no Yaiba -To the Hashira Training-'],
+      ['Demon Slayer: Kimetsu no Yaiba']
+    );
+    assert.strictEqual(
+      hashiraExcluded.some((q) => /Demon Slayer:\s*Kimetsu no Yaiba$/i.test(q)),
+      false,
+      `must not collapse onto excluded parent title: ${JSON.stringify(hashiraExcluded)}`
+    );
+
+    const seasonPreserved = deriveShortenedTitleQueries([
+      'Re:Zero - Starting Life in Another World Season 2',
+    ]);
+    assert.strictEqual(
+      seasonPreserved.length,
+      0,
+      `must never strip Season 2 tail: ${JSON.stringify(seasonPreserved)}`
+    );
   });
 
   // =========================================================================

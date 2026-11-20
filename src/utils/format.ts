@@ -25,6 +25,44 @@ export function formatFileSize(bytes: number): string {
   return `${(bytes / Math.pow(1024, i)).toFixed(2)} ${units[i]}`;
 }
 
+export function formatDiskSize(bytes: number): string {
+  if (!Number.isFinite(bytes) || bytes <= 0) return '0 B';
+  const units = ['B', 'KB', 'MB', 'GB', 'TB'];
+  const i = Math.min(units.length - 1, Math.floor(Math.log(bytes) / Math.log(1024)));
+  const val = bytes / Math.pow(1024, i);
+  if (i <= 1 || val >= 100) return `${Math.round(val)} ${units[i]}`;
+  if (val >= 10) return `${val.toFixed(1).replace(/\.0$/, '')} ${units[i]}`;
+  return `${val.toFixed(2).replace(/\.?0+$/, '')} ${units[i]}`;
+}
+
+export function getFolderDisplayName(folderPath: string): string {
+  const parts = String(folderPath || '').split(/[\\/]/).filter(Boolean);
+  return parts.length > 0 ? parts[parts.length - 1] : folderPath;
+}
+
+const FIVE_GIB = 5 * 1024 * 1024 * 1024;
+const TWENTY_FIVE_GIB = 25 * 1024 * 1024 * 1024;
+
+export type DiskHealthLevel = 'unknown' | 'critical' | 'low' | 'healthy';
+
+export function getDiskHealthStyle(freeBytes: number | null): { level: DiskHealthLevel; textClass: string } {
+  if (freeBytes == null) {
+    return { level: 'unknown', textClass: 'text-zinc-500' };
+  }
+  if (freeBytes < FIVE_GIB) {
+    return { level: 'critical', textClass: 'text-rose-400' };
+  }
+  if (freeBytes < TWENTY_FIVE_GIB) {
+    return { level: 'low', textClass: 'text-amber-300' };
+  }
+  return { level: 'healthy', textClass: 'text-zinc-200' };
+}
+
+export function extractDriveLabelFromPath(folderPath: string): string {
+  const match = /^([A-Za-z]:)/.exec(folderPath.trim());
+  return match ? match[1].toUpperCase() : '';
+}
+
 export function formatDurationFriendly(seconds?: number): string {
   if (!seconds || isNaN(seconds) || seconds <= 0) return '';
   const hrs = Math.floor(seconds / 3600);

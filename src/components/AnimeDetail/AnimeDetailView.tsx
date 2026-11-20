@@ -8,7 +8,8 @@
  */
 import React, { useEffect, useLayoutEffect, useMemo, useRef, useState } from 'react'
 import { motion } from 'framer-motion'
-import { AlertTriangle, Bell, BellRing, Check, CheckCircle, ChevronDown, Compass, Copy, Download, Film, Heart, MoreHorizontal, Play, Plus, Star, Trash2, Wand2, X } from 'lucide-react'
+import { AlertTriangle, Bell, BellRing, Check, CheckCircle, ChevronDown, Compass, Copy, Download, Film, Heart, Play, Plus, Star, Trash2, Wand2, X } from 'lucide-react'
+import { DownloadFolderMenu } from '../common/DownloadFolderMenu'
 import type {
   AnimeFolder,
   AppSettings,
@@ -26,20 +27,30 @@ import type {
 } from '../../types'
 import type { RailItem } from '../../hooks/useCatalog'
 import type { FavouriteAnime, FollowedAnime } from '../../types/notifications'
-import { findLocalFolder, useLocalStatus } from '../../hooks/useLocalStatus'
+import { findAllLocalFolders, mergeLocalFolders, useLocalStatus } from '../../hooks/useLocalStatus'
 import { useUserLibrary } from '../../hooks/useUserLibrary'
 import { StatusBadges } from '../common/StatusBadges'
 import { DownloadActionButton } from '../common/DownloadActionButton'
 import { ReleasePickerModal } from '../P2P/ReleasePickerModal'
-import { classifyRelease, detectSeasonFromTitle, isMultiSeasonCollection, type TorrentLanguageCode } from '../../lib/releaseParser/releaseClassification.ts'
+import { detectSeasonFromTitle } from '../../lib/releaseParser/releaseClassification.ts'
 import { EpisodeRow } from './EpisodeRow'
 import { resolveAnimeTitle } from '../../utils/title'
+import {
+  buildCatalogSearchAliases,
+  computeOngoingDownloadPlan,
+  inferReleasePreferenceFromEpisodes,
+  parseNumericEpisodeNumber,
+  pickAutomaticSeasonRelease,
+  readAnimeReleasePreference,
+  recordPickedReleasePreference,
+  type QueuedEpisodeDownload,
+} from '../../utils/releaseSelection'
 import { buildHeroBannerCandidates, invalidateResolvedHeroBanner, useResolvedHeroBanner } from '../../utils/heroBanner'
 // CRITICAL: import the wasm-free regex engine directly — never from
 // ../../lib/releaseParser/index.ts, which pulls native/wasm deps unsuitable
 // for the renderer process.
 import { parseReleaseCore } from '../../lib/releaseParser/regexEngine.ts'
-import { formatFileSize, formatTime, isFolderMovie } from '../../utils/format'
+import { formatFileSize, formatRelativeAirDate, formatTime, isFolderMovie } from '../../utils/format'
 import { normalizeAgeRating } from '../../utils/ageRating'
 import { useAgeRatings } from '../../hooks/useAgeRatings'
 import { showGlobalToast } from '../Toast'
@@ -78,7 +89,13 @@ export interface AnimeDetailViewProps {
   p2pState: P2pState | null
   onOpenRelated: (item: CatalogRelatedTitle) => void
   isFollowing: boolean
+  followEntry?: FollowedAnime | null
   onToggleFollow: (anime: FollowedAnime, follow: boolean) => void
+  onToggleFollowAutoDownload?: (anilistId: number, autoDownload: boolean, preferredDownloadRoot?: string | null) => void
+  enqueueEpisodeDownloads?: (items: QueuedEpisodeDownload[]) => void
+  queuedEpisodeNumbers?: number[]
+  manualPickRequestEpisode?: number | null
+  onClearManualPickRequest?: () => void
   isFavourite: boolean
   onToggleFavourite: (anime: FavouriteAnime, favourite: boolean) => void
   onUserEntryChange?: (entry: UserLibraryEntry) => void
@@ -189,24 +206,6 @@ function torrentJobForEpisode(jobs: P2pState['jobs'], anilistId: number | null, 
   })
 }
 
-function matchesPreferredReleaseLanguages(result: ReleaseSearchResult, audioPreferences: string[], subtitlePreferences: string[]): boolean {
-  const classification = classifyRelease(result.title, result.description)
-  const audioMatch = audioPreferences.length
-    ? audioPreferences.some((code) => classification.audioLanguageCodes.includes(code as TorrentLanguageCode))
-    : classification.audioLanguageCodes.length > 0
-  const subtitleMatch = subtitlePreferences.length
-    ? subtitlePreferences.some((code) => classification.subtitleLanguageCodes.includes(code as TorrentLanguageCode))
-    : classification.subtitleLanguageCodes.length > 0
-  return audioMatch && subtitleMatch
-}
-
-function isEnglishDubFallback(result: ReleaseSearchResult, audioPreferences: string[], subtitlePreferences: string[]): boolean {
-  if (!audioPreferences.includes('en') || !subtitlePreferences.includes('en')) return false
-  const classification = classifyRelease(result.title, result.description)
-  return classification.audioLanguageCodes.includes('en')
-    && !classification.subtitleLanguageCodes.includes('en')
-}
-
 const MetaChip: React.FC<{ children: React.ReactNode; className?: string; title?: string }> = ({ children, className, title }) => (
   <span
     title={title}
@@ -230,7 +229,13 @@ const AnimeDetailViewImpl: React.FC<AnimeDetailViewProps> = ({
   p2pState,
   onOpenRelated,
   isFollowing,
+  followEntry,
   onToggleFollow,
+  onToggleFollowAutoDownload,
+  enqueueEpisodeDownloads,
+  queuedEpisodeNumbers,
+  manualPickRequestEpisode,
+  onClearManualPickRequest,
   isFavourite,
   onToggleFavourite,
   onUserEntryChange,
@@ -247,6 +252,7 @@ const AnimeDetailViewImpl: React.FC<AnimeDetailViewProps> = ({
   const [descriptionReaderOpen, setDescriptionReaderOpen] = useState(false)
   const [relatedTitles, setRelatedTitles] = useState<CatalogRelatedTitle[]>([])
   const [franchiseSeasonInfo, setFranchiseSeasonInfo] = useState<FranchiseSeasonInfo | null>(null)
+  const [franchiseSeasonLoaded, setFranchiseSeasonLoaded] = useState(false)
   const [relatedLoading, setRelatedLoading] = useState(false)
   const [remoteEpisodes, setRemoteEpisodes] = useState<RemoteEpisodeInfo[]>([])
   // Airing pointer shipped with the episodes payload (computed at fetch time,
@@ -286,11 +292,7 @@ const AnimeDetailViewImpl: React.FC<AnimeDetailViewProps> = ({
   // Release picker: null = closed; { episode: null } = whole season / pack.
   const [pickerState, setPickerState] = useState<{ episode: number | null } | null>(null)
   const [queueing, setQueueing] = useState(false)
-  const [episodeDownloadQueue, setEpisodeDownloadQueue] = useState<number[]>([])
-  const [activeQueuedEpisode, setActiveQueuedEpisode] = useState<number | null>(null)
-  const episodeQueueWorkerRef = useRef(false)
   const [selectedDownloadRoot, setSelectedDownloadRoot] = useState<string | null>(null)
-  const [seasonFolderMenuOpen, setSeasonFolderMenuOpen] = useState(false)
   const initialDownloadStartedRef = useRef<string | null>(null)
   const scrollContainerRef = useRef<HTMLDivElement>(null)
   // Episodes section heading; page changes scroll back here so the first rows
@@ -303,12 +305,23 @@ const AnimeDetailViewImpl: React.FC<AnimeDetailViewProps> = ({
 
   const railItem = source.kind === 'catalog' ? source.item : null
 
-  // Local folder resolution: direct for local sources, fuzzy (anilistId then
-  // normalized title) for catalog sources.
-  const localFolder = useMemo(() => {
-    if (source.kind === 'local') return source.folder
-    return findLocalFolder(folders, { anilistId: source.item.anilistId, title: source.item.title })
+  // Merge local folders matching this title across all configured library roots
+  // so downloading newer ongoing episodes to a second drive keeps one list.
+  const matchedLocalFolders = useMemo(() => {
+    if (source.kind === 'local') {
+      const id = source.folder.anilistId
+      const title = source.folder.canonicalTitle || source.folder.folderName
+      const matches = findAllLocalFolders(folders, { anilistId: id, title })
+      if (matches.length === 0) return [source.folder]
+      return [source.folder, ...matches.filter((f) => f.folderPath !== source.folder.folderPath)]
+    }
+    return findAllLocalFolders(folders, { anilistId: source.item.anilistId, title: source.item.title })
   }, [source, folders])
+
+  const localFolder = useMemo(
+    () => mergeLocalFolders(matchedLocalFolders),
+    [matchedLocalFolders],
+  )
 
   // Remote fetches happen for catalog items and for local folders that carry
   // an AniList id; purely local titles skip all network calls.
@@ -373,8 +386,6 @@ const AnimeDetailViewImpl: React.FC<AnimeDetailViewProps> = ({
     setConfirmDeleteEpisode(null)
     setCompletedSuggestion(false)
     setRemovedPaths(new Set())
-    setEpisodeDownloadQueue([])
-    setActiveQueuedEpisode(null)
     setPickerState(null)
     setQueueing(false)
     setEpisodePage(1)
@@ -388,6 +399,7 @@ const AnimeDetailViewImpl: React.FC<AnimeDetailViewProps> = ({
       setDetails(null)
       setRelatedTitles([])
       setFranchiseSeasonInfo(null)
+      setFranchiseSeasonLoaded(false)
       setRemoteEpisodes([])
       setRemoteAiredThrough(null)
       setRemoteArtworkState({ id: null, ...EMPTY_REMOTE_ARTWORK })
@@ -403,6 +415,7 @@ const AnimeDetailViewImpl: React.FC<AnimeDetailViewProps> = ({
     setDetails(null)
     setRelatedTitles([])
     setFranchiseSeasonInfo(null)
+    setFranchiseSeasonLoaded(false)
     setRemoteEpisodes([])
     setRemoteAiredThrough(null)
     setRemoteArtworkState({ id: anilistId, ...cachedArtwork })
@@ -418,6 +431,7 @@ const AnimeDetailViewImpl: React.FC<AnimeDetailViewProps> = ({
           setDetails(null)
           setRelatedTitles([])
           setRemoteEpisodes([])
+          setFranchiseSeasonLoaded(true)
           setDetailsLoading(false)
           setRemoteEpisodesLoading(false)
           setSettledBannerAnimeId(anilistId)
@@ -489,12 +503,18 @@ const AnimeDetailViewImpl: React.FC<AnimeDetailViewProps> = ({
       }).finally(() => {
         if (!cancelled) setRelatedLoading(false)
       })
-      void api.getCatalogFranchiseSeasons?.(anilistId).then((result) => {
-        if (!cancelled) setFranchiseSeasonInfo(result ?? null)
-      }).catch((error) => {
-        console.warn('[Anime overview] Franchise season chain failed:', error)
-        if (!cancelled) setFranchiseSeasonInfo(null)
-      })
+      if (api.getCatalogFranchiseSeasons) {
+        void api.getCatalogFranchiseSeasons(anilistId).then((result) => {
+          if (!cancelled) setFranchiseSeasonInfo(result ?? null)
+        }).catch((error) => {
+          console.warn('[Anime overview] Franchise season chain failed:', error)
+          if (!cancelled) setFranchiseSeasonInfo(null)
+        }).finally(() => {
+          if (!cancelled) setFranchiseSeasonLoaded(true)
+        })
+      } else {
+        setFranchiseSeasonLoaded(true)
+      }
     }
     void load()
     return () => {
@@ -681,10 +701,14 @@ const AnimeDetailViewImpl: React.FC<AnimeDetailViewProps> = ({
   }, [hero.description]);
 
   const seasonHint = useMemo(() => {
+    if (isFeatureFilm) return null
     return franchiseSeasonInfo?.ownSeason ?? detectSeasonFromTitle(hero.title) ?? parsedSeason
-  }, [parsedSeason, hero.title, franchiseSeasonInfo?.ownSeason])
+  }, [isFeatureFilm, parsedSeason, hero.title, franchiseSeasonInfo?.ownSeason])
 
-  const franchiseSeasonTitles = useMemo(() => franchiseSeasonInfo?.chain ?? [], [franchiseSeasonInfo])
+  const franchiseSeasonTitles = useMemo(
+    () => (isFeatureFilm ? [] : (franchiseSeasonInfo?.chain ?? [])),
+    [isFeatureFilm, franchiseSeasonInfo],
+  )
 
   const partHint = useMemo(() => {
     const match = /\b(?:part|cour)\s*0*(\d{1,2})\b/i.exec(hero.title)
@@ -696,35 +720,10 @@ const AnimeDetailViewImpl: React.FC<AnimeDetailViewProps> = ({
   // insensitively and minus the display title that is already searched as the
   // primary query. Memoized so ReleasePickerModal's search effect (which keys
   // on the aliases identity) does not re-run on every render.
-  const searchAliases = useMemo(() => {
-    if (!details) return []
-    const displayKey = hero.title.trim().toLowerCase()
-    const seen = new Set<string>([displayKey])
-    const aliases: string[] = []
-    const isOva = details.format?.toUpperCase() === 'OVA'
-    // An OVA's parent TV show arrives via AniList's PARENT relation (seasons
-    // link through PREQUEL/SEQUEL). Without the parent's titles the OVA page
-    // can only search its own name ("K-ON! Live House") — the season bundles
-    // that actually contain the OVA ("K-ON! 1-13+OVA Complete") then surface
-    // neither in the queries nor above the 'related' relevance cut.
-    const parentTitles = isOva
-      ? relatedTitles
-        .filter((item) => item.format?.toUpperCase() === 'TV' && ['PREQUEL', 'SEQUEL', 'PARENT'].includes(String(item.relationType || '').toUpperCase()))
-        .sort((a, b) => (a.relationType === 'PREQUEL' ? -1 : 0) - (b.relationType === 'PREQUEL' ? -1 : 0))
-        .flatMap((item) => [item.title.english, item.title.romaji].filter((value): value is string => !!value))
-      : []
-    const ovaSearchAliases = isOva
-      ? [...parentTitles.map((value) => `${value} OVA`), ...parentTitles]
-      : []
-    for (const t of [...ovaSearchAliases, details.title.romaji, details.title.english]) {
-      if (!t) continue
-      const key = t.trim().toLowerCase()
-      if (!key || seen.has(key)) continue
-      seen.add(key)
-      aliases.push(t)
-    }
-    return aliases
-  }, [details, hero.title, relatedTitles])
+  const searchAliases = useMemo(
+    () => buildCatalogSearchAliases(hero.title, details, relatedTitles),
+    [details, hero.title, relatedTitles],
+  )
 
   const contentTitleAliases = useMemo(() => {
     if (!details) return []
@@ -806,6 +805,10 @@ const AnimeDetailViewImpl: React.FC<AnimeDetailViewProps> = ({
   const downloadedCount = localRows.filter((row) => row.episode && !row.episode.isDownloading).length
   const downloadingCount = localRows.filter((row) => row.episode?.isDownloading).length
   const downloadedSeason = episodeTotal > 0 && downloadedCount >= episodeTotal && downloadingCount === 0
+  const notYetReleased =
+    !downloadedSeason &&
+    downloadedCount === 0 &&
+    (hero.status === 'NOT_YET_RELEASED' || releasedEpisodeCount === 0)
 
   // Resume target: first non-completed local episode, falling back to the
   // first episode for a full rewatch.
@@ -902,6 +905,73 @@ const AnimeDetailViewImpl: React.FC<AnimeDetailViewProps> = ({
   // repeat them. Multi-episode OVAs keep the full episode grid — the
   // mergedRows guard makes the actual payload win over a bad AniList count.
   const isSingleEpisodeEntry = !isFeatureFilm && episodeTotal === 1 && mergedRows.length <= 1
+
+  const queuedEpisodeSet = useMemo(() => new Set(queuedEpisodeNumbers ?? []), [queuedEpisodeNumbers])
+
+  const ongoingPlan = useMemo(() => {
+    const downloadedEpisodeNums = localRows
+      .filter((row) => row.episode && !row.episode.isDownloading)
+      .map((row) => row.num)
+
+    const activeEpisodeNums = new Set<number>(queuedEpisodeSet)
+    for (const row of localRows) {
+      if (row.episode?.isDownloading) activeEpisodeNums.add(row.num)
+    }
+    if (anilistId != null) {
+      for (const job of p2pState?.jobs || []) {
+        if (job.anilistId !== anilistId || job.status === 'error' || job.status === 'completed' || job.status === 'seeding') {
+          continue
+        }
+        if (typeof job.episode === 'number') activeEpisodeNums.add(job.episode)
+        for (const ep of job.episodes || []) activeEpisodeNums.add(ep)
+        for (const file of job.filesProgress || []) {
+          const parsed = parseReleaseCore(file.name)
+          for (const n of parsed.episodeNumbers) activeEpisodeNums.add(n)
+          if (parsed.episodeNumber != null) activeEpisodeNums.add(parsed.episodeNumber)
+        }
+      }
+    }
+
+    const watchedEpisodeNums = new Set<number>()
+    for (const row of localRows) {
+      if (row.episode && history[row.episode.filePath]?.completed) {
+        watchedEpisodeNums.add(row.num)
+      }
+    }
+    const matchedFolderPaths = new Set(matchedLocalFolders.map((folder) => folder.folderPath.toLowerCase()))
+    for (const entry of Object.values(history)) {
+      if (!entry?.completed || !entry.folderPath) continue
+      if (!matchedFolderPaths.has(entry.folderPath.toLowerCase())) continue
+      const num = parseNumericEpisodeNumber(entry.fileName, entry.episodeNumber)
+      if (num != null) watchedEpisodeNums.add(num)
+    }
+
+    const watchedMaxProgress = anilistId != null ? (userEntries[anilistId]?.progress ?? 0) : 0
+    return computeOngoingDownloadPlan({
+      status: hero.status,
+      isFeatureFilm,
+      isSingleEpisodeEntry,
+      releasedEpisodeCount,
+      episodeTotal,
+      downloadedEpisodeNums,
+      activeEpisodeNums,
+      watchedEpisodeNums,
+      watchedMaxProgress,
+    })
+  }, [
+    localRows,
+    queuedEpisodeSet,
+    anilistId,
+    p2pState?.jobs,
+    history,
+    matchedLocalFolders,
+    userEntries,
+    hero.status,
+    isFeatureFilm,
+    isSingleEpisodeEntry,
+    releasedEpisodeCount,
+    episodeTotal,
+  ])
 
   // After the new page renders, bring the top of the episode section back into
   // view (only for explicit pager clicks, not the auto-jump on open).
@@ -1121,23 +1191,63 @@ const AnimeDetailViewImpl: React.FC<AnimeDetailViewProps> = ({
     return normalizedFolder === normalizedRoot || normalizedFolder.startsWith(`${normalizedRoot}\\`) || normalizedFolder.startsWith(`${normalizedRoot}/`)
   })
   const defaultDownloadRoot = selectedDownloadRoot || localFolderRoot || settings.downloadTargetFolder || downloadRoots[0] || null
-  const downloadLocation = () => {
-    // Reuse the existing anime directory when the chosen root already contains it.
-    if (localFolder && (!selectedDownloadRoot || selectedDownloadRoot === localFolderRoot)) {
-      return { targetFolder: localFolder.folderPath }
+  const downloadLocation = (): { targetFolder?: string; downloadRoot?: string } => {
+    if (selectedDownloadRoot) {
+      const normalizedRoot = selectedDownloadRoot.replace(/[\\/]+$/, '').toLowerCase()
+      const existingOnRoot = matchedLocalFolders.find((folder) => {
+        const normalizedFolder = folder.folderPath.replace(/[\\/]+$/, '').toLowerCase()
+        return normalizedFolder === normalizedRoot
+          || normalizedFolder.startsWith(`${normalizedRoot}\\`)
+          || normalizedFolder.startsWith(`${normalizedRoot}/`)
+      })
+      if (existingOnRoot) return { targetFolder: existingOnRoot.folderPath }
+      return { downloadRoot: selectedDownloadRoot }
     }
+    if (localFolder) return { targetFolder: localFolder.folderPath }
     return defaultDownloadRoot ? { downloadRoot: defaultDownloadRoot } : {}
   }
 
+  const getEffectiveAnimePref = () => {
+    const inferred = inferReleasePreferenceFromEpisodes(localFolder?.episodes ?? [])
+    if (anilistId == null) return inferred
+    const saved = readAnimeReleasePreference(anilistId)
+    return {
+      ...inferred,
+      ...(saved ?? {}),
+      preferredGroup: saved?.preferredGroup ?? inferred.preferredGroup ?? null,
+      audioMode: saved?.audioMode ?? null,
+    }
+  }
+
+  const buildQueuedEpisode = (episode: number): QueuedEpisodeDownload => {
+    const matchingRemote = remoteEpisodes.find((ep) => ep.number === episode)
+    const parsedAir = matchingRemote?.airDate ? Date.parse(matchingRemote.airDate) : Number.NaN
+    return {
+      anilistId: anilistId!,
+      episode,
+      title: hero.title,
+      aliases: searchAliases,
+      season: seasonHint,
+      part: partHint,
+      episodeCount: details?.episodesCount ?? null,
+      episodeDurationMinutes: details?.durationMinutes ?? null,
+      mediaFormat: details?.format ?? hero.format ?? null,
+      franchiseSeasons: franchiseSeasonTitles,
+      contentTitleAliases,
+      ...downloadLocation(),
+      airedAtMs: Number.isFinite(parsedAir) ? parsedAir : null,
+    }
+  }
+
   const requestDownload = async (episode: number | null) => {
-    if (!canDownload) return
+    if (!canDownload || notYetReleased || anilistId == null) return
     if (episode != null) {
       const alreadyDownloading = (p2pState?.jobs || []).some((job) => job.status !== 'error' && job.anilistId === anilistId &&
         (job.episodes?.includes(episode) || job.episode === episode || (job.episode == null && (job.filesProgress || []).some((file) => {
           const parsed = parseReleaseCore(file.name)
           return parsed.episodeNumbers.includes(episode) || parsed.episodeNumber === episode
         }))))
-      if (alreadyDownloading || episodeDownloadQueue.includes(episode) || activeQueuedEpisode === episode) return
+      if (alreadyDownloading || queuedEpisodeSet.has(episode)) return
       // Opening the manual picker is not a queued download. Keeping it out of
       // the worker queue avoids showing the episode card's download spinner
       // while the user is only browsing releases (or has not picked one yet).
@@ -1145,9 +1255,89 @@ const AnimeDetailViewImpl: React.FC<AnimeDetailViewProps> = ({
         setPickerState({ episode })
         return
       }
-      setEpisodeDownloadQueue((pending) => pending.includes(episode) ? pending : [...pending, episode])
+      enqueueEpisodeDownloads?.([buildQueuedEpisode(episode)])
       return
     }
+
+    if (ongoingPlan.isOngoing) {
+      if (ongoingPlan.buttonDisabled || ongoingPlan.targetEpisodes.length === 0) return
+      const targets = ongoingPlan.targetEpisodes
+      if (settings.releaseSelectionMode === 'manual') {
+        setPickerState({ episode: targets.length === 1 ? targets[0] : null })
+        return
+      }
+      if (targets.length === 1) {
+        enqueueEpisodeDownloads?.([buildQueuedEpisode(targets[0])])
+        return
+      }
+      if (queueing) return
+      const api = window.electronAPI
+      if (!api?.searchReleases || !api.addDownload) return
+      setQueueing(true)
+      try {
+        const response = await api.searchReleases({
+          title: hero.title,
+          aliases: searchAliases,
+          anilistId,
+          season: seasonHint,
+          part: partHint,
+          episode: null,
+          episodeCount: details?.episodesCount ?? null,
+          episodeDurationMinutes: details?.durationMinutes ?? null,
+          mediaFormat: details?.format ?? hero.format ?? null,
+          franchiseSeasons: franchiseSeasonTitles,
+        })
+        const { best, usedEnglishDubFallback } = pickAutomaticSeasonRelease(response?.results ?? [], {
+          isOvaTitle: (details?.format ?? hero.format ?? '').toUpperCase() === 'OVA',
+          audioPreferences: settings.preferredTorrentAudioLanguages ?? ['en'],
+          subtitlePreferences: settings.preferredTorrentSubtitleLanguages ?? ['en'],
+          animePref: getEffectiveAnimePref(),
+        })
+        if (best) {
+          const result = await api.addDownload({
+            item: best,
+            title: hero.title,
+            anilistId,
+            episode: null,
+            season: seasonHint,
+            mediaFormat: details?.format ?? hero.format ?? null,
+            episodeCount: details?.episodesCount ?? hero.episodesCount ?? null,
+            mediaAliases: contentTitleAliases,
+            franchiseSeasons: franchiseSeasonTitles,
+            ...downloadLocation(),
+          })
+          if (result?.success && usedEnglishDubFallback) {
+            showGlobalToast(`Season download queued with English dub: ${best.title}. No release with both English dub and English subtitles was found. You can create subtitles in Whisper Studio.`, 'warning')
+          } else if (result?.success) {
+            showGlobalToast(`Season download queued: ${best.title}`, 'success')
+          } else {
+            showGlobalToast(result?.error || 'Failed to queue the season download', 'error')
+          }
+          return
+        }
+        // No batch pack matched (normal for weekly airing shows): queue missing
+        // aired episodes individually through the persistent global worker.
+        if (enqueueEpisodeDownloads) {
+          enqueueEpisodeDownloads(targets.map((ep) => buildQueuedEpisode(ep)))
+          showGlobalToast(`Queuing ${targets.length} aired episode(s) individually…`, 'info')
+        } else {
+          showGlobalToast('No matching batch or episode queue handler available.', 'error')
+        }
+      } catch (err) {
+        console.error('Automatic ongoing release search failed:', err)
+        if (enqueueEpisodeDownloads) {
+          enqueueEpisodeDownloads(targets.map((ep) => buildQueuedEpisode(ep)))
+          showGlobalToast(`Batch search failed — queuing ${targets.length} aired episode(s) individually…`, 'info')
+        } else {
+          showGlobalToast(err instanceof Error ? err.message : 'Automatic release search failed', 'error')
+        }
+      } finally {
+        setQueueing(false)
+        onLibraryChanged?.()
+      }
+      return
+    }
+
     if (queueing) return
     if (settings.releaseSelectionMode === 'manual') {
       setPickerState({ episode: null })
@@ -1158,53 +1348,12 @@ const AnimeDetailViewImpl: React.FC<AnimeDetailViewProps> = ({
     setQueueing(true)
     try {
       const response = await api.searchReleases({ title: hero.title, aliases: searchAliases, anilistId, season: seasonHint, part: partHint, episode: null, episodeCount: details?.episodesCount ?? null, episodeDurationMinutes: details?.durationMinutes ?? null, mediaFormat: details?.format ?? hero.format ?? null, franchiseSeasons: franchiseSeasonTitles })
-      // Automatic selection requires the release to actually name this show:
-      // 'related' (a whole-word mention, e.g. "Re:Monster" for "Monster") and
-      // 'none' are refused — only exact/prefix titles may auto-download.
-      // OVA/OAD titles also accept their dedicated release kinds ('ova', and
-      // 'unknown' for an unlabeled single-video release) — the engine cuts
-      // just the OVA file out of either shape (marker/token matching), so
-      // release SHAPE is not a selection criterion. Language preference is:
-      // full audio+subtitle matches beat the English-dub fallback, and within
-      // one tier the backend ranking (relevance, quality, seeders) decides —
-      // with a seeded-first preference, because a release nobody is seeding
-      // can never finish (a 0-seeder dedicated raw must not beat a seeded
-      // bundle that carries the same OVA).
-      const isOvaTitle = (details?.format ?? hero.format ?? "").toUpperCase() === "OVA"
-      const audioPreferences = settings.preferredTorrentAudioLanguages ?? ['en']
-      const subtitlePreferences = settings.preferredTorrentSubtitleLanguages ?? ['en']
-      const seasonReleases = response?.results ?? []
-      const ovaKinds = ['ova', 'unknown', 'season-pack', 'episode-range']
-      const bundleKinds = ['season-pack', 'episode-range']
-      const validReleases = seasonReleases.filter((release) => !release.sizeWarning
-        && (release.titleRelevance == null || release.titleRelevance === 'exact' || release.titleRelevance === 'prefix')
-        && (isOvaTitle ? ovaKinds : bundleKinds).includes(classifyRelease(release.title, release.description).kind))
-      const preferSeeded = (releases: ReleaseSearchResult[]) => {
-        const seeded = releases.filter((release) => (release.seeders ?? 0) > 0)
-        return seeded.length > 0 ? seeded : releases
-      }
-      // For OVA titles the release SHAPE matters as a last tie-break: a
-      // whole-franchise mega-bundle ("Seasons 1-4 + OVAs + Specials") carries
-      // EVERY season's OVAs, so a 2-episode OVA entry would download all of
-      // them — dedicated releases, then single-season bundles, then
-      // multi-season bundles. Stable sort keeps the seeded-first ranking
-      // inside each group. TV seasons cut their season from any shape, so
-      // they keep the plain seeded ranking.
-      const ovaShapeGroup = (release: ReleaseSearchResult) => {
-        const kind = classifyRelease(release.title, release.description).kind
-        if (kind === 'ova' || kind === 'unknown') return 0
-        if (!isMultiSeasonCollection(release.title)) return 1
-        return 2
-      }
-      const pickByTier = (list: ReleaseSearchResult[]) => {
-        const ranked = preferSeeded(list)
-        if (!isOvaTitle) return ranked[0]
-        return [...ranked].sort((a, b) => ovaShapeGroup(a) - ovaShapeGroup(b))[0]
-      }
-      const best = pickByTier(validReleases.filter((release) => matchesPreferredReleaseLanguages(release, audioPreferences, subtitlePreferences)))
-        ?? pickByTier(validReleases.filter((release) => isEnglishDubFallback(release, audioPreferences, subtitlePreferences)))
-      const usedEnglishDubFallback = !!best
-        && !matchesPreferredReleaseLanguages(best, audioPreferences, subtitlePreferences)
+      const { best, usedEnglishDubFallback } = pickAutomaticSeasonRelease(response?.results ?? [], {
+        isOvaTitle: (details?.format ?? hero.format ?? '').toUpperCase() === 'OVA',
+        audioPreferences: settings.preferredTorrentAudioLanguages ?? ['en'],
+        subtitlePreferences: settings.preferredTorrentSubtitleLanguages ?? ['en'],
+        animePref: getEffectiveAnimePref(),
+      })
       if (!best) {
         if (response?.results?.length) {
           showGlobalToast('No season release matched your automatic audio and subtitle preferences. Choose a release manually.', 'warning')
@@ -1228,89 +1377,27 @@ const AnimeDetailViewImpl: React.FC<AnimeDetailViewProps> = ({
     }
   }
 
-  // Process episode requests serially, so each card has one clear torrent job.
-  useEffect(() => {
-    if (!canDownload || episodeQueueWorkerRef.current || queueing || pickerState || activeQueuedEpisode != null || episodeDownloadQueue.length === 0) return
-    const episode = episodeDownloadQueue[0]
-    episodeQueueWorkerRef.current = true
-    setActiveQueuedEpisode(episode)
-    if (settings.releaseSelectionMode === 'manual') {
-      setPickerState({ episode })
-      episodeQueueWorkerRef.current = false
-      return
-    }
-    const api = window.electronAPI
-    if (!api?.searchReleases || !api.addDownload) {
-      setEpisodeDownloadQueue((pending) => pending.filter((number) => number !== episode))
-      setActiveQueuedEpisode(null)
-      episodeQueueWorkerRef.current = false
-      return
-    }
-    setQueueing(true)
-    void (async () => {
-      let holdForManualPick = false
-      try {
-        const response = await api.searchReleases({ title: hero.title, aliases: searchAliases, anilistId, season: seasonHint, part: partHint, episode, episodeCount: details?.episodesCount ?? null, episodeDurationMinutes: details?.durationMinutes ?? null, mediaFormat: details?.format ?? hero.format ?? null, franchiseSeasons: franchiseSeasonTitles })
-        // Same title-relevance gate as the season auto-pick: only exact/prefix
-        // releases may auto-download; 'related' ("Re:Monster", spin-offs) and
-        // 'none' ("Pocket Monsters") are refused.
-        const automaticCandidates = (response?.results ?? []).filter((release) => !release.sizeWarning
-          && (release.titleRelevance == null || release.titleRelevance === 'exact' || release.titleRelevance === 'prefix'))
-        const audioPreferences = settings.preferredTorrentAudioLanguages ?? ['en']
-        const subtitlePreferences = settings.preferredTorrentSubtitleLanguages ?? ['en']
-        // Same seeded-first preference as the season pick: a release nobody
-        // seeds can never finish, so known-seeder candidates outrank 0-seeder
-        // ones inside each language tier (ranked order otherwise preserved).
-        const preferSeeded = (releases: ReleaseSearchResult[]) => {
-          const seeded = releases.filter((release) => (release.seeders ?? 0) > 0)
-          return seeded.length > 0 ? seeded : releases
-        }
-        const best = preferSeeded(automaticCandidates.filter((release) => matchesPreferredReleaseLanguages(release, audioPreferences, subtitlePreferences)))[0]
-          ?? preferSeeded(automaticCandidates.filter((release) => isEnglishDubFallback(release, audioPreferences, subtitlePreferences)))[0]
-        const usedEnglishDubFallback = !!best
-          && !matchesPreferredReleaseLanguages(best, audioPreferences, subtitlePreferences)
-        if (!best && response?.results?.length) {
-          showGlobalToast(`No release matched your automatic audio and subtitle preferences for episode ${episode}. Choose manually.`, 'warning')
-          setPickerState({ episode })
-          holdForManualPick = true
-          return
-        }
-        if (!best) {
-          const providerError = response?.reports?.find((report) => !report.ok)?.error
-          const skipped = response?.skippedWrongEpisodeCount ?? 0
-          showGlobalToast(skipped > 0 ? `No release for episode ${episode} was found; ${skipped} mismatched result(s) were skipped.` : providerError ? `No release found: ${providerError}` : `No release found for episode ${episode}.`, 'error')
-          return
-        }
-        const result = await api.addDownload({ item: best, title: hero.title, anilistId, episode, season: seasonHint, mediaFormat: details?.format ?? hero.format ?? null, episodeCount: details?.episodesCount ?? hero.episodesCount ?? null, mediaAliases: contentTitleAliases, franchiseSeasons: franchiseSeasonTitles, ...downloadLocation() })
-        if (result?.success && usedEnglishDubFallback) showGlobalToast(`Episode ${episode} queued with English dub: ${best.title}. No release with both English dub and English subtitles was found. You can create subtitles in Whisper Studio.`, 'warning')
-        else if (result?.success) showGlobalToast(`Episode ${episode} queued: ${best.title}`, 'success')
-        else showGlobalToast(result?.error || `Failed to queue episode ${episode}`, 'error')
-      } catch (err) {
-        console.error(`Automatic release search failed for episode ${episode}:`, err)
-        showGlobalToast(err instanceof Error ? err.message : `Release search failed for episode ${episode}`, 'error')
-      } finally {
-        setQueueing(false)
-        if (!holdForManualPick) {
-          setEpisodeDownloadQueue((pending) => pending.filter((number) => number !== episode))
-          setActiveQueuedEpisode(null)
-        }
-        episodeQueueWorkerRef.current = false
-        onLibraryChanged?.()
-      }
-    })()
-  }, [canDownload, episodeDownloadQueue, queueing, pickerState, activeQueuedEpisode, settings.releaseSelectionMode, settings.preferredTorrentAudioLanguages, settings.preferredTorrentSubtitleLanguages, hero.title, searchAliases, anilistId, seasonHint, franchiseSeasonTitles, details?.episodesCount, details?.durationMinutes, onLibraryChanged])
-
   useEffect(() => {
     if (initialDownloadEpisode == null) {
       initialDownloadStartedRef.current = null
       return
     }
+    const metadataReady = !detailsLoading
+      && details != null
+      && details.anilistId === anilistId
+      && (isFeatureFilm || franchiseSeasonLoaded)
     const requestKey = `${anilistId ?? 'unknown'}:${initialDownloadEpisode}`
-    if (canDownload && initialDownloadStartedRef.current !== requestKey) {
+    if (canDownload && metadataReady && initialDownloadStartedRef.current !== requestKey) {
       initialDownloadStartedRef.current = requestKey
       void requestDownload(initialDownloadEpisode)
     }
-  }, [initialDownloadEpisode, canDownload, anilistId])
+  }, [initialDownloadEpisode, canDownload, anilistId, detailsLoading, details, isFeatureFilm, franchiseSeasonLoaded])
+
+  useEffect(() => {
+    if (manualPickRequestEpisode == null) return
+    setPickerState({ episode: manualPickRequestEpisode })
+    onClearManualPickRequest?.()
+  }, [manualPickRequestEpisode, onClearManualPickRequest])
 
   // Queues the picked release via the torrent engine, then closes the picker.
   // The library refresh runs immediately (cheap rescan) so the new files show
@@ -1323,6 +1410,7 @@ const AnimeDetailViewImpl: React.FC<AnimeDetailViewProps> = ({
     try {
       const res = await api.addDownload({ item: result, title: hero.title, anilistId, episode, season: seasonHint, mediaFormat: details?.format ?? hero.format ?? null, episodeCount: details?.episodesCount ?? hero.episodesCount ?? null, mediaAliases: contentTitleAliases, franchiseSeasons: franchiseSeasonTitles, ...downloadLocation() })
       if (res?.success) {
+        if (anilistId != null) recordPickedReleasePreference(anilistId, result)
         showGlobalToast('Download queued — see the Downloads tab', 'success')
       } else {
         showGlobalToast(res?.error || 'Failed to queue download', 'error')
@@ -1332,22 +1420,13 @@ const AnimeDetailViewImpl: React.FC<AnimeDetailViewProps> = ({
       showGlobalToast('Failed to queue download', 'error')
     } finally {
       setQueueing(false)
-      if (episode != null) {
-        setEpisodeDownloadQueue((pending) => pending.filter((number) => number !== episode))
-        setActiveQueuedEpisode(null)
-      }
       setPickerState(null)
       onLibraryChanged?.()
     }
   }
 
   const handleCancelReleasePicker = () => {
-    const episode = pickerState?.episode
     setPickerState(null)
-    if (episode != null) {
-      setEpisodeDownloadQueue((pending) => pending.filter((number) => number !== episode))
-      setActiveQueuedEpisode(null)
-    }
   }
 
   const showBanner = !!hero.bannerUrl
@@ -1902,36 +1981,59 @@ const AnimeDetailViewImpl: React.FC<AnimeDetailViewProps> = ({
               </button>
 
               {anilistId != null && followEligible && (
-                <button
-                  type="button"
-                  onClick={() => onToggleFollow({
-                    anilistId,
-                    title: hero.title,
-                    posterUrl: hero.posterUrl,
-                    status: hero.status || 'RELEASING',
-                    episodesCount: hero.episodesCount,
-                  }, !isFollowing)}
-                  title={isFollowing ? 'Unfollow series updates' : 'Follow series for new episode alerts'}
-                  className={`btn-glass flex w-[124px] select-none items-center justify-center gap-1.5 rounded-xl px-3 py-3 text-xs font-bold transition-all hover:scale-[1.02] active:scale-[0.98] ${
-                    isFollowing
-                      ? 'text-emerald-200 shadow-glow-emerald-sm hover:bg-emerald-400/10'
-                      : 'text-zinc-300'
-                  }`}
-                >
-                  {isFollowing ? (
-                    <>
-                      <BellRing className="h-4 w-4 text-emerald-300 drop-shadow-[0_0_6px_rgba(52,211,153,0.7)] shrink-0" />
-                      <span className="truncate">Following</span>
-                      <Check className="h-3 w-3 text-emerald-300 shrink-0" />
-                    </>
-                  ) : (
-                    <>
-                      <Bell className="h-4 w-4 text-zinc-400 shrink-0" />
-                      <span className="truncate">Follow</span>
-                      <Plus className="h-3 w-3 text-zinc-500 shrink-0" />
-                    </>
+                <>
+                  <button
+                    type="button"
+                    onClick={() => onToggleFollow({
+                      anilistId,
+                      title: hero.title,
+                      posterUrl: hero.posterUrl,
+                      status: hero.status || 'RELEASING',
+                      episodesCount: hero.episodesCount,
+                    }, !isFollowing)}
+                    title={isFollowing ? 'Unfollow series updates' : 'Follow series for new episode alerts'}
+                    className={`btn-glass flex w-[124px] select-none items-center justify-center gap-1.5 rounded-xl px-3 py-3 text-xs font-bold transition-all hover:scale-[1.02] active:scale-[0.98] ${
+                      isFollowing
+                        ? 'text-emerald-200 shadow-glow-emerald-sm hover:bg-emerald-400/10'
+                        : 'text-zinc-300'
+                    }`}
+                  >
+                    {isFollowing ? (
+                      <>
+                        <BellRing className="h-4 w-4 text-emerald-300 drop-shadow-[0_0_6px_rgba(52,211,153,0.7)] shrink-0" />
+                        <span className="truncate">Following</span>
+                        <Check className="h-3 w-3 text-emerald-300 shrink-0" />
+                      </>
+                    ) : (
+                      <>
+                        <Bell className="h-4 w-4 text-zinc-400 shrink-0" />
+                        <span className="truncate">Follow</span>
+                        <Plus className="h-3 w-3 text-zinc-500 shrink-0" />
+                      </>
+                    )}
+                  </button>
+                  {isFollowing && p2pAvailable && onToggleFollowAutoDownload && (
+                    <button
+                      type="button"
+                      onClick={() => onToggleFollowAutoDownload(anilistId, !followEntry?.autoDownload, defaultDownloadRoot)}
+                      aria-pressed={!!followEntry?.autoDownload}
+                      title={
+                        followEntry?.autoDownload
+                          ? 'Auto-download enabled: new episodes download automatically ~30 min after airing'
+                          : 'Enable automatic download when new episodes air'
+                      }
+                      className={`btn-glass flex select-none items-center justify-center gap-1.5 rounded-xl px-3 py-3 text-xs font-bold transition-all hover:scale-[1.02] active:scale-[0.98] ${
+                        followEntry?.autoDownload
+                          ? 'text-emerald-200 shadow-glow-emerald-sm hover:bg-emerald-400/10'
+                          : 'text-zinc-400 hover:text-zinc-200'
+                      }`}
+                    >
+                      <Download className={`h-3.5 w-3.5 shrink-0 ${followEntry?.autoDownload ? 'text-emerald-300' : 'text-zinc-400'}`} />
+                      <span>Auto-DL</span>
+                      {followEntry?.autoDownload && <Check className="h-3 w-3 text-emerald-300 shrink-0" />}
+                    </button>
                   )}
-                </button>
+                </>
               )}
 
               <button
@@ -1988,55 +2090,70 @@ const AnimeDetailViewImpl: React.FC<AnimeDetailViewProps> = ({
                 </button>
               )}
 
-              {canDownload ? (
-                <div className="relative flex">
-                  <DownloadActionButton
-                    type="button"
-                    onClick={() => void requestDownload(null)}
-                    onLongPress={() => setPickerState({ episode: null })}
-                    disabled={downloadedSeason || queueing}
-                    title={downloadedSeason ? 'All listed episodes are already on this PC' : 'Click to download · hold for manual release search'}
-                    className={`btn-glass flex select-none items-center gap-2 px-4 py-3 text-xs font-bold text-zinc-200 transition-all hover:scale-[1.02] disabled:cursor-default disabled:opacity-60 disabled:hover:scale-100 ${downloadRoots.length > 1 ? 'rounded-l-xl' : 'rounded-xl'}`}
-                  >
-                    {downloadedSeason ? <CheckCircle className="h-4 w-4 text-emerald-300" /> : <Download className="h-4 w-4 text-zinc-300" />}
-                    <span>{queueing ? 'Searching…' : downloadedSeason ? (isFeatureFilm ? 'Movie downloaded' : isSingleEpisodeEntry ? 'Episode downloaded' : 'Season downloaded') : isFeatureFilm ? 'Download movie' : isSingleEpisodeEntry ? 'Download episode' : 'Download season'}</span>
-                  </DownloadActionButton>
-                  {downloadRoots.length > 1 && (
-                    <>
-                      <button
-                        type="button"
-                        aria-label="Choose download folder"
-                        title={`Download to: ${defaultDownloadRoot || ''}`}
-                        onClick={() => setSeasonFolderMenuOpen((open) => !open)}
-                        className="btn-glass -ml-px flex w-11 items-center justify-center rounded-r-xl text-zinc-300 transition-colors"
-                      >
-                        <MoreHorizontal className="h-4 w-4" />
-                      </button>
-                      {seasonFolderMenuOpen && (
-                        <div className="glass-dropdown animate-pop-in absolute bottom-full right-0 z-50 mb-2 max-h-56 w-72 overflow-y-auto rounded-xl p-1.5">
-                          <p className="px-2 py-1.5 text-[10px] font-bold uppercase tracking-wider text-zinc-500">Download to folder</p>
-                          {downloadRoots.map((root) => (
-                            <button
-                              key={root}
-                              type="button"
-                              title={root}
-                              onClick={() => { setSelectedDownloadRoot(root); setSeasonFolderMenuOpen(false) }}
-                              className={`block w-full rounded-lg px-2 py-2 text-left text-[11px] transition-colors ${defaultDownloadRoot === root ? 'bg-rose-500/15 text-rose-200' : 'text-zinc-300 hover:bg-white/5'}`}
-                            >
-                              <span className="block truncate font-medium">{root.split(/[\\/]/).filter(Boolean).slice(-1)[0] || root}</span>
-                              <span className="mt-0.5 block truncate font-mono text-[9px] text-zinc-500">{root}</span>
-                            </button>
-                          ))}
-                        </div>
-                      )}
-                    </>
-                  )}
-                </div>
-              ) : (
+              {canDownload && !notYetReleased ? (() => {
+                const heroDownloadDisabled = downloadedSeason || ongoingPlan.buttonDisabled || queueing
+                const heroDownloadLabel = queueing
+                  ? 'Searching…'
+                  : downloadedSeason
+                    ? (isFeatureFilm ? 'Movie downloaded' : isSingleEpisodeEntry ? 'Episode downloaded' : 'Season downloaded')
+                    : ongoingPlan.isOngoing
+                      ? ongoingPlan.buttonLabel
+                      : (isFeatureFilm ? 'Download movie' : isSingleEpisodeEntry ? 'Download episode' : 'Download season')
+                const nextAiringLabel = ongoingPlan.isOngoing && ongoingPlan.allAiredDownloaded && details?.nextAiringEpisode?.airingAt
+                  ? formatRelativeAirDate(new Date(details.nextAiringEpisode.airingAt * 1000).toISOString())?.label ?? null
+                  : null
+                const heroDownloadTitle = downloadedSeason
+                  ? 'All listed episodes are already on this PC'
+                  : ongoingPlan.isOngoing && ongoingPlan.allAiredDownloaded
+                    ? (nextAiringLabel
+                      ? `All aired episodes downloaded · Ep ${details?.nextAiringEpisode?.episode ?? ''} ${nextAiringLabel}`.trim()
+                      : 'All aired episodes are already downloaded')
+                    : ongoingPlan.isOngoing && ongoingPlan.buttonDisabled
+                      ? 'Downloading all remaining aired episodes'
+                      : ongoingPlan.isOngoing && ongoingPlan.targetEpisodes.length === 1
+                        ? `Click to download Ep ${ongoingPlan.targetEpisodes[0]} · hold for manual release search`
+                        : ongoingPlan.isOngoing
+                          ? `Click to download Ep ${ongoingPlan.targetEpisodes[0]}–${ongoingPlan.targetEpisodes[ongoingPlan.targetEpisodes.length - 1]} (${ongoingPlan.targetEpisodes.length}) · hold for manual release search`
+                          : 'Click to download · hold for manual release search'
+                const showHeroFolderMenu = !downloadedSeason && !ongoingPlan.buttonDisabled && downloadRoots.length > 1
+                const showCompleteIcon = downloadedSeason || (ongoingPlan.isOngoing && ongoingPlan.allAiredDownloaded)
+
+                return (
+                  <div className="relative flex">
+                    <DownloadActionButton
+                      type="button"
+                      onClick={() => void requestDownload(null)}
+                      onLongPress={() => {
+                        if (heroDownloadDisabled) return
+                        setPickerState({
+                          episode: ongoingPlan.isOngoing && ongoingPlan.targetEpisodes.length === 1
+                            ? ongoingPlan.targetEpisodes[0]
+                            : null,
+                        })
+                      }}
+                      disabled={heroDownloadDisabled}
+                      title={heroDownloadTitle}
+                      className={`btn-glass flex select-none items-center gap-2 px-4 py-3 text-xs font-bold text-zinc-200 transition-all hover:scale-[1.02] disabled:cursor-default disabled:opacity-60 disabled:hover:scale-100 ${showHeroFolderMenu ? 'rounded-l-xl' : 'rounded-xl'}`}
+                    >
+                      {showCompleteIcon ? <CheckCircle className="h-4 w-4 text-emerald-300" /> : <Download className="h-4 w-4 text-zinc-300" />}
+                      <span>{heroDownloadLabel}</span>
+                    </DownloadActionButton>
+                    {showHeroFolderMenu && (
+                      <DownloadFolderMenu
+                        roots={downloadRoots}
+                        selectedRoot={defaultDownloadRoot}
+                        onSelect={setSelectedDownloadRoot}
+                        triggerVariant="split"
+                        resetKey={anilistId ?? localFolder?.folderPath ?? null}
+                      />
+                    )}
+                  </div>
+                )
+              })() : (
                 <button
                   type="button"
                   disabled
-                  title={DOWNLOAD_TOOLTIP}
+                  title={notYetReleased ? 'Not yet released' : DOWNLOAD_TOOLTIP}
                   className="flex cursor-not-allowed select-none items-center gap-2 rounded-xl border border-white/[0.07] bg-white/[0.04] px-4 py-3 text-xs font-bold text-zinc-500 opacity-70"
                 >
                   <Download className="h-4 w-4" />
@@ -2100,7 +2217,7 @@ const AnimeDetailViewImpl: React.FC<AnimeDetailViewProps> = ({
             </p>
           </div>
           <div className="flex items-center gap-2">
-            {episodeDownloadQueue.length > 0 && <span className="rounded-full border border-cyan-300/20 bg-cyan-300/10 px-3 py-1 text-xs font-semibold text-cyan-200">{episodeDownloadQueue.length} in queue</span>}
+            {queuedEpisodeSet.size > 0 && <span className="rounded-full border border-cyan-300/20 bg-cyan-300/10 px-3 py-1 text-xs font-semibold text-cyan-200">{queuedEpisodeSet.size} in queue</span>}
             {mergedRows.length > 0 && <span className="rounded-full border border-white/10 bg-white/5 px-3 py-1 text-xs text-zinc-400">{isFeatureFilm ? '1 movie' : `${mergedRows.length} episodes`}</span>}
           </div>
         </div>
@@ -2132,9 +2249,10 @@ const AnimeDetailViewImpl: React.FC<AnimeDetailViewProps> = ({
                   (localEpisodeTitle && !localTitleLooksLikeRelease ? localEpisodeTitle : null)
                 const thumbnail = row.remote?.thumbnailUrl || local?.kitsuThumbnail || local?.thumbnailUrl || null
                 const torrentJob = torrentJobForEpisode(p2pState?.jobs || [], anilistId, row.num)
-                const queuedForSearch = episodeDownloadQueue.includes(row.num) || activeQueuedEpisode === row.num
+                const queuedForSearch = queuedEpisodeSet.has(row.num)
                 const remoteAirTime = row.remote?.airDate ? Date.parse(row.remote.airDate) : Number.NaN
                 const unaired = !local && (
+                  hero.status === 'NOT_YET_RELEASED' ||
                   (airedThrough != null && row.num > airedThrough) ||
                   (Number.isFinite(remoteAirTime) && remoteAirTime > Date.now())
                 )
@@ -2165,9 +2283,9 @@ const AnimeDetailViewImpl: React.FC<AnimeDetailViewProps> = ({
                     onPlay={local ? () => onPlayEpisode(local, startAt) : undefined}
                     onWhisper={local && localFolder ? () => onOpenWhisper(localFolder) : undefined}
                     onDownload={
-                      p2pAvailable && !local ? () => void requestDownload(row.num) : undefined
+                      p2pAvailable && !local && !unaired ? () => void requestDownload(row.num) : undefined
                     }
-                    onDownloadLongPress={p2pAvailable && !local ? () => setPickerState({ episode: row.num }) : undefined}
+                    onDownloadLongPress={p2pAvailable && !local && !unaired ? () => setPickerState({ episode: row.num }) : undefined}
                     downloadRoots={downloadRoots}
                     selectedDownloadRoot={defaultDownloadRoot}
                     onSelectDownloadRoot={setSelectedDownloadRoot}

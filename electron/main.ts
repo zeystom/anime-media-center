@@ -27,11 +27,11 @@ import { fetchRemoteEpisodes, getFastHeroBannerSources, isAniZipCacheFresh, read
 import { warmFribbIndex } from './fribb';
 import { userLibrary, UserListStatus } from './userLibrary';
 import { getUpdatedAgeRatings, startAgeRatingsUpdater } from './ageRatings';
-import { computeDiskUsage, computeStorageOverview, deleteAnime, deleteEpisodes } from './libraryManager';
+import { computeDiskUsage, computeFoldersDiskSpace, computeStorageOverview, deleteAnime, deleteEpisodes } from './libraryManager';
 import { syncBackupNow, getBackupStatus, detectRestoreState, restoreFromBackup, scheduleBackupSync } from './userDataBackup';
 import { exportWatchlist, importWatchlist, MAL_ONLY_ANILIST_ID_BASE } from './watchlistIO';
 import { initTorrentEngine, engineSetEnabled, engineAddDownload, enginePause, engineResume, engineCancel, engineGetState, engineShutdown, engineGetJobDiagnostics } from './torrentEngine';
-import { searchProviders, rankReleasesForEpisode, isExplicitEpisodeMismatch, explicitReleasePart, isExplicitPartMismatch, isExplicitSeasonMismatch, isFranchiseSeasonTitleMismatch, getEpisodeReleaseSizeWarning, sanitizeSearchQuery, extractInfoHash, fetchReleaseDescription, inspectReleaseResults, computeTitleRelevance } from './indexers';
+import { searchProviders, rankReleasesForEpisode, isExplicitEpisodeMismatch, explicitReleasePart, isExplicitPartMismatch, isExplicitSeasonMismatch, isFranchiseSeasonTitleMismatch, isExplicitSpinoffOrSpecialMismatch, deriveShortenedTitleQueries, getEpisodeReleaseSizeWarning, sanitizeSearchQuery, extractInfoHash, fetchReleaseDescription, inspectReleaseResults, computeTitleRelevance } from './indexers';
 import {
   initUpdater,
   checkForUpdates,
@@ -58,7 +58,7 @@ let mainWindow: BrowserWindow | null = null;
 // Short-lived p2p search cache (provider fetches + description inspection are
 // episode-independent; draining a season queue fires one search per episode).
 const SEARCH_CACHE_TTL_MS = 120_000;
-const searchResultCache = new Map<string, { inspected: ReleaseSearchResult[]; reports: ProviderReport[]; fetchedAt: number }>();
+const searchResultCache = new Map<string, { inspected: ReleaseSearchResult[]; reports: ProviderReport[]; executedQueries: string[]; fetchedAt: number }>();
 
 async function asyncPool<T, R>(poolLimit: number, array: T[], iteratorFn: (item: T) => Promise<R>): Promise<R[]> {
   const ret: Promise<R>[] = [];
@@ -1818,6 +1818,14 @@ function setupIpcHandlers() {
     return computeStorageOverview(roots);
   });
 
+  ipcMain.handle('library:folders-disk-space', async (_event, folderPaths?: string[]) => {
+    const settings = storage.getSettings();
+    const targets = Array.isArray(folderPaths) && folderPaths.length > 0
+      ? folderPaths
+      : (Array.isArray(settings.libraryFolders) ? settings.libraryFolders : []);
+    return computeFoldersDiskSpace(targets);
+  });
+
   ipcMain.handle('library:disk-usage', async (_event, folderPath: string) => {
     return computeDiskUsage(folderPath);
   });
@@ -1946,7 +1954,13 @@ function setupIpcHandlers() {
       if (queries.length >= 3) break;
     }
     if (queries.length === 0) return { results: [], reports: [], queries: [] };
-    const refs = [title, ...(Array.isArray(params?.aliases) ? (params.aliases as string[]) : [])];
+    const excludedShortTitles = Array.isArray(params?.franchiseSeasons)
+      ? params.franchiseSeasons.flatMap((entry) => entry.titles || [])
+      : [];
+    const shortenedCandidates = override.trim()
+      ? []
+      : deriveShortenedTitleQueries([title, ...(Array.isArray(params?.aliases) ? (params.aliases as string[]) : [])], excludedShortTitles);
+    const refs = [title, ...(Array.isArray(params?.aliases) ? (params.aliases as string[]) : []), ...shortenedCandidates];
     const withRelevance = (list: ReleaseSearchResult[]) =>
       list.map((release) => ({ ...release, titleRelevance: computeTitleRelevance(release.title, refs) }));
 
@@ -1955,7 +1969,7 @@ function setupIpcHandlers() {
     // (they are episode-independent). Ranking and episode-dependent filters
     // re-run per request below.
     const cacheKey = queries.join(' || ');
-    let cached: { inspected: ReleaseSearchResult[]; reports: ProviderReport[]; fetchedAt: number } | undefined = searchResultCache.get(cacheKey);
+    let cached: { inspected: ReleaseSearchResult[]; reports: ProviderReport[]; executedQueries: string[]; fetchedAt: number } | undefined = searchResultCache.get(cacheKey);
     // Never serve a failed attempt from cache (e.g. every provider timed out
     // because the network was down): a retry must re-attempt the providers.
     if (cached?.reports.some((report) => !report.ok)) cached = undefined;
@@ -1968,26 +1982,50 @@ function setupIpcHandlers() {
       // but allSettled keeps one unexpected rejection from losing everything.
       // Merging stays in query order so dedupe priority (earlier query wins)
       // is identical to the sequential version.
-      const settledQueries = await Promise.allSettled(queries.map((query) => searchProviders(providers, {
-        query,
-        season: params?.season ?? null,
-        part: requestedPart,
-        episode: params?.episode ?? null,
-      })));
+      const runProviderBatch = (batchQueries: string[]) =>
+        Promise.allSettled(batchQueries.map((query) => searchProviders(providers, {
+          query,
+          season: params?.season ?? null,
+          part: requestedPart,
+          episode: params?.episode ?? null,
+        })));
       const allResults: ReleaseSearchResult[] = [];
       const attemptReports: ProviderReport[] = [];
       const seen = new Set<string>();
-      for (const settled of settledQueries) {
-        if (settled.status !== 'fulfilled') continue;
-        const { results, reports } = settled.value;
-        for (const result of results) {
-          const key = extractInfoHash(result.downloadUrl) || `${result.title.toLowerCase()}|${result.sizeBytes ?? ''}`;
-          if (seen.has(key)) continue;
-          seen.add(key);
-          allResults.push(result);
+      const collectSettled = (settledList: PromiseSettledResult<{ results: ReleaseSearchResult[]; reports: ProviderReport[] }>[]) => {
+        for (const settled of settledList) {
+          if (settled.status !== 'fulfilled') continue;
+          const { results, reports } = settled.value;
+          for (const result of results) {
+            const key = extractInfoHash(result.downloadUrl) || `${result.title.toLowerCase()}|${result.sizeBytes ?? ''}`;
+            if (seen.has(key)) continue;
+            seen.add(key);
+            allResults.push(result);
+          }
+          attemptReports.push(...reports);
         }
-        attemptReports.push(...reports);
+      };
+
+      const executedQueries = [...queries];
+      collectSettled(await runProviderBatch(queries));
+
+      // Phase 2 fallback: when full subtitle-heavy titles return 0 items across
+      // all queries, retry up to 2 sanitized shortened candidates automatically.
+      if (!override.trim() && allResults.length === 0 && shortenedCandidates.length > 0) {
+        const fallbackQueries: string[] = [];
+        for (const candidate of shortenedCandidates) {
+          const sanitized = sanitizeSearchQuery(candidate);
+          if (sanitized && !executedQueries.includes(sanitized) && !fallbackQueries.includes(sanitized)) {
+            fallbackQueries.push(sanitized);
+          }
+          if (fallbackQueries.length >= 2) break;
+        }
+        if (fallbackQueries.length > 0) {
+          collectSettled(await runProviderBatch(fallbackQueries));
+          executedQueries.push(...fallbackQueries);
+        }
       }
+
       // One report per provider across queries: an ok report wins, otherwise keep the first error.
       const reportByProvider = new Map<string, ProviderReport>();
       for (const report of attemptReports) {
@@ -2014,14 +2052,14 @@ function setupIpcHandlers() {
       // re-queries the providers instead of replaying the error.
       const cacheable = !hadProviderFailure || inspectedResults.length > 0;
       if (cacheable) {
-        cached = { inspected: inspectedResults, reports: mergedReports, fetchedAt: Date.now() };
+        cached = { inspected: inspectedResults, reports: mergedReports, executedQueries, fetchedAt: Date.now() };
         searchResultCache.set(cacheKey, cached);
         if (searchResultCache.size > 24) {
           const oldest = [...searchResultCache.entries()].sort((a, b) => a[1].fetchedAt - b[1].fetchedAt)[0];
           if (oldest) searchResultCache.delete(oldest[0]);
         }
       } else {
-        cached = { inspected: inspectedResults, reports: mergedReports, fetchedAt: Date.now() };
+        cached = { inspected: inspectedResults, reports: mergedReports, executedQueries, fetchedAt: Date.now() };
       }
     }
     // Per-request ranking of the cached inspected set for THIS episode, then
@@ -2038,9 +2076,10 @@ function setupIpcHandlers() {
       // Manual query overrides are the user's explicit intent — the franchise
       // title filter only guards the automatic title/alias searches.
       (!!override.trim() || !isFranchiseSeasonTitleMismatch(release, params?.season, params?.franchiseSeasons)) &&
+      (!!override.trim() || !isExplicitSpinoffOrSpecialMismatch(release, refs, params?.mediaFormat)) &&
       (params?.episode == null || !isExplicitEpisodeMismatch(release, params.episode, params?.mediaFormat))
     );
-    console.log(`[P2P] search "${queries.join('" / "')}" -> ${compatible.length} compatible results (${ranked.length - compatible.length} wrong-part/episode result(s) skipped)`);
+    console.log(`[P2P] search "${cached.executedQueries.join('" / "')}" -> ${compatible.length} compatible results (${ranked.length - compatible.length} wrong-part/episode result(s) skipped)`);
     const annotated = compatible.map((release) => ({
       ...release,
       sizeWarning: params?.episode != null
@@ -2054,7 +2093,7 @@ function setupIpcHandlers() {
     return {
       results,
       reports: cached.reports,
-      queries,
+      queries: cached.executedQueries,
       skippedWrongEpisodeCount: ranked.length - compatible.length,
     };
   });

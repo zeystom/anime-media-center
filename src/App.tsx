@@ -15,6 +15,20 @@ import { useActiveHeroBannerUrl } from './utils/heroBanner';
 import { markScrollActivity } from './utils/scrollState';
 import type { AppNotification, FavouriteAnime, FollowedAnime } from './types/notifications';
 import { UpdatePromptModal } from './components/UpdatePromptModal';
+import {
+  buildCatalogSearchAliases,
+  findAllLocalFolders,
+  inferReleasePreferenceFromEpisodes,
+  mergeLocalFolders,
+  parseNumericEpisodeNumber,
+  pickAutomaticEpisodeRelease,
+  readAnimeReleasePreference,
+  type QueuedEpisodeDownload,
+} from './utils/releaseSelection';
+import { parseReleaseCore } from './lib/releaseParser/regexEngine.ts';
+import { detectSeasonFromTitle } from './lib/releaseParser/releaseClassification.ts';
+
+export type { QueuedEpisodeDownload };
 
 const AnimeDetailView = lazy(() => import('./components/AnimeDetail/AnimeDetailView').then((module) => ({ default: module.AnimeDetailView })));
 const VideoPlayer = lazy(() => import('./components/Player/VideoPlayer').then((module) => ({ default: module.VideoPlayer })));
@@ -63,6 +77,30 @@ const NOTIFICATIONS_STORAGE_KEY = 'anime-center.notifications.v1';
 const AIRING_WATCH_STORAGE_KEY = 'anime-center.airing-watch.v1';
 const FOLLOWED_ANIME_STORAGE_KEY = 'anime-center.followed-anime.v1';
 const FAVOURITE_ANIME_STORAGE_KEY = 'kaiko.favourite-anime.v1';
+const AUTO_DL_RETRIES_STORAGE_KEY = 'anime-center.auto-dl-retries.v1';
+const AUTO_DL_RETRY_MINUTES = [35, 60, 180, 360, 720, 1440];
+
+interface AutoDownloadRetryItem {
+  key: string;
+  anilistId: number;
+  episode: number;
+  title: string;
+  posterUrl: string | null;
+  airedAtMs: number;
+  nextRetryAtMs: number;
+  attempts: number;
+}
+
+function readAutoDownloadRetries(): AutoDownloadRetryItem[] {
+  try {
+    const parsed = JSON.parse(localStorage.getItem(AUTO_DL_RETRIES_STORAGE_KEY) || '[]');
+    return Array.isArray(parsed)
+      ? parsed.filter((item) => item && typeof item.key === 'string' && Number.isInteger(item.anilistId) && Number.isInteger(item.episode))
+      : [];
+  } catch {
+    return [];
+  }
+}
 
 function readNotifications(): AppNotification[] {
   try {
@@ -272,13 +310,16 @@ export const App: React.FC = () => {
   }, []);
   const handleNotificationAction = useCallback((item: AppNotification) => {
     if (item.kind === 'airing' && item.anilistId && item.episode) {
+      const resolvedTitle =
+        item.animeTitle ||
+        (item.message.includes(' · ') ? item.message.split(' · ')[0] : item.title);
       setInitialDownloadEpisode(item.episode);
       setDetailSource({
         kind: 'catalog',
         item: toRailItem({
           anilistId: item.anilistId,
           idMal: null,
-          title: item.title,
+          title: resolvedTitle,
           posterUrl: item.posterUrl ?? null,
           episode: item.episode,
           airingAt: Math.floor(item.createdAt / 1000),
@@ -333,6 +374,10 @@ export const App: React.FC = () => {
   const [followedAnime, setFollowedAnime] = useState<FollowedAnime[]>(readFollowedAnime);
   const [favouriteAnime, setFavouriteAnime] = useState<FavouriteAnime[]>(readFavouriteAnime);
   const [initialDownloadEpisode, setInitialDownloadEpisode] = useState<number | null>(null);
+  const [queuedEpisodeDownloads, setQueuedEpisodeDownloads] = useState<QueuedEpisodeDownload[]>([]);
+  const [activeEpisodeQueueJob, setActiveEpisodeQueueJob] = useState<QueuedEpisodeDownload | null>(null);
+  const [manualPickRequest, setManualPickRequest] = useState<{ anilistId: number; episode: number } | null>(null);
+  const [autoDownloadRetries, setAutoDownloadRetries] = useState<AutoDownloadRetryItem[]>(readAutoDownloadRetries);
   const [loading, setLoading] = useState<boolean>(true);
   const [binaryStatus, setBinaryStatus] = useState<{ ffmpegExists: boolean; whisperExists: boolean }>({
     ffmpegExists: true,
@@ -441,9 +486,12 @@ export const App: React.FC = () => {
   const toggleFollowAnime = useCallback((anime: FollowedAnime, follow: boolean) => {
     setFollowedAnime((previous) => follow
       ? previous.some((item) => item.anilistId === anime.anilistId)
-        ? previous.map((item) => item.anilistId === anime.anilistId ? anime : item)
+        ? previous.map((item) => item.anilistId === anime.anilistId ? { ...item, ...anime } : item)
         : [anime, ...previous]
       : previous.filter((item) => item.anilistId !== anime.anilistId));
+    if (!follow) {
+      setAutoDownloadRetries((previous) => previous.filter((item) => item.anilistId !== anime.anilistId));
+    }
     addNotification({
       kind: 'follow',
       tone: follow ? 'green' : 'amber',
@@ -455,6 +503,111 @@ export const App: React.FC = () => {
       posterUrl: anime.posterUrl,
     });
   }, [addNotification]);
+
+  const p2pStateRef = useRef(p2pState);
+  p2pStateRef.current = p2pState;
+  const settingsRef = useRef(settings);
+  settingsRef.current = settings;
+  const visibleFoldersRef = useRef(visibleFolders);
+  visibleFoldersRef.current = visibleFolders;
+  const followedAnimeRef = useRef(followedAnime);
+  followedAnimeRef.current = followedAnime;
+  const detailSourceRef = useRef(detailSource);
+  detailSourceRef.current = detailSource;
+  const autoDownloadRetriesRef = useRef(autoDownloadRetries);
+  autoDownloadRetriesRef.current = autoDownloadRetries;
+  const activeEpisodeQueueJobRef = useRef(activeEpisodeQueueJob);
+  activeEpisodeQueueJobRef.current = activeEpisodeQueueJob;
+  const episodeWorkerBusyRef = useRef(false);
+  const retryWorkerBusyRef = useRef(false);
+
+  useEffect(() => {
+    try { localStorage.setItem(AUTO_DL_RETRIES_STORAGE_KEY, JSON.stringify(autoDownloadRetries)); } catch {}
+  }, [autoDownloadRetries]);
+
+  const scheduleAutoDownloadRetry = useCallback((entry: {
+    anilistId: number;
+    episode: number;
+    title: string;
+    posterUrl: string | null;
+    airedAtMs: number;
+  }) => {
+    const key = `${entry.anilistId}:${entry.episode}`;
+    const firstRetryAtMs = Math.max(Date.now(), entry.airedAtMs + AUTO_DL_RETRY_MINUTES[0] * 60_000);
+    setAutoDownloadRetries((previous) => {
+      if (previous.some((item) => item.key === key)) return previous;
+      return [
+        ...previous,
+        {
+          key,
+          anilistId: entry.anilistId,
+          episode: entry.episode,
+          title: entry.title,
+          posterUrl: entry.posterUrl,
+          airedAtMs: entry.airedAtMs,
+          nextRetryAtMs: firstRetryAtMs,
+          attempts: 0,
+        },
+      ].slice(-60);
+    });
+  }, []);
+
+  const updateFollowAutoDownload = useCallback((
+    anilistId: number,
+    autoDownload: boolean,
+    preferredDownloadRoot?: string | null,
+  ) => {
+    setFollowedAnime((previous) =>
+      previous.map((item) =>
+        item.anilistId === anilistId
+          ? {
+              ...item,
+              autoDownload,
+              preferredDownloadRoot: preferredDownloadRoot !== undefined ? preferredDownloadRoot : item.preferredDownloadRoot,
+            }
+          : item,
+      ),
+    );
+    if (!autoDownload) {
+      setAutoDownloadRetries((previous) => previous.filter((item) => item.anilistId !== anilistId));
+    }
+    showGlobalToast(
+      autoDownload
+        ? 'Auto-download enabled for new episodes'
+        : 'Auto-download disabled for new episodes',
+      autoDownload ? 'success' : 'info',
+      3500,
+    );
+  }, []);
+
+  const enqueueEpisodeDownloads = useCallback((items: QueuedEpisodeDownload[]) => {
+    if (!Array.isArray(items) || items.length === 0) return;
+    const jobs = p2pStateRef.current?.jobs || [];
+    const activeJob = activeEpisodeQueueJobRef.current;
+    setQueuedEpisodeDownloads((previous) => {
+      const next = [...previous];
+      for (const item of items) {
+        if (!item || !Number.isFinite(item.anilistId) || !Number.isInteger(item.episode) || item.episode <= 0) continue;
+        const alreadyDownloading = jobs.some((job) =>
+          job.status !== 'error'
+          && job.anilistId === item.anilistId
+          && (
+            job.episodes?.includes(item.episode)
+            || job.episode === item.episode
+            || (job.episode == null && (job.filesProgress || []).some((file) => {
+              const parsed = parseReleaseCore(file.name);
+              return parsed.episodeNumbers.includes(item.episode) || parsed.episodeNumber === item.episode;
+            }))
+          ),
+        );
+        if (alreadyDownloading) continue;
+        if (activeJob && activeJob.anilistId === item.anilistId && activeJob.episode === item.episode) continue;
+        if (next.some((existing) => existing.anilistId === item.anilistId && existing.episode === item.episode)) continue;
+        next.push(item);
+      }
+      return next;
+    });
+  }, []);
 
   const toggleFavouriteAnime = useCallback((anime: FavouriteAnime, favourite: boolean) => {
     setFavouriteAnime((previous) => favourite
@@ -624,10 +777,14 @@ export const App: React.FC = () => {
         const scheduleEntries = await window.electronAPI.getAiringSchedule(0);
         if (cancelled || !Array.isArray(scheduleEntries)) return;
         const followedEpisodeCounts = new Map<number, number>();
+        const finishedCandidateIds = new Set<number>();
         const followedEntries = await Promise.all(followedAnime.map(async (anime) => {
           try {
             const details = await window.electronAPI.getCatalogDetails(anime.anilistId);
             if (details?.episodesCount != null) followedEpisodeCounts.set(anime.anilistId, details.episodesCount);
+            if (details?.status === 'FINISHED' && !details.nextAiringEpisode) {
+              finishedCandidateIds.add(anime.anilistId);
+            }
             const next = details?.nextAiringEpisode;
             if (!next) return null;
             return {
@@ -678,11 +835,21 @@ export const App: React.FC = () => {
             tone: finalEpisode ? 'purple' : 'green',
             finalEpisode,
             title: finalEpisode ? 'Final episode aired' : 'New episode aired',
+            animeTitle: entry.title,
             message: `${entry.title} · Episode ${entry.episode} has aired. Search your release sources to download it.`,
             anilistId: entry.anilistId,
             posterUrl: entry.posterUrl,
             episode: entry.episode,
           });
+          if (followed?.autoDownload && p2pStateRef.current?.enabled) {
+            scheduleAutoDownloadRetry({
+              anilistId: entry.anilistId,
+              episode: entry.episode,
+              title: entry.title,
+              posterUrl: entry.posterUrl,
+              airedAtMs: entry.airingAt * 1000,
+            });
+          }
         };
         for (const entry of entries) {
           if (!entry || entry.episode == null || (!airingMatchesLibrary(entry, folders) && !followedAnime.some((item) => item.anilistId === entry.anilistId))) continue;
@@ -721,6 +888,16 @@ export const App: React.FC = () => {
         try {
           localStorage.setItem(AIRING_WATCH_STORAGE_KEY, JSON.stringify({ initialized: true, upcoming: [...upcoming].map(([key, entry]) => ({ key, entry })) }));
         } catch {}
+        if (finishedCandidateIds.size > 0) {
+          const toUnfollow = new Set(
+            [...finishedCandidateIds].filter(
+              (id) => ![...upcoming.values()].some((pendingEntry) => pendingEntry.anilistId === id),
+            ),
+          );
+          if (toUnfollow.size > 0) {
+            setFollowedAnime((previous) => previous.filter((item) => !toUnfollow.has(item.anilistId)));
+          }
+        }
       } catch (error) {
         console.warn('Could not check airing updates:', error);
       }
@@ -731,7 +908,7 @@ export const App: React.FC = () => {
       cancelled = true;
       window.clearInterval(timer);
     };
-  }, [folders, followedAnime, addNotification]);
+  }, [folders, followedAnime, addNotification, scheduleAutoDownloadRetry]);
 
   // VPN tunnel status removed — user manages their own network safety
 
@@ -914,6 +1091,298 @@ export const App: React.FC = () => {
     }
   }, [p2pState, handleRefreshLibrary]);
 
+  // Persistent episode auto-download queue: runs in App so queuing several
+  // episodes (e.g. "Download aired (7)") continues smoothly across navigation.
+  useEffect(() => {
+    const api = window.electronAPI;
+    if (episodeWorkerBusyRef.current || queuedEpisodeDownloads.length === 0 || !p2pState?.enabled || !api?.searchReleases || !api.addDownload) {
+      return;
+    }
+    const job = queuedEpisodeDownloads[0];
+    episodeWorkerBusyRef.current = true;
+    setActiveEpisodeQueueJob(job);
+
+    void (async () => {
+      try {
+        const currentSettings = settingsRef.current;
+        if (currentSettings.releaseSelectionMode === 'manual') {
+          const activeDetailId = detailSourceRef.current?.kind === 'catalog'
+            ? detailSourceRef.current.item.anilistId
+            : detailSourceRef.current?.folder.anilistId;
+          if (activeDetailId === job.anilistId) {
+            setManualPickRequest({ anilistId: job.anilistId, episode: job.episode });
+          }
+          return;
+        }
+
+        const response = await api.searchReleases({
+          title: job.title,
+          aliases: job.aliases,
+          anilistId: job.anilistId,
+          season: job.season,
+          part: job.part,
+          episode: job.episode,
+          episodeCount: job.episodeCount,
+          episodeDurationMinutes: job.episodeDurationMinutes,
+          mediaFormat: job.mediaFormat,
+          franchiseSeasons: job.franchiseSeasons,
+        });
+
+        const mergedLocal = mergeLocalFolders(
+          findAllLocalFolders(visibleFoldersRef.current, { anilistId: job.anilistId, title: job.title }),
+        );
+        const animePref = {
+          ...inferReleasePreferenceFromEpisodes(mergedLocal?.episodes || []),
+          ...(readAnimeReleasePreference(job.anilistId) || {}),
+        };
+        const audioPreferences = currentSettings.preferredTorrentAudioLanguages ?? ['en'];
+        const subtitlePreferences = currentSettings.preferredTorrentSubtitleLanguages ?? ['en'];
+        const { best, usedEnglishDubFallback, hasJapaneseSubAlternative } = pickAutomaticEpisodeRelease(
+          response?.results ?? [],
+          { audioPreferences, subtitlePreferences, animePref },
+        );
+
+        if (!best && (response?.results?.length ?? 0) > 0) {
+          if (!job.background) {
+            showGlobalToast(
+              hasJapaneseSubAlternative
+                ? `No English dub for episode ${job.episode} yet (Japanese sub available). Choose manually.`
+                : `No release matched your preferences for episode ${job.episode}. Choose manually.`,
+              'warning',
+            );
+            const activeDetailId = detailSourceRef.current?.kind === 'catalog'
+              ? detailSourceRef.current.item.anilistId
+              : detailSourceRef.current?.folder.anilistId;
+            if (activeDetailId === job.anilistId) {
+              setManualPickRequest({ anilistId: job.anilistId, episode: job.episode });
+            }
+          }
+          return;
+        }
+
+        if (!best) {
+          if (!job.background) {
+            const justAired = job.airedAtMs != null && Date.now() >= job.airedAtMs && Date.now() - job.airedAtMs < 3 * 3600_000;
+            if (justAired) {
+              showGlobalToast(`Episode ${job.episode} aired recently — releases usually appear within 1–2 hours.`, 'warning');
+            } else {
+              const providerError = response?.reports?.find((report) => !report.ok)?.error;
+              const skipped = response?.skippedWrongEpisodeCount ?? 0;
+              showGlobalToast(
+                skipped > 0
+                  ? `No release for episode ${job.episode} was found; ${skipped} mismatched result(s) were skipped.`
+                  : providerError
+                    ? `No release found: ${providerError}`
+                    : `No release found for episode ${job.episode}.`,
+                'error',
+              );
+            }
+          }
+          return;
+        }
+
+        const dest = job.targetFolder
+          ? { targetFolder: job.targetFolder }
+          : job.downloadRoot
+            ? { downloadRoot: job.downloadRoot }
+            : mergedLocal?.folderPath
+              ? { targetFolder: mergedLocal.folderPath }
+              : {};
+
+        const result = await api.addDownload({
+          item: best,
+          title: job.title,
+          anilistId: job.anilistId,
+          episode: job.episode,
+          season: job.season,
+          mediaFormat: job.mediaFormat,
+          episodeCount: job.episodeCount,
+          mediaAliases: job.contentTitleAliases,
+          franchiseSeasons: job.franchiseSeasons,
+          ...dest,
+        });
+
+        if (!job.background) {
+          if (result?.success && usedEnglishDubFallback) {
+            showGlobalToast(`Episode ${job.episode} queued with English dub: ${best.title}. No release with both English dub and English subtitles was found. You can create subtitles in Whisper Studio.`, 'warning');
+          } else if (result?.success) {
+            showGlobalToast(`Episode ${job.episode} queued: ${best.title}`, 'success');
+          } else {
+            showGlobalToast(result?.error || `Failed to queue episode ${job.episode}`, 'error');
+          }
+        }
+        if (result?.success) {
+          void handleRefreshLibrary();
+        }
+      } catch (err) {
+        console.error(`Automatic release search failed for episode ${job.episode}:`, err);
+        if (!job.background) {
+          showGlobalToast(err instanceof Error ? err.message : `Release search failed for episode ${job.episode}`, 'error');
+        }
+      } finally {
+        episodeWorkerBusyRef.current = false;
+        setActiveEpisodeQueueJob(null);
+        setQueuedEpisodeDownloads((pending) =>
+          pending.filter((entry) => !(entry.anilistId === job.anilistId && entry.episode === job.episode)),
+        );
+      }
+    })();
+  }, [queuedEpisodeDownloads, p2pState?.enabled, handleRefreshLibrary]);
+
+  // Follow auto-download retry scheduler: retries newly aired episodes at
+  // +35m, +60m, +3h, +6h, +12h, +24h so tracker upload lag never fails silently.
+  const hasAutoDownloadRetries = autoDownloadRetries.length > 0;
+  useEffect(() => {
+    const api = window.electronAPI;
+    if (!p2pState?.enabled || !hasAutoDownloadRetries || !api?.searchReleases || !api.addDownload) return;
+    let cancelled = false;
+
+    const processDueRetries = async () => {
+      if (retryWorkerBusyRef.current || cancelled) return;
+      const due = autoDownloadRetriesRef.current.filter((item) => item.nextRetryAtMs <= Date.now());
+      if (due.length === 0) return;
+
+      retryWorkerBusyRef.current = true;
+      try {
+        for (const item of due) {
+          if (cancelled) break;
+          const followed = followedAnimeRef.current.find((f) => f.anilistId === item.anilistId);
+          if (!followed || !followed.autoDownload) {
+            setAutoDownloadRetries((prev) => prev.filter((r) => r.key !== item.key));
+            continue;
+          }
+
+          const mergedFolder = mergeLocalFolders(
+            findAllLocalFolders(visibleFoldersRef.current, { anilistId: item.anilistId, title: item.title }),
+          );
+          const alreadyLocal = (mergedFolder?.episodes || []).some(
+            (ep) => !ep.isDownloading && parseNumericEpisodeNumber(ep.fileName, ep.episodeNumber) === item.episode,
+          );
+          const jobs = p2pStateRef.current?.jobs || [];
+          const alreadyActive = jobs.some((job) =>
+            job.status !== 'error'
+            && job.anilistId === item.anilistId
+            && (job.episodes?.includes(item.episode) || job.episode === item.episode),
+          );
+          if (alreadyLocal || alreadyActive) {
+            setAutoDownloadRetries((prev) => prev.filter((r) => r.key !== item.key));
+            continue;
+          }
+
+          const details = await api.getCatalogDetails(item.anilistId).catch(() => null);
+          const related = await api.getCatalogFranchise(item.anilistId).catch(() => [] as CatalogRelatedTitle[]);
+          const format = String(details?.format || '').toUpperCase();
+          const seasonEligible = !format || ['TV', 'TV_SHORT', 'OVA', 'SPECIAL'].includes(format);
+          const franchiseSeasonInfo = seasonEligible
+            ? await api.getCatalogFranchiseSeasons?.(item.anilistId).catch(() => null)
+            : null;
+          const searchTitle = details?.title?.english || details?.title?.romaji || item.title;
+          const aliases = buildCatalogSearchAliases(searchTitle, details, related);
+          const season = format === 'MOVIE'
+            ? null
+            : (franchiseSeasonInfo?.ownSeason ?? detectSeasonFromTitle(searchTitle));
+          const franchiseSeasons = format === 'MOVIE' ? [] : (franchiseSeasonInfo?.chain ?? []);
+          const contentAliases = Array.from(new Set(
+            [details?.title?.english, details?.title?.romaji, ...(details?.synonyms || [])]
+              .filter((v): v is string => typeof v === 'string' && v.trim().length > 0),
+          ));
+
+          const response = await api.searchReleases({
+            title: searchTitle,
+            aliases,
+            anilistId: item.anilistId,
+            season,
+            part: null,
+            episode: item.episode,
+            episodeCount: details?.episodesCount ?? null,
+            episodeDurationMinutes: details?.durationMinutes ?? null,
+            mediaFormat: details?.format ?? null,
+            franchiseSeasons,
+          }).catch(() => null);
+
+          const currentSettings = settingsRef.current;
+          const animePref = {
+            ...inferReleasePreferenceFromEpisodes(mergedFolder?.episodes || []),
+            ...(readAnimeReleasePreference(item.anilistId) || {}),
+          };
+          const { best } = pickAutomaticEpisodeRelease(response?.results ?? [], {
+            audioPreferences: currentSettings.preferredTorrentAudioLanguages ?? ['en'],
+            subtitlePreferences: currentSettings.preferredTorrentSubtitleLanguages ?? ['en'],
+            animePref,
+          });
+
+          if (best) {
+            const dest = mergedFolder?.folderPath
+              ? { targetFolder: mergedFolder.folderPath }
+              : followed.preferredDownloadRoot
+                ? { downloadRoot: followed.preferredDownloadRoot }
+                : {};
+            const addRes = await api.addDownload({
+              item: best,
+              title: searchTitle,
+              anilistId: item.anilistId,
+              episode: item.episode,
+              season,
+              mediaFormat: details?.format ?? null,
+              episodeCount: details?.episodesCount ?? null,
+              mediaAliases: contentAliases,
+              franchiseSeasons,
+              ...dest,
+            }).catch(() => null);
+
+            if (addRes?.success) {
+              setAutoDownloadRetries((prev) => prev.filter((r) => r.key !== item.key));
+              void handleRefreshLibrary();
+              addNotification({
+                kind: 'download',
+                tone: 'green',
+                title: 'Auto-downloading episode',
+                animeTitle: searchTitle,
+                message: `${searchTitle} · Episode ${item.episode} queued automatically.`,
+                anilistId: item.anilistId,
+                posterUrl: details?.posterUrl || item.posterUrl,
+                episode: item.episode,
+              });
+              continue;
+            }
+          }
+
+          const nextAttempts = item.attempts + 1;
+          if (nextAttempts >= AUTO_DL_RETRY_MINUTES.length) {
+            setAutoDownloadRetries((prev) => prev.filter((r) => r.key !== item.key));
+            addNotification({
+              kind: 'airing',
+              tone: 'amber',
+              title: "Auto-download couldn't find episode",
+              animeTitle: searchTitle,
+              message: `${searchTitle} · Episode ${item.episode} wasn't found automatically — click to search manually.`,
+              anilistId: item.anilistId,
+              posterUrl: details?.posterUrl || item.posterUrl,
+              episode: item.episode,
+            });
+          } else {
+            const nextRetryAtMs = Math.max(
+              Date.now() + 60_000,
+              item.airedAtMs + AUTO_DL_RETRY_MINUTES[nextAttempts] * 60_000,
+            );
+            setAutoDownloadRetries((prev) =>
+              prev.map((r) => (r.key === item.key ? { ...r, attempts: nextAttempts, nextRetryAtMs } : r)),
+            );
+          }
+        }
+      } finally {
+        retryWorkerBusyRef.current = false;
+      }
+    };
+
+    void processDueRetries();
+    const timer = window.setInterval(() => void processDueRetries(), 2 * 60_000);
+    return () => {
+      cancelled = true;
+      window.clearInterval(timer);
+    };
+  }, [p2pState?.enabled, hasAutoDownloadRetries, autoDownloadRetries.length, addNotification, handleRefreshLibrary]);
+
   // Active Download Watcher: polls active torrents every 1.5 seconds while downloading
   // so progress percentage updates smoothly in real-time, and playback unlocks instantly when complete!
   useEffect(() => {
@@ -1041,58 +1510,98 @@ export const App: React.FC = () => {
 
     allHistory.sort((a, b) => b.lastWatchedAt - a.lastWatchedAt);
 
+    const buildUpNext = (targetFolder: AnimeFolder, nextEp: Episode, record: PlaybackProgress) => {
+      const nextProgress: PlaybackProgress = history[nextEp.filePath] || {
+        filePath: nextEp.filePath,
+        folderPath: targetFolder.folderPath,
+        fileName: nextEp.fileName,
+        episodeNumber: nextEp.episodeNumber,
+        currentTime: 0,
+        duration: nextEp.duration || 0,
+        lastWatchedAt: record.lastWatchedAt,
+        completed: false,
+      };
+      return {
+        progress: nextProgress,
+        episode: nextEp,
+        seasonName: targetFolder.canonicalTitle || targetFolder.folderName,
+        folder: targetFolder,
+        isUpNext: true,
+      };
+    };
+
     // 1. Try finding from the most recent history records:
     for (const record of allHistory) {
       // Find the folder corresponding to this history entry
       const folder = visibleFolders.find((f) => f.folderPath === record.folderPath)
         || visibleFolders.find((f) => f.episodes.some((e) => e.filePath === record.filePath));
 
-      if (!folder || folder.episodes.length === 0) continue;
+      if (!folder || folder.episodes.length === 0) {
+        // Watched files (or whole season folder) may have been deleted to free
+        // disk space before newer episodes arrived on the same or another drive.
+        if (record.completed) {
+          const watchedNum = parseNumericEpisodeNumber(record.fileName, record.episodeNumber);
+          const inferredTitle = (record.folderPath ? getPathBasename(record.folderPath) : '') || cleanSeriesTitle(record.fileName);
+          const merged = inferredTitle ? mergeLocalFolders(findAllLocalFolders(visibleFolders, { title: inferredTitle })) : null;
+          if (merged && merged.episodes.length > 0) {
+            const nextEp = merged.episodes.find((e) => {
+              const epHist = history[e.filePath];
+              const epNum = parseNumericEpisodeNumber(e.fileName, e.episodeNumber);
+              return !e.isDownloading
+                && (!epHist || !epHist.completed)
+                && (watchedNum == null || epNum == null || epNum > watchedNum);
+            });
+            if (nextEp) return buildUpNext(merged, nextEp, record);
+          }
+        }
+        continue;
+      }
 
-      const epIndex = folder.episodes.findIndex((e) => e.filePath === record.filePath);
-      if (epIndex === -1) continue;
+      const mergedForFolder = mergeLocalFolders(
+        findAllLocalFolders(visibleFolders, { anilistId: folder.anilistId, title: folder.canonicalTitle || folder.folderName }),
+      ) ?? folder;
+      const episodeList = mergedForFolder.episodes;
+      const epIndex = episodeList.findIndex((e) => e.filePath === record.filePath);
 
-      const currentEp = folder.episodes[epIndex];
+      if (epIndex === -1) {
+        if (record.completed) {
+          const watchedNum = parseNumericEpisodeNumber(record.fileName, record.episodeNumber);
+          const nextEp = episodeList.find((e) => {
+            const epHist = history[e.filePath];
+            const epNum = parseNumericEpisodeNumber(e.fileName, e.episodeNumber);
+            return !e.isDownloading
+              && (!epHist || !epHist.completed)
+              && (watchedNum == null || epNum == null || epNum > watchedNum);
+          });
+          if (nextEp) return buildUpNext(mergedForFolder, nextEp, record);
+        }
+        continue;
+      }
+
+      const currentEp = episodeList[epIndex];
 
       // CASE A: The episode is in-progress (not completed) and ready to play:
       if (!record.completed && !currentEp.isDownloading) {
         return {
           progress: record,
           episode: currentEp,
-          seasonName: folder.canonicalTitle || folder.folderName,
-          folder,
+          seasonName: mergedForFolder.canonicalTitle || mergedForFolder.folderName,
+          folder: mergedForFolder,
           isUpNext: false,
         };
       }
 
       // CASE B: The episode was COMPLETED (reached ending or >90% watched)!
-      // Seamlessly advance to the NEXT unwatched episode in this same anime series:
+      // Seamlessly advance to the NEXT unwatched episode across merged library drives:
       if (record.completed) {
-        const nextEpisodes = folder.episodes.slice(epIndex + 1);
+        const nextEpisodes = episodeList.slice(epIndex + 1);
         const nextEp = nextEpisodes.find((e) => {
           const epHist = history[e.filePath];
           return (!epHist || !epHist.completed) && !e.isDownloading;
         });
 
         if (nextEp) {
-          const nextProgress: PlaybackProgress = history[nextEp.filePath] || {
-            filePath: nextEp.filePath,
-            folderPath: folder.folderPath,
-            fileName: nextEp.fileName,
-            episodeNumber: nextEp.episodeNumber,
-            currentTime: 0,
-            duration: nextEp.duration || 0,
-            lastWatchedAt: record.lastWatchedAt,
-            completed: false,
-          };
-
-          return {
-            progress: nextProgress,
-            episode: nextEp,
-            seasonName: folder.canonicalTitle || folder.folderName,
-            folder,
-            isUpNext: true,
-          };
+          return buildUpNext(mergedForFolder, nextEp, record);
         }
         // If there are no further episodes in this season/folder, loop continues to previous history items
       }
@@ -1381,11 +1890,14 @@ export const App: React.FC = () => {
     // it, and enough distance (~2/3 of a trackpad swipe) accumulated in one
     // gesture without a direction flip.
     const canConsumeHorizontalScroll = (start: EventTarget | null, direction: number): boolean => {
-      if (start instanceof Element) {
-        const rail = start.closest('.horizontal-rail');
+      const startEl = start instanceof Element ? start : start instanceof Node ? start.parentElement : null;
+      if (startEl) {
+        const rail =
+          startEl.closest('.horizontal-rail') ??
+          startEl.closest('.horizontal-scroller-wrap')?.querySelector('.horizontal-rail');
         if (rail && rail.scrollWidth > rail.clientWidth + 2) return true;
       }
-      let el = start instanceof Element ? start : null;
+      let el = startEl;
       while (el && el !== document.body) {
         if (el.scrollWidth > el.clientWidth + 1) {
           const style = window.getComputedStyle(el);
@@ -1402,6 +1914,10 @@ export const App: React.FC = () => {
       return false;
     };
     const handleHorizontalSwipe = (event: WheelEvent) => {
+      if (event.defaultPrevented) {
+        swipeAccumRef.current = 0;
+        return;
+      }
       const now = Date.now();
       // Cooldown so momentum/inertia events can't immediately re-trigger.
       if (now - swipeLastTsRef.current < 1200) {
@@ -1514,6 +2030,33 @@ export const App: React.FC = () => {
         : null,
     [mostRecentWatched],
   );
+
+  const activeDetailAnilistId = detailSource
+    ? detailSource.kind === 'catalog'
+      ? detailSource.item.anilistId
+      : detailSource.folder.anilistId ?? null
+    : null;
+  const activeDetailFollowEntry = useMemo(
+    () => (activeDetailAnilistId != null ? followedAnime.find((item) => item.anilistId === activeDetailAnilistId) ?? null : null),
+    [followedAnime, activeDetailAnilistId],
+  );
+  const activeDetailQueuedEpisodes = useMemo(
+    () =>
+      activeDetailAnilistId != null
+        ? queuedEpisodeDownloads
+            .filter((item) => item.anilistId === activeDetailAnilistId)
+            .map((item) => item.episode)
+        : [],
+    [queuedEpisodeDownloads, activeDetailAnilistId],
+  );
+  const activeDetailManualPickEpisode =
+    manualPickRequest && activeDetailAnilistId != null && manualPickRequest.anilistId === activeDetailAnilistId
+      ? manualPickRequest.episode
+      : null;
+  const clearManualPickRequest = useCallback(() => setManualPickRequest(null), []);
+  useEffect(() => {
+    setManualPickRequest(null);
+  }, [activeDetailAnilistId]);
 
   return (
     <ToastProvider>
@@ -1714,7 +2257,13 @@ export const App: React.FC = () => {
           onSelectGenre={handleSelectGenre}
           p2pState={p2pState}
           isFollowing={followedAnime.some((item) => item.anilistId === (detailSource.kind === 'catalog' ? detailSource.item.anilistId : detailSource.folder.anilistId))}
+          followEntry={activeDetailFollowEntry}
           onToggleFollow={toggleFollowAnime}
+          onToggleFollowAutoDownload={updateFollowAutoDownload}
+          enqueueEpisodeDownloads={enqueueEpisodeDownloads}
+          queuedEpisodeNumbers={activeDetailQueuedEpisodes}
+          manualPickRequestEpisode={activeDetailManualPickEpisode}
+          onClearManualPickRequest={clearManualPickRequest}
           isFavourite={favouriteAnime.some((item) => {
             const id = detailSource.kind === 'catalog' ? detailSource.item.anilistId : detailSource.folder.anilistId;
             const title = detailSource.kind === 'catalog' ? detailSource.item.title : (detailSource.folder.canonicalTitle || detailSource.folder.folderName);

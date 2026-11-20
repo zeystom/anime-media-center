@@ -324,6 +324,32 @@ function anilistHandler(url, init) {
     const info = await catalog.getCatalogFranchiseSeasons(7004);
     assert.deepStrictEqual(info, { ownSeason: null, chain: [] });
   });
+  await runTest('getCatalogFranchiseSeasons does not inherit a PARENT TV season onto a MOVIE', async () => {
+    const movieCatalog = await freshCatalog();
+    resetDiskCache();
+    fetchHandler = async (_url, init) => {
+      const body = JSON.parse(init.body || '{}');
+      const query = body.query || '';
+      const id = body.variables?.id;
+      if (query.includes('relations') && query.includes('Media(id: $id')) {
+        if (id === 204066) {
+          return jsonResponse(200, {
+            data: {
+              Media: {
+                id: 204066,
+                format: 'MOVIE',
+                relations: { edges: [{ relationType: 'PARENT', node: { id: 145064, type: 'ANIME', format: 'TV' } }] },
+              },
+            },
+          });
+        }
+        return jsonResponse(200, { data: { Media: { id, format: 'TV', relations: { edges: [] } } } });
+      }
+      return jsonResponse(400, { errors: [{ message: 'unexpected movie franchise query' }] });
+    };
+    const info = await movieCatalog.getCatalogFranchiseSeasons(204066);
+    assert.deepStrictEqual(info, { ownSeason: null, chain: [] });
+  });
 }
 
 // ---------------------------------------------------------------------------
@@ -620,6 +646,58 @@ await runTest('getAiringWeekRange math (Monday 00:00 local, 7 days, offset)', as
     await catalog.getCatalogDetails(154587);
     assert.strictEqual(anilistCalls().length, 1, 'details must be cached within TTL');
     assert.ok(fs.existsSync(diskCacheFile('catalog_details_154587.json')));
+  });
+
+  await runTest('getCatalogDetails auto-expires ongoing entries once nextAiringEpisode has passed while FINISHED stays cached', async () => {
+    const prevFetchHandler = fetchHandler;
+    try {
+      const ongoingCatalog = await freshCatalog();
+      resetDiskCache();
+      let callNum = 0;
+      const pastAiringSec = Math.floor((Date.now() - 120_000) / 1000);
+      fetchHandler = (url, init) => {
+        const bodyText = typeof init?.body === 'string' ? init.body : '';
+        if (bodyText.includes('777002')) {
+          return jsonResponse(200, {
+            data: {
+              Media: rawMedia(777002, {
+                status: 'FINISHED',
+                nextAiringEpisode: { episode: 12, airingAt: pastAiringSec, timeUntilAiring: 0 },
+              }),
+            },
+          });
+        }
+        callNum += 1;
+        return jsonResponse(200, {
+          data: {
+            Media: rawMedia(777001, {
+              status: 'RELEASING',
+              nextAiringEpisode: { episode: callNum === 1 ? 5 : 6, airingAt: callNum === 1 ? pastAiringSec : pastAiringSec + 7 * 86400, timeUntilAiring: 0 },
+            }),
+          },
+        });
+      };
+      resetFetchCalls();
+      const first = await ongoingCatalog.getCatalogDetails(777001);
+      assert.strictEqual(first.nextAiringEpisode.episode, 5);
+      assert.strictEqual(anilistCalls().length, 1);
+
+      const second = await ongoingCatalog.getCatalogDetails(777001);
+      assert.strictEqual(second.nextAiringEpisode.episode, 6, 'passed nextAiringEpisode must bypass 24h TTL');
+      assert.strictEqual(anilistCalls().length, 2);
+
+      const third = await ongoingCatalog.getCatalogDetails(777001);
+      assert.strictEqual(third.nextAiringEpisode.episode, 6, 'future nextAiringEpisode stays cached');
+      assert.strictEqual(anilistCalls().length, 2);
+
+      const finishedFirst = await ongoingCatalog.getCatalogDetails(777002);
+      assert.strictEqual(finishedFirst.status, 'FINISHED');
+      assert.strictEqual(anilistCalls().length, 3);
+      await ongoingCatalog.getCatalogDetails(777002);
+      assert.strictEqual(anilistCalls().length, 3, 'FINISHED entries stay cached for normal TTL');
+    } finally {
+      fetchHandler = prevFetchHandler;
+    }
   });
 
   await runTest('searchCatalog with empty query returns [] without network', async () => {
@@ -1523,6 +1601,90 @@ const FRIEREN_PAYLOAD = {
     assert.deepStrictEqual(await aniZip.fetchAniZipMappings(-5), []);
   });
 }
+
+  await runTest('normalizeAniZipEpisodes skips S1..S12 specials while normalizeAniZipSpecialEpisodes extracts them', async () => {
+    const aniZip = await freshAniZip();
+    const payload = {
+      episodeCount: 2,
+      episodes: {
+        '1': { seasonNumber: 1, episode: '1', episodeNumber: 1, title: { en: 'Main Ep 1' }, image: 'https://img/m1.jpg', airDate: '2026-10-03' },
+        '2': { seasonNumber: 1, episode: '2', episodeNumber: 2, title: { en: 'Main Ep 2' }, image: 'https://img/m2.jpg', airDate: '2026-10-10' },
+        S1: { seasonNumber: 0, episode: 'S1', episodeNumber: 1, title: { en: 'Omake Short 1' }, image: 'https://img/s1.jpg', airDate: '2026-10-04' },
+        S2: { seasonNumber: 0, episode: 'S2', episodeNumber: 2, title: { en: 'Omake Short 2' }, image: 'https://img/s2.jpg', airDate: '2026-10-11' },
+      },
+    };
+    const mainEps = aniZip.normalizeAniZipEpisodes(payload);
+    assert.deepStrictEqual(mainEps.map((e) => e.number), [1, 2]);
+    assert.strictEqual(mainEps[0].title, 'Main Ep 1', 'S1 must never overwrite main episode 1');
+    assert.strictEqual(mainEps[1].title, 'Main Ep 2', 'S2 must never overwrite main episode 2');
+
+    const specials = aniZip.normalizeAniZipSpecialEpisodes(payload);
+    assert.deepStrictEqual(specials.map((e) => e.number), [1, 2]);
+    assert.strictEqual(specials[0].title, 'Omake Short 1');
+    assert.strictEqual(specials[0].thumbnailUrl, 'https://img/s1.jpg');
+    assert.strictEqual(specials[1].title, 'Omake Short 2');
+  });
+
+  {
+    const aniZip = await freshAniZip();
+    fetchHandler = (url) => {
+      if (url.startsWith('https://api.ani.zip/mappings?anilist_id=218217')) {
+        return jsonResponse(404, {});
+      }
+      if (url.startsWith('https://api.ani.zip/mappings?anilist_id=208025')) {
+        return jsonResponse(200, {
+          episodeCount: 2,
+          episodes: {
+            '1': { seasonNumber: 1, episode: '1', episodeNumber: 1, title: { en: 'Main Ep 1' }, airDate: '2026-10-03', image: 'https://img/m1.jpg' },
+            '2': { seasonNumber: 1, episode: '2', episodeNumber: 2, title: { en: 'Main Ep 2' }, airDate: '2026-10-10', image: 'https://img/m2.jpg' },
+            S1: { seasonNumber: 0, episode: 'S1', episodeNumber: 1, title: { en: 'Old 2020 Special' }, airDate: '2020-01-01', image: 'https://img/old.jpg' },
+            S2: { seasonNumber: 0, episode: 'S2', episodeNumber: 2, title: { en: 'Omake #1' }, airDate: '2026-10-04T12:00:00Z', image: 'https://img/omake1.jpg' },
+            S3: { seasonNumber: 0, episode: 'S3', episodeNumber: 3, title: { en: 'Omake #2' }, airDate: '2026-10-11T12:00:00Z', image: 'https://img/omake2.jpg' },
+          },
+        });
+      }
+      if (url.startsWith('https://graphql.anilist.co')) {
+        return jsonResponse(200, {
+          data: {
+            Media: {
+              episodes: 2,
+              status: 'RELEASING',
+              startDate: { year: 2026, month: 10, day: 4 },
+              nextAiringEpisode: { episode: 3, airingAt: Math.floor(Date.UTC(2026, 9, 18, 12) / 1000) },
+              airingSchedule: {
+                nodes: [
+                  { episode: 1, airingAt: Math.floor(Date.UTC(2026, 9, 4, 12) / 1000) },
+                  { episode: 2, airingAt: Math.floor(Date.UTC(2026, 9, 11, 12) / 1000) },
+                ],
+              },
+              title: { english: 'Dark Summoner Omake Shorts', romaji: 'Dark Summoner Omake', native: 'ダーク' },
+              synonyms: [],
+              streamingEpisodes: [],
+              relations: { edges: [{ relationType: 'PARENT', node: { id: 208025, type: 'ANIME' } }] },
+            },
+          },
+        });
+      }
+      return jsonResponse(404, {});
+    };
+    resetFetchCalls();
+    resetDiskCache();
+
+    await runTest('fetchRemoteEpisodes resolves unmapped spin-off from PARENT specials and rejects prior-era specials', async () => {
+      const { episodes } = await aniZip.fetchRemoteEpisodes(218217);
+      assert.deepStrictEqual(episodes.map((e) => e.number), [1, 2]);
+      assert.strictEqual(episodes[0].title, 'Omake #1', 'prior-era 2020 special must be skipped and air-date aligned onto ep 1');
+      assert.strictEqual(episodes[0].thumbnailUrl, 'https://img/omake1.jpg');
+      assert.strictEqual(episodes[1].title, 'Omake #2');
+      assert.strictEqual(episodes[1].thumbnailUrl, 'https://img/omake2.jpg');
+
+      const priorOnly = aniZip.matchParentSpecialsForChild(
+        [{ number: 1, title: 'Ancient 2020 OVA', thumbnailUrl: null, airDate: '2020-02-01', runtime: 24 }],
+        { episodeCount: 2, seasonStartAt: Date.UTC(2026, 9, 4) },
+      );
+      assert.deepStrictEqual(priorOnly, [], 'unrelated prior-era parent specials must be rejected');
+    });
+  }
 
 // --- GROUP 10: userLibrary ---------------------------------------------------------
 {

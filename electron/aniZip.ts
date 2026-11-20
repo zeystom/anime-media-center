@@ -23,7 +23,7 @@ import { runAniListQuery } from './anilist.ts';
 import { getFribbIndex, lookupFribbIds } from './fribb.ts';
 import { resolveSlotRow, findLateNumberedExtras } from './episodeSlots.ts';
 
-const ANI_ZIP_CACHE_NORMALIZER_VERSION = 7;
+const ANI_ZIP_CACHE_NORMALIZER_VERSION = 8;
 
 export interface RemoteEpisodeInfo {
   number: number;
@@ -93,6 +93,7 @@ const JUNK_TITLE_RE = /chimi\s*chara|chibi\s*(?:chara|theater)|picture\s*drama|m
 
 interface MemoryEpisodes {
   episodes: RemoteEpisodeInfo[];
+  specialEpisodes?: RemoteEpisodeInfo[];
   fetchedAt: number;
   /** Next scheduled airing (ms epoch) for ongoing titles; null otherwise. */
   nextAiringAt: number | null;
@@ -153,19 +154,66 @@ function pickEpisodeTitle(ep: any): string | null {
  * by episode number. Accepts both the flat live payload and the documented
  * `{ data: { episodes } }` wrapper, plus array-shaped episode lists.
  */
-export function normalizeAniZipEpisodes(payload: any): RemoteEpisodeInfo[] {
+function unpackAniZipEntries(payload: any): [string, any][] {
   if (!payload || typeof payload !== 'object') return [];
   const data = payload.data && typeof payload.data === 'object' && payload.data.episodes ? payload.data : payload;
   const rawEpisodes = data.episodes;
   if (!rawEpisodes || typeof rawEpisodes !== 'object') return [];
-
-  const source: [string, any][] = Array.isArray(rawEpisodes)
+  return Array.isArray(rawEpisodes)
     ? rawEpisodes.map((ep, i) => [String(i + 1), ep])
     : Object.entries(rawEpisodes);
+}
+
+function hasRegularAniZipSeason(entries: [string, any][]): boolean {
+  return entries.some(([, ep]) => {
+    const season = ep?.seasonNumber;
+    return season !== null && season !== undefined && season !== '' && Number.isFinite(Number(season)) && Number(season) > 0;
+  });
+}
+
+function isAniZipSpecialEntry(key: string, ep: any, hasRegularSeason: boolean): boolean {
+  const trimmedKey = String(key || '').trim();
+  if (/^S\d+$/i.test(trimmedKey) || trimmedKey === '0') return true;
+  const epStr = ep?.episode != null ? String(ep.episode).trim() : '';
+  if (/^S\d+$/i.test(epStr) || epStr === '0') return true;
+  if (hasRegularSeason) {
+    const rawSeason = ep?.seasonNumber;
+    if (rawSeason !== null && rawSeason !== undefined && rawSeason !== '' && Number(rawSeason) === 0) {
+      return true;
+    }
+  }
+  return false;
+}
+
+function buildAniZipEpisodeRecord(number: number, ep: any): RemoteEpisodeInfo {
+  const runtimeRaw = ep.runtime ?? ep.length;
+  const runtime = Number(runtimeRaw);
+  const synopsis = cleanEpisodeSynopsis(ep.overview ?? ep.summary ?? ep.description ?? ep.synopsis);
+
+  return {
+    number,
+    title: pickEpisodeTitle(ep),
+    ...(synopsis ? { synopsis } : {}),
+    thumbnailUrl: typeof ep.image === 'string' && ep.image ? ep.image : null,
+    // Prefer the precise UTC timestamp: a date-only airDate parses as UTC
+    // midnight and skews relative "aired X ago" labels by up to a day.
+    airDate: ep.airDateUtc ?? ep.airDate ?? ep.airdate ?? null,
+    runtime: Number.isFinite(runtime) && runtime > 0 ? runtime : null,
+  };
+}
+
+export function normalizeAniZipEpisodes(payload: any): RemoteEpisodeInfo[] {
+  const source = unpackAniZipEntries(payload);
+  if (source.length === 0) return [];
+  const hasRegularSeason = hasRegularAniZipSeason(source);
 
   const byNumber = new Map<number, RemoteEpisodeInfo>();
   for (const [key, ep] of source) {
     if (!ep || typeof ep !== 'object') continue;
+    // AniDB/ani.zip attaches specials under keys like "S1".."S12" with
+    // seasonNumber: 0 and numeric `episodeNumber: 1..12`. Skip specials here so
+    // they never overwrite regular episodes 1..N when `ep.episode` is "S1".
+    if (isAniZipSpecialEntry(key, ep, hasRegularSeason)) continue;
     // `episodeNumber` can be the absolute season number (12–22 for a cour
     // split into a separate AniList entry). Prefer the entry's own number or
     // map key so each part remains numbered 1..N in the UI.
@@ -174,20 +222,37 @@ export function normalizeAniZipEpisodes(payload: any): RemoteEpisodeInfo[] {
       .find((candidate) => Number.isInteger(candidate) && candidate > 0);
     if (number == null) continue;
 
-    const runtimeRaw = ep.runtime ?? ep.length;
-    const runtime = Number(runtimeRaw);
-    const synopsis = cleanEpisodeSynopsis(ep.overview ?? ep.summary ?? ep.description ?? ep.synopsis);
+    byNumber.set(number, buildAniZipEpisodeRecord(number, ep));
+  }
 
-    byNumber.set(number, {
-      number,
-      title: pickEpisodeTitle(ep),
-      ...(synopsis ? { synopsis } : {}),
-      thumbnailUrl: typeof ep.image === 'string' && ep.image ? ep.image : null,
-      // Prefer the precise UTC timestamp: a date-only airDate parses as UTC
-      // midnight and skews relative "aired X ago" labels by up to a day.
-      airDate: ep.airDateUtc ?? ep.airDate ?? ep.airdate ?? null,
-      runtime: Number.isFinite(runtime) && runtime > 0 ? runtime : null,
-    });
+  return Array.from(byNumber.values()).sort((a, b) => a.number - b.number);
+}
+
+/**
+ * Extracts AniDB special entries (`S1..Sk`, `seasonNumber === 0`) attached to a
+ * parent entry so spin-offs and bundled omake shorts lacking their own mapping
+ * can still resolve episode titles, thumbnails, and air dates.
+ */
+export function normalizeAniZipSpecialEpisodes(payload: any): RemoteEpisodeInfo[] {
+  const source = unpackAniZipEntries(payload);
+  if (source.length === 0) return [];
+  const hasRegularSeason = hasRegularAniZipSeason(source);
+
+  const stripS = (value: unknown): string => {
+    const raw = String(value ?? '').trim();
+    return /^S\d+$/i.test(raw) ? raw.slice(1) : raw;
+  };
+
+  const byNumber = new Map<number, RemoteEpisodeInfo>();
+  for (const [key, ep] of source) {
+    if (!ep || typeof ep !== 'object') continue;
+    if (!isAniZipSpecialEntry(key, ep, hasRegularSeason)) continue;
+    const number = [ep.number, stripS(ep.episode), stripS(key), ep.episodeNumber]
+      .map((candidate) => Number(candidate))
+      .find((candidate) => Number.isInteger(candidate) && candidate > 0);
+    if (number == null) continue;
+
+    byNumber.set(number, buildAniZipEpisodeRecord(number, ep));
   }
 
   return Array.from(byNumber.values()).sort((a, b) => a.number - b.number);
@@ -197,7 +262,7 @@ export function normalizeAniZipEpisodes(payload: any): RemoteEpisodeInfo[] {
  * Reads the disk cache for an anilist ID. Returns { episodes, fetchedAt } or
  * null; never throws.
  */
-function readDiskCache(anilistId: number): { episodes: RemoteEpisodeInfo[]; fetchedAt: number; kitsuId?: string | null; tvdbId?: string | null; tvdbSeason?: number | null; episodeCount?: number | null; normalizerVersion: number; nextAiringAt: number | null } | null {
+function readDiskCache(anilistId: number): { episodes: RemoteEpisodeInfo[]; specialEpisodes: RemoteEpisodeInfo[]; fetchedAt: number; kitsuId?: string | null; tvdbId?: string | null; tvdbSeason?: number | null; episodeCount?: number | null; normalizerVersion: number; nextAiringAt: number | null } | null {
   try {
     const cacheFile = path.join(storage.getMetadataCacheDir(), `anizip_${anilistId}.json`);
     if (!fs.existsSync(cacheFile)) return null;
@@ -207,6 +272,12 @@ function readDiskCache(anilistId: number): { episodes: RemoteEpisodeInfo[]; fetc
       ...episode,
       title: englishTitle(episode.title),
     }));
+    const specialEpisodes = Array.isArray(parsed.specialEpisodes)
+      ? parsed.specialEpisodes.map((episode: RemoteEpisodeInfo) => ({
+          ...episode,
+          title: englishTitle(episode.title),
+        }))
+      : [];
     const kitsuId = typeof parsed.kitsuId === 'string' || typeof parsed.kitsuId === 'number'
       ? String(parsed.kitsuId)
       : null;
@@ -228,7 +299,7 @@ function readDiskCache(anilistId: number): { episodes: RemoteEpisodeInfo[]; fetc
       );
     }
     if (episodeCount) aniZipEpisodeCountCache.set(anilistId, episodeCount);
-    return { episodes, fetchedAt: parsed.fetchedAt, kitsuId, tvdbId, tvdbSeason, episodeCount, normalizerVersion: Number.isInteger(parsed.normalizerVersion) ? parsed.normalizerVersion : 0, nextAiringAt };
+    return { episodes, specialEpisodes, fetchedAt: parsed.fetchedAt, kitsuId, tvdbId, tvdbSeason, episodeCount, normalizerVersion: Number.isInteger(parsed.normalizerVersion) ? parsed.normalizerVersion : 0, nextAiringAt };
   } catch {
     return null;
   }
@@ -525,6 +596,7 @@ interface AiringContextSnapshot {
   clearLogoUrl: string | null;
   imdbId: string | null;
   relatedAnimeIds: number[];
+  parentAnimeIds?: number[];
   /** Series titles + season for the Kitsu identity check — stable data, so a
    *  served-from-cache context can still validate a Kitsu mapping. */
   identityTitles: string[];
@@ -568,6 +640,9 @@ function readAiringContext(anilistId: number): (AiringContextSnapshot & { fetche
       imdbId: normalizeImdbId(parsed.imdbId),
       relatedAnimeIds: Array.isArray(parsed.relatedAnimeIds)
         ? parsed.relatedAnimeIds.map(Number).filter((relId: number) => Number.isInteger(relId) && relId > 0)
+        : [],
+      parentAnimeIds: Array.isArray(parsed.parentAnimeIds)
+        ? parsed.parentAnimeIds.map(Number).filter((relId: number) => Number.isInteger(relId) && relId > 0)
         : [],
       identityTitles: Array.isArray(parsed.identityTitles) ? parsed.identityTitles.filter((t: unknown): t is string => typeof t === 'string' && !!t) : [],
       identitySeason: Number.isInteger(parsed.identitySeason) ? Number(parsed.identitySeason) : null,
@@ -626,7 +701,7 @@ export async function fetchAniZipMappings(anilistId: number, options: { bypassCa
   if (bypassCache && disk) disk.episodes = [];
   if (!bypassCache && disk?.normalizerVersion === ANI_ZIP_CACHE_NORMALIZER_VERSION && cacheEntryFresh(disk) && snapshotServeable(disk.episodes, disk.fetchedAt)) {
     serveSourceById.set(id, 'cache');
-    memoryCache.set(id, { episodes: disk.episodes, fetchedAt: disk.fetchedAt, nextAiringAt: disk.nextAiringAt });
+    memoryCache.set(id, { episodes: disk.episodes, specialEpisodes: disk.specialEpisodes, fetchedAt: disk.fetchedAt, nextAiringAt: disk.nextAiringAt });
     return disk.episodes;
   }
 
@@ -653,6 +728,7 @@ export async function fetchAniZipMappings(anilistId: number, options: { bypassCa
         try { json = JSON.parse(json); } catch { /* keep malformed payload unhandled below */ }
       }
       const episodes = normalizeAniZipEpisodes(json);
+      const specialEpisodes = normalizeAniZipSpecialEpisodes(json);
       const rawEpisodeCount = Number(json?.episodeCount);
       const episodeCount = Number.isInteger(rawEpisodeCount) && rawEpisodeCount > 0 ? rawEpisodeCount : null;
       aniZipEpisodeCountCache.set(id, episodeCount);
@@ -687,14 +763,15 @@ export async function fetchAniZipMappings(anilistId: number, options: { bypassCa
             clearLogoUrl: mergedArtwork.clearLogoUrl,
             imdbId: mergedArtwork.imdbId,
             episodes,
+            specialEpisodes,
           }, null, 2),
           'utf-8'
         );
       } catch {}
 
-      memoryCache.set(id, { episodes, fetchedAt: Date.now(), nextAiringAt: disk?.nextAiringAt ?? null });
+      memoryCache.set(id, { episodes, specialEpisodes, fetchedAt: Date.now(), nextAiringAt: disk?.nextAiringAt ?? null });
       serveSourceById.set(id, 'network');
-      console.info(`[Episodes] AniZip ${id}: ${episodes.length} episode records; Kitsu mapping ${kitsuId || 'none'}`);
+      console.info(`[Episodes] AniZip ${id}: ${episodes.length} episode records; ${specialEpisodes.length} specials; Kitsu mapping ${kitsuId || 'none'}`);
       return episodes;
     } catch (err: any) {
       // Stale disk cache is better than nothing
@@ -712,6 +789,140 @@ export async function fetchAniZipMappings(anilistId: number, options: { bypassCa
 
   inFlightRequests.set(id, request);
   return request;
+}
+
+/**
+ * Fetches normalized AniDB special episodes (`S1..Sk`, `seasonNumber === 0`)
+ * attached to an anime's ani.zip entry (cached in memory and on disk).
+ */
+export async function fetchAniZipSpecialEpisodes(anilistId: number, options: { bypassCache?: boolean } = {}): Promise<RemoteEpisodeInfo[]> {
+  const id = Math.trunc(Number(anilistId));
+  if (!Number.isFinite(id) || id <= 0) return [];
+  const bypassCache = options.bypassCache === true;
+
+  if (!bypassCache) {
+    const mem = memoryCache.get(id);
+    if (mem && cacheEntryFresh(mem) && Array.isArray(mem.specialEpisodes)) {
+      return mem.specialEpisodes;
+    }
+
+    const disk = readDiskCache(id);
+    if (disk && disk.normalizerVersion === ANI_ZIP_CACHE_NORMALIZER_VERSION && cacheEntryFresh(disk)) {
+      memoryCache.set(id, {
+        episodes: disk.episodes,
+        specialEpisodes: disk.specialEpisodes,
+        fetchedAt: disk.fetchedAt,
+        nextAiringAt: disk.nextAiringAt,
+      });
+      return disk.specialEpisodes;
+    }
+  }
+
+  await fetchAniZipMappings(id, { bypassCache }).catch(() => []);
+  return memoryCache.get(id)?.specialEpisodes ?? readDiskCache(id)?.specialEpisodes ?? [];
+}
+
+/**
+ * Aligns a parent series' AniDB specials (`S1..Sk`) onto an unmapped child
+ * spin-off's episode slots `1..N`, rejecting specials from unrelated prior eras.
+ */
+export function matchParentSpecialsForChild(
+  parentSpecials: RemoteEpisodeInfo[],
+  options: {
+    episodeCount?: number | null;
+    scheduleByNumber?: Map<number, number>;
+    seasonStartAt?: number | null;
+  } = {},
+): RemoteEpisodeInfo[] {
+  if (!Array.isArray(parentSpecials) || parentSpecials.length === 0) return [];
+  const episodeCount = Number.isInteger(options.episodeCount) && Number(options.episodeCount) > 0
+    ? Number(options.episodeCount)
+    : null;
+  const scheduleByNumber = options.scheduleByNumber;
+  const scheduleTimes = scheduleByNumber ? Array.from(scheduleByNumber.values()) : [];
+  const earliestAnchor = scheduleTimes.length > 0 ? Math.min(...scheduleTimes) : (options.seasonStartAt ?? null);
+  const latestAnchor = scheduleTimes.length > 0 ? Math.max(...scheduleTimes) : null;
+
+  const PRIOR_ERA_WINDOW_MS = 45 * 24 * 60 * 60 * 1000;
+  const FUTURE_ERA_WINDOW_MS = 90 * 24 * 60 * 60 * 1000;
+  const DATE_PAIR_WINDOW_MS = 3.5 * 24 * 60 * 60 * 1000;
+
+  const sorted = [...parentSpecials].sort((a, b) => a.number - b.number);
+  const windowed = sorted.filter((ep) => {
+    if (!ep.airDate) return true;
+    const airTime = Date.parse(ep.airDate);
+    if (!Number.isFinite(airTime)) return true;
+    if (earliestAnchor != null && airTime < earliestAnchor - PRIOR_ERA_WINDOW_MS) return false;
+    if (latestAnchor != null && airTime > latestAnchor + FUTURE_ERA_WINDOW_MS) return false;
+    return true;
+  });
+  if (windowed.length === 0) return [];
+
+  if (scheduleByNumber && scheduleByNumber.size > 0) {
+    const usedSlots = new Set<number>();
+    const pairedBySpecial = new Map<RemoteEpisodeInfo, number>();
+    for (const sp of windowed) {
+      if (!sp.airDate) continue;
+      const airTime = Date.parse(sp.airDate);
+      if (!Number.isFinite(airTime)) continue;
+      let bestSlot: number | null = null;
+      let bestDiff = Infinity;
+      for (const [slotNum, slotAt] of scheduleByNumber.entries()) {
+        if (usedSlots.has(slotNum)) continue;
+        const diff = Math.abs(airTime - slotAt);
+        if (diff <= DATE_PAIR_WINDOW_MS && diff < bestDiff) {
+          bestDiff = diff;
+          bestSlot = slotNum;
+        }
+      }
+      if (bestSlot != null) {
+        usedSlots.add(bestSlot);
+        pairedBySpecial.set(sp, bestSlot);
+      }
+    }
+
+    if (pairedBySpecial.size > 0) {
+      const offsetCounts = new Map<number, number>();
+      for (const [sp, slot] of pairedBySpecial.entries()) {
+        const delta = slot - sp.number;
+        offsetCounts.set(delta, (offsetCounts.get(delta) ?? 0) + 1);
+      }
+      const dominantOffset = [...offsetCounts.entries()]
+        .sort((a, b) => b[1] - a[1] || Math.abs(a[0]) - Math.abs(b[0]))[0][0];
+      const maxSlots = episodeCount ?? Math.max(...scheduleByNumber.keys());
+      const out: RemoteEpisodeInfo[] = [];
+      for (const sp of windowed) {
+        const matchedSlot = pairedBySpecial.get(sp);
+        if (matchedSlot != null) {
+          if (episodeCount == null || matchedSlot <= episodeCount) {
+            out.push({ ...sp, number: matchedSlot });
+          }
+          continue;
+        }
+        const candidateNum = sp.number + dominantOffset;
+        if (
+          candidateNum >= 1 &&
+          candidateNum <= maxSlots &&
+          !usedSlots.has(candidateNum)
+        ) {
+          usedSlots.add(candidateNum);
+          out.push({ ...sp, number: candidateNum });
+        }
+      }
+      if (out.length > 0) {
+        return out.sort((a, b) => a.number - b.number);
+      }
+    }
+  }
+
+  if (episodeCount != null && windowed.length > episodeCount + 2) {
+    return [];
+  }
+  const limit = episodeCount != null ? Math.min(windowed.length, episodeCount) : windowed.length;
+  return windowed.slice(0, limit).map((ep, idx) => ({
+    ...ep,
+    number: idx + 1,
+  }));
 }
 
 function normalizedSeriesTitle(value: unknown): string {
@@ -960,6 +1171,7 @@ async function runRemoteEpisodesPipeline(anilistId: number, notify: (payload: Re
   }
   let identity: { titles: string[]; episodeCount: number | null; season: number | null } = { titles: [], episodeCount: null, season: null };
   let relatedAnimeIds: number[] = cachedContext?.relatedAnimeIds || [];
+  let parentAnimeIds: number[] = cachedContext?.parentAnimeIds || [];
 
   // Kick off the lightweight Kitsu per-season coverImage lookup in parallel if
   // Fribb already maps this anilistId to a Kitsu ID and it isn't cached yet.
@@ -1045,6 +1257,13 @@ async function runRemoteEpisodesPipeline(anilistId: number, notify: (payload: Re
       .filter((relId) => Number.isInteger(relId) && relId > 0);
     if (extractedRelated.length > 0 || media?.relations) {
       relatedAnimeIds = Array.from(new Set(extractedRelated));
+    }
+    const extractedParents = (media?.relations?.edges || [])
+      .filter((edge) => edge?.node?.type === 'ANIME' && ['PARENT', 'MAIN_STORY'].includes(String(edge?.relationType || '')))
+      .map((edge) => Number(edge?.node?.id))
+      .filter((relId) => Number.isInteger(relId) && relId > 0 && relId !== id);
+    if (extractedParents.length > 0 || media?.relations) {
+      parentAnimeIds = Array.from(new Set(extractedParents));
     }
     for (const item of media?.streamingEpisodes || []) {
       // AniList often provides only "Episode 15" with a perfectly usable
@@ -1439,6 +1658,37 @@ async function runRemoteEpisodesPipeline(anilistId: number, notify: (payload: Re
     }
   }
 
+  // Stage 7 — Parent AniDB specials fallback for unmapped child spin-offs
+  // (e.g. bundled weekly omake shorts) whose metadata lives on the PARENT
+  // entry under `S1..Sk` rather than their own AniList ID.
+  const needsParentSpecials = parentAnimeIds.length > 0
+    && alternateEpisodes.length === 0
+    && (
+      scopedAniZip.length === 0
+      || (
+        serveSourceById.get(id) !== 'network'
+        && (
+          lastBuiltDatedMissingTitle
+          || scopedAniZip.some((episode) => hasAired(episode) && (!episode.title || !episode.thumbnailUrl))
+        )
+      )
+    );
+  if (needsParentSpecials) {
+    for (const parentId of parentAnimeIds) {
+      const parentSpecials = await fetchAniZipSpecialEpisodes(parentId, { bypassCache: scopedAniZip.length > 0 });
+      const matched = matchParentSpecialsForChild(parentSpecials, {
+        episodeCount: identity.episodeCount ?? aniListCount,
+        scheduleByNumber,
+        seasonStartAt,
+      }).filter(withinTitle);
+      if (matched.length > 0) {
+        alternateEpisodes = matched;
+        pushBest();
+        break;
+      }
+    }
+  }
+
   await fribbPromise;
   await kitsuBannerTask;
   if (kitsuBannerUrl === undefined) {
@@ -1459,7 +1709,9 @@ async function runRemoteEpisodesPipeline(anilistId: number, notify: (payload: Re
     // Only the FINAL merged snapshot is persisted as the ani.zip rows cache —
     // intermediate progressive payloads (Kitsu page 1 alone etc.) must not
     // pin an incomplete list for its TTL.
-    memoryCache.set(id, { episodes: final.episodes, fetchedAt, nextAiringAt });
+    const existingDisk = readDiskCache(id);
+    const preservedSpecials = memoryCache.get(id)?.specialEpisodes ?? existingDisk?.specialEpisodes ?? [];
+    memoryCache.set(id, { episodes: final.episodes, specialEpisodes: preservedSpecials, fetchedAt, nextAiringAt });
     try {
       fs.writeFileSync(
         path.join(storage.getMetadataCacheDir(), `anizip_${id}.json`),
@@ -1467,7 +1719,7 @@ async function runRemoteEpisodesPipeline(anilistId: number, notify: (payload: Re
           anilistId: id,
           fetchedAt,
           normalizerVersion: serveSourceById.get(id) === 'cache'
-            ? (readDiskCache(id)?.normalizerVersion ?? 0)
+            ? (existingDisk?.normalizerVersion ?? 0)
             : ANI_ZIP_CACHE_NORMALIZER_VERSION,
           kitsuId: kitsuId ?? null,
           tvdbId: resolvedArtwork.tvdbId ?? null,
@@ -1479,6 +1731,7 @@ async function runRemoteEpisodesPipeline(anilistId: number, notify: (payload: Re
           clearLogoUrl: resolvedArtwork.clearLogoUrl ?? null,
           imdbId: resolvedArtwork.imdbId ?? null,
           episodes: final.episodes,
+          specialEpisodes: preservedSpecials,
         }, null, 2),
         'utf-8',
       );
@@ -1495,6 +1748,7 @@ async function runRemoteEpisodesPipeline(anilistId: number, notify: (payload: Re
     clearLogoUrl: resolvedArtwork.clearLogoUrl,
     imdbId: resolvedArtwork.imdbId,
     relatedAnimeIds,
+    parentAnimeIds,
     identityTitles: identity.titles,
     identitySeason: identity.season,
     identityEpisodeCount: identity.episodeCount,

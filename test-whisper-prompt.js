@@ -37,7 +37,7 @@ const bundle = await esbuild.build({
     contents: `
       export * from './electron/whisperPrompt.ts';
       export * from './electron/whisperPostProcess.ts';
-      export { cleanSubtitleSrt } from './electron/whisper.ts';
+      export { buildWhisperCliArgs, cleanSubtitleSrt, DEFAULT_EN_PUNCTUATION_PROMPT } from './electron/whisper.ts';
       export { computeRangeDragSelection } from './src/utils/episodeSelection.ts';
     `,
     resolveDir: process.cwd(),
@@ -99,7 +99,9 @@ const {
   similarityRatio,
   levenshteinDistance,
   COMMON_ENGLISH_WORDS,
+  buildWhisperCliArgs,
   cleanSubtitleSrt,
+  DEFAULT_EN_PUNCTUATION_PROMPT,
   detectOpEdFromChapters,
   filterCuesBySkipRanges,
   isCueInSkipRanges,
@@ -900,6 +902,136 @@ runTest('9.6 Phone-gallery range selection selects/deselects contiguous episodes
   assert.strictEqual(deselected.has('ep4.mkv'), false);
   assert.strictEqual(deselected.has('ep5.mkv'), false);
   assert.strictEqual(deselected.has('ep6.mkv'), true);
+});
+
+// ================================================================
+// SUITE 10: CLI Args Regression, Prompt Leak Guard & Chain Cap
+// ================================================================
+console.log('\n--- TEST SUITE 10: CLI Args, Anchor Leak Guard & Chain Cap ---');
+
+function flagValue(args, flag) {
+  const idx = args.indexOf(flag);
+  return idx >= 0 && idx + 1 < args.length ? args[idx + 1] : undefined;
+}
+
+runTest('10.1 Default English buildWhisperCliArgs sets tight VAD, v3_offsets_off, reprompt anchor, and drops HST', () => {
+  const { args } = buildWhisperCliArgs({
+    inputPath: 'ep.mkv',
+    tmpDir: '/tmp/out',
+    model: 'large-v3-turbo',
+    audioTrackNum: 1,
+    opts: {},
+    isTrackSurround: false,
+    alreadyExtracted: false,
+    suppressMode: 'off',
+    balancedFallbackFftdn: false,
+  });
+
+  assert.strictEqual(flagValue(args, '--vad_speech_pad_ms'), '350');
+  assert.strictEqual(flagValue(args, '--vad_min_silence_duration_ms'), '800');
+  assert.strictEqual(flagValue(args, '--vad_max_speech_duration_s'), '15');
+  assert.strictEqual(flagValue(args, '--condition_on_previous_text'), 'False');
+  assert.strictEqual(flagValue(args, '--reprompt'), 'True');
+  assert.strictEqual(flagValue(args, '--initial_prompt'), DEFAULT_EN_PUNCTUATION_PROMPT);
+  assert.ok(args.includes('--v3_offsets_off'), 'Must pass --v3_offsets_off');
+  assert.ok(!args.includes('--hallucination_silence_threshold'), 'Must omit experimental --hallucination_silence_threshold by default');
+});
+
+runTest('10.2 buildWhisperCliArgs formats custom prompts, preserves explicit None, and disables prompt for non-English defaults', () => {
+  const custom = buildWhisperCliArgs({
+    inputPath: 'ep.mkv',
+    tmpDir: '/tmp/out',
+    model: 'large-v3-turbo',
+    audioTrackNum: 1,
+    opts: { initialPrompt: 'Yui, Mio, Ritsu' },
+    isTrackSurround: false,
+    alreadyExtracted: false,
+    suppressMode: 'off',
+    balancedFallbackFftdn: false,
+  }).args;
+  assert.strictEqual(flagValue(custom, '--initial_prompt'), 'Yui, Mio, Ritsu.');
+  assert.strictEqual(flagValue(custom, '--reprompt'), 'True');
+
+  const nonePrompt = buildWhisperCliArgs({
+    inputPath: 'ep.mkv',
+    tmpDir: '/tmp/out',
+    model: 'large-v3-turbo',
+    audioTrackNum: 1,
+    opts: { initialPrompt: 'None' },
+    isTrackSurround: false,
+    alreadyExtracted: false,
+    suppressMode: 'off',
+    balancedFallbackFftdn: false,
+  }).args;
+  assert.strictEqual(flagValue(nonePrompt, '--initial_prompt'), 'None');
+  assert.strictEqual(flagValue(nonePrompt, '--reprompt'), 'False');
+
+  const nonEn = buildWhisperCliArgs({
+    inputPath: 'ep.mkv',
+    tmpDir: '/tmp/out',
+    model: 'large-v3-turbo',
+    audioTrackNum: 1,
+    opts: { language: 'ja' },
+    isTrackSurround: false,
+    alreadyExtracted: false,
+    suppressMode: 'off',
+    balancedFallbackFftdn: false,
+  }).args;
+  assert.strictEqual(flagValue(nonEn, '--initial_prompt'), 'None');
+  assert.strictEqual(flagValue(nonEn, '--reprompt'), 'False');
+});
+
+runTest('10.3 cleanSubtitleSrt strips leaked full anchor while preserving genuine single lines', () => {
+  const rawSrt = `1
+00:00:01,000 --> 00:00:03,000
+Hello! Wait, really? Yeah, let's go.
+
+2
+00:00:04,000 --> 00:00:05,500
+Hello!
+
+3
+00:00:06,000 --> 00:00:07,500
+Wait, really?
+
+4
+00:00:08,000 --> 00:00:10,000
+Yeah, let's go.
+
+5
+00:00:11,000 --> 00:00:13,000
+Hello! Wait, really? Yeah, let's go. We're late for practice!
+`;
+
+  const cleaned = cleanSubtitleSrt(rawSrt, true, { maxLineWidth: 46, maxLineCount: 2 });
+  assert.ok(!cleaned.includes("Hello! Wait, really? Yeah, let's go."), `Leaked full anchor must be stripped, got:\n${cleaned}`);
+  assert.ok(cleaned.includes('Hello!'), 'Single cue "Hello!" must stay');
+  assert.ok(cleaned.includes('Wait, really?'), 'Single cue "Wait, really?" must stay');
+  assert.ok(cleaned.includes("Yeah, let's go."), 'Single cue "Yeah, let\'s go." must stay');
+  assert.ok(cleaned.includes("We're late for practice!"), 'Dialogue following anchor prefix must stay');
+});
+
+runTest('10.4 rebalanceSubtitleCues does not chain cues whose duration exceeds 6.5s', () => {
+  const cues = [
+    {
+      start: '00:00:01,000',
+      end: '00:00:08,000',
+      startMs: 1000,
+      endMs: 8000,
+      text: 'This is a long opening remark that ends without punctuation',
+    },
+    {
+      start: '00:00:08,100',
+      end: '00:00:10,000',
+      startMs: 8100,
+      endMs: 10000,
+      text: 'And continues here.',
+    },
+  ];
+  const rebalanced = rebalanceSubtitleCues(cues, 46, 2);
+  const firstFlat = rebalanced[0].text.replace(/\n/g, ' ');
+  assert.ok(!firstFlat.includes('And continues here.'), `Must not chain a 7s cue with the following cue, got:\n${firstFlat}`);
+  assert.ok(rebalanced.some((c) => c.text.includes('And continues here.')), 'Second cue must remain distinct');
 });
 
 console.log('\n================================================================');

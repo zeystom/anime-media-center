@@ -86,15 +86,20 @@
   overscroll-behavior: contain;
 }
 
+.horizontal-scroller-wrap {
+  overscroll-behavior-x: contain;
+}
+
 .horizontal-rail {
   will-change: scroll-position;
   overscroll-behavior-x: contain;
+  overflow-y: hidden;
 }
 
 .horizontal-scroller-btn {
   display: none;
 }
-.horizontal-scroller-wrap[data-scrollable='true']:hover:not([data-dragging='true']) .horizontal-scroller-btn,
+.horizontal-scroller-wrap[data-scrollable='true']:hover:not([data-dragging='true']):not([data-overscrolling='true']) .horizontal-scroller-btn,
 .horizontal-scroller-wrap[data-scrollable='true'] .horizontal-scroller-btn:focus-visible {
   display: flex;
 }

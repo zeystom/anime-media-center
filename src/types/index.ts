@@ -30,6 +30,13 @@ export interface StorageOverview {
   freeBytes: number | null;
 }
 
+export interface FolderDiskSpace {
+  folderPath: string;
+  driveLabel: string;
+  freeBytes: number | null;
+  totalBytes: number | null;
+}
+
 import type { CatalogItem, CatalogRelatedTitle, AiringEntry, DiscoverCatalogPage, GenrePickRail, FranchiseSeasonEntry } from '../../electron/catalog';
 import type { HeroBannerSources, RemoteEpisodeInfo, RemoteEpisodesResult } from '../../electron/aniZip';
 import type { UserLibraryEntry, UserListStatus } from '../../electron/userLibrary';
@@ -195,6 +202,7 @@ export interface ElectronAPI {
   removeUserLibraryEntry: (anilistId: number) => Promise<boolean>;
   // Library storage management (Phase 4)
   getStorageOverview: () => Promise<StorageOverview>;
+  getFoldersDiskSpace: (folderPaths?: string[]) => Promise<FolderDiskSpace[]>;
   getDiskUsage: (folderPath: string) => Promise<{ totalBytes: number; episodeCount: number }>;
   deleteAnimeFromPC: (folderPath: string) => Promise<{ success: boolean; deletedBytes?: number; error?: string }>;
   deleteEpisodesFromPC: (filePaths: string[]) => Promise<{ success: boolean; deletedBytes?: number; error?: string }>;

@@ -35,20 +35,36 @@ const AUDIO_LANGUAGES: Array<{ code: TorrentLanguageCode; label: string; aliases
   { code: 'ko', label: 'Korean Audio', aliases: 'korean|kor' },
 ]
 
-function htmlToText(raw: string): string {
-  return raw
-    .replace(/<(script|style)\b[^>]*>[\s\S]*?<\/\1\s*>/gi, ' ')
-    .replace(/<br\s*\/?\s*>|<\/(?:p|div|li|tr|h[1-6])\s*>/gi, ' ')
-    .replace(/<[^>]*>/g, ' ')
-    .replace(/&#(\d+);/g, (_, value: string) => String.fromCodePoint(Number(value)))
-    .replace(/&#x([\da-f]+);/gi, (_, value: string) => String.fromCodePoint(parseInt(value, 16)))
-    .replace(/&nbsp;/gi, ' ')
+export function decodeHtmlEntities(raw: string): string {
+  return String(raw || '')
     .replace(/&amp;/gi, '&')
+    .replace(/&#(\d+);/g, (_, value: string) => {
+      const code = Number(value)
+      return Number.isInteger(code) && code >= 0 && code <= 0x10ffff ? String.fromCodePoint(code) : _
+    })
+    .replace(/&#x([\da-f]+);/gi, (_, value: string) => {
+      const code = parseInt(value, 16)
+      return Number.isInteger(code) && code >= 0 && code <= 0x10ffff ? String.fromCodePoint(code) : _
+    })
+    .replace(/&nbsp;/gi, ' ')
     .replace(/&quot;/gi, '"')
-    .replace(/&apos;|&#39;/gi, "'")
+    .replace(/&apos;|&#0*39;/gi, "'")
     .replace(/&lt;/gi, '<')
     .replace(/&gt;/gi, '>')
-    .replace(/\s+/g, ' ')
+}
+
+function htmlToText(raw: string): string {
+  const cleaned = String(raw || '')
+    .replace(/\r\n?/g, '\n')
+    .replace(/<(head|script|style|nav|header|footer|select|form|aside)\b[^>]*>[\s\S]*?<\/\1\s*>/gi, '\n')
+    .replace(/<br\s*\/?\s*>|<\/(?:p|div|li|tr|h[1-6]|pre|blockquote)\s*>|<hr\b[^>]*>/gi, '\n')
+    .replace(/<\/?(?:b|strong|i|em|u|s|code|span|a|small|sup|sub|font|mark|abbr)\b[^>]*>/gi, '')
+    .replace(/<[^>]*>/g, ' ')
+  return decodeHtmlEntities(cleaned)
+    .replace(/\*\*|__/g, '')
+    .replace(/[^\S\n]+/g, ' ')
+    .replace(/ *\n */g, '\n')
+    .replace(/\n{3,}/g, '\n\n')
     .trim()
 }
 
@@ -57,10 +73,18 @@ const MULTI_SUBS_RE = /\b(?:multi[-_\s]*subs?|multisubs?)\b/i
 
 function explicitAudioLabel(text: string, aliases: string): boolean {
   const language = `(?:${aliases})`
-  return new RegExp(`\\b${language}\\s+(?:(?:dual|multi)\\s+)?(?:audio|dub(?:bed)?|voice(?:\s+track)?)\\b`, 'i').test(text)
-    || new RegExp(`\\b(?:audio|dub(?:bed)?|voice(?:\s+track)?)\\s*(?:in|:|-)?\\s*${language}\\b`, 'i').test(text)
-    || new RegExp(`\\b${language}\\b[^\\n.;]{0,40}\\b(?:audio|dub(?:bed)?|voice|track)\\b`, 'i').test(text)
-    || new RegExp(`\\b(?:audio|dub(?:bed)?|voice|tracks?|languages?)\\b[^\\n.;]{0,55}\\b${language}\\b`, 'i').test(text)
+  const nonAudioFollow = `(?!\\s*[-–—_]?\\s*(?:soft\\s*)?(?:subs?|subtitles?|captions?|signs?(?:\\s*\\/\\s*songs?)?|songs?|translated|translation))`
+  const leadWindow = `(?:(?!\\b(?:subtitles?|subs?|captions?|video|source|literature|raw|menu)\\b)[^\\n.;]){0,55}`
+  const trailWindow = `(?:(?!\\b(?:subtitles?|subs?|captions?|video|source|literature|raw|menu)\\b)[^\\n.;]){0,40}`
+  const patterns = [
+    new RegExp(`\\b${language}${nonAudioFollow}\\s+(?:(?:dual|multi)\\s+)?(?:audio|dub(?:bed)?|voice(?:\\s+track)?)\\b`, 'i'),
+    new RegExp(`\\b(?:audio|dub(?:bed)?|voice(?:\\s+track)?)\\b[^\\S\\n]*(?:in|:|[-–—])?[^\\S\\n]*${language}${nonAudioFollow}\\b`, 'i'),
+    new RegExp(`\\b${language}${nonAudioFollow}\\b${trailWindow}\\b(?:audio|dub(?:bed)?|voice|track)\\b`, 'i'),
+    new RegExp(`\\b(?:audio|dub(?:bed)?|voice|tracks?|languages?)\\b${leadWindow}\\b${language}${nonAudioFollow}\\b`, 'i'),
+  ]
+  return String(text || '')
+    .split('\n')
+    .some((line) => patterns.some((re) => re.test(line)))
 }
 
 function detectLanguages(text: string): string[] {
@@ -92,8 +116,8 @@ function detectSubtitleLanguageCodes(text: string): TorrentLanguageCode[] {
   if (MULTI_SUBS_RE.test(text)) codes.add('en')
   for (const language of AUDIO_LANGUAGES) {
     const token = `(?:${language.aliases})`
-    const subtitleMention = new RegExp(`\\b${token}\\s+(?:soft\\s*)?(?:subs?|subtitles?|captions?)\\b`, 'i').test(text)
-      || new RegExp(`\\b(?:subs?|subtitles?|captions?)\\s*(?:in|:|-)?\\s*${token}\\b`, 'i').test(text)
+    const subtitleMention = new RegExp(`\\b${token}(?:[-–—/_ \\t]+|(?=(?:soft)?(?:subs?|subtitles?|captions?)\\b))(?:soft[-–—_ \\t]*)?(?:subs?|subtitles?|captions?)\\b`, 'i').test(text)
+      || new RegExp(`\\b(?:subs?|subtitles?|captions?)[^\\S\\n]*(?:in|:|[-–—])?[^\\S\\n]*${token}(?:\\b|(?=_))`, 'i').test(text)
     if (subtitleMention) codes.add(language.code)
   }
   return [...codes]
@@ -103,9 +127,8 @@ function detectSubtitle(text: string): 'Dubtitles' | 'English Subs' | 'Multi-Sub
   if (/\b(?:english\s+)?dubtitles?\b/i.test(text) || /\benglish\s+(?:sdh|closed\s+captions?|cc)\b/i.test(text)) {
     return 'Dubtitles'
   }
-  if (/\b(?:english|eng)\s*(?:soft\s*)?subs?\b/i.test(text)
-    || /\b(?:english|eng)\s+subtitles?\b/i.test(text)
-    || /\bsubtitles?\s*(?:in|:|-)?\s*(?:english|eng)\b/i.test(text)) {
+  if (/\b(?:english|eng)[-–—/_ \t]*(?:soft[-–—_ \t]*)?(?:subs?|subtitles?)\b/i.test(text)
+    || /\bsubtitles?[^\S\n]*(?:in|:|[-–—])?[^\S\n]*(?:english|eng)\b/i.test(text)) {
     return 'English Subs'
   }
   if (MULTI_SUBS_RE.test(text)) {
@@ -170,7 +193,7 @@ export function isMultiSeasonCollection(title: string | null | undefined): boole
 
 /** Conservatively classify only explicit language/audio and subtitle claims. */
 export function classifyRelease(title: string, description?: string | null): ReleaseClassification {
-  const searchableText = htmlToText(`${title} ${description ?? ''}`).slice(0, 80_000)
+  const searchableText = htmlToText(`${title}\n${description ?? ''}`).slice(0, 80_000)
   const parsed = parseReleaseCore(title)
   const audioLabels = detectLanguages(searchableText)
   const audioLanguageCodes = detectAudioLanguageCodes(searchableText)
@@ -278,7 +301,30 @@ export function qualityRank(title: string | null | undefined, parsedResolution?:
   return 0
 }
 
+function extractTorrentDescriptionHtml(raw: string): string | null {
+  const openMatch = /<div\b[^>]*\bid=["']torrent-description["'][^>]*>/i.exec(raw)
+  if (!openMatch) return null
+  const contentStart = openMatch.index + openMatch[0].length
+  const divTagRe = /<\/?div\b[^>]*>/gi
+  divTagRe.lastIndex = contentStart
+  let depth = 1
+  let match: RegExpExecArray | null
+  while ((match = divTagRe.exec(raw)) !== null) {
+    if (/^<\/div/i.test(match[0])) {
+      depth -= 1
+      if (depth === 0) {
+        return raw.slice(contentStart, match.index)
+      }
+    } else if (!/\/>$/.test(match[0])) {
+      depth += 1
+    }
+  }
+  return raw.slice(contentStart)
+}
+
 /** Convert a fetched or RSS HTML snippet into bounded plain text. */
 export function releaseDescriptionToText(raw: string | null | undefined): string {
-  return raw ? htmlToText(raw).slice(0, 20_000) : ''
+  if (!raw) return ''
+  const scoped = extractTorrentDescriptionHtml(raw) ?? raw
+  return htmlToText(scoped).slice(0, 20_000)
 }

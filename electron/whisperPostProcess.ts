@@ -94,6 +94,7 @@ export const DEFAULT_HALLUCINATIONS: RegExp[] = [
   /^\s*(?:mbc|nhk|tbs|tv\s+tokyo)\s*$/i,
   /^\s*(?:dialogue|characters)\s+from\s+an\s+anime\s+episode[.!,:\s-]*$/i,
   /^\s*this\s+is\s+the\s+(?:first|second|third)\s+(?:sentence|one)[.!]?\s*$/i,
+  /^\s*hello!\s+wait,\s+really\?\s+yeah,\s+let'?s\s+go[.!]?\s*$/i,
 ];
 
 const NON_LATIN_GIBBERISH_REGEX = /[\u0400-\u04ff\u0590-\u05ff\u0600-\u06ff\u0e00-\u0e7f\uac00-\ud7af]/u;
@@ -1050,18 +1051,19 @@ export function rebalanceSubtitleCues(
 
     const chain: CueBlock[] = [startCue];
     let j = i;
-    while (j + 1 < working.length && chain.length < 5) {
+    while (j + 1 < working.length && chain.length < 4) {
       const prev = working[j];
       const next = working[j + 1];
       const prevFlat = prev.text.replace(/[\n\r]+/g, ' ').replace(/\s+/g, ' ').trim();
       const nextFlat = next.text.replace(/[\n\r]+/g, ' ').replace(/\s+/g, ' ').trim();
       if (!prevFlat || !nextFlat || /^[([].*[)\]]$/.test(nextFlat)) break;
+      if (prev.endMs - prev.startMs > 6500 || next.endMs - next.startMs > 6500) break;
 
       const gap = next.startMs - prev.endMs;
       const prevEndsSentence = /[.!?…]["'”’]?$/.test(prevFlat);
       const totalDur = next.endMs - startCue.startMs;
 
-      if (gap >= 0 && gap <= 550 && !prevEndsSentence && totalDur <= 18000) {
+      if (gap >= 0 && gap <= 550 && !prevEndsSentence && totalDur <= 12000) {
         chain.push(next);
         j++;
       } else {
