@@ -64,6 +64,7 @@ export interface AniListFranchiseNode {
   id: number;
   type?: string;
   format?: string | null;
+  isAdult?: boolean;
   relations?: { edges: { relationType: string; node: AniListFranchiseNode | null }[] } | null;
 }
 
@@ -267,9 +268,75 @@ const DETAILS_QUERY = `
 const FRANCHISE_GRAPH_QUERY = `
   query ($id: Int) {
     Media(id: $id, type: ANIME) {
+      id
+      type
       format
+      isAdult
       relations {
-        edges { relationType node { id type format relations { edges { relationType node { id type format } } } } }
+        edges {
+          relationType
+          node {
+            id
+            type
+            format
+            isAdult
+            relations {
+              edges {
+                relationType
+                node { id type format isAdult }
+              }
+            }
+          }
+        }
+      }
+    }
+  }
+`;
+
+const FRANCHISE_GRAPH_BATCH_1HOP_QUERY = `
+  query ($ids: [Int], $perPage: Int) {
+    Page(page: 1, perPage: $perPage) {
+      media(id_in: $ids, isAdult: false) {
+        id
+        type
+        format
+        isAdult
+        relations {
+          edges {
+            relationType
+            node { id type format isAdult }
+          }
+        }
+      }
+    }
+  }
+`;
+
+const FRANCHISE_GRAPH_BATCH_2HOP_QUERY = `
+  query ($ids: [Int], $perPage: Int) {
+    Page(page: 1, perPage: $perPage) {
+      media(id_in: $ids, isAdult: false) {
+        id
+        type
+        format
+        isAdult
+        relations {
+          edges {
+            relationType
+            node {
+              id
+              type
+              format
+              isAdult
+              relations {
+                edges {
+                  relationType
+                  node { id type format isAdult }
+                }
+              }
+            }
+          }
+        }
       }
     }
   }
@@ -643,14 +710,39 @@ export async function queryFranchise(id: number): Promise<AniListFranchiseNode |
   return data?.Media ?? null;
 }
 
-export async function queryFranchiseMedia(ids: number[]): Promise<AniListMedia[]> {
-  const unique = [...new Set(ids.filter((id) => Number.isInteger(id) && id > 0))].slice(0, 50);
+export async function queryFranchiseGraphBatch(ids: number[], depth: 1 | 2 = 1): Promise<AniListFranchiseNode[]> {
+  const unique = [...new Set(ids.filter((id) => Number.isInteger(id) && id > 0))];
   if (unique.length === 0) return [];
-  const data = await runAniListQuery<{ Page?: { media?: (AniListMedia | null)[] | null } | null }>(FRANCHISE_MEDIA_QUERY, {
-    ids: unique,
-    perPage: unique.length,
-  });
-  return (data.Page?.media ?? []).filter((item): item is AniListMedia => !!item);
+  const query = depth === 2 ? FRANCHISE_GRAPH_BATCH_2HOP_QUERY : FRANCHISE_GRAPH_BATCH_1HOP_QUERY;
+  const results: AniListFranchiseNode[] = [];
+  for (let offset = 0; offset < unique.length; offset += MAX_PER_PAGE) {
+    const chunk = unique.slice(offset, offset + MAX_PER_PAGE);
+    const data = await runAniListQuery<{ Page?: { media?: (AniListFranchiseNode | null)[] | null } | null }>(query, {
+      ids: chunk,
+      perPage: chunk.length,
+    });
+    for (const item of data.Page?.media ?? []) {
+      if (item) results.push(item);
+    }
+  }
+  return results;
+}
+
+export async function queryFranchiseMedia(ids: number[]): Promise<AniListMedia[]> {
+  const unique = [...new Set(ids.filter((id) => Number.isInteger(id) && id > 0))];
+  if (unique.length === 0) return [];
+  const results: AniListMedia[] = [];
+  for (let offset = 0; offset < unique.length; offset += MAX_PER_PAGE) {
+    const chunk = unique.slice(offset, offset + MAX_PER_PAGE);
+    const data = await runAniListQuery<{ Page?: { media?: (AniListMedia | null)[] | null } | null }>(FRANCHISE_MEDIA_QUERY, {
+      ids: chunk,
+      perPage: chunk.length,
+    });
+    for (const item of data.Page?.media ?? []) {
+      if (item) results.push(item);
+    }
+  }
+  return results;
 }
 
 import {

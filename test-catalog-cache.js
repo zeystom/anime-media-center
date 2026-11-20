@@ -249,6 +249,15 @@ function anilistHandler(url, init) {
       ] },
     } } });
   }
+  if (query.includes('relations') && query.includes('id_in: $ids')) {
+    return jsonResponse(200, {
+      data: {
+        Page: {
+          media: (vars.ids || []).map((id) => ({ id, type: 'ANIME', format: 'TV', isAdult: false, relations: { edges: [] } })),
+        },
+      },
+    });
+  }
   if (query.includes('id_in: $ids')) {
     return jsonResponse(200, { data: { Page: { media: (vars.ids || []).map((id) => rawMedia(id, { format: 'TV' })) } } });
   }
@@ -273,7 +282,383 @@ function anilistHandler(url, init) {
     // Manga-hop children keep the neutral RELATED label: real manga->anime
     // edges are always ADAPTATION, which is meaningless anime-to-anime.
     assert.strictEqual(related.find((item) => item.anilistId === 202)?.relationType, 'RELATED');
-    assert.strictEqual(anilistCalls().length, 2, 'graph IDs and media details are fetched in two bounded requests');
+    assert.strictEqual(anilistCalls().length, 3, 'graph IDs, frontier expansion, and media details are fetched in three bounded requests');
+  });
+}
+
+{
+  // Build a reusable graph-backed AniList mock helper for multi-hop franchise tests
+  function makeGraphHandler(nodes, mediaOverrides = {}) {
+    const isTwoHopQuery = (query) => (query.match(/\brelations\b/g) || []).length >= 2;
+    const serializeEdges = (nodeId, depth) => {
+      const node = nodes[nodeId];
+      if (!node) return [];
+      return (node.edges || []).map((edge) => {
+        const target = nodes[edge.id];
+        const child = {
+          id: edge.id,
+          type: target?.type || 'ANIME',
+          format: target?.format ?? null,
+          isAdult: target?.isAdult === true,
+        };
+        if (depth > 1 && target) {
+          child.relations = { edges: serializeEdges(edge.id, depth - 1) };
+        }
+        return { relationType: edge.relationType, node: child };
+      });
+    };
+
+    return (_url, init) => {
+      const body = JSON.parse(init.body || '{}');
+      const query = body.query || '';
+      const vars = body.variables || {};
+
+      if (query.includes('relations') && query.includes('Media(id: $id')) {
+        const node = nodes[vars.id];
+        if (!node) return jsonResponse(200, { data: { Media: null } });
+        return jsonResponse(200, {
+          data: {
+            Media: {
+              id: vars.id,
+              type: node.type || 'ANIME',
+              format: node.format ?? 'TV',
+              isAdult: node.isAdult === true,
+              relations: { edges: serializeEdges(vars.id, 2) },
+            },
+          },
+        });
+      }
+      if (query.includes('relations') && query.includes('id_in: $ids')) {
+        const depth = isTwoHopQuery(query) ? 2 : 1;
+        return jsonResponse(200, {
+          data: {
+            Page: {
+              media: (vars.ids || [])
+                .map((id) => {
+                  const node = nodes[id];
+                  if (!node || node.isAdult === true) return null;
+                  return {
+                    id,
+                    type: node.type || 'ANIME',
+                    format: node.format ?? null,
+                    isAdult: false,
+                    relations: { edges: serializeEdges(id, depth) },
+                  };
+                })
+                .filter(Boolean),
+            },
+          },
+        });
+      }
+      if (query.includes('id_in: $ids')) {
+        return jsonResponse(200, {
+          data: {
+            Page: {
+              media: (vars.ids || [])
+                .filter((id) => nodes[id]?.isAdult !== true)
+                .map((id) => rawMedia(id, { format: nodes[id]?.format || 'TV', ...(mediaOverrides[id] || {}) })),
+            },
+          },
+        });
+      }
+      return jsonResponse(400, { errors: [{ message: 'unexpected franchise test query' }] });
+    };
+  }
+
+  await runTest('getCatalogFranchise crawls multi-hop OVA/special/movie/season graphs and shares component cache', async () => {
+    const catalog = await freshCatalog();
+    resetDiskCache();
+    resetFetchCalls();
+
+    const narutoGraph = {
+      20: {
+        type: 'ANIME', format: 'TV',
+        edges: [
+          { relationType: 'SEQUEL', id: 1735 },
+          { relationType: 'SIDE_STORY', id: 761 },
+          { relationType: 'SIDE_STORY', id: 7367 },
+          { relationType: 'CHARACTER', id: 162561 },
+        ],
+      },
+      1735: {
+        type: 'ANIME', format: 'TV',
+        edges: [
+          { relationType: 'PREQUEL', id: 20 },
+          { relationType: 'SEQUEL', id: 97938 },
+          { relationType: 'SIDE_STORY', id: 2472 },
+        ],
+      },
+      97938: {
+        type: 'ANIME', format: 'TV',
+        edges: [
+          { relationType: 'PREQUEL', id: 1735 },
+          { relationType: 'SIDE_STORY', id: 21220 },
+        ],
+      },
+      761: { type: 'ANIME', format: 'SPECIAL', edges: [{ relationType: 'PARENT', id: 20 }] },
+      7367: { type: 'ANIME', format: 'SPECIAL', edges: [{ relationType: 'PARENT', id: 20 }] },
+      2472: { type: 'ANIME', format: 'MOVIE', edges: [{ relationType: 'PARENT', id: 1735 }] },
+      21220: { type: 'ANIME', format: 'MOVIE', edges: [{ relationType: 'PARENT', id: 97938 }] },
+      162561: { type: 'ANIME', format: 'TV', edges: [{ relationType: 'CHARACTER', id: 20 }] },
+    };
+    const overrides = {
+      20: { seasonYear: 2002, startDate: { year: 2002, month: 10, day: 3 } },
+      761: { seasonYear: 2003, startDate: { year: 2003, month: 5, day: 1 } },
+      1735: { seasonYear: 2007, startDate: { year: 2007, month: 2, day: 15 } },
+      2472: { seasonYear: 2007, startDate: { year: 2007, month: 8, day: 4 } },
+      7367: { seasonYear: 2009, startDate: { year: 2009, month: 10, day: 12 } },
+      21220: { seasonYear: 2015, startDate: { year: 2015, month: 8, day: 7 } },
+      97938: { seasonYear: 2017, startDate: { year: 2017, month: 4, day: 5 } },
+    };
+
+    fetchHandler = makeGraphHandler(narutoGraph, overrides);
+
+    // Start from 761 (4 hops away from 21220)
+    const fromSpecial = await catalog.getCatalogFranchise(761);
+    assert.deepStrictEqual(fromSpecial.map((item) => item.anilistId), [20, 1735, 2472, 7367, 21220, 97938]);
+    assert.strictEqual(fromSpecial.find((item) => item.anilistId === 20)?.relationType, 'PARENT');
+    for (const indirectId of [1735, 2472, 7367, 21220, 97938]) {
+      assert.strictEqual(fromSpecial.find((item) => item.anilistId === indirectId)?.relationType, 'RELATED');
+    }
+    assert.ok(!fromSpecial.some((item) => item.anilistId === 162561), 'CHARACTER crossovers must stay excluded');
+
+    const callsAfterInitial = anilistCalls().length;
+    assert.ok(callsAfterInitial >= 3);
+
+    // Subsequent member lookups hit shared memory cache with 0 network calls & preserve own direct relation types
+    const from20 = await catalog.getCatalogFranchise(20);
+    assert.deepStrictEqual(from20.map((item) => item.anilistId), [761, 1735, 2472, 7367, 21220, 97938]);
+    assert.strictEqual(from20.find((item) => item.anilistId === 1735)?.relationType, 'SEQUEL');
+    assert.strictEqual(from20.find((item) => item.anilistId === 761)?.relationType, 'SIDE_STORY');
+    assert.strictEqual(from20.find((item) => item.anilistId === 97938)?.relationType, 'RELATED');
+
+    const from1735 = await catalog.getCatalogFranchise(1735);
+    assert.deepStrictEqual(from1735.map((item) => item.anilistId), [20, 761, 2472, 7367, 21220, 97938]);
+    assert.strictEqual(from1735.find((item) => item.anilistId === 20)?.relationType, 'PREQUEL');
+    assert.strictEqual(from1735.find((item) => item.anilistId === 97938)?.relationType, 'SEQUEL');
+    assert.strictEqual(from1735.find((item) => item.anilistId === 2472)?.relationType, 'SIDE_STORY');
+    assert.strictEqual(from1735.find((item) => item.anilistId === 761)?.relationType, 'RELATED');
+
+    const from7367 = await catalog.getCatalogFranchise(7367);
+    assert.deepStrictEqual(from7367.map((item) => item.anilistId), [20, 761, 1735, 2472, 21220, 97938]);
+    assert.strictEqual(from7367.find((item) => item.anilistId === 20)?.relationType, 'PARENT');
+
+    const from97938 = await catalog.getCatalogFranchise(97938);
+    assert.deepStrictEqual(from97938.map((item) => item.anilistId), [20, 761, 1735, 2472, 7367, 21220]);
+    assert.strictEqual(from97938.find((item) => item.anilistId === 1735)?.relationType, 'PREQUEL');
+    assert.strictEqual(from97938.find((item) => item.anilistId === 21220)?.relationType, 'SIDE_STORY');
+
+    assert.strictEqual(anilistCalls().length, callsAfterInitial, 'navigating across franchise entries must hit shared cache');
+
+    // Details memory cache is seeded from the franchise media payload
+    const details20 = await catalog.getCatalogDetails(20);
+    assert.strictEqual(details20?.anilistId, 20);
+    assert.strictEqual(anilistCalls().length, callsAfterInitial, 'getCatalogDetails must hit seeded memory cache');
+
+    // Cold memory (new module instance) hits shared disk cache with 0 network calls
+    const reloadedCatalog = await freshCatalog();
+    const fromDisk7367 = await reloadedCatalog.getCatalogFranchise(7367);
+    assert.deepStrictEqual(fromDisk7367.map((item) => item.anilistId), [20, 761, 1735, 2472, 21220, 97938]);
+    assert.strictEqual(fromDisk7367.find((item) => item.anilistId === 20)?.relationType, 'PARENT');
+    assert.strictEqual(anilistCalls().length, callsAfterInitial, 'cold instance must read shared franchise disk cache');
+  });
+
+  await runTest('getCatalogFranchise traverses multi-hop MANGA bridges without crossing MANGA->MANGA or CHARACTER edges', async () => {
+    const catalog = await freshCatalog();
+    resetDiskCache();
+    resetFetchCalls();
+
+    const mangaBridgeGraph = {
+      5001: { type: 'ANIME', format: 'OVA', edges: [{ relationType: 'PARENT', id: 5002 }] },
+      5002: {
+        type: 'ANIME', format: 'TV',
+        edges: [
+          { relationType: 'SIDE_STORY', id: 5001 },
+          { relationType: 'ADAPTATION', id: 9500 },
+        ],
+      },
+      9500: {
+        type: 'MANGA', format: 'MANGA',
+        edges: [
+          { relationType: 'ADAPTATION', id: 5002 },
+          { relationType: 'ADAPTATION', id: 5003 },
+          { relationType: 'SPIN_OFF', id: 9501 },
+          { relationType: 'CHARACTER', id: 5999 },
+        ],
+      },
+      9501: { type: 'MANGA', format: 'MANGA', edges: [{ relationType: 'ADAPTATION', id: 5998 }] },
+      5003: {
+        type: 'ANIME', format: 'TV',
+        edges: [
+          { relationType: 'ADAPTATION', id: 9500 },
+          { relationType: 'SEQUEL', id: 5004 },
+        ],
+      },
+      5004: { type: 'ANIME', format: 'TV', edges: [{ relationType: 'PREQUEL', id: 5003 }] },
+      5998: { type: 'ANIME', format: 'TV', edges: [] },
+      5999: { type: 'ANIME', format: 'TV', edges: [] },
+    };
+    fetchHandler = makeGraphHandler(mangaBridgeGraph);
+
+    const related = await catalog.getCatalogFranchise(5001);
+    assert.deepStrictEqual(related.map((item) => item.anilistId), [5002, 5003, 5004]);
+    assert.strictEqual(related.find((item) => item.anilistId === 5002)?.relationType, 'PARENT');
+    assert.strictEqual(related.find((item) => item.anilistId === 5003)?.relationType, 'RELATED');
+    assert.strictEqual(related.find((item) => item.anilistId === 5004)?.relationType, 'RELATED');
+  });
+
+  await runTest('getCatalogFranchise handles standalone anime in 1 query and caches empty result', async () => {
+    const catalog = await freshCatalog();
+    resetDiskCache();
+    resetFetchCalls();
+
+    fetchHandler = makeGraphHandler({ 6001: { type: 'ANIME', format: 'TV', edges: [] } });
+    const first = await catalog.getCatalogFranchise(6001);
+    assert.deepStrictEqual(first, []);
+    assert.strictEqual(anilistCalls().length, 1, 'standalone title must skip queryFranchiseMedia');
+
+    const second = await catalog.getCatalogFranchise(6001);
+    assert.deepStrictEqual(second, []);
+    assert.strictEqual(anilistCalls().length, 1);
+
+    const reloaded = await freshCatalog();
+    const fromDisk = await reloaded.getCatalogFranchise(6001);
+    assert.deepStrictEqual(fromDisk, []);
+    assert.strictEqual(anilistCalls().length, 1);
+  });
+
+  await runTest('getCatalogFranchise chunks queryFranchiseMedia for franchises larger than 50 titles', async () => {
+    const catalog = await freshCatalog();
+    resetDiskCache();
+    resetFetchCalls();
+
+    // 3 main seasons (8001 <-> 8002 <-> 8003) with 62 movies/OVAs/specials attached across them = 65 total titles
+    const largeGraph = {
+      8001: { type: 'ANIME', format: 'TV', edges: [{ relationType: 'SEQUEL', id: 8002 }] },
+      8002: { type: 'ANIME', format: 'TV', edges: [{ relationType: 'PREQUEL', id: 8001 }, { relationType: 'SEQUEL', id: 8003 }] },
+      8003: { type: 'ANIME', format: 'TV', edges: [{ relationType: 'PREQUEL', id: 8002 }] },
+    };
+    for (let id = 8004; id <= 8065; id++) {
+      const parentId = id <= 8025 ? 8001 : id <= 8045 ? 8002 : 8003;
+      largeGraph[parentId].edges.push({ relationType: 'SIDE_STORY', id });
+      largeGraph[id] = { type: 'ANIME', format: 'SPECIAL', edges: [{ relationType: 'PARENT', id: parentId }] };
+    }
+    fetchHandler = makeGraphHandler(largeGraph);
+
+    const related = await catalog.getCatalogFranchise(8001);
+    assert.strictEqual(related.length, 64);
+    assert.strictEqual(related[0].anilistId, 8002);
+    assert.strictEqual(related[63].anilistId, 8065);
+    const mediaQueries = anilistCalls().filter((call) => {
+      const q = JSON.parse(call.init.body || '{}').query || '';
+      return q.includes('id_in: $ids') && !q.includes('relations');
+    });
+    assert.strictEqual(mediaQueries.length, 2, '65 items must chunk across 2 queryFranchiseMedia requests (50 + 15)');
+  });
+
+  await runTest('getCatalogFranchise excludes adult nodes and does not traverse through them', async () => {
+    const catalog = await freshCatalog();
+    resetDiskCache();
+    resetFetchCalls();
+
+    const adultGraph = {
+      8501: {
+        type: 'ANIME', format: 'TV',
+        edges: [
+          { relationType: 'SEQUEL', id: 8502 },
+          { relationType: 'SIDE_STORY', id: 8504 },
+        ],
+      },
+      8502: { type: 'ANIME', format: 'OVA', isAdult: true, edges: [{ relationType: 'SEQUEL', id: 8503 }] },
+      8503: { type: 'ANIME', format: 'TV', edges: [{ relationType: 'PREQUEL', id: 8502 }] },
+      8504: { type: 'ANIME', format: 'SPECIAL', edges: [{ relationType: 'PARENT', id: 8501 }] },
+    };
+    fetchHandler = makeGraphHandler(adultGraph);
+
+    const related = await catalog.getCatalogFranchise(8501);
+    assert.deepStrictEqual(related.map((item) => item.anilistId), [8504]);
+  });
+
+  await runTest('getCatalogFranchise resilience: 2-hop fallback to 1-hop, 429 partial without cache poisoning, and stale disk fallback', async () => {
+    // (a) 2-hop batch non-429 failure falls back to 1-hop and resolves full franchise
+    {
+      const catalog = await freshCatalog();
+      resetDiskCache();
+      resetFetchCalls();
+      const chainGraph = {
+        9101: { type: 'ANIME', format: 'TV', edges: [{ relationType: 'SEQUEL', id: 9102 }] },
+        9102: { type: 'ANIME', format: 'TV', edges: [{ relationType: 'PREQUEL', id: 9101 }, { relationType: 'SEQUEL', id: 9103 }] },
+        9103: { type: 'ANIME', format: 'TV', edges: [{ relationType: 'PREQUEL', id: 9102 }, { relationType: 'SEQUEL', id: 9104 }] },
+        9104: { type: 'ANIME', format: 'TV', edges: [{ relationType: 'PREQUEL', id: 9103 }] },
+      };
+      const baseHandler = makeGraphHandler(chainGraph);
+      fetchHandler = (url, init) => {
+        const body = JSON.parse(init.body || '{}');
+        const q = body.query || '';
+        const isTwoHopBatch = q.includes('relations') && q.includes('id_in: $ids') && (q.match(/\brelations\b/g) || []).length >= 2;
+        if (isTwoHopBatch) return jsonResponse(500, { errors: [{ message: 'complexity limit exceeded' }] });
+        return baseHandler(url, init);
+      };
+      const related = await catalog.getCatalogFranchise(9101);
+      assert.deepStrictEqual(related.map((item) => item.anilistId), [9102, 9103, 9104]);
+    }
+
+    // (b) Round 2 rate-limit (429) returns Round 1 partial results without poisoning 24h cache
+    {
+      const catalog = await freshCatalog();
+      resetDiskCache();
+      resetFetchCalls();
+      const chainGraph = {
+        9201: { type: 'ANIME', format: 'TV', edges: [{ relationType: 'SEQUEL', id: 9202 }] },
+        9202: { type: 'ANIME', format: 'TV', edges: [{ relationType: 'PREQUEL', id: 9201 }, { relationType: 'SEQUEL', id: 9203 }] },
+        9203: { type: 'ANIME', format: 'TV', edges: [{ relationType: 'PREQUEL', id: 9202 }, { relationType: 'SEQUEL', id: 9204 }] },
+        9204: { type: 'ANIME', format: 'TV', edges: [{ relationType: 'PREQUEL', id: 9203 }] },
+      };
+      const baseHandler = makeGraphHandler(chainGraph);
+      let blockBatchWith429 = true;
+      fetchHandler = (url, init) => {
+        const body = JSON.parse(init.body || '{}');
+        const q = body.query || '';
+        if (blockBatchWith429 && q.includes('relations') && q.includes('id_in: $ids')) {
+          return jsonResponse(429, { errors: [{ message: 'Too Many Requests' }] }, { 'retry-after': '1' });
+        }
+        return baseHandler(url, init);
+      };
+      const partial = await catalog.getCatalogFranchise(9201);
+      assert.deepStrictEqual(partial.map((item) => item.anilistId), [9202, 9203]);
+
+      // Subsequent lookup on 9201 or 9202 must NOT be stuck with partial results in 24h cache
+      blockBatchWith429 = false;
+      const recoveredRoot = await catalog.getCatalogFranchise(9201);
+      assert.deepStrictEqual(recoveredRoot.map((item) => item.anilistId), [9202, 9203, 9204]);
+      const recovered = await catalog.getCatalogFranchise(9202);
+      assert.deepStrictEqual(recovered.map((item) => item.anilistId), [9201, 9203, 9204]);
+    }
+
+    // (c) Expired disk cache falls back to stale complete component when refresh fails
+    {
+      const catalog = await freshCatalog();
+      resetDiskCache();
+      resetFetchCalls();
+      const smallGraph = {
+        9301: { type: 'ANIME', format: 'TV', edges: [{ relationType: 'SEQUEL', id: 9302 }] },
+        9302: { type: 'ANIME', format: 'TV', edges: [{ relationType: 'PREQUEL', id: 9301 }] },
+      };
+      fetchHandler = makeGraphHandler(smallGraph);
+      const initial = await catalog.getCatalogFranchise(9301);
+      assert.deepStrictEqual(initial.map((item) => item.anilistId), [9302]);
+
+      // Age the component disk file beyond TTL_DETAILS_MS (24h)
+      const compFile = diskCacheFile('catalog_franchise_comp_v2_9301.json');
+      const parsed = JSON.parse(fs.readFileSync(compFile, 'utf-8'));
+      parsed.fetchedAt = Date.now() - 25 * 60 * 60 * 1000;
+      fs.writeFileSync(compFile, JSON.stringify(parsed, null, 2), 'utf-8');
+
+      const reloaded = await freshCatalog();
+      fetchHandler = () => { throw new Error('network down'); };
+      const stale = await reloaded.getCatalogFranchise(9301);
+      assert.deepStrictEqual(stale.map((item) => item.anilistId), [9302]);
+    }
   });
 }
 

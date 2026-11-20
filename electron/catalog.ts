@@ -23,9 +23,11 @@ import {
   querySearch,
   queryDetails,
   queryFranchise,
+  queryFranchiseGraphBatch,
   queryFranchiseMedia,
   queryDiscoverCatalog,
   queryGenreCandidates,
+  type AniListFranchiseNode,
   type AniListMedia,
   type AniListSeason,
 } from './anilist.ts';
@@ -604,57 +606,342 @@ export async function getCatalogDetails(anilistId: number): Promise<CatalogItem 
   });
 }
 
+const MAX_FRANCHISE_ANIME = 150;
+const MAX_FRANCHISE_BFS_ROUNDS = 8;
+const MAX_FRANCHISE_MANGA_BRIDGES = 25;
+const TWO_HOP_FRONTIER_THRESHOLD = 15;
+const FRANCHISE_INDEX_CACHE_NAME = 'franchise_index_v2';
+const FRANCHISE_COMPONENT_CACHE_PREFIX = 'franchise_comp_v2_';
+
+interface CachedFranchiseComponent {
+  items: CatalogItem[];
+  directEdges: Record<string, Record<string, string>>;
+}
+
+let franchiseMemberIndex: Map<number, string> | null = null;
+
+function compareCatalogChronological(a: CatalogItem, b: CatalogItem): number {
+  // Chronological by first-air date. AniList's relation graph has no
+  // ordering of its own, so the release date (startDate, falling back to
+  // seasonYear) is the practical proxy. Titles with no date at all sink
+  // to the end, tie-broken by ID for stability.
+  const yearA = a.startDate?.year ?? a.seasonYear ?? Number.MAX_SAFE_INTEGER;
+  const yearB = b.startDate?.year ?? b.seasonYear ?? Number.MAX_SAFE_INTEGER;
+  if (yearA !== yearB) return yearA - yearB;
+  const monthA = a.startDate?.month ?? 0;
+  const monthB = b.startDate?.month ?? 0;
+  if (monthA !== monthB) return monthA - monthB;
+  const dayA = a.startDate?.day ?? 0;
+  const dayB = b.startDate?.day ?? 0;
+  if (dayA !== dayB) return dayA - dayB;
+  return a.anilistId - b.anilistId;
+}
+
+function loadFranchiseMemberIndex(): Map<number, string> {
+  if (franchiseMemberIndex) return franchiseMemberIndex;
+  const map = new Map<number, string>();
+  const disk = readDiskCache(FRANCHISE_INDEX_CACHE_NAME);
+  if (disk?.data && typeof disk.data === 'object' && !Array.isArray(disk.data)) {
+    for (const [rawId, cacheName] of Object.entries(disk.data as Record<string, unknown>)) {
+      const memberId = Number(rawId);
+      if (Number.isInteger(memberId) && memberId > 0 && typeof cacheName === 'string' && cacheName.length > 0) {
+        map.set(memberId, cacheName);
+      }
+    }
+  }
+  franchiseMemberIndex = map;
+  return map;
+}
+
+function saveFranchiseMemberIndex(memberIds: Iterable<number>, componentCacheName: string): void {
+  const index = loadFranchiseMemberIndex();
+  let changed = false;
+  for (const rawId of memberIds) {
+    const memberId = Math.trunc(Number(rawId));
+    if (!Number.isInteger(memberId) || memberId <= 0) continue;
+    if (index.get(memberId) !== componentCacheName) {
+      index.set(memberId, componentCacheName);
+      changed = true;
+    }
+  }
+  if (!changed) return;
+  const serialized = Object.fromEntries(
+    Array.from(index.entries(), ([memberId, name]) => [String(memberId), name]),
+  );
+  writeDiskCache(FRANCHISE_INDEX_CACHE_NAME, { data: serialized, fetchedAt: Date.now() });
+}
+
+function isValidFranchiseComponent(data: unknown, cacheName: string, targetId: number): data is CachedFranchiseComponent {
+  if (!data || typeof data !== 'object') return false;
+  const candidate = data as Partial<CachedFranchiseComponent>;
+  if (!Array.isArray(candidate.items) || !candidate.directEdges || typeof candidate.directEdges !== 'object') {
+    return false;
+  }
+  if (candidate.items.length === 0) {
+    return cacheName === `${FRANCHISE_COMPONENT_CACHE_PREFIX}${targetId}`;
+  }
+  return candidate.items.some((item) => item && item.anilistId === targetId);
+}
+
+function projectFranchiseForId(component: CachedFranchiseComponent, id: number): CatalogRelatedTitle[] {
+  const direct = component.directEdges[String(id)] || {};
+  return component.items
+    .filter((item) => item.anilistId !== id)
+    .map((item) => ({
+      ...item,
+      relationType: direct[String(item.anilistId)] || 'RELATED',
+    }));
+}
+
+function seedDetailsMemoryCache(items: CatalogItem[], fetchedAt: number): void {
+  for (const item of items) {
+    if (!Number.isInteger(item.anilistId) || item.anilistId <= 0) continue;
+    const detailsKey = `details_${item.anilistId}`;
+    const existing = memoryCache.get(detailsKey);
+    if (!existing || existing.fetchedAt < fetchedAt) {
+      memoryCache.set(detailsKey, { data: item, fetchedAt });
+    }
+  }
+}
+
+function saveFranchiseComponent(
+  cacheName: string,
+  component: CachedFranchiseComponent,
+  memberIds: Iterable<number>,
+  fetchedAt = Date.now(),
+): void {
+  const entry: CacheEntry<CachedFranchiseComponent> = { data: component, fetchedAt };
+  memoryCache.set(cacheName, entry);
+  writeDiskCache(cacheName, entry);
+  saveFranchiseMemberIndex(memberIds, cacheName);
+}
+
+function readCachedFranchiseComponent(
+  cacheName: string,
+  id: number,
+): { component: CachedFranchiseComponent; fresh: boolean; fetchedAt: number } | null {
+  for (const [isMemory, entry] of [
+    [true, memoryCache.get(cacheName)],
+    [false, readDiskCache(cacheName)],
+  ] as const) {
+    if (!entry || !isValidFranchiseComponent(entry.data, cacheName, id)) continue;
+    const fresh = Date.now() - entry.fetchedAt < TTL_DETAILS_MS;
+    if (fresh && !isMemory) memoryCache.set(cacheName, entry);
+    return { component: entry.data, fresh, fetchedAt: entry.fetchedAt };
+  }
+  return null;
+}
+
+interface FranchiseCrawlResult {
+  animeIds: Set<number>;
+  directEdges: Record<string, Record<string, string>>;
+  capped: boolean;
+  incomplete: boolean;
+  notFound: boolean;
+}
+
+async function crawlFranchiseGraph(id: number): Promise<FranchiseCrawlResult> {
+  const root = await queryFranchise(id);
+  if (!root) {
+    return { animeIds: new Set([id]), directEdges: {}, capped: false, incomplete: false, notFound: true };
+  }
+
+  const expanded = new Set<number>();
+  const animeIds = new Set<number>([id]);
+  const directEdges: Record<string, Record<string, string>> = {};
+  const mangaQueued = new Set<number>();
+  let capped = false;
+  let incomplete = false;
+
+  const trackAnimeId = (animeId: number): boolean => {
+    if (animeIds.has(animeId)) return true;
+    if (animeIds.size >= MAX_FRANCHISE_ANIME) {
+      capped = true;
+      return false;
+    }
+    animeIds.add(animeId);
+    return true;
+  };
+
+  const ingestNode = (node: AniListFranchiseNode, fallbackId?: number, fallbackType?: string): number[] => {
+    const nodeId = typeof node.id === 'number' && node.id > 0 ? node.id : fallbackId;
+    if (!nodeId || node.isAdult === true) return [];
+    const nodeType = node.type || fallbackType;
+    if (nodeType !== 'ANIME' && nodeType !== 'MANGA') return [];
+    if (nodeType === 'ANIME' && !trackAnimeId(nodeId)) return [];
+
+    if (!Array.isArray(node.relations?.edges)) {
+      return expanded.has(nodeId) ? [] : [nodeId];
+    }
+    if (expanded.has(nodeId)) return [];
+    expanded.add(nodeId);
+
+    const nextIds: number[] = [];
+    if (nodeType === 'MANGA') {
+      mangaQueued.add(nodeId);
+      for (const edge of node.relations.edges) {
+        const child = edge?.node;
+        if (!child || typeof child.id !== 'number' || child.id <= 0 || child.isAdult === true) continue;
+        if (child.type !== 'ANIME') continue;
+        if (edge.relationType !== 'ADAPTATION' && edge.relationType !== 'SOURCE') continue;
+        if (!trackAnimeId(child.id)) continue;
+        if (Array.isArray(child.relations?.edges)) nextIds.push(...ingestNode(child));
+        else if (!expanded.has(child.id)) nextIds.push(child.id);
+      }
+      return nextIds;
+    }
+
+    const edgesByTarget = (directEdges[String(nodeId)] ??= {});
+    for (const edge of node.relations.edges) {
+      const child = edge?.node;
+      if (!child || typeof child.id !== 'number' || child.id <= 0 || child.isAdult === true) continue;
+      if (edge.relationType === 'CHARACTER') continue;
+
+      if (child.type === 'ANIME') {
+        if (!trackAnimeId(child.id)) continue;
+        if (child.id !== nodeId && !edgesByTarget[String(child.id)]) {
+          edgesByTarget[String(child.id)] = edge.relationType || 'RELATED';
+        }
+        if (Array.isArray(child.relations?.edges)) nextIds.push(...ingestNode(child));
+        else if (!expanded.has(child.id)) nextIds.push(child.id);
+      } else if (child.type === 'MANGA' && (edge.relationType === 'ADAPTATION' || edge.relationType === 'SOURCE')) {
+        if (Array.isArray(child.relations?.edges)) nextIds.push(...ingestNode(child));
+        else if (!expanded.has(child.id) && !mangaQueued.has(child.id) && mangaQueued.size < MAX_FRANCHISE_MANGA_BRIDGES) {
+          mangaQueued.add(child.id);
+          nextIds.push(child.id);
+        }
+      }
+    }
+    return nextIds;
+  };
+
+  const round1Next = ingestNode(root, id, 'ANIME');
+  expanded.add(id);
+  let frontier = [...new Set(round1Next)].filter((nid) => !expanded.has(nid));
+
+  for (let round = 2; round <= MAX_FRANCHISE_BFS_ROUNDS && frontier.length > 0 && !capped; round++) {
+    const useTwoHop = frontier.length <= TWO_HOP_FRONTIER_THRESHOLD;
+    const chunkSize = useTwoHop ? TWO_HOP_FRONTIER_THRESHOLD : 50;
+    const nextSet = new Set<number>();
+
+    for (let offset = 0; offset < frontier.length; offset += chunkSize) {
+      const chunk = frontier.slice(offset, offset + chunkSize);
+      let nodes: AniListFranchiseNode[];
+      try {
+        nodes = await queryFranchiseGraphBatch(chunk, useTwoHop ? 2 : 1);
+      } catch (err: any) {
+        const msg = String(err?.message || err || '');
+        if (useTwoHop && !msg.includes('429')) {
+          try {
+            nodes = await queryFranchiseGraphBatch(chunk, 1);
+          } catch {
+            incomplete = true;
+            break;
+          }
+        } else {
+          incomplete = true;
+          break;
+        }
+      }
+
+      for (const node of nodes) {
+        for (const nid of ingestNode(node)) nextSet.add(nid);
+      }
+      for (const queriedId of chunk) expanded.add(queriedId);
+      if (capped) break;
+    }
+
+    if (incomplete) break;
+    frontier = [...nextSet].filter((nid) => !expanded.has(nid));
+  }
+
+  if (!incomplete && frontier.length > 0) capped = true;
+  return { animeIds, directEdges, capped, incomplete, notFound: false };
+}
+
 /** Returns connected anime titles from AniList's bounded franchise graph. */
 export async function getCatalogFranchise(anilistId: number): Promise<CatalogRelatedTitle[]> {
   const id = Math.trunc(Number(anilistId));
   if (!Number.isFinite(id) || id <= 0) return [];
-  return cachedServiceCall(`franchise_${id}`, TTL_DETAILS_MS, async () => {
-    const root = await queryFranchise(id);
-    const relationTypes = new Map<number, string>();
-    const addAnime = (node: { id?: number; type?: string } | null, relationType: string) => {
-      if (!node || node.type !== 'ANIME' || typeof node.id !== 'number' || node.id === id) return;
-      if (!relationTypes.has(node.id)) relationTypes.set(node.id, relationType || 'RELATED');
-    };
-    const edges = root?.relations?.edges || [];
-    // Direct anime relations first so titles keep their true relation type
-    // (SEQUEL, SIDE_STORY, ...) instead of being pre-empted by the manga hop
-    // below, which labels everything it reaches as ADAPTATION.
-    for (const edge of edges) {
-      if (edge.relationType === 'CHARACTER' || !edge.node) continue;
-      addAnime(edge.node, edge.relationType);
-    }
-    // Some AniList franchises link seasons through their manga adaptation
-    // node instead of connecting each anime season directly. Manga->anime
-    // edges are always labeled ADAPTATION, which is meaningless for an
-    // anime-to-anime link, so hop-two titles get the neutral RELATED label.
-    for (const edge of edges) {
-      if (edge.node?.type !== 'MANGA') continue;
-      for (const child of edge.node.relations?.edges || []) {
-        if (child.relationType === 'CHARACTER' || !child.node) continue;
-        addAnime(child.node, 'RELATED');
+
+  const mappedCacheName = loadFranchiseMemberIndex().get(id);
+  const cached = mappedCacheName ? readCachedFranchiseComponent(mappedCacheName, id) : null;
+  if (cached?.fresh) {
+    seedDetailsMemoryCache(cached.component.items, cached.fetchedAt);
+    return projectFranchiseForId(cached.component, id);
+  }
+  const staleComponent = cached?.component ?? null;
+
+  const inFlightKey = `franchise_v2_${id}`;
+  const pending = inFlightRequests.get(inFlightKey);
+  if (pending) {
+    return pending as Promise<CatalogRelatedTitle[]>;
+  }
+
+  const request = (async () => {
+    try {
+      const crawl = await crawlFranchiseGraph(id);
+      if (crawl.notFound) {
+        saveFranchiseComponent(`${FRANCHISE_COMPONENT_CACHE_PREFIX}${id}`, { items: [], directEdges: {} }, [id]);
+        return [];
       }
+      if (crawl.animeIds.size <= 1) {
+        if (crawl.incomplete && staleComponent) return projectFranchiseForId(staleComponent, id);
+        if (!crawl.incomplete) {
+          saveFranchiseComponent(`${FRANCHISE_COMPONENT_CACHE_PREFIX}${id}`, { items: [], directEdges: {} }, [id]);
+        }
+        return [];
+      }
+
+      const media = await queryFranchiseMedia([...crawl.animeIds]);
+      const uniqueItems = new Map<number, CatalogItem>();
+      for (const rawItem of media) {
+        const normalized = normalizeMedia(rawItem);
+        if (normalized.anilistId && !normalized.isAdult && !uniqueItems.has(normalized.anilistId)) {
+          uniqueItems.set(normalized.anilistId, normalized);
+        }
+      }
+      const items = [...uniqueItems.values()].sort(compareCatalogChronological);
+      const component: CachedFranchiseComponent = { items, directEdges: crawl.directEdges };
+
+      if (crawl.incomplete) {
+        if (staleComponent && staleComponent.items.length >= items.length) {
+          return projectFranchiseForId(staleComponent, id);
+        }
+        return projectFranchiseForId(component, id);
+      }
+
+      const now = Date.now();
+      if (items.length === 0) {
+        saveFranchiseComponent(`${FRANCHISE_COMPONENT_CACHE_PREFIX}${id}`, { items: [], directEdges: {} }, [id], now);
+        return [];
+      }
+
+      if (crawl.capped) {
+        const memberIds = items.some((item) => item.anilistId === id) ? [id] : [];
+        saveFranchiseComponent(`${FRANCHISE_COMPONENT_CACHE_PREFIX}partial_${id}`, component, memberIds, now);
+      } else {
+        const canonicalId = Math.min(id, ...items.map((item) => item.anilistId));
+        saveFranchiseComponent(
+          `${FRANCHISE_COMPONENT_CACHE_PREFIX}${canonicalId}`,
+          component,
+          items.map((item) => item.anilistId),
+          now,
+        );
+      }
+
+      seedDetailsMemoryCache(items, now);
+      return projectFranchiseForId(component, id);
+    } catch (err: any) {
+      console.error(`Catalog refresh failed for franchise_${id}, serving stale data if available:`, err?.message || err);
+      return staleComponent ? projectFranchiseForId(staleComponent, id) : [];
+    } finally {
+      inFlightRequests.delete(inFlightKey);
     }
-    const media = await queryFranchiseMedia([...relationTypes.keys()]);
-    return media.map((item) => ({
-      ...normalizeMedia(item),
-      relationType: relationTypes.get(item.id) || 'RELATED',
-    })).sort((a, b) => {
-      // Chronological by first-air date. AniList's relation graph has no
-      // ordering of its own, so the release date (startDate, falling back to
-      // seasonYear) is the practical proxy. Titles with no date at all sink
-      // to the end, tie-broken by ID for stability.
-      const yearA = a.startDate?.year ?? a.seasonYear ?? Number.MAX_SAFE_INTEGER;
-      const yearB = b.startDate?.year ?? b.seasonYear ?? Number.MAX_SAFE_INTEGER;
-      if (yearA !== yearB) return yearA - yearB;
-      const monthA = a.startDate?.month ?? 0;
-      const monthB = b.startDate?.month ?? 0;
-      if (monthA !== monthB) return monthA - monthB;
-      const dayA = a.startDate?.day ?? 0;
-      const dayB = b.startDate?.day ?? 0;
-      if (dayA !== dayB) return dayA - dayB;
-      return a.anilistId - b.anilistId;
-    });
-  }, { emptyValue: [] });
+  })();
+
+  inFlightRequests.set(inFlightKey, request);
+  return request;
 }
 
 // --- Franchise season chain --------------------------------------------------
