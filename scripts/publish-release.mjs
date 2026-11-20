@@ -38,15 +38,13 @@ if (!token) {
   process.exit(1);
 }
 
-const RELEASE_BODY = `## Kaiko ${VERSION} — Smart Language Release Search, Ongoing Auto-Downloads, Playback Defaults, Bell Notifications & Streamlined Settings
+const RELEASE_BODY = `## Kaiko ${VERSION} — Full Franchise Related Graph & Instant Cross-Entry Caching
 
 ### What's New
-- **Smart Language-Aware Release Search & Multi-Audio / Multi-Subs Inspection:** full multi-audio, dual-audio, and multi-sub language classification in user priority order, automatically inspecting release descriptions to extract exact audio and subtitle languages inside Multi-Audio / Multi-Subs packs before ranking or auto-picking.
-- **Ongoing Anime Auto-Download & Per-Folder Target Picker:** automatic background episode download scheduling and retry for followed ongoing anime, alongside a download folder picker with live per-drive disk space rings.
-- **Default Playback Audio, Subtitles & Subtitle Types:** persistent defaults in Settings and the Video Player for audio language, subtitle language, main subtitle style (\`Smart Auto\`, \`Dubtitles / SDH\`, \`Full Dialogue\`, \`Off\`), and \`2nd Sub / Signs & Songs\` (\`Auto\`, \`Always On\`, \`Off\`), backed by v2 per-season track memory and one-click **Save as Default** in the player.
-- **Bell-Anchored Animated Notifications & Click Routing:** spring-animated popups anchored directly under the navbar bell with ring/ripple feedback, hover-to-pause timers, high-contrast dark obsidian cards readable over bright banners, and clickable actions across both live popups and the Notification Center (including jumping straight to **Library → Favourites** or **Library → Following**).
-- **Streamlined Settings Layout:** split **Subtitles & AI** into dedicated **Subtitles & Audio** and **AI** tabs and simplified **Playback** and **Downloads & P2P → Release Selection** into compact dropdowns, segmented pills, and inline \`#2\` fallback language chips.
-- **Whisper Sync/Punctuation, AniZip Specials & Touchpad Improvements:** refined Faster-Whisper CLI prompt priming and subtitle sync/punctuation post-processing, parent AniDB special-episode matching for unmapped spin-offs, and cleaner horizontal touchpad scroll physics.
+- **Full Multi-Hop Franchise Related Graph:** opening any season, OVA, special, movie, or alternative version now shows the entire connected anime franchise (across multi-hop \`ANIME\` relations and \`MANGA\` \`ADAPTATION\`/\`SOURCE\` bridges up to 150 titles) instead of only direct 1-hop neighbors.
+- **Accurate Direct & Transitive Relation Badges:** preserves exact direct relation labels (\`PARENT\`, \`PREQUEL\`, \`SEQUEL\`, \`SIDE_STORY\`, etc.) for immediate neighbors while tagging multi-hop entries \`RELATED\`, and filters out \`CHARACTER\` crossovers and adult entries.
+- **Instant Cross-Entry Navigation & Shared Caching:** caches the full franchise component once on disk and in memory (\`franchise_index_v2\`) and pre-seeds per-title details in memory, so jumping between seasons, OVAs, and movies in the same franchise loads immediately with zero extra AniList requests.
+- **Large-Franchise Support & Network Resilience:** removes the 50-title fetch limit by chunking media metadata across 50-item pages, automatically falls back from 2-hop to 1-hop queries on server errors, and avoids caching incomplete results on rate limits (\`429\`) while serving stale cached data when offline.
 
 ---
 ### Assets included

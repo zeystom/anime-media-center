@@ -1,5 +1,11 @@
 # Changelog
 
+## 5.1.0 — Full Franchise Related Graph & Instant Cross-Entry Caching
+
+- **Full Multi-Hop Franchise Related Graph (`electron/catalog.ts`, `electron/anilist.ts`):** Rewrote `getCatalogFranchise` to perform a bounded multi-hop BFS across AniList `ANIME` relations and `MANGA` `ADAPTATION`/`SOURCE` bridges (up to 150 titles / 8 rounds) using batched 1-hop/2-hop GraphQL queries (`queryFranchiseGraphBatch`), so opening any season, OVA, special, movie, or alternative version shows every entry in the franchise instead of only direct 1-hop neighbors. Excludes `CHARACTER` crossovers and `isAdult` entries, never crosses `MANGA -> MANGA` edges, and preserves exact direct relation badges (`PARENT`, `PREQUEL`, `SEQUEL`, `SIDE_STORY`, etc.) while labeling transitive entries `RELATED`.
+- **Shared Franchise Component Cache & Instant Navigation (`electron/catalog.ts`):** Added a versioned shared component cache (`franchise_index_v2` / `franchise_comp_v2_<id>`, 24h TTL) and in-memory details cache seeding (`seedDetailsMemoryCache`) so navigating between seasons, OVAs, specials, and movies inside the same franchise resolves immediately with zero additional AniList requests.
+- **Large-Franchise Chunking & Network Resilience (`electron/anilist.ts`, `electron/catalog.ts`, `test-catalog-cache.js`):** Removed the 50-title cap in `queryFranchiseMedia` by chunking into 50-item pages, added automatic 2-hop-to-1-hop query fallback on non-429 errors, prevented 24h cache poisoning on partial 429 failures with stale disk fallback, and added offline test coverage.
+
 ## 5.0.0 — Smart Language Release Search, Ongoing Auto-Downloads, Playback Defaults, Bell Notifications & Streamlined Settings
 
 - **Smart Language-Aware Release Search & Multi-Audio / Multi-Subs Inspection (`releaseClassification.ts`, `releaseSelection.ts`, `indexers.ts`, `ReleasePickerModal.tsx`):** Added full multi-audio, dual-audio, and multi-sub language classification in user priority order, automatically inspecting torrent descriptions to resolve exact audio and subtitle tracks inside Multi-Audio / Multi-Subs packs before ranking or auto-picking.
