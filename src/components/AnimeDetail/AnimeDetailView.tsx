@@ -26,13 +26,13 @@ import type {
   UserListStatus,
 } from '../../types'
 import type { RailItem } from '../../hooks/useCatalog'
-import type { FavouriteAnime, FollowedAnime } from '../../types/notifications'
+import type { FavouriteAnime, FollowedAnime, SettingsTabId } from '../../types/notifications'
 import { findAllLocalFolders, mergeLocalFolders, useLocalStatus } from '../../hooks/useLocalStatus'
 import { useUserLibrary } from '../../hooks/useUserLibrary'
 import { StatusBadges } from '../common/StatusBadges'
 import { DownloadActionButton } from '../common/DownloadActionButton'
 import { ReleasePickerModal } from '../P2P/ReleasePickerModal'
-import { detectSeasonFromTitle } from '../../lib/releaseParser/releaseClassification.ts'
+import { detectSeasonFromTitle, getTorrentLanguageLabel } from '../../lib/releaseParser/releaseClassification.ts'
 import { EpisodeRow } from './EpisodeRow'
 import { resolveAnimeTitle } from '../../utils/title'
 import {
@@ -102,6 +102,8 @@ export interface AnimeDetailViewProps {
   onUserEntryRemove?: (anilistId: number) => void
   onBackdropProgressChange?: (progress: number) => void
   onSelectGenre?: (genre: string) => void
+  onOpenDownloads?: () => void
+  onOpenSettings?: (tab?: SettingsTabId) => void
 }
 
 interface MergedEpisodeRow {
@@ -242,6 +244,8 @@ const AnimeDetailViewImpl: React.FC<AnimeDetailViewProps> = ({
   onUserEntryRemove,
   onBackdropProgressChange,
   onSelectGenre,
+  onOpenDownloads,
+  onOpenSettings,
 }) => {
   const [details, setDetails] = useState<CatalogItem | null>(null)
   // Hero description expand-on-click (clamped to 3 lines by default). The
@@ -1287,7 +1291,7 @@ const AnimeDetailViewImpl: React.FC<AnimeDetailViewProps> = ({
           mediaFormat: details?.format ?? hero.format ?? null,
           franchiseSeasons: franchiseSeasonTitles,
         })
-        const { best, usedEnglishDubFallback } = pickAutomaticSeasonRelease(response?.results ?? [], {
+        const { best, usedEnglishDubFallback, fallbackAudioLanguage } = pickAutomaticSeasonRelease(response?.results ?? [], {
           isOvaTitle: (details?.format ?? hero.format ?? '').toUpperCase() === 'OVA',
           audioPreferences: settings.preferredTorrentAudioLanguages ?? ['en'],
           subtitlePreferences: settings.preferredTorrentSubtitleLanguages ?? ['en'],
@@ -1307,9 +1311,35 @@ const AnimeDetailViewImpl: React.FC<AnimeDetailViewProps> = ({
             ...downloadLocation(),
           })
           if (result?.success && usedEnglishDubFallback) {
-            showGlobalToast(`Season download queued with English dub: ${best.title}. No release with both English dub and English subtitles was found. You can create subtitles in Whisper Studio.`, 'warning')
+            const fallbackLabel = fallbackAudioLanguage === 'en' || !fallbackAudioLanguage
+              ? 'English dub'
+              : `${getTorrentLanguageLabel(fallbackAudioLanguage)} audio`
+            const missingSubNote = fallbackAudioLanguage === 'en' || !fallbackAudioLanguage
+              ? 'No release with both English dub and English subtitles was found.'
+              : 'No release with matching subtitles was found.'
+            showGlobalToast(
+              `Season download queued with ${fallbackLabel}: ${best.title}. ${missingSubNote} You can create subtitles in Whisper Studio.`,
+              'warning',
+              5600,
+              {
+                title: hero.title,
+                posterUrl: hero.posterUrl,
+                kind: 'whisper',
+                actionLabel: localFolder ? 'Whisper Studio' : 'Downloads',
+                onAction: () => {
+                  if (localFolder) onOpenWhisper(localFolder)
+                  else onOpenDownloads?.()
+                },
+              },
+            )
           } else if (result?.success) {
-            showGlobalToast(`Season download queued: ${best.title}`, 'success')
+            showGlobalToast(`Season download queued: ${best.title}`, 'success', 4800, {
+              title: hero.title,
+              posterUrl: hero.posterUrl,
+              kind: 'download',
+              actionLabel: 'Downloads',
+              onAction: onOpenDownloads,
+            })
           } else {
             showGlobalToast(result?.error || 'Failed to queue the season download', 'error')
           }
@@ -1319,7 +1349,13 @@ const AnimeDetailViewImpl: React.FC<AnimeDetailViewProps> = ({
         // aired episodes individually through the persistent global worker.
         if (enqueueEpisodeDownloads) {
           enqueueEpisodeDownloads(targets.map((ep) => buildQueuedEpisode(ep)))
-          showGlobalToast(`Queuing ${targets.length} aired episode(s) individually…`, 'info')
+          showGlobalToast(`Queuing ${targets.length} aired episode(s) individually…`, 'info', 4200, {
+            title: hero.title,
+            posterUrl: hero.posterUrl,
+            kind: 'download',
+            actionLabel: 'Downloads',
+            onAction: onOpenDownloads,
+          })
         } else {
           showGlobalToast('No matching batch or episode queue handler available.', 'error')
         }
@@ -1327,7 +1363,13 @@ const AnimeDetailViewImpl: React.FC<AnimeDetailViewProps> = ({
         console.error('Automatic ongoing release search failed:', err)
         if (enqueueEpisodeDownloads) {
           enqueueEpisodeDownloads(targets.map((ep) => buildQueuedEpisode(ep)))
-          showGlobalToast(`Batch search failed — queuing ${targets.length} aired episode(s) individually…`, 'info')
+          showGlobalToast(`Batch search failed — queuing ${targets.length} aired episode(s) individually…`, 'info', 4500, {
+            title: hero.title,
+            posterUrl: hero.posterUrl,
+            kind: 'download',
+            actionLabel: 'Downloads',
+            onAction: onOpenDownloads,
+          })
         } else {
           showGlobalToast(err instanceof Error ? err.message : 'Automatic release search failed', 'error')
         }
@@ -1348,7 +1390,7 @@ const AnimeDetailViewImpl: React.FC<AnimeDetailViewProps> = ({
     setQueueing(true)
     try {
       const response = await api.searchReleases({ title: hero.title, aliases: searchAliases, anilistId, season: seasonHint, part: partHint, episode: null, episodeCount: details?.episodesCount ?? null, episodeDurationMinutes: details?.durationMinutes ?? null, mediaFormat: details?.format ?? hero.format ?? null, franchiseSeasons: franchiseSeasonTitles })
-      const { best, usedEnglishDubFallback } = pickAutomaticSeasonRelease(response?.results ?? [], {
+      const { best, usedEnglishDubFallback, fallbackAudioLanguage } = pickAutomaticSeasonRelease(response?.results ?? [], {
         isOvaTitle: (details?.format ?? hero.format ?? '').toUpperCase() === 'OVA',
         audioPreferences: settings.preferredTorrentAudioLanguages ?? ['en'],
         subtitlePreferences: settings.preferredTorrentSubtitleLanguages ?? ['en'],
@@ -1361,13 +1403,50 @@ const AnimeDetailViewImpl: React.FC<AnimeDetailViewProps> = ({
           return
         }
         const providerError = response?.reports?.find((report) => !report.ok)?.error
-        showGlobalToast(providerError ? `No release found: ${providerError}` : 'No matching season release found. Check your indexers in Settings.', 'error')
+        showGlobalToast(
+          providerError ? `No release found: ${providerError}` : 'No matching season release found. Check your indexers in Settings.',
+          'error',
+          5200,
+          {
+            title: hero.title,
+            actionLabel: 'Open Settings',
+            onAction: () => onOpenSettings?.('downloads'),
+          },
+        )
         return
       }
       const result = await api.addDownload({ item: best, title: hero.title, anilistId, episode: null, season: seasonHint, mediaFormat: details?.format ?? hero.format ?? null, episodeCount: details?.episodesCount ?? hero.episodesCount ?? null, mediaAliases: contentTitleAliases, franchiseSeasons: franchiseSeasonTitles, ...downloadLocation() })
-      if (result?.success && usedEnglishDubFallback) showGlobalToast(`Season download queued with English dub: ${best.title}. No release with both English dub and English subtitles was found. You can create subtitles in Whisper Studio.`, 'warning')
-      else if (result?.success) showGlobalToast(`Season download queued: ${best.title}`, 'success')
-      else showGlobalToast(result?.error || 'Failed to queue the season download', 'error')
+      if (result?.success && usedEnglishDubFallback) {
+        const fallbackLabel = fallbackAudioLanguage === 'en' || !fallbackAudioLanguage
+          ? 'English dub'
+          : `${getTorrentLanguageLabel(fallbackAudioLanguage)} audio`
+        const missingSubNote = fallbackAudioLanguage === 'en' || !fallbackAudioLanguage
+          ? 'No release with both English dub and English subtitles was found.'
+          : 'No release with matching subtitles was found.'
+        showGlobalToast(
+          `Season download queued with ${fallbackLabel}: ${best.title}. ${missingSubNote} You can create subtitles in Whisper Studio.`,
+          'warning',
+          5600,
+          {
+            title: hero.title,
+            posterUrl: hero.posterUrl,
+            kind: 'whisper',
+            actionLabel: localFolder ? 'Whisper Studio' : 'Downloads',
+            onAction: () => {
+              if (localFolder) onOpenWhisper(localFolder)
+              else onOpenDownloads?.()
+            },
+          },
+        )
+      } else if (result?.success) {
+        showGlobalToast(`Season download queued: ${best.title}`, 'success', 4800, {
+          title: hero.title,
+          posterUrl: hero.posterUrl,
+          kind: 'download',
+          actionLabel: 'Downloads',
+          onAction: onOpenDownloads,
+        })
+      } else showGlobalToast(result?.error || 'Failed to queue the season download', 'error')
     } catch (err) {
       console.error('Automatic release selection failed:', err)
       showGlobalToast(err instanceof Error ? err.message : 'Automatic release search failed', 'error')
@@ -1411,7 +1490,13 @@ const AnimeDetailViewImpl: React.FC<AnimeDetailViewProps> = ({
       const res = await api.addDownload({ item: result, title: hero.title, anilistId, episode, season: seasonHint, mediaFormat: details?.format ?? hero.format ?? null, episodeCount: details?.episodesCount ?? hero.episodesCount ?? null, mediaAliases: contentTitleAliases, franchiseSeasons: franchiseSeasonTitles, ...downloadLocation() })
       if (res?.success) {
         if (anilistId != null) recordPickedReleasePreference(anilistId, result)
-        showGlobalToast('Download queued — see the Downloads tab', 'success')
+        showGlobalToast('Download queued — see the Downloads tab', 'success', 4500, {
+          title: hero.title,
+          posterUrl: hero.posterUrl,
+          kind: 'download',
+          actionLabel: 'Downloads',
+          onAction: onOpenDownloads,
+        })
       } else {
         showGlobalToast(res?.error || 'Failed to queue download', 'error')
       }
@@ -2541,6 +2626,8 @@ const AnimeDetailViewImpl: React.FC<AnimeDetailViewProps> = ({
         episodeDurationMinutes={details?.durationMinutes ?? null}
         aliases={searchAliases}
         franchiseSeasons={franchiseSeasonTitles}
+        preferredAudioLanguages={settings.preferredTorrentAudioLanguages ?? ['en']}
+        preferredSubtitleLanguages={settings.preferredTorrentSubtitleLanguages ?? ['en']}
         onCancel={handleCancelReleasePicker}
         onPicked={handlePickRelease}
       />

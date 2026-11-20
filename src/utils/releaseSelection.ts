@@ -1,4 +1,10 @@
-import { classifyRelease, isMultiSeasonCollection, type TorrentLanguageCode } from '../lib/releaseParser/releaseClassification.ts'
+import {
+  classifyRelease,
+  computeLanguagePreferenceRank,
+  isMultiSeasonCollection,
+  matchesReleaseLanguagePreferences,
+  type TorrentLanguageCode,
+} from '../lib/releaseParser/releaseClassification.ts'
 import { parseReleaseCore } from '../lib/releaseParser/regexEngine.ts'
 import type { AnimeFolder, CatalogRelatedTitle, FranchiseSeasonEntry, ReleaseSearchResult } from '../types'
 
@@ -102,7 +108,8 @@ export function recordPickedReleasePreference(
   if (!title) return
   const parsedGroup = parseReleaseCore(title).releaseGroup?.trim() || null
   const classification = classifyRelease(title, release?.description)
-  const audioMode: 'dub' | 'sub' = classification.audioLanguageCodes.includes('en') ? 'dub' : 'sub'
+  const hasNonJapaneseDub = classification.audioLanguageCodes.some((code) => code !== 'ja')
+  const audioMode: 'dub' | 'sub' = hasNonJapaneseDub ? 'dub' : 'sub'
   const patch: Partial<AnimeReleasePreference> = { audioMode }
   if (parsedGroup) patch.preferredGroup = parsedGroup
   saveAnimeReleasePreference(anilistId, patch)
@@ -136,13 +143,27 @@ export function matchesPreferredReleaseLanguages(
   subtitlePreferences: string[],
 ): boolean {
   const classification = classifyRelease(result.title, result.description)
-  const audioMatch = audioPreferences.length
-    ? audioPreferences.some((code) => classification.audioLanguageCodes.includes(code as TorrentLanguageCode))
-    : classification.audioLanguageCodes.length > 0
-  const subtitleMatch = subtitlePreferences.length
-    ? subtitlePreferences.some((code) => classification.subtitleLanguageCodes.includes(code as TorrentLanguageCode))
-    : classification.subtitleLanguageCodes.length > 0
-  return audioMatch && subtitleMatch
+  return matchesReleaseLanguagePreferences(classification, audioPreferences, subtitlePreferences)
+}
+
+export function isDubAudioOnlyFallback(
+  result: Pick<ReleaseSearchResult, 'title' | 'description'>,
+  audioPreferences: string[],
+  subtitlePreferences: string[],
+): TorrentLanguageCode | null {
+  if (audioPreferences.length === 0 || subtitlePreferences.length === 0) return null
+  const dubPrefs = audioPreferences.filter((code) => code !== 'ja')
+  if (dubPrefs.length === 0) return null
+  const classification = classifyRelease(result.title, result.description)
+  if (subtitlePreferences.some((code) => classification.subtitleLanguageCodes.includes(code as TorrentLanguageCode))) {
+    return null
+  }
+  for (const code of dubPrefs) {
+    if (classification.audioLanguageCodes.includes(code as TorrentLanguageCode)) {
+      return code as TorrentLanguageCode
+    }
+  }
+  return null
 }
 
 export function isEnglishDubFallback(
@@ -150,10 +171,7 @@ export function isEnglishDubFallback(
   audioPreferences: string[],
   subtitlePreferences: string[],
 ): boolean {
-  if (!audioPreferences.includes('en') || !subtitlePreferences.includes('en')) return false
-  const classification = classifyRelease(result.title, result.description)
-  return classification.audioLanguageCodes.includes('en')
-    && !classification.subtitleLanguageCodes.includes('en')
+  return isDubAudioOnlyFallback(result, audioPreferences, subtitlePreferences) === 'en'
 }
 
 function preferSeeded(releases: ReleaseSearchResult[]): ReleaseSearchResult[] {
@@ -161,18 +179,29 @@ function preferSeeded(releases: ReleaseSearchResult[]): ReleaseSearchResult[] {
   return seeded.length > 0 ? seeded : releases
 }
 
-function preferSeededAndGroup(releases: ReleaseSearchResult[], preferredGroup?: string | null): ReleaseSearchResult[] {
+function rankCandidatesForAutoPick(
+  releases: ReleaseSearchResult[],
+  audioPreferences: string[],
+  subtitlePreferences: string[],
+  preferredGroup?: string | null,
+): ReleaseSearchResult[] {
+  if (releases.length <= 1) return releases
+  const targetGroup = preferredGroup?.trim().toLowerCase() || null
   const pool = preferSeeded(releases)
-  const target = preferredGroup?.trim().toLowerCase()
-  if (!target || pool.length <= 1) return pool
-  const matching: ReleaseSearchResult[] = []
-  const others: ReleaseSearchResult[] = []
-  for (const release of pool) {
-    const group = parseReleaseCore(release.title || '').releaseGroup?.trim().toLowerCase()
-    if (group && group === target) matching.push(release)
-    else others.push(release)
-  }
-  return matching.length > 0 ? [...matching, ...others] : pool
+  return pool
+    .map((release, index) => {
+      const classification = classifyRelease(release.title, release.description)
+      const langRank = computeLanguagePreferenceRank(classification, audioPreferences, subtitlePreferences)
+      const group = targetGroup ? parseReleaseCore(release.title || '').releaseGroup?.trim().toLowerCase() : null
+      const groupMatch = targetGroup && group === targetGroup ? 0 : 1
+      return { release, index, langRank, groupMatch }
+    })
+    .sort((a, b) => {
+      if (a.langRank !== b.langRank) return a.langRank - b.langRank
+      if (a.groupMatch !== b.groupMatch) return a.groupMatch - b.groupMatch
+      return a.index - b.index
+    })
+    .map((entry) => entry.release)
 }
 
 function matchesNonDubSubRelease(
@@ -181,7 +210,7 @@ function matchesNonDubSubRelease(
   preferredGroup?: string | null,
 ): 'sub-match' | 'group-match' | null {
   const classification = classifyRelease(release.title, release.description)
-  if (classification.audioLanguageCodes.includes('en')) return null
+  if (classification.audioLanguageCodes.some((code) => code !== 'ja')) return null
   const subtitleMatch = subtitlePreferences.length
     ? subtitlePreferences.some((code) => classification.subtitleLanguageCodes.includes(code as TorrentLanguageCode))
     : classification.subtitleLanguageCodes.length > 0
@@ -199,7 +228,7 @@ function isNonDubJapaneseSubRelease(
   subtitlePreferences: string[],
 ): boolean {
   const classification = classifyRelease(release.title, release.description)
-  if (classification.audioLanguageCodes.includes('en')) return false
+  if (classification.audioLanguageCodes.some((code) => code !== 'ja')) return false
   const hasJaOrSub = classification.audioLanguageCodes.includes('ja')
     || (subtitlePreferences.length
       ? subtitlePreferences.some((code) => classification.subtitleLanguageCodes.includes(code as TorrentLanguageCode))
@@ -214,36 +243,44 @@ export function pickAutomaticEpisodeRelease(
     subtitlePreferences: string[]
     animePref?: Partial<AnimeReleasePreference> | null
   },
-): { best: ReleaseSearchResult | null; usedEnglishDubFallback: boolean; hasJapaneseSubAlternative: boolean } {
+): {
+  best: ReleaseSearchResult | null
+  usedEnglishDubFallback: boolean
+  fallbackAudioLanguage: TorrentLanguageCode | null
+  hasJapaneseSubAlternative: boolean
+} {
   const { audioPreferences, subtitlePreferences, animePref } = options
   const preferredGroup = animePref?.preferredGroup ?? null
   const automaticCandidates = (results ?? []).filter((release) =>
     !release.sizeWarning
     && (release.titleRelevance == null || release.titleRelevance === 'exact' || release.titleRelevance === 'prefix'),
   )
+  const hasDubPreference = audioPreferences.some((code) => code !== 'ja')
 
   let best: ReleaseSearchResult | null = null
-  if (animePref?.audioMode === 'sub' && audioPreferences.includes('en')) {
+  if (animePref?.audioMode === 'sub' && hasDubPreference) {
     const subMatches = automaticCandidates.filter((r) => matchesNonDubSubRelease(r, subtitlePreferences, preferredGroup) === 'sub-match')
     const groupOnlyMatches = automaticCandidates.filter((r) => matchesNonDubSubRelease(r, subtitlePreferences, preferredGroup) === 'group-match')
-    best = preferSeededAndGroup(subMatches, preferredGroup)[0]
+    best = rankCandidatesForAutoPick(subMatches, ['ja'], subtitlePreferences, preferredGroup)[0]
       ?? preferSeeded(groupOnlyMatches)[0]
-      ?? preferSeededAndGroup(automaticCandidates.filter((r) => matchesPreferredReleaseLanguages(r, audioPreferences, subtitlePreferences)), preferredGroup)[0]
-      ?? preferSeededAndGroup(automaticCandidates.filter((r) => isEnglishDubFallback(r, audioPreferences, subtitlePreferences)), preferredGroup)[0]
+      ?? rankCandidatesForAutoPick(automaticCandidates.filter((r) => matchesPreferredReleaseLanguages(r, audioPreferences, subtitlePreferences)), audioPreferences, subtitlePreferences, preferredGroup)[0]
+      ?? rankCandidatesForAutoPick(automaticCandidates.filter((r) => isDubAudioOnlyFallback(r, audioPreferences, subtitlePreferences) !== null), audioPreferences, subtitlePreferences, preferredGroup)[0]
       ?? null
   } else {
-    best = preferSeededAndGroup(automaticCandidates.filter((r) => matchesPreferredReleaseLanguages(r, audioPreferences, subtitlePreferences)), preferredGroup)[0]
-      ?? preferSeededAndGroup(automaticCandidates.filter((r) => isEnglishDubFallback(r, audioPreferences, subtitlePreferences)), preferredGroup)[0]
+    best = rankCandidatesForAutoPick(automaticCandidates.filter((r) => matchesPreferredReleaseLanguages(r, audioPreferences, subtitlePreferences)), audioPreferences, subtitlePreferences, preferredGroup)[0]
+      ?? rankCandidatesForAutoPick(automaticCandidates.filter((r) => isDubAudioOnlyFallback(r, audioPreferences, subtitlePreferences) !== null), audioPreferences, subtitlePreferences, preferredGroup)[0]
       ?? null
   }
 
+  const dubFallbackLang = best ? isDubAudioOnlyFallback(best, audioPreferences, subtitlePreferences) : null
   const usedEnglishDubFallback = !!best && !matchesPreferredReleaseLanguages(best, audioPreferences, subtitlePreferences)
     && !(animePref?.audioMode === 'sub' && matchesNonDubSubRelease(best, subtitlePreferences, preferredGroup) != null)
+  const fallbackAudioLanguage = usedEnglishDubFallback ? dubFallbackLang : null
   const hasJapaneseSubAlternative = best == null
-    && audioPreferences.includes('en')
+    && hasDubPreference
     && automaticCandidates.some((r) => isNonDubJapaneseSubRelease(r, subtitlePreferences))
 
-  return { best, usedEnglishDubFallback, hasJapaneseSubAlternative }
+  return { best, usedEnglishDubFallback, fallbackAudioLanguage, hasJapaneseSubAlternative }
 }
 
 export function pickAutomaticSeasonRelease(
@@ -255,7 +292,11 @@ export function pickAutomaticSeasonRelease(
     animePref?: Partial<AnimeReleasePreference> | null
     allowedKinds?: string[]
   },
-): { best: ReleaseSearchResult | null; usedEnglishDubFallback: boolean } {
+): {
+  best: ReleaseSearchResult | null
+  usedEnglishDubFallback: boolean
+  fallbackAudioLanguage: TorrentLanguageCode | null
+} {
   const { isOvaTitle, audioPreferences, subtitlePreferences, animePref, allowedKinds } = options
   const preferredGroup = animePref?.preferredGroup ?? null
   const ovaKinds = ['ova', 'unknown', 'season-pack', 'episode-range']
@@ -266,6 +307,7 @@ export function pickAutomaticSeasonRelease(
     && (release.titleRelevance == null || release.titleRelevance === 'exact' || release.titleRelevance === 'prefix')
     && (isOvaTitle ? ovaKinds : bundleKinds).includes(classifyRelease(release.title, release.description).kind),
   )
+  const hasDubPreference = audioPreferences.some((code) => code !== 'ja')
 
   const ovaShapeGroup = (release: ReleaseSearchResult) => {
     const kind = classifyRelease(release.title, release.description).kind
@@ -274,30 +316,32 @@ export function pickAutomaticSeasonRelease(
     return 2
   }
 
-  const pickByTier = (list: ReleaseSearchResult[]): ReleaseSearchResult | null => {
-    const ranked = preferSeededAndGroup(list, preferredGroup)
+  const pickByTier = (list: ReleaseSearchResult[], rankAudioPrefs: string[]): ReleaseSearchResult | null => {
+    const ranked = rankCandidatesForAutoPick(list, rankAudioPrefs, subtitlePreferences, preferredGroup)
     if (ranked.length === 0) return null
     if (!isOvaTitle) return ranked[0]
     return [...ranked].sort((a, b) => ovaShapeGroup(a) - ovaShapeGroup(b))[0] ?? null
   }
 
   let best: ReleaseSearchResult | null = null
-  if (animePref?.audioMode === 'sub' && audioPreferences.includes('en')) {
+  if (animePref?.audioMode === 'sub' && hasDubPreference) {
     const subMatches = validReleases.filter((r) => matchesNonDubSubRelease(r, subtitlePreferences, preferredGroup) === 'sub-match')
     const groupOnlyMatches = validReleases.filter((r) => matchesNonDubSubRelease(r, subtitlePreferences, preferredGroup) === 'group-match')
-    best = pickByTier(subMatches)
-      ?? pickByTier(groupOnlyMatches)
-      ?? pickByTier(validReleases.filter((r) => matchesPreferredReleaseLanguages(r, audioPreferences, subtitlePreferences)))
-      ?? pickByTier(validReleases.filter((r) => isEnglishDubFallback(r, audioPreferences, subtitlePreferences)))
+    best = pickByTier(subMatches, ['ja'])
+      ?? pickByTier(groupOnlyMatches, ['ja'])
+      ?? pickByTier(validReleases.filter((r) => matchesPreferredReleaseLanguages(r, audioPreferences, subtitlePreferences)), audioPreferences)
+      ?? pickByTier(validReleases.filter((r) => isDubAudioOnlyFallback(r, audioPreferences, subtitlePreferences) !== null), audioPreferences)
   } else {
-    best = pickByTier(validReleases.filter((r) => matchesPreferredReleaseLanguages(r, audioPreferences, subtitlePreferences)))
-      ?? pickByTier(validReleases.filter((r) => isEnglishDubFallback(r, audioPreferences, subtitlePreferences)))
+    best = pickByTier(validReleases.filter((r) => matchesPreferredReleaseLanguages(r, audioPreferences, subtitlePreferences)), audioPreferences)
+      ?? pickByTier(validReleases.filter((r) => isDubAudioOnlyFallback(r, audioPreferences, subtitlePreferences) !== null), audioPreferences)
   }
 
+  const dubFallbackLang = best ? isDubAudioOnlyFallback(best, audioPreferences, subtitlePreferences) : null
   const usedEnglishDubFallback = !!best && !matchesPreferredReleaseLanguages(best, audioPreferences, subtitlePreferences)
     && !(animePref?.audioMode === 'sub' && matchesNonDubSubRelease(best, subtitlePreferences, preferredGroup) != null)
+  const fallbackAudioLanguage = usedEnglishDubFallback ? dubFallbackLang : null
 
-  return { best, usedEnglishDubFallback }
+  return { best, usedEnglishDubFallback, fallbackAudioLanguage }
 }
 
 export function computeOngoingDownloadPlan(params: {

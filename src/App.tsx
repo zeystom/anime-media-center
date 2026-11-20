@@ -13,7 +13,7 @@ import { toRailItem } from './hooks/useCatalog';
 import type { RailItem } from './hooks/useCatalog';
 import { useActiveHeroBannerUrl } from './utils/heroBanner';
 import { markScrollActivity } from './utils/scrollState';
-import type { AppNotification, FavouriteAnime, FollowedAnime } from './types/notifications';
+import { resolveNotificationActionMeta, type AppNotification, type FavouriteAnime, type FollowedAnime, type LibraryCollectionFilter, type SettingsTabId } from './types/notifications';
 import { UpdatePromptModal } from './components/UpdatePromptModal';
 import {
   buildCatalogSearchAliases,
@@ -26,7 +26,7 @@ import {
   type QueuedEpisodeDownload,
 } from './utils/releaseSelection';
 import { parseReleaseCore } from './lib/releaseParser/regexEngine.ts';
-import { detectSeasonFromTitle } from './lib/releaseParser/releaseClassification.ts';
+import { detectSeasonFromTitle, getTorrentLanguageLabel } from './lib/releaseParser/releaseClassification.ts';
 
 export type { QueuedEpisodeDownload };
 
@@ -160,6 +160,11 @@ export const App: React.FC = () => {
   const isPlayerOpenRef = useRef(false);
   const [playerInitialTime, setPlayerInitialTime] = useState<number>(0);
   const [settingsOpen, setSettingsOpen] = useState<boolean>(false);
+  const [settingsInitialTab, setSettingsInitialTab] = useState<SettingsTabId | undefined>(undefined);
+  const [libraryInitialFilter, setLibraryInitialFilter] = useState<LibraryCollectionFilter | null>(null);
+  const handleClearLibraryFilter = useCallback(() => setLibraryInitialFilter(null), []);
+  const handlePlayEpisodeRef = useRef<(episode: Episode, startAt?: number) => void>(() => {});
+  const handleClosePlayerRef = useRef<() => Promise<void>>(async () => {});
   const [isWhisperActive, setIsWhisperActive] = useState<boolean>(false);
   const [detailSource, setDetailSource] = useState<DetailSource | null>(null);
   // Navbar backdrop progress lives OUTSIDE React state: scroll updates flow
@@ -245,7 +250,11 @@ export const App: React.FC = () => {
     setDetailSource(null);
     setCurrentTab(tab);
   }, []);
-  const handleOpenSettings = useCallback(() => setSettingsOpen(true), []);
+  const handleOpenSettings = useCallback((tab?: SettingsTabId) => {
+    setSettingsInitialTab(typeof tab === 'string' ? tab : undefined);
+    setSettingsMounted(true);
+    setSettingsOpen(true);
+  }, []);
   const handleSelectCatalogItem = useCallback((item: RailItem) => setDetailSource({ kind: 'catalog', item }), []);
   const handleSelectLocalFolder = useCallback((folder: AnimeFolder) => setDetailSource({ kind: 'local', folder }), []);
   const handleSelectSearchItem = useCallback((item: RailItem) => {
@@ -308,31 +317,6 @@ export const App: React.FC = () => {
     setDetailSource(null);
     setCurrentTab('whisper');
   }, []);
-  const handleNotificationAction = useCallback((item: AppNotification) => {
-    if (item.kind === 'airing' && item.anilistId && item.episode) {
-      const resolvedTitle =
-        item.animeTitle ||
-        (item.message.includes(' · ') ? item.message.split(' · ')[0] : item.title);
-      setInitialDownloadEpisode(item.episode);
-      setDetailSource({
-        kind: 'catalog',
-        item: toRailItem({
-          anilistId: item.anilistId,
-          idMal: null,
-          title: resolvedTitle,
-          posterUrl: item.posterUrl ?? null,
-          episode: item.episode,
-          airingAt: Math.floor(item.createdAt / 1000),
-        }),
-      });
-    } else if (item.kind === 'download') {
-      setDetailSource(null);
-      setCurrentTab('downloads');
-    } else if (item.kind === 'whisper') {
-      setDetailSource(null);
-      setCurrentTab('whisper');
-    }
-  }, []);
 
   // Library & Data state
   const [settings, setSettings] = useState<AppSettings>({
@@ -353,6 +337,10 @@ export const App: React.FC = () => {
     releaseSelectionMode: 'automatic',
     preferredTorrentAudioLanguages: ['en'],
     preferredTorrentSubtitleLanguages: ['en'],
+    defaultAudioLanguage: 'auto',
+    defaultSubtitleLanguage: 'auto',
+    defaultSubtitleType: 'auto',
+    defaultTopSubMode: 'auto',
   });
 
   const [folders, setFolders] = useState<AnimeFolder[]>([]);
@@ -411,6 +399,175 @@ export const App: React.FC = () => {
   const prevJobStatusRef = useRef<Record<string, string>>({});
   const p2pSeededRef = useRef(false);
   const prevProgressRef = useRef<Record<string, number>>({});
+  const visibleFoldersActionRef = useRef<AnimeFolder[]>([]);
+  visibleFoldersActionRef.current = visibleFolders;
+
+  const markNotificationRead = useCallback((id: string) => {
+    setNotifications((previous) => previous.map((item) => item.id === id ? { ...item, read: true } : item));
+  }, []);
+
+  const exitPlayerIfOpen = useCallback(() => {
+    if (isPlayerOpenRef.current) {
+      void handleClosePlayerRef.current();
+    }
+  }, []);
+
+  const handleOpenLibraryFilter = useCallback((filter: LibraryCollectionFilter) => {
+    exitPlayerIfOpen();
+    setInitialDownloadEpisode(null);
+    setDetailSource(null);
+    setLibraryInitialFilter(filter);
+    setCurrentTab('library');
+  }, [exitPlayerIfOpen]);
+
+  const handleNotificationAction = useCallback((item: AppNotification) => {
+    const { actionType } = resolveNotificationActionMeta(item);
+    const currentFolders = visibleFoldersActionRef.current;
+
+    const findMatchingFolder = (): AnimeFolder | null => {
+      if (item.folderPath) {
+        const cleanTarget = item.folderPath.replace(/[/\\]+$/, '').toLowerCase();
+        const byPath = currentFolders.find(
+          (f) => f.folderPath.replace(/[/\\]+$/, '').toLowerCase() === cleanTarget
+        );
+        if (byPath) return byPath;
+      }
+      if (item.anilistId != null) {
+        const byId = currentFolders.find((f) => f.anilistId === item.anilistId);
+        if (byId) return byId;
+      }
+      const normTitle = normalizeAnimeTitle(item.animeTitle);
+      if (normTitle.length >= 4) {
+        const byTitle = currentFolders.find((f) => {
+          const cf = normalizeAnimeTitle(f.canonicalTitle);
+          const ff = normalizeAnimeTitle(f.folderName);
+          return cf === normTitle || ff === normTitle;
+        });
+        if (byTitle) return byTitle;
+      }
+      return null;
+    };
+
+    const resolvedTitle =
+      item.animeTitle ||
+      (item.message.includes(' · ') ? item.message.split(' · ')[0] : item.title);
+
+    if (actionType === 'open-settings') {
+      handleOpenSettings(item.settingsTab || 'general');
+      return;
+    }
+
+    if (actionType === 'open-library') {
+      handleOpenLibraryFilter(
+        item.libraryFilter || (item.kind === 'follow' ? 'followed' : 'all')
+      );
+      return;
+    }
+
+    if (actionType === 'open-downloads') {
+      exitPlayerIfOpen();
+      setInitialDownloadEpisode(null);
+      setDetailSource(null);
+      setCurrentTab('downloads');
+      return;
+    }
+
+    if (actionType === 'open-whisper') {
+      exitPlayerIfOpen();
+      const folder = findMatchingFolder();
+      if (folder) {
+        setSelectedFolder(folder);
+      }
+      setInitialDownloadEpisode(null);
+      setDetailSource(null);
+      setCurrentTab('whisper');
+      return;
+    }
+
+    if (actionType === 'play-episode') {
+      if (item.filePath) {
+        const targetLower = item.filePath.toLowerCase();
+        for (const folder of currentFolders) {
+          const ep = folder.episodes.find((entry) => entry.filePath.toLowerCase() === targetLower);
+          if (ep && !ep.isDownloading) {
+            setInitialDownloadEpisode(null);
+            setDetailSource(null);
+            handlePlayEpisodeRef.current(ep);
+            return;
+          }
+        }
+      }
+      exitPlayerIfOpen();
+      const folder = findMatchingFolder();
+      if (folder) setSelectedFolder(folder);
+      setInitialDownloadEpisode(null);
+      setDetailSource(null);
+      setCurrentTab('whisper');
+      return;
+    }
+
+    if (actionType === 'manual-pick' && item.anilistId && item.episode) {
+      exitPlayerIfOpen();
+      setInitialDownloadEpisode(null);
+      setManualPickRequest({ anilistId: item.anilistId, episode: item.episode });
+      setDetailSource({
+        kind: 'catalog',
+        item: toRailItem({
+          anilistId: item.anilistId,
+          idMal: null,
+          title: resolvedTitle,
+          posterUrl: item.posterUrl ?? null,
+          episode: item.episode,
+          airingAt: Math.floor(item.createdAt / 1000),
+        }),
+      });
+      return;
+    }
+
+    if (actionType === 'find-episode' && item.anilistId && item.episode) {
+      exitPlayerIfOpen();
+      setInitialDownloadEpisode(item.episode);
+      setDetailSource({
+        kind: 'catalog',
+        item: toRailItem({
+          anilistId: item.anilistId,
+          idMal: null,
+          title: resolvedTitle,
+          posterUrl: item.posterUrl ?? null,
+          episode: item.episode,
+          airingAt: Math.floor(item.createdAt / 1000),
+        }),
+      });
+      return;
+    }
+
+    if (actionType === 'open-anime') {
+      exitPlayerIfOpen();
+      const localFolder = findMatchingFolder();
+      if (localFolder) {
+        setInitialDownloadEpisode(null);
+        setDetailSource({ kind: 'local', folder: localFolder });
+        return;
+      }
+      if (item.anilistId) {
+        setInitialDownloadEpisode(null);
+        setDetailSource({
+          kind: 'catalog',
+          item: toRailItem({
+            anilistId: item.anilistId,
+            idMal: null,
+            title: resolvedTitle,
+            posterUrl: item.posterUrl ?? null,
+            episode: item.episode ?? 1,
+            airingAt: Math.floor(item.createdAt / 1000),
+          }),
+        });
+        return;
+      }
+      setDetailSource(null);
+      setCurrentTab('downloads');
+    }
+  }, [exitPlayerIfOpen, handleOpenLibraryFilter, handleOpenSettings]);
 
   const addNotification = useCallback((notification: Omit<AppNotification, 'id' | 'createdAt' | 'read'>) => {
     const item: AppNotification = {
@@ -433,8 +590,17 @@ export const App: React.FC = () => {
           : item.tone === 'red'
             ? 'error'
             : 'info';
-    showGlobalToast(`${item.title}: ${item.message}`, toastType, 5000);
-  }, []);
+    const { actionType, actionLabel } = resolveNotificationActionMeta(item);
+    showGlobalToast(item.message, toastType, 5200, {
+      title: item.title,
+      posterUrl: item.posterUrl,
+      kind: item.kind,
+      notificationId: item.id,
+      actionLabel: actionLabel ?? undefined,
+      onMarkRead: () => markNotificationRead(item.id),
+      onAction: actionType ? () => handleNotificationAction(item) : undefined,
+    });
+  }, [handleNotificationAction, markNotificationRead]);
 
   // Download notifications share a stable id derived from the torrent's
   // infoHash: the started → progress → completed transitions UPDATE one item
@@ -470,10 +636,6 @@ export const App: React.FC = () => {
     try { localStorage.setItem(FAVOURITE_ANIME_STORAGE_KEY, JSON.stringify(favouriteAnime)); } catch {}
   }, [favouriteAnime]);
 
-  const markNotificationRead = useCallback((id: string) => {
-    setNotifications((previous) => previous.map((item) => item.id === id ? { ...item, read: true } : item));
-  }, []);
-
   const markAllNotificationsRead = useCallback(() => {
     setNotifications((previous) => previous.map((item) => ({ ...item, read: true })));
   }, []);
@@ -495,12 +657,16 @@ export const App: React.FC = () => {
     addNotification({
       kind: 'follow',
       tone: follow ? 'green' : 'amber',
-      title: follow ? 'Anime followed' : 'Follow removed',
+      title: follow ? 'Saved to Library · Following' : 'Removed from Following',
+      animeTitle: anime.title,
       message: follow
-        ? `${anime.title} will be tracked for new episodes.`
-        : `${anime.title} will no longer be tracked for new episodes.`,
+        ? `${anime.title} was added to Following in your Library — new episodes will be tracked.`
+        : `${anime.title} was removed from Following in your Library.`,
       anilistId: anime.anilistId,
       posterUrl: anime.posterUrl,
+      actionType: 'open-library',
+      libraryFilter: 'followed',
+      actionLabel: 'View Following',
     });
   }, [addNotification]);
 
@@ -571,14 +737,24 @@ export const App: React.FC = () => {
     if (!autoDownload) {
       setAutoDownloadRetries((previous) => previous.filter((item) => item.anilistId !== anilistId));
     }
+    const followed = followedAnimeRef.current.find((item) => item.anilistId === anilistId);
     showGlobalToast(
-      autoDownload
-        ? 'Auto-download enabled for new episodes'
-        : 'Auto-download disabled for new episodes',
+      followed
+        ? `${followed.title} — ${autoDownload ? 'auto-download enabled in Following.' : 'auto-download disabled.'}`
+        : autoDownload
+          ? 'Auto-download enabled for new episodes'
+          : 'Auto-download disabled for new episodes',
       autoDownload ? 'success' : 'info',
-      3500,
+      3800,
+      {
+        title: autoDownload ? 'Auto-Download Enabled' : 'Auto-Download Paused',
+        posterUrl: followed?.posterUrl,
+        kind: 'follow',
+        actionLabel: 'View Following',
+        onAction: () => handleOpenLibraryFilter('followed'),
+      },
     );
-  }, []);
+  }, [handleOpenLibraryFilter]);
 
   const enqueueEpisodeDownloads = useCallback((items: QueuedEpisodeDownload[]) => {
     if (!Array.isArray(items) || items.length === 0) return;
@@ -615,8 +791,20 @@ export const App: React.FC = () => {
         ? previous.map((item) => (anime.anilistId != null && item.anilistId === anime.anilistId) || item.titleKey === anime.titleKey ? anime : item)
         : [anime, ...previous]
       : previous.filter((item) => !((anime.anilistId != null && item.anilistId === anime.anilistId) || item.titleKey === anime.titleKey)));
-    showGlobalToast(favourite ? `${anime.title} added to favourites` : `${anime.title} removed from favourites`, 'success');
-  }, []);
+    showGlobalToast(
+      favourite
+        ? `${anime.title} was added to Favourites in your Library.`
+        : `${anime.title} was removed from Favourites in your Library.`,
+      'success',
+      4200,
+      {
+        title: favourite ? 'Saved to Library · Favourites' : 'Removed from Favourites',
+        posterUrl: anime.posterUrl,
+        actionLabel: 'View Favourites',
+        onAction: () => handleOpenLibraryFilter('favourites'),
+      },
+    );
+  }, [handleOpenLibraryFilter]);
 
   const checkBinariesStatus = useCallback(async (appSettings: AppSettings) => {
     if (!window.electronAPI) return;
@@ -650,26 +838,48 @@ export const App: React.FC = () => {
     for (const job of state.jobs) {
       next[job.infoHash] = job.status;
       const before = prev[job.infoHash];
-      const poster = folders.find((f) => f.anilistId === job.anilistId)?.posterUrl ?? null;
+      const matchedFolder = folders.find((f) => f.anilistId != null && f.anilistId === job.anilistId) ?? null;
+      const followedMatch = job.anilistId != null
+        ? followedAnimeRef.current.find((f) => f.anilistId === job.anilistId) ?? null
+        : null;
+      const poster = matchedFolder?.posterUrl ?? followedMatch?.posterUrl ?? null;
       const suffix = job.episode != null ? ` · Episode ${job.episode}` : '';
 
       if (!p2pSeededRef.current) continue;
 
       // New job: announce the start with a live progress notification.
       if (before === undefined && (job.status === 'downloading' || job.status === 'connecting' || job.status === 'queued')) {
-        showGlobalToast(`${job.title} download started`, 'info', 5000);
+        const startedId = `dl:${job.infoHash}`;
+        const startedMessage = `${job.title}${suffix} — searching peers and downloading.`;
         upsertDownloadNotification({
           kind: 'download',
           tone: 'blue',
-          id: `dl:${job.infoHash}`,
+          id: startedId,
           infoHash: job.infoHash,
           state: 'downloading',
           progress: Math.max(0, Math.min(100, job.progress ?? 0)),
           title: 'Download started',
-          message: `${job.title}${suffix} — searching peers and downloading.`,
+          animeTitle: job.title,
+          message: startedMessage,
           anilistId: job.anilistId ?? undefined,
+          folderPath: matchedFolder?.folderPath ?? null,
           posterUrl: poster,
           episode: job.episode ?? undefined,
+          actionType: 'open-downloads',
+          actionLabel: 'Downloads',
+        });
+        showGlobalToast(startedMessage, 'info', 4800, {
+          title: 'Download started',
+          posterUrl: poster,
+          kind: 'download',
+          notificationId: startedId,
+          actionLabel: 'Downloads',
+          onMarkRead: () => markNotificationRead(startedId),
+          onAction: () => {
+            exitPlayerIfOpen();
+            setDetailSource(null);
+            setCurrentTab('downloads');
+          },
         });
         prevProgressRef.current[job.infoHash] = job.progress ?? 0;
         continue;
@@ -677,36 +887,71 @@ export const App: React.FC = () => {
 
       if (before && before !== job.status) {
         if (job.status === 'completed') {
-          showGlobalToast(`Downloaded "${job.title}" — it is now in your library`, 'success');
-          upsertDownloadNotification({
+          const completedId = `dl:${job.infoHash}`;
+          const canOpenAnime = Boolean(job.anilistId || matchedFolder?.folderPath);
+          const completedNotif: Omit<AppNotification, 'createdAt' | 'read'> = {
             kind: 'download',
             tone: 'green',
-            id: `dl:${job.infoHash}`,
+            id: completedId,
             infoHash: job.infoHash,
             state: 'completed',
             progress: 100,
             title: 'Download complete',
+            animeTitle: job.title,
             message: `${job.title}${suffix} is ready in your library.`,
             anilistId: job.anilistId ?? undefined,
+            folderPath: matchedFolder?.folderPath ?? null,
             posterUrl: poster,
             episode: job.episode ?? undefined,
+            actionType: canOpenAnime ? 'open-anime' : 'open-downloads',
+            actionLabel: canOpenAnime ? 'Open Anime' : 'Downloads',
+          };
+          upsertDownloadNotification(completedNotif);
+          showGlobalToast(completedNotif.message, 'success', 5500, {
+            title: 'Download complete',
+            posterUrl: poster,
+            kind: 'download',
+            notificationId: completedId,
+            actionLabel: completedNotif.actionLabel,
+            onMarkRead: () => markNotificationRead(completedId),
+            onAction: () =>
+              handleNotificationAction({
+                ...completedNotif,
+                createdAt: Date.now(),
+                read: false,
+              }),
           });
         } else if (job.status === 'error') {
-          showGlobalToast(
-            job.error ? `Download failed: ${job.error}` : `Download failed for "${job.title}"`,
-            'warning'
-          );
+          const errorId = `dl:${job.infoHash}`;
+          const errMessage = job.error ? `${job.title}${suffix} — ${job.error}` : `${job.title}${suffix} failed.`;
           upsertDownloadNotification({
             kind: 'download',
             tone: 'red',
-            id: `dl:${job.infoHash}`,
+            id: errorId,
             infoHash: job.infoHash,
             state: 'error',
             title: 'Download failed',
-            message: job.error ? `${job.title}${suffix} — ${job.error}` : `${job.title}${suffix} failed.`,
+            animeTitle: job.title,
+            message: errMessage,
             anilistId: job.anilistId ?? undefined,
+            folderPath: matchedFolder?.folderPath ?? null,
             posterUrl: poster,
             episode: job.episode ?? undefined,
+            actionType: 'open-downloads',
+            actionLabel: 'View Error',
+          });
+          showGlobalToast(errMessage, 'warning', 5500, {
+            title: 'Download failed',
+            posterUrl: poster,
+            kind: 'download',
+            notificationId: errorId,
+            actionLabel: 'View Error',
+            onMarkRead: () => markNotificationRead(errorId),
+            onAction: () => {
+              exitPlayerIfOpen();
+              setDetailSource(null);
+              setCurrentTab('downloads');
+            },
           });
         }
         continue;
@@ -726,10 +971,14 @@ export const App: React.FC = () => {
             state: 'downloading',
             progress: Math.max(0, Math.min(100, job.progress)),
             title: 'Downloading',
+            animeTitle: job.title,
             message: `${job.title}${suffix}`,
             anilistId: job.anilistId ?? undefined,
+            folderPath: matchedFolder?.folderPath ?? null,
             posterUrl: poster,
             episode: job.episode ?? undefined,
+            actionType: 'open-downloads',
+            actionLabel: 'Downloads',
           });
         }
       }
@@ -744,7 +993,7 @@ export const App: React.FC = () => {
         : previous;
     });
     p2pSeededRef.current = true;
-  }, [folders, upsertDownloadNotification]);
+  }, [folders, upsertDownloadNotification, markNotificationRead, handleNotificationAction, exitPlayerIfOpen]);
 
   // P2P state: initial load + live subscription (unsubscribed on unmount).
   useEffect(() => {
@@ -840,6 +1089,8 @@ export const App: React.FC = () => {
             anilistId: entry.anilistId,
             posterUrl: entry.posterUrl,
             episode: entry.episode,
+            actionType: 'find-episode',
+            actionLabel: `Find EP ${entry.episode}`,
           });
           if (followed?.autoDownload && p2pStateRef.current?.enabled) {
             scheduleAutoDownloadRetry({
@@ -976,17 +1227,32 @@ export const App: React.FC = () => {
           title: 'Whisper Batch Completed',
           message: `Generated AI subtitles for ${result.completedCount} episode${result.completedCount === 1 ? '' : 's'}.`,
           tone: 'green',
+          actionType: 'open-whisper',
+          actionLabel: 'Whisper Studio',
         });
       }
     });
 
     const unsubEpisodeDone = window.electronAPI?.onWhisperEpisodeDone?.((data) => {
       const displayTitle = cleanEpisodeTitle(data.fileName).displayTitle || data.fileName;
+      const epFolderPath = getPathDirname(data.filePath) || null;
+      const matchingFolder = epFolderPath
+        ? visibleFoldersActionRef.current.find(
+            (f) => f.folderPath.replace(/[/\\]+$/, '').toLowerCase() === epFolderPath.replace(/[/\\]+$/, '').toLowerCase()
+          )
+        : undefined;
       addNotification({
         kind: 'whisper',
         title: 'Episode Subtitles Ready',
+        animeTitle: matchingFolder?.canonicalTitle || matchingFolder?.folderName || undefined,
         message: `Generated subtitles for "${displayTitle}" (${data.index + 1}/${data.total})`,
         tone: 'purple',
+        anilistId: matchingFolder?.anilistId ?? undefined,
+        posterUrl: matchingFolder?.posterUrl ?? null,
+        filePath: data.filePath,
+        folderPath: epFolderPath,
+        actionType: 'play-episode',
+        actionLabel: 'Watch',
       });
       handleRefreshLibrary();
     });
@@ -997,6 +1263,8 @@ export const App: React.FC = () => {
         title: 'Model Ready',
         message: `Whisper model "${data.modelName}" is downloaded and ready to use.`,
         tone: 'green',
+        actionType: 'open-whisper',
+        actionLabel: 'Whisper Studio',
       });
     });
 
@@ -1011,6 +1279,8 @@ export const App: React.FC = () => {
           title: 'Faster-Whisper Ready',
           message: 'Faster-Whisper-XXL engine has been downloaded and configured successfully.',
           tone: 'green',
+          actionType: 'open-whisper',
+          actionLabel: 'Whisper Studio',
         });
       }
     });
@@ -1137,25 +1407,49 @@ export const App: React.FC = () => {
         };
         const audioPreferences = currentSettings.preferredTorrentAudioLanguages ?? ['en'];
         const subtitlePreferences = currentSettings.preferredTorrentSubtitleLanguages ?? ['en'];
-        const { best, usedEnglishDubFallback, hasJapaneseSubAlternative } = pickAutomaticEpisodeRelease(
+        const { best, usedEnglishDubFallback, fallbackAudioLanguage, hasJapaneseSubAlternative } = pickAutomaticEpisodeRelease(
           response?.results ?? [],
           { audioPreferences, subtitlePreferences, animePref },
         );
 
         if (!best && (response?.results?.length ?? 0) > 0) {
           if (!job.background) {
-            showGlobalToast(
-              hasJapaneseSubAlternative
-                ? `No English dub for episode ${job.episode} yet (Japanese sub available). Choose manually.`
-                : `No release matched your preferences for episode ${job.episode}. Choose manually.`,
-              'warning',
-            );
+            const englishDubOnly = audioPreferences.includes('en') && !audioPreferences.some((c) => c !== 'ja' && c !== 'en');
             const activeDetailId = detailSourceRef.current?.kind === 'catalog'
               ? detailSourceRef.current.item.anilistId
               : detailSourceRef.current?.folder.anilistId;
             if (activeDetailId === job.anilistId) {
               setManualPickRequest({ anilistId: job.anilistId, episode: job.episode });
             }
+            showGlobalToast(
+              hasJapaneseSubAlternative
+                ? (englishDubOnly
+                  ? `No English dub for episode ${job.episode} yet (Japanese sub available). Choose manually.`
+                  : `No preferred dub for episode ${job.episode} yet (subtitled release available). Choose manually.`)
+                : `No release matched your preferences for episode ${job.episode}. Choose manually.`,
+              'warning',
+              5200,
+              {
+                title: `${job.title} · Episode ${job.episode}`,
+                actionLabel: 'Choose Release',
+                onAction: () => {
+                  exitPlayerIfOpen();
+                  setInitialDownloadEpisode(null);
+                  setManualPickRequest({ anilistId: job.anilistId, episode: job.episode });
+                  setDetailSource({
+                    kind: 'catalog',
+                    item: toRailItem({
+                      anilistId: job.anilistId,
+                      idMal: null,
+                      title: job.title,
+                      posterUrl: mergedLocal?.posterUrl ?? null,
+                      episode: job.episode,
+                      airingAt: Math.floor(Date.now() / 1000),
+                    }),
+                  });
+                },
+              },
+            );
           }
           return;
         }
@@ -1175,6 +1469,12 @@ export const App: React.FC = () => {
                     ? `No release found: ${providerError}`
                     : `No release found for episode ${job.episode}.`,
                 'error',
+                5000,
+                {
+                  title: `${job.title} · Episode ${job.episode}`,
+                  actionLabel: 'Indexers Settings',
+                  onAction: () => handleOpenSettings('downloads'),
+                },
               );
             }
           }
@@ -1204,11 +1504,52 @@ export const App: React.FC = () => {
 
         if (!job.background) {
           if (result?.success && usedEnglishDubFallback) {
-            showGlobalToast(`Episode ${job.episode} queued with English dub: ${best.title}. No release with both English dub and English subtitles was found. You can create subtitles in Whisper Studio.`, 'warning');
+            const fallbackLabel = fallbackAudioLanguage === 'en' || !fallbackAudioLanguage
+              ? 'English dub'
+              : `${getTorrentLanguageLabel(fallbackAudioLanguage)} audio`;
+            const missingSubNote = fallbackAudioLanguage === 'en' || !fallbackAudioLanguage
+              ? 'No release with both English dub and English subtitles was found.'
+              : 'No release with matching subtitles was found.';
+            showGlobalToast(
+              `Episode ${job.episode} queued with ${fallbackLabel}: ${best.title}. ${missingSubNote} You can create subtitles in Whisper Studio.`,
+              'warning',
+              5600,
+              {
+                title: `${job.title} · Ep ${job.episode}`,
+                posterUrl: mergedLocal?.posterUrl ?? null,
+                kind: 'whisper',
+                actionLabel: 'Whisper Studio',
+                onAction: () => {
+                  exitPlayerIfOpen();
+                  if (mergedLocal) setSelectedFolder(mergedLocal);
+                  setDetailSource(null);
+                  setCurrentTab('whisper');
+                },
+              },
+            );
           } else if (result?.success) {
-            showGlobalToast(`Episode ${job.episode} queued: ${best.title}`, 'success');
+            showGlobalToast(`Episode ${job.episode} queued: ${best.title}`, 'success', 4500, {
+              title: job.title,
+              posterUrl: mergedLocal?.posterUrl ?? null,
+              kind: 'download',
+              actionLabel: 'Downloads',
+              onAction: () => {
+                exitPlayerIfOpen();
+                setDetailSource(null);
+                setCurrentTab('downloads');
+              },
+            });
           } else {
-            showGlobalToast(result?.error || `Failed to queue episode ${job.episode}`, 'error');
+            showGlobalToast(result?.error || `Failed to queue episode ${job.episode}`, 'error', 4800, {
+              title: `${job.title} · Episode ${job.episode}`,
+              kind: 'download',
+              actionLabel: 'Downloads',
+              onAction: () => {
+                exitPlayerIfOpen();
+                setDetailSource(null);
+                setCurrentTab('downloads');
+              },
+            });
           }
         }
         if (result?.success) {
@@ -1340,8 +1681,11 @@ export const App: React.FC = () => {
                 animeTitle: searchTitle,
                 message: `${searchTitle} · Episode ${item.episode} queued automatically.`,
                 anilistId: item.anilistId,
+                folderPath: mergedFolder?.folderPath ?? null,
                 posterUrl: details?.posterUrl || item.posterUrl,
                 episode: item.episode,
+                actionType: 'open-downloads',
+                actionLabel: 'Downloads',
               });
               continue;
             }
@@ -1359,6 +1703,8 @@ export const App: React.FC = () => {
               anilistId: item.anilistId,
               posterUrl: details?.posterUrl || item.posterUrl,
               episode: item.episode,
+              actionType: 'manual-pick',
+              actionLabel: 'Choose Release',
             });
           } else {
             const nextRetryAtMs = Math.max(
@@ -1681,6 +2027,7 @@ export const App: React.FC = () => {
       window.electronAPI.setFullScreen(true).catch(() => {});
     }
   }, [folders, history]);
+  handlePlayEpisodeRef.current = handlePlayEpisode;
 
   // Close Player & Refresh Progress
   const handleClosePlayer = useCallback(async () => {
@@ -1693,6 +2040,7 @@ export const App: React.FC = () => {
     setHistory(watchHistory);
     refreshUserEntries();
   }, [refreshUserEntries]);
+  handleClosePlayerRef.current = handleClosePlayer;
 
   // Switch episode inside Player
   const handlePlayerEpisodeChange = (newEpisode: Episode, startAt?: number) => {
@@ -1769,11 +2117,21 @@ export const App: React.FC = () => {
   };
 
   // Save Settings - Only rescan library if libraryFolders changed
+  const settingsSaveGenRef = useRef(0);
   const handleSaveSettings = useCallback(async (newSettings: Partial<AppSettings>) => {
+    const gen = ++settingsSaveGenRef.current;
     const prevFolders = settings.libraryFolders || (settings.defaultLibraryRoot ? [settings.defaultLibraryRoot] : []);
     const updated = await window.electronAPI.updateSettings(newSettings);
+    if (gen !== settingsSaveGenRef.current) return;
     setSettings(updated);
-    checkBinariesStatus(updated);
+    if (
+      Object.prototype.hasOwnProperty.call(newSettings, 'ffmpegPath')
+      || Object.prototype.hasOwnProperty.call(newSettings, 'whisperPath')
+      || Object.prototype.hasOwnProperty.call(newSettings, 'whisperModel')
+      || Object.prototype.hasOwnProperty.call(newSettings, 'customModelPath')
+    ) {
+      checkBinariesStatus(updated);
+    }
 
     const newFolders = updated.libraryFolders || (updated.defaultLibraryRoot ? [updated.defaultLibraryRoot] : []);
     const foldersChanged =
@@ -1787,6 +2145,7 @@ export const App: React.FC = () => {
 
   const handleCloseSettings = useCallback(() => {
     setSettingsOpen(false);
+    setSettingsInitialTab(undefined);
   }, []);
 
   // Resolve current active anime folder for player (with fallback for BUG-01)
@@ -2055,7 +2414,7 @@ export const App: React.FC = () => {
       : null;
   const clearManualPickRequest = useCallback(() => setManualPickRequest(null), []);
   useEffect(() => {
-    setManualPickRequest(null);
+    setManualPickRequest((prev) => (prev && prev.anilistId === activeDetailAnilistId ? prev : null));
   }, [activeDetailAnilistId]);
 
   return (
@@ -2187,6 +2546,8 @@ export const App: React.FC = () => {
               favouriteAnime={favouriteAnime}
               userEntries={userEntries}
               loading={loading}
+              initialFilter={libraryInitialFilter}
+              onClearInitialFilter={handleClearLibraryFilter}
               onChangeRoot={handleChangeRoot}
               onRefresh={handleRefreshLibrary}
               onOpenFolderDetails={(folder, collectionOnly) => {
@@ -2234,7 +2595,7 @@ export const App: React.FC = () => {
                 initialFolder={selectedFolder}
                 whisperExists={binaryStatus.whisperExists}
                 onRefreshLibrary={handleRefreshLibrary}
-                onOpenSettings={handleOpenSettings}
+                onOpenSettings={() => handleOpenSettings('ai')}
                 settings={settings}
                 onSaveSettings={handleSaveSettings}
                 isActiveTab={currentTab === 'whisper'}
@@ -2282,6 +2643,8 @@ export const App: React.FC = () => {
           onUserEntryChange={handleUserEntryChange}
           onUserEntryRemove={handleUserEntryRemove}
           onOpenWhisper={handleOpenWhisperFolder}
+          onOpenDownloads={() => handleSelectTab('downloads')}
+          onOpenSettings={handleOpenSettings}
         />
         </Suspense>
       )}
@@ -2298,7 +2661,7 @@ export const App: React.FC = () => {
             animeTitle={currentPlayingFolder.canonicalTitle || cleanSeriesTitle(currentPlayingFolder.folderName) || currentPlayingFolder.folderName}
             initialTime={playerInitialTime}
             settings={settings}
-            onUpdateSettings={(updated) => setSettings((prev) => ({ ...prev, ...updated }))}
+            onUpdateSettings={handleSaveSettings}
             history={history}
             onClose={handleClosePlayer}
             onEpisodeChange={handlePlayerEpisodeChange}
@@ -2338,6 +2701,7 @@ export const App: React.FC = () => {
         onClose={handleCloseSettings}
         settings={settings}
         onSave={handleSaveSettings}
+        initialTab={settingsInitialTab}
       /></Suspense>}
 
       {/* Startup Update Prompt */}

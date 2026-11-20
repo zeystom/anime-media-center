@@ -37,8 +37,21 @@ export function isSignsSubtitleTitle(title?: string | null): boolean {
  * paired with a Signs/Forced marker, while strictly ignoring foreign-language
  * tracks (jpn, rus, spa, etc.).
  */
-export function isAllowedSignsLanguage(lang?: string | null): boolean {
+export function isAllowedSignsLanguage(
+  lang?: string | null,
+  allowedLanguages?: string[]
+): boolean {
   const code = (lang || '').trim().toLowerCase();
+  if (allowedLanguages && allowedLanguages.length > 0) {
+    if (code === '' || code === 'zxx' || code === 'und') return true;
+    const base = code.split(/[-_]/)[0];
+    const normalized = new Set(
+      allowedLanguages
+        .map((entry) => entry.trim().toLowerCase())
+        .filter(Boolean)
+    );
+    return normalized.has(code) || normalized.has(base);
+  }
   return (
     code === '' ||
     code === 'eng' ||
@@ -63,10 +76,11 @@ export function isTopSignsCandidate(
     isSigns?: boolean;
     isForced?: boolean;
   },
-  selectedMainSubId: string | null
+  selectedMainSubId: string | null,
+  allowedLanguages?: string[]
 ): boolean {
   if (track.id === selectedMainSubId) return false;
-  if (!isAllowedSignsLanguage(track.language)) return false;
+  if (!isAllowedSignsLanguage(track.language, allowedLanguages)) return false;
   return Boolean(track.isSigns || track.isForced || isSignsSubtitleTitle(track.title));
 }
 

@@ -23,12 +23,22 @@
 import { XMLParser, XMLValidator } from 'fast-xml-parser';
 import type { RssProvider, ReleaseSearchResult, ProviderReport } from './types.ts';
 import { parseReleaseSync } from '../src/lib/releaseParser/index.ts';
-import { classifyRelease, decodeHtmlEntities, detectSeasonFromTitle, isMultiSeasonCollection, qualityRank, releaseDescriptionToText } from '../src/lib/releaseParser/releaseClassification.ts';
+import {
+  classifyRelease,
+  computeLanguagePreferenceRank,
+  decodeHtmlEntities,
+  detectSeasonFromTitle,
+  isMultiSeasonCollection,
+  qualityRank,
+  releaseDescriptionToText,
+  type ReleaseClassification,
+  type TorrentLanguageCode,
+} from '../src/lib/releaseParser/releaseClassification.ts';
 
 /** Per-request timeout for indexer feeds. */
 const FETCH_TIMEOUT_MS = 12_000;
 /** Upper bound of normalized items kept per provider feed. */
-const MAX_ITEMS_PER_PROVIDER = 50;
+const MAX_ITEMS_PER_PROVIDER = 75;
 const MAX_RELEASE_PAGE_BYTES = 512 * 1024;
 const MAX_RELEASE_PAGE_REDIRECTS = 3;
 /** Upper bound of providers accepted by importProvidersConfig. */
@@ -364,7 +374,14 @@ const BATCH_TITLE_RE = /batch|season\s*(pack|1[- ]?\d+)|complete/i;
  */
 export function rankReleasesForEpisode(
   results: ReleaseSearchResult[],
-  ref?: { animeTitle?: string; season?: number | null; part?: number | null; episode?: number | null }
+  ref?: {
+    animeTitle?: string;
+    season?: number | null;
+    part?: number | null;
+    episode?: number | null;
+    preferredAudioLanguages?: string[] | null;
+    preferredSubtitleLanguages?: string[] | null;
+  }
 ): ReleaseSearchResult[] {
   if (!Array.isArray(results)) return [];
   const refNorm = normalizeMatch(typeof ref?.animeTitle === 'string' ? ref.animeTitle : '');
@@ -379,7 +396,11 @@ export function rankReleasesForEpisode(
     return {
       result,
       relevance: computeTitleRelevance(result.title, [typeof ref?.animeTitle === 'string' ? ref.animeTitle : '']),
-      rank: classification.rank,
+      rank: computeLanguagePreferenceRank(
+        classification,
+        ref?.preferredAudioLanguages,
+        ref?.preferredSubtitleLanguages,
+      ),
       score: scoreRelease(result, { ...ref, season: targetSeason ?? ref?.season }, refNorm),
       quality: qualityRank(result.title),
       isBatch,
@@ -926,20 +947,85 @@ export async function fetchReleaseDescription(
   return new TextDecoder().decode(bytes);
 }
 
+function hasRichReleaseDescription(description: string | null | undefined): boolean {
+  const text = releaseDescriptionToText(description);
+  if (!text) return false;
+  const isSingleLineNyaaSummary = !text.includes('\n') && /(?:^|\|)\s*(?:View|#\d+)\s*\|/i.test(text);
+  if (isSingleLineNyaaSummary) return false;
+  return text.includes('\n') || /\b(?:audio|subtitles?|subs?|language|track\s*\d+|stream\s*#\d+|аудио|субтитры)\b/iu.test(text);
+}
+
+function needsReleaseInspection(
+  result: ReleaseSearchResult,
+  classification: ReleaseClassification,
+  audioPrefs: string[],
+  subPrefs: string[],
+): boolean {
+  if (!result.detailsUrl) return false;
+  const rich = hasRichReleaseDescription(result.description);
+  const hasExplicitMultiTracks = rich
+    && !classification.hasUnlistedMultiAudio
+    && !classification.hasUnlistedMultiSubs
+    && classification.audioLanguageCodes.length >= 2
+    && classification.subtitleLanguageCodes.length >= 1;
+
+  if ((classification.isMultiAudio || classification.isMultiSubs || classification.isDualAudio) && !hasExplicitMultiTracks) {
+    return true;
+  }
+  if (classification.audioLanguageCodes.length === 0 || classification.subtitleLanguageCodes.length === 0) {
+    return true;
+  }
+  if (audioPrefs.length > 0 && !audioPrefs.some((code) => classification.audioLanguageCodes.includes(code as TorrentLanguageCode))) {
+    return true;
+  }
+  if (subPrefs.length > 0 && !subPrefs.some((code) => classification.subtitleLanguageCodes.includes(code as TorrentLanguageCode))) {
+    return true;
+  }
+  if (audioPrefs.includes('en') && subPrefs.includes('en') && !classification.hasDubtitles) {
+    return true;
+  }
+  return false;
+}
+
 /**
  * Inspect detail pages for the best-matching search results before ranking and
- * automatic selection. RSS feeds often omit language tracks, so relying on
- * them alone can silently choose a release without English subtitles.
+ * automatic selection. RSS feeds often omit exact audio/subtitle tracks —
+ * especially on Multi-Audio / Multi-Subs releases whose full track list lives
+ * in the release description.
  */
 export async function inspectReleaseResults(
   results: ReleaseSearchResult[],
   providers: RssProvider[],
   limit = 20,
+  options?: {
+    preferredAudioLanguages?: string[] | null;
+    preferredSubtitleLanguages?: string[] | null;
+  },
 ): Promise<ReleaseSearchResult[]> {
   const output = [...results];
+  const audioPrefs = Array.isArray(options?.preferredAudioLanguages) ? options.preferredAudioLanguages : [];
+  const subPrefs = Array.isArray(options?.preferredSubtitleLanguages) ? options.preferredSubtitleLanguages : [];
+
+  const candidatePriority = (result: ReleaseSearchResult, classification: ReleaseClassification): number => {
+    const isMulti = classification.isMultiAudio || classification.isMultiSubs || classification.isDualAudio;
+    const partialAudioMatch = audioPrefs.length > 0 && audioPrefs.some((code) => classification.audioLanguageCodes.includes(code as TorrentLanguageCode));
+    const partialSubMatch = subPrefs.length > 0 && subPrefs.some((code) => classification.subtitleLanguageCodes.includes(code as TorrentLanguageCode));
+    if (isMulti || partialAudioMatch || partialSubMatch) return 0;
+    if ((result.seeders ?? 0) > 0) return 1;
+    return 2;
+  };
+
   const candidates = output
     .map((result, index) => ({ result, index, classification: classifyRelease(result.title, result.description) }))
-    .filter(({ result, classification }) => !!result.detailsUrl && !(classification.languageGroup === 'eng-dub-dubtitles' || classification.languageGroup === 'eng-dub-subs'))
+    .filter(({ result, classification }) => needsReleaseInspection(result, classification, audioPrefs, subPrefs))
+    .sort((a, b) => {
+      const pDiff = candidatePriority(a.result, a.classification) - candidatePriority(b.result, b.classification);
+      if (pDiff !== 0) return pDiff;
+      const aSeeded = (a.result.seeders ?? 0) > 0 ? 0 : 1;
+      const bSeeded = (b.result.seeders ?? 0) > 0 ? 0 : 1;
+      if (aSeeded !== bSeeded) return aSeeded - bSeeded;
+      return a.index - b.index;
+    })
     .slice(0, Math.max(0, Math.min(40, Math.floor(limit))));
   let cursor = 0;
   const workers = Array.from({ length: Math.min(8, candidates.length) }, async () => {
@@ -956,6 +1042,68 @@ export async function inspectReleaseResults(
   });
   await Promise.all(workers);
   return output;
+}
+
+const LANGUAGE_SEARCH_KEYWORDS: Record<string, string> = {
+  en: 'Dual Audio',
+  ru: 'RUS',
+  de: 'German',
+  fr: 'French',
+  es: 'Spanish',
+  it: 'ITA',
+  pt: 'Portuguese',
+  zh: 'Chinese',
+  ko: 'Korean',
+};
+
+/**
+ * Build up to 2 sanitized secondary queries when Phase 1 title search found no
+ * releases matching the user's language preferences (for example, Multi-Audio
+ * or localized releases pushed off page 1 of a date-sorted RSS feed).
+ */
+export function buildLanguageFallbackQueries(
+  primaryQuery: string,
+  audioPreferences: string[],
+  subtitlePreferences: string[],
+): string[] {
+  const base = sanitizeSearchQuery(primaryQuery);
+  if (!base) return [];
+  const audioPrefs = Array.isArray(audioPreferences) ? audioPreferences : [];
+  const subPrefs = Array.isArray(subtitlePreferences) ? subtitlePreferences : [];
+  if (audioPrefs.length === 0 && subPrefs.length === 0) return [];
+
+  const rawCandidates: string[] = [];
+  const nonJaAudio = audioPrefs.filter((code) => code !== 'ja');
+
+  if (nonJaAudio.length > 0) {
+    if (nonJaAudio.includes('en') && nonJaAudio[0] === 'en') {
+      rawCandidates.push(`${base} Dual Audio`, `${base} Multi Audio`);
+    } else {
+      const keyword = LANGUAGE_SEARCH_KEYWORDS[nonJaAudio[0]];
+      rawCandidates.push(`${base} Multi Audio`);
+      if (keyword) rawCandidates.push(`${base} ${keyword}`);
+    }
+  } else if (subPrefs.length > 0) {
+    const nonEnSub = subPrefs.filter((code) => code !== 'en');
+    if (nonEnSub.length > 0) {
+      const primarySub = nonEnSub[0];
+      const keyword = primarySub === 'fr' ? 'VOSTFR' : LANGUAGE_SEARCH_KEYWORDS[primarySub];
+      rawCandidates.push(`${base} Multi Subs`);
+      if (keyword) rawCandidates.push(`${base} ${keyword}`);
+    } else {
+      rawCandidates.push(`${base} Multi Subs`);
+    }
+  }
+
+  const out: string[] = [];
+  for (const candidate of rawCandidates) {
+    const sanitized = sanitizeSearchQuery(candidate);
+    if (sanitized && sanitized !== base && !out.includes(sanitized)) {
+      out.push(sanitized);
+    }
+    if (out.length >= 2) break;
+  }
+  return out;
 }
 
 /**

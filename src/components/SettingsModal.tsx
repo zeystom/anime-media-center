@@ -25,9 +25,11 @@ import {
   Languages,
   Sparkles,
   Subtitles,
+  Volume2,
 } from 'lucide-react';
-import { AppSettings } from '../types';
+import { AppSettings, type DefaultSubtitleType, type DefaultTopSubMode } from '../types';
 import type { P2pState, RssProvider, UpdaterState, UpdateInfoPayload, FolderDiskSpace } from '../types';
+import type { SettingsTabId } from '../types/notifications';
 import { showGlobalToast } from './Toast';
 import { GlassSelect } from './common/GlassSelect';
 import { DiskSpaceRing } from './common/DiskSpaceRing';
@@ -35,7 +37,7 @@ import { enableDeveloperMode, useDeveloperMode } from '../utils/devMode';
 import { P2pConsentModal } from './P2P/P2pConsentModal';
 import { UpdatePromptModal } from './UpdatePromptModal';
 import { extractDriveLabelFromPath, formatDiskSize, formatFileSize, getDiskHealthStyle, getFolderDisplayName } from '../utils/format';
-import { TORRENT_LANGUAGES, type TorrentLanguageCode } from '../lib/releaseParser/releaseClassification';
+import { getTorrentLanguageLabel, TORRENT_LANGUAGES, type TorrentLanguageCode } from '../lib/releaseParser/releaseClassification';
 
 interface BackupStatusInfo {
   exists: boolean;
@@ -80,11 +82,14 @@ const ToggleSwitch: React.FC<{
   </button>
 );
 
+export type { SettingsTabId };
+
 interface SettingsModalProps {
   isOpen: boolean;
   onClose: () => void;
   settings: AppSettings;
   onSave: (newSettings: Partial<AppSettings>) => void;
+  initialTab?: SettingsTabId;
 }
 
 export const SettingsModal: React.FC<SettingsModalProps> = ({
@@ -92,6 +97,7 @@ export const SettingsModal: React.FC<SettingsModalProps> = ({
   onClose,
   settings,
   onSave,
+  initialTab,
 }) => {
   const [ffmpegPath, setFfmpegPath] = useState(settings.ffmpegPath);
   const [whisperPath, setWhisperPath] = useState(settings.whisperPath);
@@ -139,6 +145,21 @@ export const SettingsModal: React.FC<SettingsModalProps> = ({
   const [preferredSubtitleLanguages, setPreferredSubtitleLanguages] = useState<TorrentLanguageCode[]>(
     (settings.preferredTorrentSubtitleLanguages ?? ['en']) as TorrentLanguageCode[]
   );
+  const [defaultAudioLanguage, setDefaultAudioLanguage] = useState<string>(
+    settings.defaultAudioLanguage ?? 'auto'
+  );
+  const [defaultSubtitleLanguage, setDefaultSubtitleLanguage] = useState<string>(
+    settings.defaultSubtitleLanguage ?? 'auto'
+  );
+  const [defaultSubtitleType, setDefaultSubtitleType] = useState<DefaultSubtitleType>(
+    settings.defaultSubtitleType ?? 'auto'
+  );
+  const [defaultTopSubMode, setDefaultTopSubMode] = useState<DefaultTopSubMode>(
+    settings.defaultTopSubMode ?? 'auto'
+  );
+  const wasOpenRef = useRef(false);
+  const preferredAudioRef = useRef<TorrentLanguageCode[]>(preferredAudioLanguages);
+  const preferredSubtitleRef = useRef<TorrentLanguageCode[]>(preferredSubtitleLanguages);
   const [animeTitleLanguage, setAnimeTitleLanguage] = useState<'english' | 'romaji' | 'native'>(
     settings.animeTitleLanguage ?? 'english'
   );
@@ -178,7 +199,7 @@ export const SettingsModal: React.FC<SettingsModalProps> = ({
 
   const [isDetecting, setIsDetecting] = useState(false);
   const [showSetupGuide, setShowSetupGuide] = useState(false);
-  const [activeTab, setActiveTab] = useState<'general' | 'subtitles' | 'downloads' | 'backup' | 'updates'>('general');
+  const [activeTab, setActiveTab] = useState<SettingsTabId>(initialTab ?? 'general');
   const [confirmDeleteIndex, setConfirmDeleteIndex] = useState<number | null>(null);
 
   const [confirmDeleteEngine, setConfirmDeleteEngine] = useState<boolean>(false);
@@ -250,47 +271,54 @@ export const SettingsModal: React.FC<SettingsModalProps> = ({
   }, [updaterState.downloadProgress, updaterState.status]);
 
   useEffect(() => {
-    if (isOpen) {
-      setFfmpegPath(settings.ffmpegPath);
-      setWhisperPath(settings.whisperPath);
-      setWhisperModel(settings.whisperModel || 'large-v3-turbo');
-      setCustomModelPath(settings.customModelPath || '');
-      setCheckForUpdatesOnStartup(settings.checkForUpdatesOnStartup ?? true);
-      setAutoUpdate(settings.autoUpdate ?? true);
-      setAnimeTitleLanguage(settings.animeTitleLanguage ?? 'english');
-      setNavbarBlur(settings.navbarBlur ?? true);
-      setConfirmDeleteIndex(null);
-      setConfirmDeleteEngine(false);
-      setConfirmDeleteModel(null);
-      setConfirmRestore(false);
-      setLibraryFolders(
-        Array.isArray(settings.libraryFolders) && settings.libraryFolders.length > 0
-          ? settings.libraryFolders
-          : settings.defaultLibraryRoot
-          ? [settings.defaultLibraryRoot]
-          : []
-      );
-      setReleaseSelectionMode(settings.releaseSelectionMode ?? 'automatic');
-      setPreferredAudioLanguages((settings.preferredTorrentAudioLanguages ?? ['en']) as TorrentLanguageCode[]);
-      setPreferredSubtitleLanguages((settings.preferredTorrentSubtitleLanguages ?? ['en']) as TorrentLanguageCode[]);
-      setSubsourceApiKey(settings.subsourceApiKey || '');
-      setSubdlApiKey(settings.subdlApiKey || '');
-      setOpensubtitlesApiKey(settings.opensubtitlesApiKey || '');
-
-      // Check existence of external binaries and models
-      window.electronAPI
-        .checkBinaries({
-          ffmpegPath: settings.ffmpegPath,
-          whisperPath: settings.whisperPath,
-          modelName: settings.whisperModel || 'large-v3-turbo',
-          customModelPath: settings.customModelPath,
-        })
-        .then((status) => {
-          setBinaryStatus(status);
-        })
-        .catch(() => {});
+    if (!isOpen) {
+      wasOpenRef.current = false;
+      return;
     }
-  }, [isOpen, settings]);
+    if (initialTab) {
+      setActiveTab(initialTab);
+    }
+    if (wasOpenRef.current) return;
+    wasOpenRef.current = true;
+    if (!initialTab) {
+      setActiveTab('general');
+    }
+
+    const initialAudio = (settings.preferredTorrentAudioLanguages ?? ['en']) as TorrentLanguageCode[];
+    const initialSubs = (settings.preferredTorrentSubtitleLanguages ?? ['en']) as TorrentLanguageCode[];
+
+    setFfmpegPath(settings.ffmpegPath);
+    setWhisperPath(settings.whisperPath);
+    setWhisperModel(settings.whisperModel || 'large-v3-turbo');
+    setCustomModelPath(settings.customModelPath || '');
+    setCheckForUpdatesOnStartup(settings.checkForUpdatesOnStartup ?? true);
+    setAutoUpdate(settings.autoUpdate ?? true);
+    setAnimeTitleLanguage(settings.animeTitleLanguage ?? 'english');
+    setNavbarBlur(settings.navbarBlur ?? true);
+    setConfirmDeleteIndex(null);
+    setConfirmDeleteEngine(false);
+    setConfirmDeleteModel(null);
+    setConfirmRestore(false);
+    setLibraryFolders(
+      Array.isArray(settings.libraryFolders) && settings.libraryFolders.length > 0
+        ? settings.libraryFolders
+        : settings.defaultLibraryRoot
+        ? [settings.defaultLibraryRoot]
+        : []
+    );
+    setReleaseSelectionMode(settings.releaseSelectionMode ?? 'automatic');
+    preferredAudioRef.current = initialAudio;
+    preferredSubtitleRef.current = initialSubs;
+    setPreferredAudioLanguages(initialAudio);
+    setPreferredSubtitleLanguages(initialSubs);
+    setDefaultAudioLanguage(settings.defaultAudioLanguage ?? 'auto');
+    setDefaultSubtitleLanguage(settings.defaultSubtitleLanguage ?? 'auto');
+    setDefaultSubtitleType(settings.defaultSubtitleType ?? 'auto');
+    setDefaultTopSubMode(settings.defaultTopSubMode ?? 'auto');
+    setSubsourceApiKey(settings.subsourceApiKey || '');
+    setSubdlApiKey(settings.subdlApiKey || '');
+    setOpensubtitlesApiKey(settings.opensubtitlesApiKey || '');
+  }, [isOpen, settings, initialTab]);
 
   // Live status check when user edits paths or model
   useEffect(() => {
@@ -1154,8 +1182,47 @@ export const SettingsModal: React.FC<SettingsModalProps> = ({
     }
   };
 
+  const commitTorrentLanguages = (kind: 'audio' | 'subtitles', next: TorrentLanguageCode[]) => {
+    if (kind === 'audio') {
+      preferredAudioRef.current = next;
+      setPreferredAudioLanguages(next);
+      onSave({ preferredTorrentAudioLanguages: next });
+    } else {
+      preferredSubtitleRef.current = next;
+      setPreferredSubtitleLanguages(next);
+      onSave({ preferredTorrentSubtitleLanguages: next });
+    }
+  };
+
+  const handleSetPrimaryTorrentLanguage = (kind: 'audio' | 'subtitles', value: string) => {
+    const current = kind === 'audio' ? preferredAudioRef.current : preferredSubtitleRef.current;
+    if (value === 'any') {
+      commitTorrentLanguages(kind, []);
+      return;
+    }
+    const primary = value as TorrentLanguageCode;
+    const fallbacks = current.slice(1).filter((code) => code !== primary);
+    commitTorrentLanguages(kind, [primary, ...fallbacks]);
+  };
+
+  const handleAddFallbackTorrentLanguage = (kind: 'audio' | 'subtitles', value: string) => {
+    const code = value as TorrentLanguageCode;
+    const current = kind === 'audio' ? preferredAudioRef.current : preferredSubtitleRef.current;
+    if (!current.includes(code)) {
+      commitTorrentLanguages(kind, [...current, code]);
+    }
+  };
+
+  const handleRemoveTorrentLanguage = (kind: 'audio' | 'subtitles', code: TorrentLanguageCode) => {
+    const current = kind === 'audio' ? preferredAudioRef.current : preferredSubtitleRef.current;
+    commitTorrentLanguages(
+      kind,
+      current.filter((item) => item !== code)
+    );
+  };
+
   const navTabs: Array<{
-    id: 'general' | 'subtitles' | 'downloads' | 'backup' | 'updates';
+    id: SettingsTabId;
     label: string;
     icon: React.ReactNode;
     dot?: string;
@@ -1163,7 +1230,12 @@ export const SettingsModal: React.FC<SettingsModalProps> = ({
     { id: 'general', label: 'Library & UI', icon: <Folder className="w-4 h-4" /> },
     {
       id: 'subtitles',
-      label: 'Subtitles & AI',
+      label: 'Subtitles & Audio',
+      icon: <Subtitles className="w-4 h-4" />,
+    },
+    {
+      id: 'ai',
+      label: 'AI',
       icon: <Sparkles className="w-4 h-4" />,
       dot: binaryStatus.whisperExists ? 'bg-emerald-400' : 'bg-amber-400',
     },
@@ -1411,6 +1483,200 @@ export const SettingsModal: React.FC<SettingsModalProps> = ({
             )}
 
             {activeTab === 'subtitles' && (
+              <div className="space-y-6 animate-in fade-in duration-150">
+                {/* Playback Defaults */}
+                <section className="space-y-3">
+                  <h4 className="text-[11px] font-bold uppercase tracking-wider text-zinc-400 flex items-center gap-1.5">
+                    <Volume2 className="w-3.5 h-3.5 text-rose-400" />
+                    <span>Playback</span>
+                  </h4>
+
+                  <div className="rounded-xl bg-white/[0.03] border border-white/[0.08] p-4 space-y-3.5">
+                    <div className="grid grid-cols-1 sm:grid-cols-2 gap-3">
+                      <div className="space-y-1.5">
+                        <label className="text-[11px] font-semibold text-zinc-300">Audio</label>
+                        <GlassSelect
+                          value={defaultAudioLanguage}
+                          onChange={(value) => {
+                            setDefaultAudioLanguage(value);
+                            onSave({ defaultAudioLanguage: value });
+                          }}
+                          options={[
+                            {
+                              value: 'auto',
+                              label: `Auto (${getTorrentLanguageLabel(preferredAudioLanguages[0] || 'en')})`,
+                            },
+                            { value: 'original', label: 'Japanese (Original)' },
+                            ...TORRENT_LANGUAGES.map((lang) => ({
+                              value: lang.code,
+                              label: lang.label,
+                            })),
+                          ]}
+                          ariaLabel="Default audio language"
+                          className="w-full px-3 py-2 rounded-lg"
+                        />
+                      </div>
+
+                      <div className="space-y-1.5">
+                        <label className="text-[11px] font-semibold text-zinc-300">Subtitles</label>
+                        <GlassSelect
+                          value={defaultSubtitleType === 'off' ? 'off' : defaultSubtitleLanguage}
+                          onChange={(value) => {
+                            if (value === 'off') {
+                              setDefaultSubtitleLanguage('off');
+                              setDefaultSubtitleType('off');
+                              onSave({ defaultSubtitleLanguage: 'off', defaultSubtitleType: 'off' });
+                            } else if (defaultSubtitleType === 'off') {
+                              setDefaultSubtitleLanguage(value);
+                              setDefaultSubtitleType('auto');
+                              onSave({ defaultSubtitleLanguage: value, defaultSubtitleType: 'auto' });
+                            } else {
+                              setDefaultSubtitleLanguage(value);
+                              onSave({ defaultSubtitleLanguage: value });
+                            }
+                          }}
+                          options={[
+                            {
+                              value: 'auto',
+                              label: `Auto (${getTorrentLanguageLabel(preferredSubtitleLanguages[0] || 'en')})`,
+                            },
+                            { value: 'off', label: 'Off' },
+                            ...TORRENT_LANGUAGES.map((lang) => ({
+                              value: lang.code,
+                              label: lang.label,
+                            })),
+                          ]}
+                          ariaLabel="Default subtitle language"
+                          className="w-full px-3 py-2 rounded-lg"
+                        />
+                      </div>
+                    </div>
+
+                    <div className="pt-3 border-t border-white/[0.06] space-y-2.5">
+                      <div className="flex items-center justify-between gap-4">
+                        <span className="text-xs font-medium text-zinc-300">Subtitle style</span>
+                        <div
+                          className={`inline-flex rounded-lg bg-black/30 p-0.5 border border-white/[0.08] transition-opacity ${
+                            defaultSubtitleLanguage === 'off' || defaultSubtitleType === 'off'
+                              ? 'opacity-50'
+                              : ''
+                          }`}
+                        >
+                          {([
+                            { value: 'auto', label: 'Auto', title: 'Dubtitles on dubs, Full Dialogue on Japanese' },
+                            { value: 'dubtitles', label: 'Dubtitles', title: 'Prefer Dubtitles, SDH & Whisper' },
+                            { value: 'dialogue', label: 'Dialogue', title: 'Prefer Full ASS / Dialogue subtitles' },
+                          ] as const).map((option) => {
+                            const active =
+                              defaultSubtitleLanguage !== 'off' && defaultSubtitleType === option.value;
+                            return (
+                              <button
+                                key={option.value}
+                                type="button"
+                                title={option.title}
+                                onClick={() => {
+                                  setDefaultSubtitleType(option.value);
+                                  if (defaultSubtitleLanguage === 'off') {
+                                    setDefaultSubtitleLanguage('auto');
+                                    onSave({ defaultSubtitleType: option.value, defaultSubtitleLanguage: 'auto' });
+                                  } else {
+                                    onSave({ defaultSubtitleType: option.value });
+                                  }
+                                }}
+                                className={`px-3 py-1 rounded-md text-[11px] font-semibold transition-all ${
+                                  active
+                                    ? 'bg-rose-500/20 text-rose-100 border border-rose-400/40 shadow-sm'
+                                    : 'border border-transparent text-zinc-400 hover:text-zinc-200'
+                                }`}
+                              >
+                                {option.label}
+                              </button>
+                            );
+                          })}
+                        </div>
+                      </div>
+
+                      <div className="flex items-center justify-between gap-4">
+                        <span className="text-xs font-medium text-zinc-300">Signs &amp; songs</span>
+                        <div className="inline-flex rounded-lg bg-black/30 p-0.5 border border-white/[0.08]">
+                          {([
+                            { value: 'auto', label: 'Auto', title: 'Show top signs when main subtitles are not full ASS' },
+                            { value: 'always', label: 'Always', title: 'Always enable matching signs track' },
+                            { value: 'off', label: 'Off', title: 'Never auto-enable or auto-extract signs' },
+                          ] as const).map((option) => {
+                            const active = defaultTopSubMode === option.value;
+                            return (
+                              <button
+                                key={option.value}
+                                type="button"
+                                title={option.title}
+                                onClick={() => {
+                                  setDefaultTopSubMode(option.value);
+                                  onSave({ defaultTopSubMode: option.value });
+                                }}
+                                className={`px-3 py-1 rounded-md text-[11px] font-semibold transition-all ${
+                                  active
+                                    ? 'bg-rose-500/20 text-rose-100 border border-rose-400/40 shadow-sm'
+                                    : 'border border-transparent text-zinc-400 hover:text-zinc-200'
+                                }`}
+                              >
+                                {option.label}
+                              </button>
+                            );
+                          })}
+                        </div>
+                      </div>
+                    </div>
+                  </div>
+                </section>
+
+                {/* Online Subtitle Search */}
+                <section className="space-y-3 pt-4 border-t border-white/[0.08]">
+                  <h4 className="text-[11px] font-bold uppercase tracking-wider text-zinc-400 flex items-center gap-1.5">
+                    <Subtitles className="w-3.5 h-3.5 text-zinc-500" />
+                    <span>Online Subtitle Search</span>
+                  </h4>
+
+                  <div className="rounded-xl bg-white/[0.03] border border-white/[0.08] p-3.5 space-y-3">
+                    <div className="flex items-center justify-between gap-2">
+                      <div>
+                        <p className="text-xs font-semibold text-zinc-200">TsukiHime</p>
+                        <p className="text-[11px] text-zinc-500">Built-in anime ASS &amp; font database</p>
+                      </div>
+                      <span className="inline-flex items-center gap-1 px-2 py-0.5 rounded-full text-[10px] font-semibold bg-emerald-500/15 text-emerald-300 border border-emerald-500/25">
+                        <CheckCircle2 className="w-3 h-3" />
+                        <span>Active</span>
+                      </span>
+                    </div>
+
+                    <div className="pt-2.5 border-t border-white/[0.06] space-y-2">
+                      <p className="text-[11px] font-medium text-zinc-400">Fallback API Keys (optional)</p>
+                      <div className="grid grid-cols-1 sm:grid-cols-3 gap-2">
+                        {[
+                          { label: 'SubSource', value: subsourceApiKey, setter: setSubsourceApiKey, keyName: 'subsourceApiKey' as const, placeholder: 'X-API-Key' },
+                          { label: 'SubDL', value: subdlApiKey, setter: setSubdlApiKey, keyName: 'subdlApiKey' as const, placeholder: 'API key' },
+                          { label: 'OpenSubtitles', value: opensubtitlesApiKey, setter: setOpensubtitlesApiKey, keyName: 'opensubtitlesApiKey' as const, placeholder: 'Api-Key' },
+                        ].map((field) => (
+                          <div key={field.keyName} className="space-y-1">
+                            <label className="text-[10px] font-medium text-zinc-500">{field.label}</label>
+                            <input
+                              type="password"
+                              value={field.value}
+                              onChange={(e) => field.setter(e.target.value)}
+                              onBlur={() => onSave({ [field.keyName]: field.value.trim() })}
+                              placeholder={field.placeholder}
+                              className="w-full px-2.5 py-1.5 rounded-lg bg-black/30 border border-white/10 text-xs font-mono text-zinc-200 placeholder-zinc-600 focus:outline-none focus:border-rose-400/50"
+                            />
+                          </div>
+                        ))}
+                      </div>
+                    </div>
+                  </div>
+                </section>
+              </div>
+            )}
+
+            {activeTab === 'ai' && (
               <div className="space-y-6 animate-in fade-in duration-150">
                 {/* Faster-Whisper Engine */}
                 <section className="space-y-3">
@@ -1818,50 +2084,6 @@ export const SettingsModal: React.FC<SettingsModalProps> = ({
                     )}
                   </div>
                 </section>
-
-                {/* Online Subtitle Search */}
-                <section className="space-y-3 pt-4 border-t border-white/[0.08]">
-                  <h4 className="text-[11px] font-bold uppercase tracking-wider text-zinc-400 flex items-center gap-1.5">
-                    <Subtitles className="w-3.5 h-3.5 text-zinc-500" />
-                    <span>Online Subtitle Search</span>
-                  </h4>
-
-                  <div className="rounded-xl bg-white/[0.03] border border-white/[0.08] p-3.5 space-y-3">
-                    <div className="flex items-center justify-between gap-2">
-                      <div>
-                        <p className="text-xs font-semibold text-zinc-200">TsukiHime</p>
-                        <p className="text-[11px] text-zinc-500">Built-in anime ASS &amp; font database</p>
-                      </div>
-                      <span className="inline-flex items-center gap-1 px-2 py-0.5 rounded-full text-[10px] font-semibold bg-emerald-500/15 text-emerald-300 border border-emerald-500/25">
-                        <CheckCircle2 className="w-3 h-3" />
-                        <span>Active</span>
-                      </span>
-                    </div>
-
-                    <div className="pt-2.5 border-t border-white/[0.06] space-y-2">
-                      <p className="text-[11px] font-medium text-zinc-400">Fallback API Keys (optional)</p>
-                      <div className="grid grid-cols-1 sm:grid-cols-3 gap-2">
-                        {[
-                          { label: 'SubSource', value: subsourceApiKey, setter: setSubsourceApiKey, keyName: 'subsourceApiKey' as const, placeholder: 'X-API-Key' },
-                          { label: 'SubDL', value: subdlApiKey, setter: setSubdlApiKey, keyName: 'subdlApiKey' as const, placeholder: 'API key' },
-                          { label: 'OpenSubtitles', value: opensubtitlesApiKey, setter: setOpensubtitlesApiKey, keyName: 'opensubtitlesApiKey' as const, placeholder: 'Api-Key' },
-                        ].map((field) => (
-                          <div key={field.keyName} className="space-y-1">
-                            <label className="text-[10px] font-medium text-zinc-500">{field.label}</label>
-                            <input
-                              type="password"
-                              value={field.value}
-                              onChange={(e) => field.setter(e.target.value)}
-                              onBlur={() => onSave({ [field.keyName]: field.value.trim() })}
-                              placeholder={field.placeholder}
-                              className="w-full px-2.5 py-1.5 rounded-lg bg-black/30 border border-white/10 text-xs font-mono text-zinc-200 placeholder-zinc-600 focus:outline-none focus:border-rose-400/50"
-                            />
-                          </div>
-                        ))}
-                      </div>
-                    </div>
-                  </div>
-                </section>
               </div>
             )}
 
@@ -1901,70 +2123,97 @@ export const SettingsModal: React.FC<SettingsModalProps> = ({
 
                 {/* Release Selection & Languages */}
                 <section className="space-y-3 pt-4 border-t border-white/[0.08]">
-                  <h4 className="text-[11px] font-bold uppercase tracking-wider text-zinc-400">
-                    Release Selection
-                  </h4>
-                  <div className="grid grid-cols-2 gap-2">
-                    {([
-                      ['automatic', 'Automatic (best match)'],
-                      ['manual', 'Choose manually'],
-                    ] as const).map(([mode, label]) => (
-                      <button
-                        key={mode}
-                        type="button"
-                        onClick={() => {
-                          setReleaseSelectionMode(mode);
-                          onSave({ releaseSelectionMode: mode });
-                        }}
-                        className={`rounded-xl border px-3 py-2 text-xs font-semibold transition-colors ${
-                          releaseSelectionMode === mode
-                            ? 'border-rose-400/50 bg-rose-500/15 text-rose-100'
-                            : 'border-white/[0.08] bg-white/[0.025] text-zinc-400 hover:bg-white/[0.06] hover:text-zinc-200'
-                        }`}
-                      >
-                        {label}
-                      </button>
-                    ))}
+                  <div className="flex items-center justify-between gap-3">
+                    <h4 className="text-[11px] font-bold uppercase tracking-wider text-zinc-400">
+                      Release Selection
+                    </h4>
+                    <div className="inline-flex rounded-lg bg-black/30 p-0.5 border border-white/[0.08]">
+                      {([
+                        ['automatic', 'Automatic'],
+                        ['manual', 'Manual'],
+                      ] as const).map(([mode, label]) => (
+                        <button
+                          key={mode}
+                          type="button"
+                          onClick={() => {
+                            setReleaseSelectionMode(mode);
+                            onSave({ releaseSelectionMode: mode });
+                          }}
+                          className={`px-3 py-1 rounded-md text-[11px] font-semibold transition-all ${
+                            releaseSelectionMode === mode
+                              ? 'bg-rose-500/20 text-rose-100 border border-rose-400/40 shadow-sm'
+                              : 'border border-transparent text-zinc-400 hover:text-zinc-200'
+                          }`}
+                        >
+                          {label}
+                        </button>
+                      ))}
+                    </div>
                   </div>
 
-                  <div className="rounded-xl bg-white/[0.03] border border-white/[0.08] p-3.5 space-y-2.5">
+                  <div className="rounded-xl bg-white/[0.03] border border-white/[0.08] p-4 grid grid-cols-1 sm:grid-cols-2 gap-3.5">
                     {([
-                      ['Audio', preferredAudioLanguages, setPreferredAudioLanguages, 'preferredTorrentAudioLanguages'],
-                      ['Subtitles', preferredSubtitleLanguages, setPreferredSubtitleLanguages, 'preferredTorrentSubtitleLanguages'],
-                    ] as const).map(([label, selected, setSelected, settingKey]) => (
-                      <div key={label} className="space-y-1.5">
-                        <p className="text-[11px] font-medium text-zinc-400">{label}</p>
-                        <div className="grid grid-cols-2 gap-1.5 sm:grid-cols-5">
-                          {TORRENT_LANGUAGES.map((language) => {
-                            const checked = selected.includes(language.code);
-                            return (
-                              <label
-                                key={language.code}
-                                className={`flex cursor-pointer items-center gap-1.5 rounded-lg border px-2 py-1.5 text-[11px] transition ${
-                                  checked
-                                    ? 'border-rose-400/35 bg-rose-500/10 text-rose-100'
-                                    : 'border-white/[0.06] bg-black/25 text-zinc-400 hover:text-zinc-200'
-                                }`}
-                              >
-                                <input
-                                  type="checkbox"
-                                  checked={checked}
-                                  onChange={() => {
-                                    const next = checked
-                                      ? selected.filter((code) => code !== language.code)
-                                      : [...selected, language.code];
-                                    setSelected(next);
-                                    onSave({ [settingKey]: next });
-                                  }}
-                                  className="accent-rose-500"
-                                />
-                                {language.label}
-                              </label>
-                            );
-                          })}
+                      ['audio', 'Audio', preferredAudioLanguages],
+                      ['subtitles', 'Subtitles', preferredSubtitleLanguages],
+                    ] as const).map(([kind, label, selected]) => {
+                      const primary = selected[0] ?? 'any';
+                      const fallbacks = selected.slice(1);
+                      const remaining = TORRENT_LANGUAGES.filter((l) => !selected.includes(l.code));
+
+                      return (
+                        <div key={kind} className="space-y-2">
+                          <label className="text-[11px] font-semibold text-zinc-300">{label}</label>
+                          <GlassSelect
+                            value={primary}
+                            onChange={(value) => handleSetPrimaryTorrentLanguage(kind, value)}
+                            options={[
+                              { value: 'any', label: 'Any language' },
+                              ...TORRENT_LANGUAGES.map((lang) => ({
+                                value: lang.code,
+                                label: lang.label,
+                              })),
+                            ]}
+                            ariaLabel={`Preferred ${label.toLowerCase()} language`}
+                            className="w-full px-3 py-2 rounded-lg"
+                          />
+
+                          {selected.length > 0 && (
+                            <div className="flex flex-wrap items-center gap-1.5">
+                              {fallbacks.map((code, idx) => (
+                                <button
+                                  key={code}
+                                  type="button"
+                                  onClick={() => handleRemoveTorrentLanguage(kind, code)}
+                                  title={`Fallback #${idx + 2} — click to remove`}
+                                  className="inline-flex items-center gap-1 rounded-md border border-rose-400/30 bg-rose-500/10 px-2 py-0.5 text-[10px] font-medium text-rose-200 hover:bg-rose-500/20 transition-colors"
+                                >
+                                  <span className="text-rose-400/80 font-mono">#{idx + 2}</span>
+                                  <span>{getTorrentLanguageLabel(code)}</span>
+                                  <X className="w-2.5 h-2.5 opacity-75" />
+                                </button>
+                              ))}
+
+                              {remaining.length > 0 && (
+                                <div className="w-fit">
+                                  <GlassSelect
+                                    value="Fallback"
+                                    onChange={(value) => handleAddFallbackTorrentLanguage(kind, value)}
+                                    options={remaining.map((lang) => ({
+                                      value: lang.code,
+                                      label: lang.label,
+                                    }))}
+                                    leadingIcon={<Plus className="w-3 h-3" />}
+                                    ariaLabel={`Add fallback ${label.toLowerCase()} language`}
+                                    className="h-6 px-2 py-0 rounded-md text-[10px] font-medium text-zinc-400 border-white/[0.08] bg-black/25 hover:text-zinc-200"
+                                    menuClassName="min-w-[8.5rem]"
+                                  />
+                                </div>
+                              )}
+                            </div>
+                          )}
                         </div>
-                      </div>
-                    ))}
+                      );
+                    })}
                   </div>
                 </section>
 

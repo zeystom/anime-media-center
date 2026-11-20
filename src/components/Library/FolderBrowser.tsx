@@ -1,7 +1,7 @@
 import React, { useEffect, useMemo, useRef, useState } from 'react';
 import { RefreshCw, Film, Search, Star, X, ArrowDownToLine, CheckCircle2, FolderOpen, ArrowUpDown, Heart, Bell } from 'lucide-react';
 import { AnimeFolder, PlaybackProgress, UserLibraryEntry, UserListStatus } from '../../types';
-import type { FavouriteAnime, FollowedAnime } from '../../types/notifications';
+import type { FavouriteAnime, FollowedAnime, LibraryCollectionFilter } from '../../types/notifications';
 import { cleanSeriesTitle, formatFileSize, isFolderMovie } from '../../utils/format';
 import { GlassSelect } from '../common/GlassSelect';
 
@@ -13,6 +13,8 @@ interface FolderBrowserProps {
   favouriteAnime: FavouriteAnime[];
   userEntries?: Record<number, UserLibraryEntry>;
   loading: boolean;
+  initialFilter?: LibraryCollectionFilter | null;
+  onClearInitialFilter?: () => void;
   onChangeRoot?: () => void;
   onRefresh: () => void;
   /** Card click navigates to the unified title page — episodes live there. */
@@ -22,7 +24,7 @@ interface FolderBrowserProps {
 type LibraryAnimeFolder = AnimeFolder & { collectionOnly?: boolean };
 
 type SortMode = 'recent' | 'title' | 'score' | 'episodes' | 'size';
-type CollectionFilter = 'all' | 'watching' | 'planning' | 'completed' | 'paused' | 'dropped' | 'favourites' | 'followed';
+type CollectionFilter = LibraryCollectionFilter;
 
 const SORT_LABELS: Record<SortMode, string> = {
   recent: 'Recently watched',
@@ -84,6 +86,8 @@ export const FolderBrowser: React.FC<FolderBrowserProps> = ({
   favouriteAnime,
   userEntries,
   loading,
+  initialFilter,
+  onClearInitialFilter,
   onChangeRoot,
   onRefresh,
   onOpenFolderDetails,
@@ -92,6 +96,13 @@ export const FolderBrowser: React.FC<FolderBrowserProps> = ({
   const [sortMode, setSortMode] = useState<SortMode>('recent');
   const [collectionFilter, setCollectionFilter] = useState<CollectionFilter>('all');
   const libraryWarmTimerRef = useRef<number | null>(null);
+
+  useEffect(() => {
+    if (!initialFilter) return;
+    setCollectionFilter(initialFilter);
+    setSearchQuery('');
+    onClearInitialFilter?.();
+  }, [initialFilter, onClearInitialFilter]);
 
   useEffect(() => () => {
     if (libraryWarmTimerRef.current != null) window.clearTimeout(libraryWarmTimerRef.current);

@@ -445,6 +445,40 @@ canvas.JASSUB {
   .release-search-ring, .release-search-ring__arc { animation-duration: 3.6s; }
 }
 
+/* Bell notification ring + halo pulse when new popups emerge from the navbar bell */
+@keyframes kaiko-bell-ring {
+  0% { transform: rotate(0deg) scale(1); }
+  14% { transform: rotate(15deg) scale(1.1); }
+  28% { transform: rotate(-13deg) scale(1.1); }
+  44% { transform: rotate(10deg) scale(1.06); }
+  60% { transform: rotate(-7deg) scale(1.03); }
+  76% { transform: rotate(4deg) scale(1.01); }
+  100% { transform: rotate(0deg) scale(1); }
+}
+@keyframes kaiko-bell-ripple {
+  0% {
+    opacity: 0.72;
+    transform: scale(0.65);
+  }
+  100% {
+    opacity: 0;
+    transform: scale(1.85);
+  }
+}
+.animate-bell-ring {
+  transform-origin: 50% 18%;
+  animation: kaiko-bell-ring 720ms var(--ease-fluid) both;
+}
+.animate-bell-ripple {
+  animation: kaiko-bell-ripple 720ms cubic-bezier(0.22, 1, 0.36, 1) both;
+}
+@media (prefers-reduced-motion: reduce) {
+  .animate-bell-ring,
+  .animate-bell-ripple {
+    animation: none;
+  }
+}
+
 @keyframes download-beam-spin {
   from { transform: rotate(0deg); }
   to { transform: rotate(360deg); }

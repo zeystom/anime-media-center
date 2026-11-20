@@ -19,6 +19,7 @@ import {
   Loader2,
   AlertCircle,
   CheckCircle2,
+  BookmarkCheck,
 } from 'lucide-react';
 import {
   AudioTrack,
@@ -33,6 +34,10 @@ import {
   isTopSignsCandidate,
   isAllowedSignsLanguage,
 } from '../../../electron/assSignsExtractor';
+import {
+  canonicalizeTrackLanguage,
+  resolveEffectivePlaybackPreferences,
+} from '../../utils/playerTrackSelection';
 
 interface TrackControlsProps {
   isOpen: boolean;
@@ -69,6 +74,7 @@ interface TrackControlsProps {
   anilistId?: number | null;
   settings?: AppSettings;
   onUpdateSettings?: (updated: Partial<AppSettings>) => void;
+  onSaveAsDefault?: () => void;
   onSubtitleTrackAdded?: (
     updatedMeta: VideoMetadata,
     trackId: string,
@@ -130,6 +136,10 @@ const BG_OPTIONS: Array<{ id: 'none' | 'translucent' | 'semi' | 'solid'; label: 
 ];
 
 function normalizeSubtitleTitle(track: SubtitleTrack): string {
+  const trackLangLabel =
+    track.languageName && track.languageName !== 'Unknown' && track.languageName !== 'Undetermined'
+      ? track.languageName
+      : 'English';
   if (track.type === 'external') {
     if (track.isSigns || track.isForced) {
       const cleaned = (track.title || '')
@@ -138,7 +148,7 @@ function normalizeSubtitleTitle(track: SubtitleTrack): string {
       if (cleaned && !/\.(?:ass|ssa|srt|vtt)$/i.test(cleaned)) {
         return cleaned;
       }
-      return 'English — Signs / Songs (External)';
+      return `${trackLangLabel} — Signs / Songs (External)`;
     }
     if (
       track.isDubtitle ||
@@ -148,9 +158,9 @@ function normalizeSubtitleTitle(track: SubtitleTrack): string {
       return 'External .srt (Whisper)';
     }
     const cleaned = (track.title || '').replace(/^External:\s*/i, '').trim();
-    return cleaned || 'English — External Subtitles';
+    return cleaned || `${trackLangLabel} — External Subtitles`;
   }
-  const lang = track.languageName || 'English';
+  const lang = trackLangLabel;
   const rawTitle = (track.title || '').trim();
   const isRawCodecOnly =
     /^(?:ass|ssa|subrip|srt|hdmv_pgs_subtitle|pgssub|pgs|dvd_subtitle|dvdsub|vobsub)(?:\s*\([^)]*\))*$/i.test(
@@ -255,10 +265,12 @@ export const TrackControls: React.FC<TrackControlsProps> = ({
   anilistId,
   settings,
   onUpdateSettings,
+  onSaveAsDefault,
   onSubtitleTrackAdded,
 }) => {
   const [activeTab, setActiveTab] = useState<'tracks' | 'styling' | 'search'>('tracks');
   const [previewBackdrop, setPreviewBackdrop] = useState<'spectrum' | 'dark' | 'bright'>('spectrum');
+  const [savedDefaultFeedback, setSavedDefaultFeedback] = useState(false);
 
   // Local embedded ASS -> Signs extraction state
   const [extractingEmbedded, setExtractingEmbedded] = useState(false);
@@ -295,12 +307,19 @@ export const TrackControls: React.FC<TrackControlsProps> = ({
       setActiveTab('tracks');
       setSignsActionStatus(null);
       setSearchError(null);
+      setSavedDefaultFeedback(false);
       setSearchQuery(animeTitle || '');
       setSubsourceKeyDraft(settings?.subsourceApiKey || '');
       setSubdlKeyDraft(settings?.subdlApiKey || '');
       setOpensubsKeyDraft(settings?.opensubtitlesApiKey || '');
     }
   }, [isOpen, animeTitle, settings?.subsourceApiKey, settings?.subdlApiKey, settings?.opensubtitlesApiKey]);
+
+  useEffect(() => {
+    if (!savedDefaultFeedback) return;
+    const t = window.setTimeout(() => setSavedDefaultFeedback(false), 1800);
+    return () => window.clearTimeout(t);
+  }, [savedDefaultFeedback]);
 
   useEffect(() => {
     if (!isOpen) return;
@@ -314,14 +333,16 @@ export const TrackControls: React.FC<TrackControlsProps> = ({
     return () => window.removeEventListener('keydown', handleKeyDown);
   }, [isOpen]);
 
+  const effectivePlaybackPrefs = resolveEffectivePlaybackPreferences(settings);
+
   // Embedded ASS tracks eligible for instant local Signs & Songs extraction
   const extractableAssTracks = subtitleTracks.filter(
     (track) =>
       track.type === 'embedded' &&
       track.index !== null &&
       /ass|ssa/i.test(track.codec || '') &&
-      isAllowedSignsLanguage(track.language) &&
-      !isTopSignsCandidate(track, null)
+      isAllowedSignsLanguage(track.language, effectivePlaybackPrefs.signsAllowedLanguages) &&
+      !isTopSignsCandidate(track, null, effectivePlaybackPrefs.signsAllowedLanguages)
   );
 
   const effectiveExtractTrackIdx =
@@ -432,10 +453,11 @@ export const TrackControls: React.FC<TrackControlsProps> = ({
       subdlApiKey: subdlKeyDraft.trim(),
       opensubtitlesApiKey: opensubsKeyDraft.trim(),
     };
-    if (window.electronAPI?.updateSettings) {
+    if (onUpdateSettings) {
+      onUpdateSettings(patch);
+    } else if (window.electronAPI?.updateSettings) {
       await window.electronAPI.updateSettings(patch).catch(() => {});
     }
-    onUpdateSettings?.(patch);
     setShowApiKeysBar(false);
     void runOnlineSearch(searchMode, searchQuery);
   };
@@ -443,7 +465,9 @@ export const TrackControls: React.FC<TrackControlsProps> = ({
   if (!isOpen) return null;
 
   // Filter 2nd Subtitle / Signs (Top):
-  const topSignsTracks = subtitleTracks.filter((track) => isTopSignsCandidate(track, selectedMainSubId));
+  const topSignsTracks = subtitleTracks.filter((track) =>
+    isTopSignsCandidate(track, selectedMainSubId, effectivePlaybackPrefs.signsAllowedLanguages)
+  );
 
   return (
     <div
@@ -518,7 +542,10 @@ export const TrackControls: React.FC<TrackControlsProps> = ({
                 <div className="space-y-1.5 max-h-72 overflow-y-auto pr-1">
                   {audioTracks.map((track) => {
                     const isSelected = selectedAudioIndex === track.audioIndex;
-                    const isEng = track.language === 'eng' || track.language === 'en';
+                    const canonicalLang = canonicalizeTrackLanguage(track.language, track.title);
+                    const langBadge = (canonicalLang || track.language || '').toUpperCase();
+                    const isPreferredLang =
+                      canonicalLang !== null && effectivePlaybackPrefs.audioLanguages.includes(canonicalLang);
                     const { title, badge } = getAudioTrackDisplay(track, audioTracks);
 
                     return (
@@ -534,9 +561,15 @@ export const TrackControls: React.FC<TrackControlsProps> = ({
                         <div className="truncate mr-2">
                           <div className="truncate font-medium flex items-center space-x-1.5">
                             <span>{title}</span>
-                            {isEng && (
-                              <span className="text-[10px] px-1 rounded bg-indigo-500/20 text-indigo-300 border border-indigo-500/30 font-semibold">
-                                ENG
+                            {langBadge && langBadge !== 'UND' && (
+                              <span
+                                className={`text-[10px] px-1 rounded border font-semibold ${
+                                  isPreferredLang
+                                    ? 'bg-indigo-500/20 text-indigo-300 border-indigo-500/30'
+                                    : 'bg-zinc-800/90 text-zinc-400 border-zinc-700/60'
+                                }`}
+                              >
+                                {langBadge === 'EN' ? 'ENG' : langBadge}
                               </span>
                             )}
                           </div>
@@ -661,6 +694,10 @@ export const TrackControls: React.FC<TrackControlsProps> = ({
                     topSignsTracks.map((track, idx) => {
                       const isSelected = selectedTopSubId === track.id;
                       const { title, badge } = getSubTrackDisplay(track, idx, topSignsTracks);
+                      const signsLang =
+                        track.languageName && track.languageName !== 'Unknown' && track.languageName !== 'Undetermined'
+                          ? track.languageName
+                          : 'Signs';
                       return (
                         <button
                           key={track.id}
@@ -673,7 +710,7 @@ export const TrackControls: React.FC<TrackControlsProps> = ({
                         >
                           <div className="truncate mr-2">
                             <div className="truncate font-medium">{title}</div>
-                            <div className="text-[10px] text-rose-500/80">English Signs / Forced Only</div>
+                            <div className="text-[10px] text-rose-500/80">{signsLang} Signs / Forced Only</div>
                           </div>
                           <div className="flex items-center space-x-2 shrink-0">
                             <span className="px-1.5 py-0.5 rounded text-[10px] font-mono font-medium bg-zinc-800 text-zinc-400 border border-zinc-700/50">
@@ -686,7 +723,7 @@ export const TrackControls: React.FC<TrackControlsProps> = ({
                     })
                   ) : (
                     <div className="p-3 text-center rounded-xl bg-zinc-900/40 border border-dashed border-zinc-800 text-zinc-500 text-xs">
-                      No English Signs/Forced tracks found in this file. (Foreign tracks are strictly ignored).
+                      No matching Signs/Forced tracks found in this file.
                     </div>
                   )}
                 </div>
@@ -843,6 +880,29 @@ export const TrackControls: React.FC<TrackControlsProps> = ({
                   <SlidersHorizontal className="w-3.5 h-3.5 text-rose-400" />
                   <span>Advanced</span>
                 </button>
+
+                {onSaveAsDefault && (
+                  <button
+                    type="button"
+                    onClick={() => {
+                      onSaveAsDefault();
+                      setSavedDefaultFeedback(true);
+                    }}
+                    title="Save active audio language, subtitle language, subtitle type, and signs mode as global player defaults"
+                    className={`flex items-center space-x-1.5 px-3 py-1.5 rounded-lg border text-xs font-semibold transition-all shadow-sm ${
+                      savedDefaultFeedback
+                        ? 'bg-emerald-500/20 border-emerald-500/40 text-emerald-200'
+                        : 'bg-zinc-800/80 hover:bg-zinc-700/80 text-zinc-200 hover:text-white border-white/10'
+                    }`}
+                  >
+                    {savedDefaultFeedback ? (
+                      <Check className="w-3.5 h-3.5 text-emerald-400" />
+                    ) : (
+                      <BookmarkCheck className="w-3.5 h-3.5 text-indigo-400" />
+                    )}
+                    <span>{savedDefaultFeedback ? 'Saved as Default' : 'Save as Default'}</span>
+                  </button>
+                )}
               </div>
 
               <div className="flex items-center space-x-3 ml-auto">

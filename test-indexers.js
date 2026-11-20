@@ -47,6 +47,7 @@ import {
   isFranchiseSeasonTitleMismatch,
   isExplicitSpinoffOrSpecialMismatch,
   deriveShortenedTitleQueries,
+  buildLanguageFallbackQueries,
 } from './electron/indexers.ts';
 import { classifyRelease, decodeHtmlEntities, detectSeasonFromTitle, isMultiSeasonCollection, qualityRank, releaseDescriptionToText } from './src/lib/releaseParser/releaseClassification.ts';
 import { detectVpnStatus, clearVpnCache } from './electron/vpnGuard.ts';
@@ -1414,6 +1415,244 @@ async function main() {
       0,
       `must never strip Season 2 tail: ${JSON.stringify(seasonPreserved)}`
     );
+  });
+
+  // =========================================================================
+  // 8. Multi-Audio / Multi-Subs, MediaInfo, inspection, and language ranking
+  // =========================================================================
+  console.log('\n--- SUITE 8: Multi-Audio / MediaInfo / language-aware ranking & search ---');
+
+  runTest('8.1 Multi-Audio + Multi-Subs long lists (ToonsHub / Netflix / Cyrillic) extract all languages', () => {
+    const title = '[ToonsHub] Solo Leveling S02E01 (CR 1080p) [Multi-Audio][Multi-Subs]';
+    const desc = [
+      'Audio: Japanese, English, German, French, Spanish (Latin America), Portuguese (Brazil), Italian, Russian',
+      'Subtitles: Arabic, Chinese (Simplified), Chinese (Traditional), English, French, German, Indonesian, Italian, Japanese, Korean, Malay, Portuguese (Brazil), Russian, Spanish, Thai, Vietnamese',
+    ].join('\n');
+    const cls = classifyRelease(title, desc);
+    assert.strictEqual(cls.isMultiAudio, true);
+    assert.strictEqual(cls.isMultiSubs, true);
+    assert.strictEqual(cls.hasUnlistedMultiAudio, false);
+    assert.strictEqual(cls.hasUnlistedMultiSubs, false);
+    for (const code of ['en', 'ja', 'de', 'fr', 'es', 'it', 'ru', 'pt']) {
+      assert.ok(cls.audioLanguageCodes.includes(code), `missing audio code ${code}: ${JSON.stringify(cls.audioLanguageCodes)}`);
+    }
+    for (const code of ['en', 'ja', 'de', 'fr', 'es', 'it', 'ru', 'pt', 'zh', 'ko']) {
+      assert.ok(cls.subtitleLanguageCodes.includes(code), `missing subtitle code ${code}: ${JSON.stringify(cls.subtitleLanguageCodes)}`);
+    }
+
+    const cyrillicDesc = [
+      'Аудио: Японский, Русский (AniLibria), Английский',
+      'Субтитры: Русские, Английские',
+    ].join('\n');
+    const clsRu = classifyRelease('[AniLibria] Show - 01 [1080p]', cyrillicDesc);
+    assert.deepStrictEqual(clsRu.audioLanguageCodes, ['en', 'ja', 'ru']);
+    assert.deepStrictEqual(clsRu.subtitleLanguageCodes, ['en', 'ru']);
+  });
+
+  runTest('8.2 MediaInfo multi-line blocks avoid Text-to-Audio bleed and exclude Signs/Forced tracks', () => {
+    const mediaInfo = [
+      'General',
+      'Unique ID : 12345',
+      'Format : Matroska',
+      '',
+      'Audio #1',
+      'ID : 2',
+      'Format : FLAC',
+      'Language : Japanese',
+      'Title : Japanese Original',
+      '',
+      'Audio #2',
+      'ID : 3',
+      'Format : AAC',
+      'Language : Russian',
+      'Title : Russian Dub',
+      '',
+      'Audio #3',
+      'ID : 4',
+      'Format : AAC',
+      'Language : English',
+      'Title : English Dub',
+      '',
+      'Text #1',
+      'ID : 5',
+      'Format : ASS',
+      'Language : Russian',
+      'Title : Signs & Songs',
+      'Forced : Yes',
+      '',
+      'Text #2',
+      'ID : 6',
+      'Format : ASS',
+      'Language : English',
+      'Title : English Full',
+      'Forced : No',
+      '',
+      'Text #3',
+      'ID : 7',
+      'Format : ASS',
+      'Language : Russian',
+      'Title : Russian Full',
+      'Forced : No',
+      '',
+      'Text #4',
+      'ID : 8',
+      'Format : ASS',
+      'Language : German',
+      'Title : German Signs',
+      'Forced : Yes',
+    ].join('\n');
+    const cls = classifyRelease('[Group] Show - 01 [1080p][Multi-Audio]', mediaInfo);
+    assert.deepStrictEqual(cls.audioLanguageCodes, ['en', 'ja', 'ru']);
+    assert.deepStrictEqual(cls.subtitleLanguageCodes, ['en', 'ru']);
+    assert.strictEqual(cls.subtitleLanguageCodes.includes('de'), false, 'forced/signs German track must be excluded');
+  });
+
+  runTest('8.3 ffprobe stream lines & HTML table track lists classify accurately', () => {
+    const ffprobeDesc = [
+      'Stream #0:0(jpn): Video: hevc',
+      'Stream #0:1(jpn): Audio: flac, 48000 Hz, stereo',
+      'Stream #0:2(rus): Audio: aac, 48000 Hz, stereo',
+      'Stream #0:3(eng): Subtitle: ass (default)',
+      'Stream #0:4(rus): Subtitle: ass (Signs & Songs)',
+      'Stream #0:5(rus): Subtitle: ass (Full)',
+    ].join('\n');
+    const ffCls = classifyRelease('[Group] Show - 01', ffprobeDesc);
+    assert.deepStrictEqual(ffCls.audioLanguageCodes, ['ja', 'ru']);
+    assert.deepStrictEqual(ffCls.subtitleLanguageCodes, ['en', 'ru']);
+
+    const htmlTable = '<table><tr><th>Audio</th><td>Japanese, French</td></tr><tr><th>Subtitles</th><td>French, German</td></tr></table>';
+    const htmlCls = classifyRelease('[Group] Show - 01', htmlTable);
+    assert.deepStrictEqual(htmlCls.audioLanguageCodes, ['ja', 'fr']);
+    assert.deepStrictEqual(htmlCls.subtitleLanguageCodes, ['de', 'fr']);
+  });
+
+  runTest('8.4 false-positive regressions: Alya in Russian, "It was ripped", Nyaa English-translated', () => {
+    const alya = classifyRelease('Alya Sometimes Hides Her Feelings in Russian - 01 [1080p][Dual Audio]');
+    assert.deepStrictEqual(alya.audioLanguageCodes, ['en', 'ja'], 'title word "Russian" must not falsely trigger Russian audio');
+    assert.strictEqual(alya.audioLanguageCodes.includes('ru'), false);
+
+    const itProse = classifyRelease('[Group] Show - 01', 'Audio: It was ripped from Blu-ray with high bitrate');
+    assert.strictEqual(itProse.audioLanguageCodes.includes('it'), false, '"It was ripped" must not trigger Italian');
+
+    const nyaaRss = classifyRelease('[SubsPlease] Show - 01 (1080p)', 'View | 500 MiB | Anime - English-translated | hash');
+    assert.strictEqual(nyaaRss.audioLanguageCodes.includes('en'), false, 'Nyaa "English-translated" category must not trigger English dub');
+  });
+
+  runTest('8.5 Dual-Audio / Multi-Audio with explicit non-English description avoids hallucinated English', () => {
+    const dualRu = classifyRelease('[Group] Show - 01 [Dual-Audio]', 'Audio: Japanese, Russian\nSubtitles: Russian');
+    assert.deepStrictEqual(dualRu.audioLanguageCodes, ['ja', 'ru']);
+    assert.deepStrictEqual(dualRu.subtitleLanguageCodes, ['ru']);
+    assert.strictEqual(dualRu.audioLanguageCodes.includes('en'), false);
+
+    const dualRuSingle = classifyRelease('[Group] Show - 01 [Dual-Audio]', 'Audio: Russian');
+    assert.deepStrictEqual(dualRuSingle.audioLanguageCodes, ['ja', 'ru']);
+  });
+
+  runTest('8.6 VOSTFR, RUS+JPN, multi-sub brackets, scene .DUAL./.MULTI., and Dublado tags', () => {
+    const vostfr = classifyRelease('[Team] Show - 01 [1080p][VOSTFR]');
+    assert.deepStrictEqual(vostfr.audioLanguageCodes, ['ja']);
+    assert.deepStrictEqual(vostfr.subtitleLanguageCodes, ['fr']);
+
+    const rusJpn = classifyRelease('[Release] Show - 01 [RUS+JPN][EN/DE/FR/RU Subs]');
+    assert.deepStrictEqual(rusJpn.audioLanguageCodes, ['ja', 'ru']);
+    assert.deepStrictEqual(rusJpn.subtitleLanguageCodes, ['en', 'de', 'fr', 'ru']);
+
+    const sceneDual = classifyRelease('Show.Name.S01E01.1080p.CR.WEB-DL.DUAL.DDP2.0.H.264-Group');
+    assert.strictEqual(sceneDual.isDualAudio, true);
+    assert.deepStrictEqual(sceneDual.audioLanguageCodes, ['en', 'ja']);
+
+    const sceneMulti = classifyRelease('Show.Name.S01E01.1080p.NF.WEB-DL.MULTi.DDP5.1.H.264-Group');
+    assert.strictEqual(sceneMulti.isMultiAudio, true);
+    assert.strictEqual(sceneMulti.hasUnlistedMultiAudio, true);
+
+    const dublado = classifyRelease('[Group] Show - 01 [1080p][Dublado]');
+    assert.deepStrictEqual(dublado.audioLanguageCodes, ['pt']);
+  });
+
+  await runAsyncTest('8.7 inspectReleaseResults DOES inspect [Multi-Audio][Multi-Subs] and [Dual-Audio][Multi-Subs] detail pages', async () => {
+    const original = globalThis.fetch;
+    const requestedUrls = [];
+    globalThis.fetch = async (url) => {
+      requestedUrls.push(String(url));
+      return {
+        ok: true,
+        status: 200,
+        headers: new Headers({ 'content-type': 'text/html' }),
+        body: null,
+        text: async () => '<div id="torrent-description"><p>Audio: Japanese, English, German, Russian<br>Subtitles: English, German, Russian</p></div>',
+      };
+    };
+    try {
+      const multiRelease = {
+        ...makeResult('[ToonsHub] Show S01E01 (WEB 1080p) [Multi-Audio][Multi-Subs]', 100),
+        providerId: 'prov-rss',
+        providerName: rssProvider.name,
+        detailsUrl: 'https://indexer.example/release/multi-1',
+        description: '<a href="https://indexer.example/view/1">#1 | View</a> | 1.1 GiB | Anime - English-translated',
+      };
+      const dualRelease = {
+        ...makeResult('[Judas] Show S01E01 [1080p][Dual-Audio][Multi-Subs]', 80),
+        providerId: 'prov-rss',
+        providerName: rssProvider.name,
+        detailsUrl: 'https://indexer.example/release/dual-2',
+      };
+      const inspected = await inspectReleaseResults([multiRelease, dualRelease], [rssProvider], 10, {
+        preferredAudioLanguages: ['ru'],
+        preferredSubtitleLanguages: ['ru'],
+      });
+      assert.strictEqual(requestedUrls.length, 2, 'both Multi-Audio and Dual-Audio releases must be inspected');
+      const cls0 = classifyRelease(inspected[0].title, inspected[0].description);
+      assert.ok(cls0.audioLanguageCodes.includes('ru'));
+      assert.ok(cls0.audioLanguageCodes.includes('de'));
+      assert.ok(cls0.subtitleLanguageCodes.includes('ru'));
+      assert.strictEqual(cls0.hasUnlistedMultiAudio, false);
+    } finally {
+      globalThis.fetch = original;
+    }
+  });
+
+  runTest('8.8 rankReleasesForEpisode respects preferredAudioLanguages / preferredSubtitleLanguages including priority order and Any ([])', () => {
+    const enRelease = makeResult('[Group] Show - 01 [1080p][English Dub][English Subs]', 500);
+    const jaRuRelease = makeResult('[Group] Show - 01 [1080p][Japanese Audio][Russian Subs]', 100);
+    const ruRelease = makeResult('[Group] Show - 01 [1080p][Russian Audio][Russian Subs]', 25);
+    const highRes4k = makeResult('[Group] Show - 01 [2160p][Japanese RAW]', 900);
+
+    const rankedRu = rankReleasesForEpisode([enRelease, jaRuRelease, ruRelease, highRes4k], {
+      animeTitle: 'Show',
+      episode: 1,
+      preferredAudioLanguages: ['ru'],
+      preferredSubtitleLanguages: ['ru'],
+    });
+    assert.strictEqual(rankedRu[0], ruRelease, 'Russian audio + subs wins for ru/ru');
+    assert.strictEqual(rankedRu[1], jaRuRelease, 'Japanese audio + Russian subs follows');
+
+    const rankedPriority = rankReleasesForEpisode([enRelease, ruRelease], {
+      animeTitle: 'Show',
+      episode: 1,
+      preferredAudioLanguages: ['ru', 'en'],
+      preferredSubtitleLanguages: ['ru', 'en'],
+    });
+    assert.strictEqual(rankedPriority[0], ruRelease, 'priority #1 (ru) beats #2 (en) despite fewer seeders');
+
+    const rankedAny = rankReleasesForEpisode([enRelease, ruRelease, highRes4k], {
+      animeTitle: 'Show',
+      episode: 1,
+      preferredAudioLanguages: [],
+      preferredSubtitleLanguages: [],
+    });
+    assert.strictEqual(rankedAny[0], highRes4k, 'with Any/Any ([]/[]), quality & seeders decide without language bias');
+  });
+
+  runTest('8.9 buildLanguageFallbackQueries emits targeted tracker keywords per language combination', () => {
+    assert.deepStrictEqual(buildLanguageFallbackQueries('Frieren: Beyond', ['ru'], ['ru']), ['Frieren Beyond Multi Audio', 'Frieren Beyond RUS']);
+    assert.deepStrictEqual(buildLanguageFallbackQueries('Frieren', ['en'], ['en']), ['Frieren Dual Audio', 'Frieren Multi Audio']);
+    assert.deepStrictEqual(buildLanguageFallbackQueries('Frieren', ['de'], ['de']), ['Frieren Multi Audio', 'Frieren German']);
+    assert.deepStrictEqual(buildLanguageFallbackQueries('Frieren', ['ja'], ['fr']), ['Frieren Multi Subs', 'Frieren VOSTFR']);
+    assert.deepStrictEqual(buildLanguageFallbackQueries('Frieren', [], ['fr']), ['Frieren Multi Subs', 'Frieren VOSTFR']);
+    assert.deepStrictEqual(buildLanguageFallbackQueries('Frieren', ['ja'], ['ru']), ['Frieren Multi Subs', 'Frieren RUS']);
+    assert.deepStrictEqual(buildLanguageFallbackQueries('Frieren', ['ja'], ['en']), ['Frieren Multi Subs']);
+    assert.deepStrictEqual(buildLanguageFallbackQueries('Frieren', ['ja'], []), []);
+    assert.deepStrictEqual(buildLanguageFallbackQueries('Frieren', [], []), []);
   });
 
   // =========================================================================

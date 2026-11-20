@@ -135,11 +135,19 @@ export interface PlaybackProgress {
   completed: boolean;
 }
 
+export type DefaultSubtitleType = 'auto' | 'dubtitles' | 'dialogue' | 'off';
+export type DefaultTopSubMode = 'auto' | 'always' | 'off';
+export type SeasonMainSubtitleType = 'dubtitles' | 'dialogue' | 'signs' | 'external' | 'off';
+
 export interface SeasonPreference {
-  preferredAudioLanguage: string; // default 'eng'
+  schemaVersion?: number;
+  preferredAudioLanguage: string; // canonical or ISO-639 code (legacy default 'eng')
   preferredAudioIndex?: number;
   mainSubtitleTrackId?: string | null;   // null means explicitly OFF
+  mainSubtitleLanguage?: string | null;
+  mainSubtitleType?: SeasonMainSubtitleType | null;
   topSubtitleTrackId?: string | null;    // null means explicitly OFF
+  topSubtitleLanguage?: string | null;
   topSubEnabled: boolean;
   subSyncOffset: number;          // in seconds (-0.5, 0.5, etc.)
 }
@@ -207,6 +215,16 @@ export interface AppSettings {
   /** Languages accepted by automatic release matching; an empty list accepts any explicitly detected language. */
   preferredTorrentAudioLanguages?: string[];
   preferredTorrentSubtitleLanguages?: string[];
+
+  // ---- Default Playback Audio & Subtitle Preferences ----
+  /** 'auto' matches preferredTorrentAudioLanguages[0], 'original' picks Japanese/original audio, or an explicit ISO language code. */
+  defaultAudioLanguage?: string;
+  /** 'auto' matches preferredTorrentSubtitleLanguages[0], 'off' disables default main subtitles, or an explicit ISO language code. */
+  defaultSubtitleLanguage?: string;
+  /** Default main subtitle track style/type preference when starting playback. */
+  defaultSubtitleType?: DefaultSubtitleType;
+  /** Default 2nd / Top Signs & Songs subtitle behavior. */
+  defaultTopSubMode?: DefaultTopSubMode;
 
   // ---- Optional Online Subtitle Provider Keys (BYOC; TsukiHime requires no key) ----
   subsourceApiKey?: string;

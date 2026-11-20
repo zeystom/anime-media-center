@@ -1,7 +1,8 @@
 import React, { useCallback, useEffect, useMemo, useRef, useState } from 'react';
-import { House, Compass, Film, CalendarDays, HardDrive, Sparkles, Settings as SettingsIcon, ShieldCheck, ShieldAlert, Search, Bell, CheckCheck, Trash2, Download, Radio, History, AlertTriangle, Minus, Square, Copy, X } from 'lucide-react';
+import { House, Compass, Film, CalendarDays, HardDrive, Sparkles, Settings as SettingsIcon, ShieldCheck, ShieldAlert, Search, Bell, CheckCheck, Trash2, Download, Radio, History, AlertTriangle, Minus, Square, Copy, X, ChevronRight, Play, SlidersHorizontal } from 'lucide-react';
 import { useCatalogSearch, type RailItem } from '../hooks/useCatalog';
-import type { AppNotification } from '../types/notifications';
+import { resolveNotificationActionMeta, type AppNotification, type NotificationActionType } from '../types/notifications';
+import { setNotificationDrawerOpen, subscribeToastArrival } from './Toast';
 
 export type AppTab = 'home' | 'discover' | 'library' | 'schedule' | 'downloads' | 'whisper';
 
@@ -87,9 +88,39 @@ function timeAgo(timestamp: number, now: number): string {
   return years === 1 ? 'a year ago' : `${years} years ago`;
 }
 
-// One notification card with horizontal swipe-to-dismiss. A press without
-// movement never starts a drag, so the row's buttons keep their normal
-// clicks; capture begins only after the drag threshold is crossed.
+function notificationActionPillClass(
+  actionType: NotificationActionType,
+  item: AppNotification
+): string {
+  if (actionType === 'find-episode') {
+    return item.finalEpisode
+      ? 'bg-violet-400/15 text-violet-200 border-violet-400/25 group-hover:bg-violet-400/25'
+      : 'bg-emerald-400/15 text-emerald-200 border-emerald-400/25 group-hover:bg-emerald-400/25';
+  }
+  if (actionType === 'manual-pick') {
+    return 'bg-amber-400/15 text-amber-200 border-amber-400/25 group-hover:bg-amber-400/25';
+  }
+  if (actionType === 'open-downloads') {
+    return item.state === 'error'
+      ? 'bg-rose-400/15 text-rose-200 border-rose-400/25 group-hover:bg-rose-400/25'
+      : 'bg-sky-400/15 text-sky-200 border-sky-400/25 group-hover:bg-sky-400/25';
+  }
+  if (actionType === 'open-whisper' || actionType === 'play-episode') {
+    return 'bg-rose-400/15 text-rose-200 border-rose-400/25 group-hover:bg-rose-400/25';
+  }
+  if (actionType === 'open-library') {
+    return item.libraryFilter === 'favourites'
+      ? 'bg-rose-400/15 text-rose-200 border-rose-400/25 group-hover:bg-rose-400/25'
+      : 'bg-emerald-400/15 text-emerald-200 border-emerald-400/25 group-hover:bg-emerald-400/25';
+  }
+  if (actionType === 'open-anime') {
+    return 'bg-emerald-400/15 text-emerald-200 border-emerald-400/25 group-hover:bg-emerald-400/25';
+  }
+  return 'bg-white/[0.08] text-zinc-200 border-white/15 group-hover:bg-white/[0.14]';
+}
+
+// One notification card with horizontal swipe-to-dismiss AND whole-card click action.
+// A press without movement never starts a drag, so clicks work cleanly anywhere on the card.
 const NotificationRow: React.FC<{
   item: AppNotification;
   toneClass: string;
@@ -102,7 +133,11 @@ const NotificationRow: React.FC<{
   const [dragging, setDragging] = useState(false);
   const [exiting, setExiting] = useState(false);
   const dragXRef = useRef(0);
+  const didDragRef = useRef(false);
   const gestureRef = useRef({ pointerId: -1, startX: 0, started: false });
+
+  const actionMeta = useMemo(() => resolveNotificationActionMeta(item), [item]);
+  const isClickable = actionMeta.actionType !== null;
 
   const endGesture = () => {
     gestureRef.current.pointerId = -1;
@@ -113,6 +148,7 @@ const NotificationRow: React.FC<{
   const handlePointerDown = (event: React.PointerEvent<HTMLDivElement>) => {
     if (exiting) return;
     if (event.pointerType === 'mouse' && event.button !== 0) return;
+    didDragRef.current = false;
     gestureRef.current = { pointerId: event.pointerId, startX: event.clientX, started: false };
   };
 
@@ -123,6 +159,7 @@ const NotificationRow: React.FC<{
     if (!gesture.started) {
       if (Math.abs(dx) < DRAG_START_PX) return;
       gesture.started = true;
+      didDragRef.current = true;
       setDragging(true);
       try { event.currentTarget.setPointerCapture(event.pointerId); } catch {}
     }
@@ -149,12 +186,44 @@ const NotificationRow: React.FC<{
     endGesture();
   };
 
+  const handleRowActivate = () => {
+    if (didDragRef.current || dragging || exiting) return;
+    if (!item.read) {
+      onRead(item.id);
+    }
+    if (isClickable) {
+      onOpen(item);
+    }
+  };
+
+  const renderGlyph = (small = false) => {
+    const cls = small ? 'h-3 w-3' : 'h-4 w-4';
+    if (item.kind === 'airing') return <Radio className={cls} />;
+    if (item.kind === 'follow') return <Bell className={cls} />;
+    if (item.kind === 'whisper') return <Sparkles className={cls} />;
+    if (item.state === 'error') return <AlertTriangle className={cls} />;
+    return <Download className={cls} />;
+  };
+
   return (
     <div
       onPointerDown={handlePointerDown}
       onPointerMove={handlePointerMove}
       onPointerUp={handlePointerEnd}
       onPointerCancel={handlePointerEnd}
+      onClick={handleRowActivate}
+      onKeyDown={
+        isClickable
+          ? (e) => {
+              if (e.key === 'Enter' || e.key === ' ') {
+                e.preventDefault();
+                handleRowActivate();
+              }
+            }
+          : undefined
+      }
+      role={isClickable ? 'button' : undefined}
+      tabIndex={isClickable ? 0 : undefined}
       onClickCapture={(event) => {
         // Swallow the click that trails a completed drag so buttons under the
         // release point never fire.
@@ -171,21 +240,26 @@ const NotificationRow: React.FC<{
           : 'transform 190ms cubic-bezier(0.22, 1, 0.36, 1), opacity 160ms linear',
         touchAction: 'pan-y',
       }}
-      className="mb-1.5 flex gap-3 rounded-xl border border-white/[0.08] bg-[#1a1424]/90 p-3.5 transition-colors hover:border-rose-400/25 hover:bg-[#251b30]"
+      className={`group mb-1.5 flex gap-3 rounded-xl border p-3.5 transition-colors ${
+        isClickable ? 'cursor-pointer' : ''
+      } ${
+        item.read
+          ? 'border-white/[0.06] bg-[#161120]/75 hover:border-rose-400/25 hover:bg-[#22192d]/90'
+          : 'border-white/[0.11] bg-[#1c1527]/95 hover:border-rose-400/35 hover:bg-[#271d35]'
+      }`}
     >
-      <div className={`mt-0.5 flex h-9 w-9 shrink-0 items-center justify-center rounded-lg ${toneClass}`}>
-        {item.kind === 'airing' ? (
-          <Radio className="h-4 w-4" />
-        ) : item.kind === 'follow' ? (
-          <Bell className="h-4 w-4" />
-        ) : item.kind === 'whisper' ? (
-          <Sparkles className="h-4 w-4" />
-        ) : item.state === 'error' ? (
-          <AlertTriangle className="h-4 w-4" />
-        ) : (
-          <Download className="h-4 w-4" />
-        )}
-      </div>
+      {item.posterUrl ? (
+        <div className="relative mt-0.5 h-12 w-9 shrink-0 overflow-hidden rounded-lg border border-white/10 bg-zinc-900 shadow-sm">
+          <img src={item.posterUrl} alt="" className="h-full w-full object-cover" loading="lazy" />
+          <div className={`absolute -bottom-0.5 -right-0.5 flex h-4 w-4 items-center justify-center rounded-md border border-black/40 backdrop-blur-md ${toneClass}`}>
+            {renderGlyph(true)}
+          </div>
+        </div>
+      ) : (
+        <div className={`mt-0.5 flex h-9 w-9 shrink-0 items-center justify-center rounded-lg ${toneClass}`}>
+          {renderGlyph(false)}
+        </div>
+      )}
       <div className="min-w-0 flex-1">
         <p className="text-[13px] font-semibold text-zinc-100">{item.title}</p>
         <p className="mt-1 text-xs leading-relaxed text-zinc-300">{item.message}</p>
@@ -201,20 +275,42 @@ const NotificationRow: React.FC<{
           <span className="text-[11px] text-zinc-500" title={new Date(item.createdAt).toLocaleString()}>
             {timeAgo(item.createdAt, now)}
           </span>
-          {item.kind === 'airing' && item.anilistId && item.episode ? (
-            <button type="button" onClick={() => { onRead(item.id); onOpen(item); }} className={`rounded-lg px-2.5 py-1 text-[11px] font-bold transition ${item.finalEpisode ? 'bg-violet-400/10 text-violet-200 hover:bg-violet-400/20' : 'bg-emerald-400/10 text-emerald-200 hover:bg-emerald-400/20'}`}>Find EP {item.episode}</button>
-          ) : item.kind === 'download' ? (
-            <button type="button" onClick={() => { onRead(item.id); onOpen(item); }} className="rounded-lg bg-emerald-400/10 px-2.5 py-1 text-[11px] font-bold text-emerald-200 transition hover:bg-emerald-400/20">Downloads</button>
-          ) : item.kind === 'whisper' ? (
-            <button type="button" onClick={() => { onRead(item.id); onOpen(item); }} className="rounded-lg bg-rose-400/10 px-2.5 py-1 text-[11px] font-bold text-rose-200 transition hover:bg-rose-400/20">Whisper Studio</button>
-          ) : item.kind !== 'follow' && !item.read ? (
-            <button type="button" onClick={() => onRead(item.id)} className="text-[11px] font-semibold text-zinc-400 hover:text-zinc-200">Mark read</button>
+          {actionMeta.actionType && actionMeta.actionLabel ? (
+            <span className={`inline-flex items-center gap-1 rounded-lg border px-2 py-0.5 text-[11px] font-bold transition ${notificationActionPillClass(actionMeta.actionType, item)}`}>
+              {actionMeta.actionType === 'play-episode' && <Play className="h-2.5 w-2.5 fill-current" />}
+              {actionMeta.actionType === 'open-settings' && <SlidersHorizontal className="h-2.5 w-2.5" />}
+              <span>{actionMeta.actionLabel}</span>
+              <ChevronRight className="h-3 w-3 transition-transform duration-150 group-hover:translate-x-0.5" />
+            </span>
+          ) : !item.read ? (
+            <button
+              type="button"
+              onClick={(e) => {
+                e.stopPropagation();
+                onRead(item.id);
+              }}
+              className="text-[11px] font-semibold text-zinc-400 hover:text-zinc-200"
+            >
+              Mark read
+            </button>
           ) : null}
         </div>
       </div>
       <div className="flex shrink-0 items-start gap-1">
         {!item.read && <span className="mt-1.5 h-1.5 w-1.5 rounded-full bg-rose-400" />}
-        <button type="button" onClick={() => onDismiss(item.id)} title="Dismiss notification" aria-label={`Dismiss ${item.title}`} className="-mr-1 -mt-1 rounded-md p-1 text-zinc-600 transition hover:bg-white/[0.08] hover:text-zinc-200"><X className="h-3.5 w-3.5" /></button>
+        <button
+          type="button"
+          onPointerDown={(e) => e.stopPropagation()}
+          onClick={(e) => {
+            e.stopPropagation();
+            onDismiss(item.id);
+          }}
+          title="Dismiss notification"
+          aria-label={`Dismiss ${item.title}`}
+          className="-mr-1 -mt-1 rounded-md p-1 text-zinc-600 transition hover:bg-white/[0.08] hover:text-zinc-200"
+        >
+          <X className="h-3.5 w-3.5" />
+        </button>
       </div>
     </div>
   );
@@ -241,7 +337,31 @@ const NavbarImpl: React.FC<NavbarProps> = ({
 }) => {
   const [query, setQuery] = useState('');
   const [notificationsOpen, setNotificationsOpen] = useState(false);
+  const [bellRinging, setBellRinging] = useState(false);
   const [searchOpen, setSearchOpen] = useState(false);
+
+  useEffect(() => {
+    setNotificationDrawerOpen(notificationsOpen);
+    return () => setNotificationDrawerOpen(false);
+  }, [notificationsOpen]);
+
+  useEffect(() => {
+    let timerId: number | null = null;
+    const unsubscribe = subscribeToastArrival(() => {
+      setBellRinging(false);
+      window.requestAnimationFrame(() => {
+        setBellRinging(true);
+      });
+      if (timerId !== null) window.clearTimeout(timerId);
+      timerId = window.setTimeout(() => {
+        setBellRinging(false);
+      }, 760);
+    });
+    return () => {
+      unsubscribe();
+      if (timerId !== null) window.clearTimeout(timerId);
+    };
+  }, []);
   const [windowMaximized, setWindowMaximized] = useState(false);
   const [recentSearches, setRecentSearches] = useState<RailItem[]>(() => loadRecentSearches());
   const searchBoxRef = useRef<HTMLDivElement>(null);
@@ -576,12 +696,19 @@ const NavbarImpl: React.FC<NavbarProps> = ({
         <div ref={notificationsRef} className="relative">
           <button
             type="button"
+            data-notification-bell="true"
             onClick={() => { setNotificationsOpen((open) => !open); setSearchOpen(false); }}
             title={unreadCount ? `${unreadCount} unread notifications` : 'Notifications'}
             aria-label="Notifications"
             className="relative rounded-lg p-2 text-zinc-400 transition hover:bg-zinc-800/80 hover:text-white"
           >
-            <Bell className="h-5 w-5" />
+            {bellRinging && (
+              <span
+                aria-hidden="true"
+                className="pointer-events-none absolute inset-0 rounded-lg border border-rose-400/60 bg-rose-500/10 animate-bell-ripple"
+              />
+            )}
+            <Bell className={bellRinging ? 'h-5 w-5 text-rose-300 animate-bell-ring' : 'h-5 w-5'} />
             {unreadCount > 0 && <span className="absolute right-1 top-1 h-2 w-2 rounded-full bg-rose-400 ring-2 ring-[#0F0B15]" />}
           </button>
           {notificationsOpen && (

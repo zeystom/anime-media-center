@@ -419,13 +419,14 @@ export async function probeMkv(filePath: string, ffmpegPath: string): Promise<Vi
   const externalTracks: SubtitleTrack[] = externalMatches.map((found) => {
     const ext = path.extname(found.fileName).toLowerCase();
     const codec = ext === '.ass' || ext === '.ssa' ? 'ass' : ext === '.vtt' ? 'webvtt' : 'subrip';
+    const detectedLang = found.language || 'eng';
     return {
       id: `ext-${crypto.createHash('md5').update(found.fileName).digest('hex').slice(0, 8)}`,
       index: null,
       type: 'external',
       filePath: found.filePath,
-      language: 'eng',
-      languageName: 'English',
+      language: detectedLang,
+      languageName: getLanguageName(detectedLang),
       codec,
       title: found.isWhisper ? 'AI (Whisper)' : `External: ${found.fileName}`,
       isDefault: false,

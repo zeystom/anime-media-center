@@ -20,6 +20,7 @@ import { AnimeFolder, Episode, PlaybackProgress, SeasonPreference, VIDEO_EXTENSI
 import { getKitsuMetadata, fetchAniSkipTimes } from './kitsu';
 import { extractEpisodeNumber } from './episodes';
 import { parseReleaseCore } from '../src/lib/releaseParser/regexEngine.ts';
+import { classifyRelease, matchesReleaseLanguagePreferences } from '../src/lib/releaseParser/releaseClassification.ts';
 import { checkEpisodeDownloading, isFolderDownloading } from './torrents';
 import { getTrending, getPopularSeason, getAllTimePopular, getAiringSchedule, getRecommendations, getGenrePicks, getDiscoverCatalog, searchCatalog, getCatalogDetails, getCatalogFranchise, getCatalogFranchiseSeasons } from './catalog';
 import { queryAnimeCharacters } from './anilist';
@@ -31,7 +32,7 @@ import { computeDiskUsage, computeFoldersDiskSpace, computeStorageOverview, dele
 import { syncBackupNow, getBackupStatus, detectRestoreState, restoreFromBackup, scheduleBackupSync } from './userDataBackup';
 import { exportWatchlist, importWatchlist, MAL_ONLY_ANILIST_ID_BASE } from './watchlistIO';
 import { initTorrentEngine, engineSetEnabled, engineAddDownload, enginePause, engineResume, engineCancel, engineGetState, engineShutdown, engineGetJobDiagnostics } from './torrentEngine';
-import { searchProviders, rankReleasesForEpisode, isExplicitEpisodeMismatch, explicitReleasePart, isExplicitPartMismatch, isExplicitSeasonMismatch, isFranchiseSeasonTitleMismatch, isExplicitSpinoffOrSpecialMismatch, deriveShortenedTitleQueries, getEpisodeReleaseSizeWarning, sanitizeSearchQuery, extractInfoHash, fetchReleaseDescription, inspectReleaseResults, computeTitleRelevance } from './indexers';
+import { searchProviders, rankReleasesForEpisode, isExplicitEpisodeMismatch, explicitReleasePart, isExplicitPartMismatch, isExplicitSeasonMismatch, isFranchiseSeasonTitleMismatch, isExplicitSpinoffOrSpecialMismatch, deriveShortenedTitleQueries, buildLanguageFallbackQueries, getEpisodeReleaseSizeWarning, sanitizeSearchQuery, extractInfoHash, fetchReleaseDescription, inspectReleaseResults, computeTitleRelevance } from './indexers';
 import {
   initUpdater,
   checkForUpdates,
@@ -756,7 +757,18 @@ function setupIpcHandlers() {
   });
 
   ipcMain.handle('update-settings', async (_event, newSettings) => {
-    return storage.updateSettings(newSettings);
+    const updated = storage.updateSettings(newSettings);
+    if (
+      newSettings
+      && typeof newSettings === 'object'
+      && (
+        Object.prototype.hasOwnProperty.call(newSettings, 'preferredTorrentAudioLanguages')
+        || Object.prototype.hasOwnProperty.call(newSettings, 'preferredTorrentSubtitleLanguages')
+      )
+    ) {
+      searchResultCache.clear();
+    }
+    return updated;
   });
 
   ipcMain.handle('browse-folder', async (_event, defaultPath) => {
@@ -1964,11 +1976,14 @@ function setupIpcHandlers() {
     const withRelevance = (list: ReleaseSearchResult[]) =>
       list.map((release) => ({ ...release, titleRelevance: computeTitleRelevance(release.title, refs) }));
 
+    const preferredAudioLanguages = settings.preferredTorrentAudioLanguages ?? ['en'];
+    const preferredSubtitleLanguages = settings.preferredTorrentSubtitleLanguages ?? ['en'];
+
     // Short-lived cache: draining a season queue fires one search per episode,
     // and provider fetches + description inspections are the expensive part
     // (they are episode-independent). Ranking and episode-dependent filters
     // re-run per request below.
-    const cacheKey = queries.join(' || ');
+    const cacheKey = `${queries.join(' || ')} ## ${preferredAudioLanguages.join(',')}|${preferredSubtitleLanguages.join(',')}`;
     let cached: { inspected: ReleaseSearchResult[]; reports: ProviderReport[]; executedQueries: string[]; fetchedAt: number } | undefined = searchResultCache.get(cacheKey);
     // Never serve a failed attempt from cache (e.g. every provider timed out
     // because the network was down): a retry must re-attempt the providers.
@@ -1992,18 +2007,21 @@ function setupIpcHandlers() {
       const allResults: ReleaseSearchResult[] = [];
       const attemptReports: ProviderReport[] = [];
       const seen = new Set<string>();
-      const collectSettled = (settledList: PromiseSettledResult<{ results: ReleaseSearchResult[]; reports: ProviderReport[] }>[]) => {
+      const collectSettled = (settledList: PromiseSettledResult<{ results: ReleaseSearchResult[]; reports: ProviderReport[] }>[]): ReleaseSearchResult[] => {
+        const added: ReleaseSearchResult[] = [];
         for (const settled of settledList) {
           if (settled.status !== 'fulfilled') continue;
           const { results, reports } = settled.value;
           for (const result of results) {
-            const key = extractInfoHash(result.downloadUrl) || `${result.title.toLowerCase()}|${result.sizeBytes ?? ''}`;
+            const key = result.infoHash || extractInfoHash(result.downloadUrl) || `${result.title.toLowerCase()}|${result.sizeBytes ?? ''}`;
             if (seen.has(key)) continue;
             seen.add(key);
             allResults.push(result);
+            added.push(result);
           }
           attemptReports.push(...reports);
         }
+        return added;
       };
 
       const executedQueries = [...queries];
@@ -2026,12 +2044,6 @@ function setupIpcHandlers() {
         }
       }
 
-      // One report per provider across queries: an ok report wins, otherwise keep the first error.
-      const reportByProvider = new Map<string, ProviderReport>();
-      for (const report of attemptReports) {
-        const existing = reportByProvider.get(report.providerId);
-        if (!existing || (!existing.ok && report.ok)) reportByProvider.set(report.providerId, report);
-      }
       // Wrong-show results (titleRelevance 'none') are dropped BEFORE the
       // description inspection so its request budget is spent on the right
       // show only.
@@ -2040,11 +2052,77 @@ function setupIpcHandlers() {
         season: params?.season ?? null,
         part: requestedPart,
         episode: params?.episode ?? null,
+        preferredAudioLanguages,
+        preferredSubtitleLanguages,
       })).filter((release) => release.titleRelevance !== 'none');
       // Feed metadata is frequently incomplete. Inspect the strongest candidates
       // before ranking so automatic mode cannot mistake an unknown track list for
-      // a confirmed English dub/sub release.
-      const inspectedResults = await inspectReleaseResults(relevant, providers, 40);
+      // a confirmed dub/sub release or miss Multi-Audio track lists.
+      let inspectedResults = await inspectReleaseResults(relevant, providers, 40, {
+        preferredAudioLanguages,
+        preferredSubtitleLanguages,
+      });
+
+      // Phase 2 language fallback: if Phase 1 yielded no compatible release
+      // matching the user's preferred languages, issue targeted Multi-Audio /
+      // language-tagged queries to surface buried releases.
+      const anyInitialProviderOk = attemptReports.some((report) => report.ok);
+      if (
+        !override.trim()
+        && anyInitialProviderOk
+        && (preferredAudioLanguages.length > 0 || preferredSubtitleLanguages.length > 0)
+      ) {
+        const hasPreferredMatch = inspectedResults.some((release) => {
+          if (
+            isExplicitPartMismatch(release, requestedPart)
+            || isExplicitSeasonMismatch(release, params?.season, title, params?.franchiseSeasons)
+            || isFranchiseSeasonTitleMismatch(release, params?.season, params?.franchiseSeasons)
+            || isExplicitSpinoffOrSpecialMismatch(release, refs, params?.mediaFormat)
+          ) {
+            return false;
+          }
+          return matchesReleaseLanguagePreferences(
+            classifyRelease(release.title, release.description),
+            preferredAudioLanguages,
+            preferredSubtitleLanguages,
+          );
+        });
+        if (!hasPreferredMatch) {
+          const langFallbackQueries = buildLanguageFallbackQueries(
+            queries[0],
+            preferredAudioLanguages,
+            preferredSubtitleLanguages,
+          ).filter((q) => !executedQueries.includes(q));
+          if (langFallbackQueries.length > 0) {
+            const addedFromLang = collectSettled(await runProviderBatch(langFallbackQueries));
+            executedQueries.push(...langFallbackQueries);
+            if (addedFromLang.length > 0) {
+              const relevantAdded = withRelevance(rankReleasesForEpisode(addedFromLang, {
+                animeTitle: title,
+                season: params?.season ?? null,
+                part: requestedPart,
+                episode: params?.episode ?? null,
+                preferredAudioLanguages,
+                preferredSubtitleLanguages,
+              })).filter((release) => release.titleRelevance !== 'none');
+              if (relevantAdded.length > 0) {
+                const inspectedAdded = await inspectReleaseResults(relevantAdded, providers, 20, {
+                  preferredAudioLanguages,
+                  preferredSubtitleLanguages,
+                });
+                inspectedResults = [...inspectedResults, ...inspectedAdded];
+              }
+            }
+          }
+        }
+      }
+
+      // One report per provider across queries: an ok report wins, otherwise keep the first error.
+      const reportByProvider = new Map<string, ProviderReport>();
+      for (const report of attemptReports) {
+        const existing = reportByProvider.get(report.providerId);
+        if (!existing || (!existing.ok && report.ok)) reportByProvider.set(report.providerId, report);
+      }
       const mergedReports = [...reportByProvider.values()];
       const hadProviderFailure = mergedReports.some((report) => !report.ok);
       // Cache only usable attempts. A failed search (all providers timed out
@@ -2069,6 +2147,8 @@ function setupIpcHandlers() {
       season: params?.season ?? null,
       part: requestedPart,
       episode: params?.episode ?? null,
+      preferredAudioLanguages,
+      preferredSubtitleLanguages,
     }));
     const compatible = ranked.filter((release) =>
       !isExplicitPartMismatch(release, requestedPart) &&

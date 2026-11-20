@@ -26,7 +26,17 @@ import {
 import type { FranchiseSeasonEntry, ProviderReport, ReleaseSearchResult } from '../../types'
 import type { ParsedRelease } from '../../lib/releaseParser/types.ts'
 import { formatEpisodeNumberPart, parseReleaseCore } from '../../lib/releaseParser/regexEngine.ts'
-import { classifyRelease, detectSeasonFromTitle, qualityRank, TORRENT_LANGUAGES, type ReleaseClassification, type ReleaseKind, type TorrentLanguageCode } from '../../lib/releaseParser/releaseClassification.ts'
+import {
+  classifyRelease,
+  computeLanguagePreferenceRank,
+  detectSeasonFromTitle,
+  getTorrentLanguageLabel,
+  qualityRank,
+  TORRENT_LANGUAGES,
+  type ReleaseClassification,
+  type ReleaseKind,
+  type TorrentLanguageCode,
+} from '../../lib/releaseParser/releaseClassification.ts'
 import { formatFileSize } from '../../utils/format'
 import { GlassSelect } from '../common/GlassSelect'
 
@@ -46,6 +56,8 @@ interface ReleasePickerModalProps {
   /** Alternative titles (romaji/english) tried alongside the main query. */
   aliases?: string[]
   franchiseSeasons?: FranchiseSeasonEntry[]
+  preferredAudioLanguages?: string[]
+  preferredSubtitleLanguages?: string[]
   onCancel: () => void
   onPicked: (result: ReleaseSearchResult) => void
 }
@@ -53,7 +65,7 @@ interface ReleasePickerModalProps {
 const SKELETON_ROWS = 6
 type ReleaseTab = 'all' | 'batches' | 'episodes'
 type ReleaseTypeFilter = 'all' | ReleaseKind
-type ReleaseLanguageFilter = 'all' | 'unknown' | TorrentLanguageCode
+type ReleaseLanguageFilter = 'all' | 'multi' | 'unknown' | TorrentLanguageCode
 
 const RELEASE_TABS: Array<{ id: ReleaseTab; label: string }> = [
   { id: 'all', label: 'All Releases' },
@@ -93,6 +105,107 @@ function buildReleaseChips(parsed: ParsedRelease): Array<{ label: string; classN
   return chips.slice(0, 3)
 }
 
+interface LanguageBadgeItem {
+  label: string
+  tone: 'emerald' | 'sky' | 'violet' | 'amber'
+  tooltip?: string
+}
+
+const BADGE_TONE_CLASSES: Record<LanguageBadgeItem['tone'], string> = {
+  emerald: 'border border-emerald-400/30 bg-emerald-500/15 text-emerald-200',
+  sky: 'border border-sky-400/25 bg-sky-500/15 text-sky-200',
+  violet: 'border border-violet-400/25 bg-violet-500/15 text-violet-200',
+  amber: 'border border-amber-400/25 bg-amber-500/10 text-amber-200',
+}
+
+function orderCodesByPreference(
+  codes: TorrentLanguageCode[],
+  preferences: string[],
+): TorrentLanguageCode[] {
+  const prefIndex = new Map(preferences.map((code, idx) => [code, idx]))
+  return [...codes].sort((a, b) => {
+    const idxA = prefIndex.get(a) ?? Number.MAX_SAFE_INTEGER
+    const idxB = prefIndex.get(b) ?? Number.MAX_SAFE_INTEGER
+    if (idxA !== idxB) return idxA - idxB
+    return 0
+  })
+}
+
+function buildLanguageBadges(
+  classification: ReleaseClassification,
+  preferredAudioLanguages: string[],
+  preferredSubtitleLanguages: string[],
+): LanguageBadgeItem[] {
+  const badges: LanguageBadgeItem[] = []
+  const prefAudioSet = new Set(preferredAudioLanguages)
+  const prefSubSet = new Set(preferredSubtitleLanguages)
+
+  if (classification.hasUnlistedMultiAudio) {
+    badges.push({
+      label: 'Multi-Audio (tracks unlisted)',
+      tone: 'amber',
+      tooltip: 'Tagged Multi-Audio, but exact audio tracks were not listed in the release details.',
+    })
+  } else if (classification.isMultiAudio || classification.audioLanguageCodes.length >= 3) {
+    const ordered = orderCodesByPreference(classification.audioLanguageCodes, preferredAudioLanguages)
+    const shown = ordered.slice(0, 3).map((c) => c.toUpperCase())
+    const rest = ordered.length - shown.length
+    const matched = ordered.some((c) => prefAudioSet.has(c))
+    const summary = rest > 0 ? `${shown.join(', ')} +${rest}` : shown.join(', ')
+    badges.push({
+      label: `Multi-Audio (${summary})`,
+      tone: matched ? 'emerald' : 'sky',
+      tooltip: `Audio tracks: ${classification.audioLanguageCodes.map((c) => getTorrentLanguageLabel(c)).join(', ')}`,
+    })
+  } else {
+    classification.audioLanguageCodes.forEach((code, idx) => {
+      const matched = prefAudioSet.has(code)
+      badges.push({
+        label: classification.audioLabels[idx] || `${getTorrentLanguageLabel(code)} Audio`,
+        tone: matched ? 'emerald' : code === 'en' ? 'sky' : code === 'ja' ? 'violet' : 'amber',
+      })
+    })
+  }
+
+  if (classification.hasDubtitles) {
+    const matched = classification.subtitleLanguageCodes.some((c) => prefSubSet.has(c))
+    badges.push({
+      label: 'Dubtitles',
+      tone: matched ? 'emerald' : 'sky',
+      tooltip: 'Subtitles timed to the dub dialogue',
+    })
+  } else if (classification.hasUnlistedMultiSubs) {
+    badges.push({
+      label: 'Multi-Subs (tracks unlisted)',
+      tone: 'amber',
+      tooltip: 'Tagged Multi-Subs, but exact subtitle tracks were not listed in the release details.',
+    })
+  } else if (classification.subtitleLanguageCodes.length >= 3) {
+    const ordered = orderCodesByPreference(classification.subtitleLanguageCodes, preferredSubtitleLanguages)
+    const matchedCount = ordered.filter((c) => prefSubSet.has(c)).length
+    const shownCount = matchedCount >= 3 ? 3 : 2
+    const shown = ordered.slice(0, shownCount).map((c) => c.toUpperCase())
+    const rest = ordered.length - shown.length
+    const matched = matchedCount > 0
+    const summary = rest > 0 ? `${shown.join(', ')} +${rest}` : shown.join(', ')
+    badges.push({
+      label: `Multi-Subs (${summary})`,
+      tone: matched ? 'emerald' : 'violet',
+      tooltip: `Subtitle tracks: ${classification.subtitleLanguageCodes.map((c) => getTorrentLanguageLabel(c)).join(', ')}`,
+    })
+  } else {
+    classification.subtitleLanguageCodes.forEach((code, idx) => {
+      const matched = prefSubSet.has(code)
+      badges.push({
+        label: classification.subtitleLabels[idx] || `${getTorrentLanguageLabel(code)} Subs`,
+        tone: matched ? 'emerald' : 'violet',
+      })
+    })
+  }
+
+  return badges
+}
+
 const TYPE_FILTERS: Array<{ value: ReleaseTypeFilter; label: string }> = [
   { value: 'all', label: 'All release types' },
   { value: 'episode', label: 'Single episodes' },
@@ -116,6 +229,8 @@ export const ReleasePickerModal: React.FC<ReleasePickerModalProps> = ({
   episodeDurationMinutes,
   aliases,
   franchiseSeasons,
+  preferredAudioLanguages = ['en'],
+  preferredSubtitleLanguages = ['en'],
   onCancel,
   onPicked,
 }) => {
@@ -252,16 +367,11 @@ export const ReleasePickerModal: React.FC<ReleasePickerModalProps> = ({
       ? null
       : (season ?? (title ? detectSeasonFromTitle(title) : null))
 
-  // Preserve backend's match ordering inside each audio/subtitle priority group.
+  // Preserve backend's match ordering inside each audio/subtitle preference group.
   const languageSorted = useMemo(() => [...classified].sort((a, b) => {
-    // 1. Language classification rank:
-    // 0 = Dubtitles (Verified Dubtitles outranks higher resolution without dubtitles)
-    // 1 = Eng Dub + Eng/Multi Subs
-    // 2 = Eng Dub or Japanese + Subs
-    // 3 = Japanese only
-    // 4 = Other
-    // 5 = Unknown
-    const priorityDiff = a.classification.rank - b.classification.rank
+    const priorityDiff =
+      computeLanguagePreferenceRank(a.classification, preferredAudioLanguages, preferredSubtitleLanguages)
+      - computeLanguagePreferenceRank(b.classification, preferredAudioLanguages, preferredSubtitleLanguages)
     if (priorityDiff) return priorityDiff
 
     // 2. Size warning
@@ -295,7 +405,7 @@ export const ReleasePickerModal: React.FC<ReleasePickerModalProps> = ({
 
     // 6. Seeders
     return (b.result.seeders ?? -1) - (a.result.seeders ?? -1)
-  }), [classified, episode, effectiveSeason])
+  }), [classified, episode, effectiveSeason, preferredAudioLanguages, preferredSubtitleLanguages])
 
   // Local search and controls compose; unclassified items naturally stay last.
   const normalizedFilter = filter.trim().toLowerCase()
@@ -304,9 +414,11 @@ export const ReleasePickerModal: React.FC<ReleasePickerModalProps> = ({
       if (normalizedFilter && !(item.result.title || '').toLowerCase().includes(normalizedFilter)
         && !(item.result.description || '').toLowerCase().includes(normalizedFilter)) return false
       if (audioFilter === 'unknown' && item.classification.audioLanguageCodes.length > 0) return false
-      if (audioFilter !== 'all' && audioFilter !== 'unknown' && !item.classification.audioLanguageCodes.includes(audioFilter)) return false
+      if (audioFilter === 'multi' && !item.classification.isMultiAudio && item.classification.audioLanguageCodes.length < 3) return false
+      if (audioFilter !== 'all' && audioFilter !== 'unknown' && audioFilter !== 'multi' && !item.classification.audioLanguageCodes.includes(audioFilter)) return false
       if (subtitleFilter === 'unknown' && item.classification.subtitleLanguageCodes.length > 0) return false
-      if (subtitleFilter !== 'all' && subtitleFilter !== 'unknown' && !item.classification.subtitleLanguageCodes.includes(subtitleFilter)) return false
+      if (subtitleFilter === 'multi' && !item.classification.isMultiSubs && item.classification.subtitleLanguageCodes.length < 3) return false
+      if (subtitleFilter !== 'all' && subtitleFilter !== 'unknown' && subtitleFilter !== 'multi' && !item.classification.subtitleLanguageCodes.includes(subtitleFilter)) return false
       if (typeFilter !== 'all' && item.classification.kind !== typeFilter) return false
       return true
     })
@@ -472,6 +584,7 @@ export const ReleasePickerModal: React.FC<ReleasePickerModalProps> = ({
               onChange={(value) => setAudioFilter(value as ReleaseLanguageFilter)}
               options={[
                 { value: 'all', label: 'Any audio' },
+                { value: 'multi', label: 'Multi-Audio' },
                 { value: 'unknown', label: 'Audio not listed' },
                 ...TORRENT_LANGUAGES.map((option) => ({ value: option.code, label: `${option.label} audio` })),
               ]}
@@ -483,6 +596,7 @@ export const ReleasePickerModal: React.FC<ReleasePickerModalProps> = ({
               onChange={(value) => setSubtitleFilter(value as ReleaseLanguageFilter)}
               options={[
                 { value: 'all', label: 'Any subtitles' },
+                { value: 'multi', label: 'Multi-Subs' },
                 { value: 'unknown', label: 'Subtitles not listed' },
                 ...TORRENT_LANGUAGES.map((option) => ({ value: option.code, label: `${option.label} subtitles` })),
               ]}
@@ -578,24 +692,11 @@ export const ReleasePickerModal: React.FC<ReleasePickerModalProps> = ({
                 visible.map((item, index) => {
                   const { result, parsed, classification } = item
                   const chips = buildReleaseChips(parsed)
-                  const languageBadges = classification.languageGroup === 'eng-dub-dubtitles'
-                    ? ['English Dub', 'Dubtitles']
-                    : classification.languageGroup === 'eng-dub-subs'
-                      ? ['English Dub', classification.subtitleLabel || 'English Subs']
-                      : classification.languageGroup === 'eng-dub'
-                        ? ['English Dub']
-                        : classification.languageGroup === 'japanese'
-                          ? ['Japanese Audio', ...(classification.subtitleLabel ? [classification.subtitleLabel] : [])]
-                          : classification.languageGroup === 'other'
-                            ? [...classification.audioLabels, ...(classification.subtitleLabel ? [classification.subtitleLabel] : [])]
-                            : []
-                  const languageBadgeClass = classification.rank <= 1
-                    ? 'border border-emerald-400/25 bg-emerald-500/15 text-emerald-200'
-                    : classification.languageGroup === 'eng-dub'
-                      ? 'border border-sky-400/25 bg-sky-500/15 text-sky-200'
-                      : classification.languageGroup === 'japanese'
-                        ? 'border border-violet-400/25 bg-violet-500/15 text-violet-200'
-                        : 'border border-amber-400/25 bg-amber-500/10 text-amber-200'
+                  const languageBadges = buildLanguageBadges(
+                    classification,
+                    preferredAudioLanguages,
+                    preferredSubtitleLanguages,
+                  )
                   return (
                     <div
                       key={`${result.providerId}-${result.downloadUrl}-${index}`}
@@ -610,21 +711,25 @@ export const ReleasePickerModal: React.FC<ReleasePickerModalProps> = ({
                           >
                             {result.title}
                           </p>
-                          {classification.hasLanguageInfo && (
+                          {(classification.kindLabel || languageBadges.length > 0) && (
                             <div className="mt-1.5 flex flex-wrap items-center gap-1">
                               {classification.kindLabel && (
                                 <span className="rounded border border-indigo-300/25 bg-indigo-500/15 px-1.5 py-0.5 text-[10px] font-bold text-indigo-200">
                                   {classification.kindLabel}
                                 </span>
                               )}
-                              {languageBadges.map((label) => (
-                                <span key={label} className={`rounded px-1.5 py-0.5 text-[10px] font-bold ${languageBadgeClass}`}>
-                                  {label}
+                              {languageBadges.map((badge, badgeIndex) => (
+                                <span
+                                  key={`${badge.label}-${badgeIndex}`}
+                                  title={badge.tooltip}
+                                  className={`rounded px-1.5 py-0.5 text-[10px] font-bold ${BADGE_TONE_CLASSES[badge.tone]}`}
+                                >
+                                  {badge.label}
                                 </span>
                               ))}
                             </div>
                           )}
-                          {classification.hasLanguageInfo && chips.length > 0 && (
+                          {chips.length > 0 && (
                             <div className="mt-1 flex flex-wrap items-center gap-1">
                               {chips.map((chip, chipIndex) => (
                                 <span

@@ -1,7 +1,7 @@
 import fs from 'fs';
 import path from 'path';
 import { app } from 'electron';
-import { AnimeFolder, AppSettings, PlaybackProgress, SeasonPreference } from './types';
+import { AnimeFolder, AppSettings, DefaultSubtitleType, DefaultTopSubMode, PlaybackProgress, SeasonPreference } from './types';
 import { registerMainServices } from './userDataBackup';
 import { resolveUserDataPath } from './userDataPath';
 
@@ -12,10 +12,44 @@ import { resolveUserDataPath } from './userDataPath';
  */
 const UNSAFE_RECORD_KEYS = ['__proto__', 'constructor', 'prototype'];
 const TORRENT_LANGUAGE_CODES = new Set(['en', 'ja', 'de', 'fr', 'es', 'it', 'ru', 'pt', 'zh', 'ko']);
+const SUBTITLE_TYPES = new Set<DefaultSubtitleType>(['auto', 'dubtitles', 'dialogue', 'off']);
+const TOP_SUB_MODES = new Set<DefaultTopSubMode>(['auto', 'always', 'off']);
 
 function normalizeTorrentLanguages(value: unknown, fallback: string[]): string[] {
   if (!Array.isArray(value)) return fallback;
   return [...new Set(value.filter((language): language is string => typeof language === 'string' && TORRENT_LANGUAGE_CODES.has(language)))];
+}
+
+function normalizeDefaultAudioLanguage(value: unknown): string {
+  if (typeof value !== 'string') return 'auto';
+  const cleaned = value.trim().toLowerCase();
+  if (cleaned === 'auto' || cleaned === 'original' || TORRENT_LANGUAGE_CODES.has(cleaned)) {
+    return cleaned;
+  }
+  return 'auto';
+}
+
+function normalizeDefaultSubtitleLanguage(value: unknown): string {
+  if (typeof value !== 'string') return 'auto';
+  const cleaned = value.trim().toLowerCase();
+  if (cleaned === 'auto' || cleaned === 'off' || TORRENT_LANGUAGE_CODES.has(cleaned)) {
+    return cleaned;
+  }
+  return 'auto';
+}
+
+function normalizeDefaultSubtitleType(value: unknown): DefaultSubtitleType {
+  if (typeof value === 'string' && SUBTITLE_TYPES.has(value as DefaultSubtitleType)) {
+    return value as DefaultSubtitleType;
+  }
+  return 'auto';
+}
+
+function normalizeDefaultTopSubMode(value: unknown): DefaultTopSubMode {
+  if (typeof value === 'string' && TOP_SUB_MODES.has(value as DefaultTopSubMode)) {
+    return value as DefaultTopSubMode;
+  }
+  return 'auto';
 }
 
 const exePathCache = new Map<string, { path: string | null; time: number }>();
@@ -449,6 +483,10 @@ export class StorageService {
           releaseSelectionMode: parsed.releaseSelectionMode === 'manual' ? 'manual' : 'automatic',
           preferredTorrentAudioLanguages: normalizeTorrentLanguages(parsed.preferredTorrentAudioLanguages, ['en']),
           preferredTorrentSubtitleLanguages: normalizeTorrentLanguages(parsed.preferredTorrentSubtitleLanguages, ['en']),
+          defaultAudioLanguage: normalizeDefaultAudioLanguage(parsed.defaultAudioLanguage),
+          defaultSubtitleLanguage: normalizeDefaultSubtitleLanguage(parsed.defaultSubtitleLanguage),
+          defaultSubtitleType: normalizeDefaultSubtitleType(parsed.defaultSubtitleType),
+          defaultTopSubMode: normalizeDefaultTopSubMode(parsed.defaultTopSubMode),
           animeTitleLanguage: ['english', 'romaji', 'native'].includes(parsed.animeTitleLanguage) ? parsed.animeTitleLanguage : 'english',
         };
 
@@ -485,6 +523,10 @@ export class StorageService {
       releaseSelectionMode: 'automatic',
       preferredTorrentAudioLanguages: ['en'],
       preferredTorrentSubtitleLanguages: ['en'],
+      defaultAudioLanguage: 'auto',
+      defaultSubtitleLanguage: 'auto',
+      defaultSubtitleType: 'auto',
+      defaultTopSubMode: 'auto',
       animeTitleLanguage: 'english',
       enableP2P: false,
       p2pConsentAcceptedAt: null,
@@ -496,7 +538,26 @@ export class StorageService {
 
   updateSettings(settings: Partial<AppSettings>): AppSettings {
     const current = this.getSettings();
-    const updated = { ...current, ...settings };
+    const normalizedPatch: Partial<AppSettings> = { ...settings };
+    if (Object.prototype.hasOwnProperty.call(settings, 'preferredTorrentAudioLanguages')) {
+      normalizedPatch.preferredTorrentAudioLanguages = normalizeTorrentLanguages(settings.preferredTorrentAudioLanguages, []);
+    }
+    if (Object.prototype.hasOwnProperty.call(settings, 'preferredTorrentSubtitleLanguages')) {
+      normalizedPatch.preferredTorrentSubtitleLanguages = normalizeTorrentLanguages(settings.preferredTorrentSubtitleLanguages, []);
+    }
+    if (Object.prototype.hasOwnProperty.call(settings, 'defaultAudioLanguage')) {
+      normalizedPatch.defaultAudioLanguage = normalizeDefaultAudioLanguage(settings.defaultAudioLanguage);
+    }
+    if (Object.prototype.hasOwnProperty.call(settings, 'defaultSubtitleLanguage')) {
+      normalizedPatch.defaultSubtitleLanguage = normalizeDefaultSubtitleLanguage(settings.defaultSubtitleLanguage);
+    }
+    if (Object.prototype.hasOwnProperty.call(settings, 'defaultSubtitleType')) {
+      normalizedPatch.defaultSubtitleType = normalizeDefaultSubtitleType(settings.defaultSubtitleType);
+    }
+    if (Object.prototype.hasOwnProperty.call(settings, 'defaultTopSubMode')) {
+      normalizedPatch.defaultTopSubMode = normalizeDefaultTopSubMode(settings.defaultTopSubMode);
+    }
+    const updated = { ...current, ...normalizedPatch };
     if (Array.isArray(updated.libraryFolders) && updated.libraryFolders.length > 0) {
       updated.defaultLibraryRoot = updated.libraryFolders[0];
     } else if (Array.isArray(updated.libraryFolders) && updated.libraryFolders.length === 0) {

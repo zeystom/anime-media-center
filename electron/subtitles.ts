@@ -8,7 +8,56 @@ export interface ExternalSubtitleMatch {
   isForced: boolean;
   isSigns: boolean;
   isDubtitle?: boolean;
+  language?: string;
   suffix: string;
+}
+
+const EXTERNAL_SUB_LANG_MAP: Record<string, string> = {
+  en: 'eng',
+  eng: 'eng',
+  enm: 'eng',
+  english: 'eng',
+  ja: 'jpn',
+  jp: 'jpn',
+  jpn: 'jpn',
+  japanese: 'jpn',
+  ru: 'rus',
+  rus: 'rus',
+  russian: 'rus',
+  de: 'deu',
+  deu: 'deu',
+  ger: 'deu',
+  german: 'deu',
+  fr: 'fra',
+  fre: 'fra',
+  fra: 'fra',
+  french: 'fra',
+  es: 'spa',
+  spa: 'spa',
+  spanish: 'spa',
+  it: 'ita',
+  ita: 'ita',
+  italian: 'ita',
+  pt: 'por',
+  por: 'por',
+  portuguese: 'por',
+  zh: 'zho',
+  chi: 'zho',
+  zho: 'zho',
+  chinese: 'zho',
+  ko: 'kor',
+  kor: 'kor',
+  korean: 'kor',
+};
+
+function detectExternalSubLanguage(suffixTokens: string[]): string | undefined {
+  for (const token of suffixTokens) {
+    const clean = token.toLowerCase();
+    if (EXTERNAL_SUB_LANG_MAP[clean]) return EXTERNAL_SUB_LANG_MAP[clean];
+    const base = clean.split(/[-_]/)[0];
+    if (base && EXTERNAL_SUB_LANG_MAP[base]) return EXTERNAL_SUB_LANG_MAP[base];
+  }
+  return undefined;
 }
 
 /**
@@ -74,6 +123,8 @@ export function findExternalSubtitles(videoPath: string, preloadedEntries?: stri
         suffixTokens.includes('dubtitle') ||
         suffixTokens.includes('cc');
 
+      const language = detectExternalSubLanguage(suffixTokens);
+
       matches.push({
         filePath: fullPath,
         fileName: file,
@@ -81,6 +132,7 @@ export function findExternalSubtitles(videoPath: string, preloadedEntries?: stri
         isForced,
         isSigns,
         isDubtitle,
+        ...(language ? { language } : {}),
         suffix: suffixTokens.join('.'),
       });
     }

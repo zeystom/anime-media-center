@@ -10,6 +10,7 @@ import {
   computeOngoingDownloadPlan,
   findAllLocalFolders,
   inferReleasePreferenceFromEpisodes,
+  matchesPreferredReleaseLanguages,
   mergeLocalFolders,
   parseNumericEpisodeNumber,
   pickAutomaticEpisodeRelease,
@@ -427,6 +428,136 @@ test('recordPickedReleasePreference & inferReleasePreferenceFromEpisodes persist
       { fileName: '[SubsPlease] Sample - 03 (1080p).mkv' },
     ]);
     assert.equal(inferred.preferredGroup, 'SubsPlease');
+  } finally {
+    globalThis.localStorage = prevStorage;
+  }
+});
+
+test('matchesPreferredReleaseLanguages supports Any ([]) audio/subtitles and implicit Japanese sub releases', () => {
+  const subsOnly = { title: '[SubsPlease] Cool Show - 01 (1080p) [Eng-Subs].mkv', description: '' };
+  const ruDubOnly = { title: '[AniLibria] Cool Show - 01 [1080p][Russian Audio].mkv', description: '' };
+  const dualNoSubs = { title: '[Group] Cool Show - 01 [1080p][Dual Audio].mkv', description: '' };
+
+  assert.equal(matchesPreferredReleaseLanguages(subsOnly, ['ja'], ['en']), true);
+  assert.equal(matchesPreferredReleaseLanguages(subsOnly, ['ja'], []), true);
+  assert.equal(matchesPreferredReleaseLanguages(ruDubOnly, ['ru'], []), true);
+  assert.equal(matchesPreferredReleaseLanguages(dualNoSubs, [], []), true);
+  assert.equal(matchesPreferredReleaseLanguages(subsOnly, [], ['en']), true);
+  assert.equal(matchesPreferredReleaseLanguages(subsOnly, ['en'], ['en']), false);
+});
+
+test('pickAutomaticEpisodeRelease & pickAutomaticSeasonRelease respect multi-language priority, Multi-Audio descriptions, and localized dub fallbacks', () => {
+  const enRelease = {
+    title: '[Group] Cool Show - 01 [1080p][English Dub][English Subs].mkv',
+    seeders: 200,
+    titleRelevance: 'exact',
+  };
+  const ruMulti = {
+    title: '[ToonsHub] Cool Show - 01 [1080p][Multi-Audio][Multi-Subs].mkv',
+    description: 'Audio: Japanese, English, Russian\nSubtitles: English, Russian',
+    seeders: 30,
+    titleRelevance: 'exact',
+  };
+  const subsPlease = {
+    title: '[SubsPlease] Cool Show - 01 (1080p) [Eng-Subs].mkv',
+    seeders: 150,
+    titleRelevance: 'exact',
+  };
+  const jaConfirmed = {
+    title: '[Group] Cool Show - 01 (1080p)[Japanese Audio][English Subs].mkv',
+    seeders: 25,
+    titleRelevance: 'exact',
+  };
+  const jaRaw = {
+    title: '[RAW] Cool Show - 01 [1080p][Japanese Audio].mkv',
+    seeders: 500,
+    titleRelevance: 'exact',
+  };
+  const ruDubNoSub = {
+    title: '[AniLibria] Cool Show - 01 [1080p][Russian Audio].mkv',
+    seeders: 40,
+    titleRelevance: 'exact',
+  };
+
+  // Multi-language priority ['ru', 'en'] picks Russian match over higher-seeded English
+  const priorityPick = pickAutomaticEpisodeRelease([enRelease, ruMulti], {
+    audioPreferences: ['ru', 'en'],
+    subtitlePreferences: ['ru', 'en'],
+  });
+  assert.equal(priorityPick.best?.title, ruMulti.title);
+  assert.equal(priorityPick.fallbackAudioLanguage, null);
+
+  // ['ja'] + ['en'] matches SubsPlease and prefers confirmed Japanese audio when both exist
+  const subsOnlyPick = pickAutomaticEpisodeRelease([enRelease, subsPlease, jaRaw], {
+    audioPreferences: ['ja'],
+    subtitlePreferences: ['en'],
+  });
+  assert.equal(subsOnlyPick.best?.title, subsPlease.title);
+
+  const confirmedJaPick = pickAutomaticEpisodeRelease([subsPlease, jaConfirmed], {
+    audioPreferences: ['ja'],
+    subtitlePreferences: ['en'],
+  });
+  assert.equal(confirmedJaPick.best?.title, jaConfirmed.title);
+
+  // ['ja'] + ['en'] NEVER falls back to unsubtitled Japanese RAW
+  const noRawFallback = pickAutomaticEpisodeRelease([jaRaw], {
+    audioPreferences: ['ja'],
+    subtitlePreferences: ['en'],
+  });
+  assert.equal(noRawFallback.best, null);
+  assert.equal(noRawFallback.usedEnglishDubFallback, false);
+
+  // ['ru'] + ['ru'] falls back to Russian dub without subs and reports fallbackAudioLanguage: 'ru'
+  const ruFallback = pickAutomaticEpisodeRelease([enRelease, ruDubNoSub], {
+    audioPreferences: ['ru'],
+    subtitlePreferences: ['ru'],
+  });
+  assert.equal(ruFallback.best?.title, ruDubNoSub.title);
+  assert.equal(ruFallback.usedEnglishDubFallback, true);
+  assert.equal(ruFallback.fallbackAudioLanguage, 'ru');
+
+  // Season packs follow the same priority and fallback rules
+  const seasonEnPack = {
+    title: '[Group] Cool Show S01 (01-12) [1080p][English Dub][English Subs] Batch',
+    seeders: 200,
+    titleRelevance: 'exact',
+  };
+  const seasonRuPack = {
+    title: '[Group] Cool Show S01 (01-12) [1080p][Multi-Audio][Multi-Subs] Batch',
+    description: 'Audio: Japanese, Russian\nSubtitles: Russian',
+    seeders: 20,
+    titleRelevance: 'exact',
+  };
+  const seasonPick = pickAutomaticSeasonRelease([seasonEnPack, seasonRuPack], {
+    isOvaTitle: false,
+    audioPreferences: ['ru', 'en'],
+    subtitlePreferences: ['ru', 'en'],
+  });
+  assert.equal(seasonPick.best?.title, seasonRuPack.title);
+});
+
+test('recordPickedReleasePreference records audioMode=dub for non-Japanese dubs and sub for JP+Russian subs', () => {
+  const store = new Map();
+  const prevStorage = globalThis.localStorage;
+  globalThis.localStorage = {
+    getItem: (k) => (store.has(k) ? store.get(k) : null),
+    setItem: (k, v) => { store.set(k, String(v)); },
+    removeItem: (k) => { store.delete(k); },
+    clear: () => { store.clear(); },
+  };
+  try {
+    recordPickedReleasePreference(5001, {
+      title: '[AniLibria] Show - 01 [1080p][Russian Audio]',
+      description: '',
+    });
+    assert.equal(readAnimeReleasePreference(5001)?.audioMode, 'dub');
+
+    recordPickedReleasePreference(5002, {
+      title: '[SubsGroup] Show - 01 [1080p][Japanese Audio][Russian Subs]',
+      description: '',
+    });
+    assert.equal(readAnimeReleasePreference(5002)?.audioMode, 'sub');
   } finally {
     globalThis.localStorage = prevStorage;
   }
