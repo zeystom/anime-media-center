@@ -38,14 +38,15 @@ if (!token) {
   process.exit(1);
 }
 
-const RELEASE_BODY = `## Kaiko ${VERSION} — Player OSD & Cursor Sync, Touchpad Tuning & Taskbar Icon Fix
+const RELEASE_BODY = `## Kaiko ${VERSION} — Smart Language Release Search, Ongoing Auto-Downloads, Playback Defaults, Bell Notifications & Streamlined Settings
 
 ### What's New
-- **Clean Player Next-Episode OSD & Adaptive Status Pill:** removed the overflowing episode title from the center OSD circle when switching episodes and adapted \`RippleIndicator\` into a frosted pill for longer status labels so text never clips outside the badge.
-- **Auto-Hide Cursor After Alt-Tab / Restore:** returning to a playing episode via Alt-Tab or taskbar restore now hides the mouse cursor together with the player HUD without requiring a manual mouse wiggle.
-- **Laptop Touchpad Overscroll Tuning:** two-finger horizontal touchpad scrolling on Home rails now uses heavier pull resistance, wider edge deadzones, and a longer release window so you clearly see the magnetic end indicator without accidentally snapping back mid-swipe.
-- **Installer & Taskbar Icon Fix:** unpacked \`app-icon.ico\` outside \`app.asar\`, switched Win32 \`setAppDetails\` icon resolution to real filesystem/executable paths, and flushed Shell icon notifications in NSIS so launching Kaiko right after installing or updating shows the proper taskbar icon.
-- **Repository Cleanup:** removed unused legacy Home/placeholder assets and orphaned draft test files.
+- **Smart Language-Aware Release Search & Multi-Audio / Multi-Subs Inspection:** full multi-audio, dual-audio, and multi-sub language classification in user priority order, automatically inspecting release descriptions to extract exact audio and subtitle languages inside Multi-Audio / Multi-Subs packs before ranking or auto-picking.
+- **Ongoing Anime Auto-Download & Per-Folder Target Picker:** automatic background episode download scheduling and retry for followed ongoing anime, alongside a download folder picker with live per-drive disk space rings.
+- **Default Playback Audio, Subtitles & Subtitle Types:** persistent defaults in Settings and the Video Player for audio language, subtitle language, main subtitle style (\`Smart Auto\`, \`Dubtitles / SDH\`, \`Full Dialogue\`, \`Off\`), and \`2nd Sub / Signs & Songs\` (\`Auto\`, \`Always On\`, \`Off\`), backed by v2 per-season track memory and one-click **Save as Default** in the player.
+- **Bell-Anchored Animated Notifications & Click Routing:** spring-animated popups anchored directly under the navbar bell with ring/ripple feedback, hover-to-pause timers, high-contrast dark obsidian cards readable over bright banners, and clickable actions across both live popups and the Notification Center (including jumping straight to **Library → Favourites** or **Library → Following**).
+- **Streamlined Settings Layout:** split **Subtitles & AI** into dedicated **Subtitles & Audio** and **AI** tabs and simplified **Playback** and **Downloads & P2P → Release Selection** into compact dropdowns, segmented pills, and inline \`#2\` fallback language chips.
+- **Whisper Sync/Punctuation, AniZip Specials & Touchpad Improvements:** refined Faster-Whisper CLI prompt priming and subtitle sync/punctuation post-processing, parent AniDB special-episode matching for unmapped spin-offs, and cleaner horizontal touchpad scroll physics.
 
 ---
 ### Assets included
