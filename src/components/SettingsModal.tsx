@@ -1795,96 +1795,114 @@ export const SettingsModal: React.FC<SettingsModalProps> = ({
                       </div>
                     </div>
                   ) : binaryStatus.whisperExists ? (
-                    confirmDeleteEngine ? (
-                      <div className="flex items-center justify-between gap-3 px-3.5 py-2.5 rounded-xl bg-red-950/40 border border-red-500/40 animate-in fade-in duration-150">
-                        <div className="flex items-center gap-2 text-xs text-red-200 min-w-0">
-                          <AlertTriangle className="w-3.5 h-3.5 text-red-400 shrink-0" />
-                          <span className="truncate">Delete Faster-Whisper-XXL from storage?</span>
+                    <div className="p-3.5 rounded-xl bg-white/[0.03] border border-white/[0.08] space-y-2.5">
+                      {confirmDeleteEngine ? (
+                        <div className="flex items-center justify-between gap-3 px-3 py-2 rounded-lg bg-red-950/40 border border-red-500/40 animate-in fade-in duration-150">
+                          <div className="flex items-center gap-2 text-xs text-red-200 min-w-0">
+                            <AlertTriangle className="w-3.5 h-3.5 text-red-400 shrink-0" />
+                            <span className="truncate">Delete Faster-Whisper-XXL from storage?</span>
+                          </div>
+                          <div className="flex items-center gap-2 shrink-0">
+                            <button
+                              type="button"
+                              disabled={isDeletingEngine}
+                              onClick={() => setConfirmDeleteEngine(false)}
+                              className="px-2.5 py-1 rounded-lg text-[11px] font-medium text-zinc-300 bg-zinc-800 hover:bg-zinc-700"
+                            >
+                              Cancel
+                            </button>
+                            <button
+                              type="button"
+                              disabled={isDeletingEngine}
+                              onClick={handleDeleteWhisperEngine}
+                              className="px-2.5 py-1 rounded-lg text-[11px] font-bold text-white bg-red-600 hover:bg-red-500 disabled:opacity-50"
+                            >
+                              {isDeletingEngine ? 'Deleting...' : 'Confirm Delete'}
+                            </button>
+                          </div>
+                        </div>
+                      ) : (
+                        <div className="flex items-center justify-between gap-3">
+                          <p className="text-xs font-semibold text-zinc-200">Faster-Whisper-XXL</p>
+                          <button
+                            type="button"
+                            onClick={() => setConfirmDeleteEngine(true)}
+                            className="inline-flex items-center gap-1.5 px-3 py-1 rounded-lg bg-red-500/10 hover:bg-red-500/20 text-red-300 border border-red-500/20 text-xs font-medium transition-colors shrink-0"
+                          >
+                            <Trash2 className="w-3.5 h-3.5" />
+                            <span>Delete Engine</span>
+                          </button>
+                        </div>
+                      )}
+
+                      <div className="flex items-center gap-2">
+                        <input
+                          type="text"
+                          placeholder="Path to faster-whisper-xxl.exe"
+                          value={whisperPath}
+                          onChange={(e) => handleWhisperChange(e.target.value)}
+                          onBlur={handleWhisperBlur}
+                          onKeyDown={handleWhisperKeyDown}
+                          className="flex-1 px-3 py-2 rounded-lg bg-black/30 border border-white/10 text-xs font-mono text-zinc-200 placeholder-zinc-600 focus:outline-none focus:border-rose-400/50"
+                        />
+                        <button
+                          type="button"
+                          onClick={handleBrowseWhisper}
+                          className="flex items-center gap-1.5 px-3 py-2 rounded-lg bg-white/[0.07] hover:bg-white/[0.12] text-zinc-200 border border-white/10 text-xs font-medium shrink-0 transition-colors"
+                        >
+                          <FolderOpen className="w-3.5 h-3.5 text-zinc-400" />
+                          <span>Browse</span>
+                        </button>
+                      </div>
+                    </div>
+                  ) : (
+                    <div className="p-3.5 rounded-xl bg-rose-950/20 border border-rose-500/25 space-y-2.5">
+                      <div className="flex items-center justify-between gap-3">
+                        <div className="min-w-0">
+                          <p className="text-xs font-semibold text-white">One-Click Engine Setup</p>
+                          <p className="text-[11px] text-zinc-400">Install Faster-Whisper-XXL standalone automatically.</p>
                         </div>
                         <div className="flex items-center gap-2 shrink-0">
                           <button
                             type="button"
-                            disabled={isDeletingEngine}
-                            onClick={() => setConfirmDeleteEngine(false)}
-                            className="px-2.5 py-1 rounded-lg text-[11px] font-medium text-zinc-300 bg-zinc-800 hover:bg-zinc-700"
+                            onClick={handleDownloadWhisperEngine}
+                            className="btn-primary flex items-center gap-1.5 px-3.5 py-1.5 rounded-lg text-white text-xs font-semibold"
                           >
-                            Cancel
+                            <Download className="w-3.5 h-3.5" />
+                            <span>Download Engine</span>
                           </button>
                           <button
                             type="button"
-                            disabled={isDeletingEngine}
-                            onClick={handleDeleteWhisperEngine}
-                            className="px-2.5 py-1 rounded-lg text-[11px] font-bold text-white bg-red-600 hover:bg-red-500 disabled:opacity-50"
+                            onClick={() => window.electronAPI.openExternalUrl('https://github.com/Purfview/whisper-standalone-win/releases')}
+                            title="Open GitHub Releases"
+                            className="p-1.5 rounded-lg bg-white/[0.07] hover:bg-white/[0.12] text-zinc-300 border border-white/10"
                           >
-                            {isDeletingEngine ? 'Deleting...' : 'Confirm Delete'}
+                            <ExternalLink className="w-3.5 h-3.5" />
                           </button>
                         </div>
                       </div>
-                    ) : (
-                      <div className="flex items-center justify-between gap-3 px-3.5 py-2.5 rounded-xl bg-white/[0.03] border border-white/[0.08]">
-                        <div className="min-w-0">
-                          <p className="text-xs font-semibold text-zinc-200">Faster-Whisper-XXL Ready</p>
-                          <p className="text-[11px] text-zinc-500 font-mono truncate">
-                            {whisperPath || 'Configured in application storage'}
-                          </p>
-                        </div>
+
+                      <div className="flex items-center gap-2">
+                        <input
+                          type="text"
+                          placeholder="Path to faster-whisper-xxl.exe"
+                          value={whisperPath}
+                          onChange={(e) => handleWhisperChange(e.target.value)}
+                          onBlur={handleWhisperBlur}
+                          onKeyDown={handleWhisperKeyDown}
+                          className="flex-1 px-3 py-2 rounded-lg bg-black/30 border border-white/10 text-xs font-mono text-zinc-200 placeholder-zinc-600 focus:outline-none focus:border-rose-400/50"
+                        />
                         <button
                           type="button"
-                          onClick={() => setConfirmDeleteEngine(true)}
-                          className="inline-flex items-center gap-1.5 px-3 py-1.5 rounded-lg bg-red-500/10 hover:bg-red-500/20 text-red-300 border border-red-500/20 text-xs font-medium transition-colors shrink-0"
+                          onClick={handleBrowseWhisper}
+                          className="flex items-center gap-1.5 px-3 py-2 rounded-lg bg-white/[0.07] hover:bg-white/[0.12] text-zinc-200 border border-white/10 text-xs font-medium shrink-0 transition-colors"
                         >
-                          <Trash2 className="w-3.5 h-3.5" />
-                          <span>Delete Engine</span>
-                        </button>
-                      </div>
-                    )
-                  ) : (
-                    <div className="flex items-center justify-between gap-3 p-3.5 rounded-xl bg-rose-950/20 border border-rose-500/25">
-                      <div className="min-w-0">
-                        <p className="text-xs font-semibold text-white">One-Click Engine Setup</p>
-                        <p className="text-[11px] text-zinc-400">Install Faster-Whisper-XXL standalone automatically.</p>
-                      </div>
-                      <div className="flex items-center gap-2 shrink-0">
-                        <button
-                          type="button"
-                          onClick={handleDownloadWhisperEngine}
-                          className="btn-primary flex items-center gap-1.5 px-3.5 py-1.5 rounded-lg text-white text-xs font-semibold"
-                        >
-                          <Download className="w-3.5 h-3.5" />
-                          <span>Download Engine</span>
-                        </button>
-                        <button
-                          type="button"
-                          onClick={() => window.electronAPI.openExternalUrl('https://github.com/Purfview/whisper-standalone-win/releases')}
-                          title="Open GitHub Releases"
-                          className="p-1.5 rounded-lg bg-white/[0.07] hover:bg-white/[0.12] text-zinc-300 border border-white/10"
-                        >
-                          <ExternalLink className="w-3.5 h-3.5" />
+                          <FolderOpen className="w-3.5 h-3.5 text-zinc-400" />
+                          <span>Browse</span>
                         </button>
                       </div>
                     </div>
                   )}
-
-                  {/* Executable Path */}
-                  <div className="flex items-center gap-2">
-                    <input
-                      type="text"
-                      placeholder="Path to faster-whisper-xxl.exe"
-                      value={whisperPath}
-                      onChange={(e) => handleWhisperChange(e.target.value)}
-                      onBlur={handleWhisperBlur}
-                      onKeyDown={handleWhisperKeyDown}
-                      className="flex-1 px-3 py-2 rounded-lg bg-black/30 border border-white/10 text-xs font-mono text-zinc-200 placeholder-zinc-600 focus:outline-none focus:border-rose-400/50"
-                    />
-                    <button
-                      type="button"
-                      onClick={handleBrowseWhisper}
-                      className="flex items-center gap-1.5 px-3 py-2 rounded-lg bg-white/[0.07] hover:bg-white/[0.12] text-zinc-200 border border-white/10 text-xs font-medium shrink-0"
-                    >
-                      <FolderOpen className="w-3.5 h-3.5 text-zinc-400" />
-                      <span>Browse</span>
-                    </button>
-                  </div>
                 </section>
 
                 {/* AI Subtitle Models */}

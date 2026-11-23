@@ -22,6 +22,7 @@ import {
   Download,
   Sparkles,
   Music,
+  HelpCircle,
 } from 'lucide-react';
 import {
   AnimeFolder,
@@ -1274,10 +1275,7 @@ const WhisperStudioImpl: React.FC<WhisperStudioProps> = ({
                 <div className="flex items-center space-x-2.5 truncate mr-2">
                   <Volume2 className="w-4 h-4 text-emerald-400 shrink-0" />
                   <span className="truncate">
-                    Audio: <strong className="text-white font-semibold">{selectedTrack?.title || 'English'}</strong>{' '}
-                    <span className="text-[10px] text-emerald-400 bg-emerald-500/10 px-1.5 py-0.5 rounded border border-emerald-500/20 font-semibold ml-1">
-                      auto-detected
-                    </span>
+                    Audio: <strong className="text-white font-semibold">{selectedTrack?.title || 'English'}</strong>
                   </span>
                 </div>
                 <button
@@ -1516,28 +1514,9 @@ const WhisperStudioImpl: React.FC<WhisperStudioProps> = ({
 
             {/* Opening & Music Filter (Always Visible) */}
             <div className="pt-2.5 border-t border-zinc-800/60 space-y-2">
-              <div className="flex items-center justify-between text-xs">
-                <div className="flex items-center space-x-1.5 text-zinc-300">
-                  <Music className="w-3.5 h-3.5 text-indigo-400 shrink-0" />
-                  <span className="font-semibold">Opening &amp; Music Filter</span>
-                </div>
-                <span
-                  className={`text-[10px] font-semibold px-1.5 py-0.5 rounded border ${
-                    skipOpEd || suppressSinging !== 'off'
-                      ? 'bg-emerald-500/15 text-emerald-300 border-emerald-500/30'
-                      : 'bg-zinc-800/80 text-zinc-400 border-zinc-700'
-                  }`}
-                >
-                  {skipOpEd && suppressSinging !== 'off'
-                    ? `OP/ED Skip + ${suppressSinging === 'balanced' ? 'Balanced' : 'Strict'}`
-                    : skipOpEd
-                    ? 'OP/ED Skip On'
-                    : suppressSinging === 'balanced'
-                    ? 'Balanced Filter On'
-                    : suppressSinging === 'strict'
-                    ? 'Strict Filter On'
-                    : 'Off'}
-                </span>
+              <div className="flex items-center space-x-1.5 text-xs text-zinc-300">
+                <Music className="w-3.5 h-3.5 text-indigo-400 shrink-0" />
+                <span className="font-semibold">Opening &amp; Music Filter</span>
               </div>
 
               <div className="space-y-1.5">
@@ -1545,17 +1524,35 @@ const WhisperStudioImpl: React.FC<WhisperStudioProps> = ({
                   onClick={() => {
                     if (!isProcessing) setSkipOpEd((prev) => !prev);
                   }}
-                  className={`flex items-center justify-between gap-3 p-2 rounded-xl bg-zinc-900/60 border border-zinc-800/80 transition-colors ${
+                  className={`flex items-center justify-between gap-3 p-2.5 rounded-xl bg-zinc-900/60 border border-zinc-800/80 transition-colors ${
                     isProcessing ? 'opacity-60 cursor-not-allowed' : 'cursor-pointer hover:border-zinc-700/80'
                   }`}
                 >
-                  <div className="min-w-0">
-                    <span className="text-xs font-medium text-zinc-200 block">
+                  <div className="flex items-center gap-1.5 min-w-0">
+                    <span className="text-xs font-medium text-zinc-200">
                       Skip Opening &amp; Ending (OP / ED)
                     </span>
-                    <span className="text-[10px] text-zinc-500 block leading-tight mt-0.5">
-                      Ignores lyrics in detected OP/ED using MKV chapters &amp; AniSkip. Turn off if characters talk over credits.
-                    </span>
+                    <div className="relative group/help shrink-0">
+                      <button
+                        type="button"
+                        aria-label="About Skip Opening and Ending"
+                        onClick={(e) => e.stopPropagation()}
+                        className="inline-flex items-center justify-center w-4 h-4 rounded-full text-zinc-500 hover:text-rose-300 hover:bg-white/[0.08] focus-visible:outline-none focus-visible:text-rose-300 transition-colors"
+                      >
+                        <HelpCircle className="w-3.5 h-3.5" />
+                      </button>
+                      <div
+                        role="tooltip"
+                        className="pointer-events-none opacity-0 translate-y-1 group-hover/help:opacity-100 group-hover/help:translate-y-0 group-focus-within/help:opacity-100 group-focus-within/help:translate-y-0 transition-all duration-150 absolute bottom-full left-0 mb-2 w-72 p-3 rounded-xl glass-dropdown z-50"
+                      >
+                        <p className="text-xs font-semibold text-zinc-100 mb-1">
+                          Skip Opening &amp; Ending (OP / ED)
+                        </p>
+                        <p className="text-[11px] leading-relaxed text-zinc-300">
+                          Ignores lyrics in detected OP/ED using MKV chapters &amp; AniSkip. Turn off if characters talk over credits.
+                        </p>
+                      </div>
+                    </div>
                   </div>
                   <button
                     type="button"
@@ -1579,15 +1576,49 @@ const WhisperStudioImpl: React.FC<WhisperStudioProps> = ({
                   </button>
                 </div>
 
-                <div className="p-2.5 rounded-xl bg-zinc-900/60 border border-zinc-800/80 space-y-2">
+                <div className="p-2.5 rounded-xl bg-zinc-900/60 border border-zinc-800/80">
                   <div className="flex items-center justify-between gap-2">
-                    <span className="text-xs font-medium text-zinc-200">
-                      Suppress singing &amp; music
-                    </span>
+                    <div className="flex items-center gap-1.5 min-w-0">
+                      <span className="text-xs font-medium text-zinc-200">
+                        Suppress singing &amp; music
+                      </span>
+                      <div className="relative group/help shrink-0">
+                        <button
+                          type="button"
+                          aria-label="About Suppress singing and music"
+                          className="inline-flex items-center justify-center w-4 h-4 rounded-full text-zinc-500 hover:text-rose-300 hover:bg-white/[0.08] focus-visible:outline-none focus-visible:text-rose-300 transition-colors"
+                        >
+                          <HelpCircle className="w-3.5 h-3.5" />
+                        </button>
+                        <div
+                          role="tooltip"
+                          className="pointer-events-none opacity-0 translate-y-1 group-hover/help:opacity-100 group-hover/help:translate-y-0 group-focus-within/help:opacity-100 group-focus-within/help:translate-y-0 transition-all duration-150 absolute bottom-full left-0 mb-2 w-80 p-3 rounded-xl glass-dropdown z-50 space-y-1.5"
+                        >
+                          <p className="text-xs font-semibold text-zinc-100">
+                            Suppress singing &amp; music
+                          </p>
+                          <ul className="space-y-1 text-[11px] leading-relaxed text-zinc-300">
+                            <li className={suppressSinging === 'off' ? 'text-zinc-100' : 'text-zinc-400'}>
+                              <span className={`font-semibold ${suppressSinging === 'off' ? 'text-rose-300' : 'text-zinc-200'}`}>Off</span>
+                              <span className="ml-1.5 inline-flex items-center px-1.5 py-px rounded bg-rose-500/15 text-rose-300 border border-rose-500/30 text-[9px] font-semibold uppercase tracking-wide align-middle">
+                                Recommended
+                              </span>
+                              <span className="font-semibold">:</span> Keeps audio untouched (OP/ED skip still works).
+                            </li>
+                            <li className={suppressSinging === 'balanced' ? 'text-zinc-100' : 'text-zinc-400'}>
+                              <span className={`font-semibold ${suppressSinging === 'balanced' ? 'text-rose-300' : 'text-zinc-200'}`}>Balanced:</span> Dampens BGM &amp; singing (~60%) while keeping quiet or high-pitched voices intact.
+                            </li>
+                            <li className={suppressSinging === 'strict' ? 'text-zinc-100' : 'text-zinc-400'}>
+                              <span className={`font-semibold ${suppressSinging === 'strict' ? 'text-rose-300' : 'text-zinc-200'}`}>Strict:</span> Heavy neural filter for insert songs; may drop 20–30% of quiet or high-pitched speech.
+                            </li>
+                          </ul>
+                        </div>
+                      </div>
+                    </div>
                     <div
                       role="radiogroup"
                       aria-label="Suppress singing and music"
-                      className="inline-flex items-center p-0.5 rounded-lg bg-zinc-950/80 border border-zinc-800"
+                      className="inline-flex items-center p-0.5 rounded-lg bg-zinc-950/80 border border-zinc-800 shrink-0"
                     >
                       {(
                         [
@@ -1617,36 +1648,8 @@ const WhisperStudioImpl: React.FC<WhisperStudioProps> = ({
                       })}
                     </div>
                   </div>
-                  <span className="text-[10px] text-zinc-500 block leading-tight">
-                    {suppressSinging === 'off'
-                      ? 'Audio kept untouched. Skip OP/ED above still removes intro & outro gibberish cleanly.'
-                      : suppressSinging === 'balanced'
-                      ? 'Soft compromise: dampens BGM & singing (~60%) while keeping quiet, high-pitched, and slow anime voices intact.'
-                      : 'Aggressive full-episode neural filter for heavy insert songs; may drop 20–30% of quiet or high-pitched speech.'}
-                  </span>
                 </div>
               </div>
-            </div>
-
-            {/* Subtle Milestone 4 Summary Line */}
-            <div className="pt-2 border-t border-zinc-800/60 text-[11px] text-zinc-500 flex items-center space-x-1.5 flex-wrap">
-              <span>Accurate Timestamps</span>
-              <span>·</span>
-              <span>English Dialogue</span>
-              <span>·</span>
-              <span>Standard 2-Line</span>
-              <span>·</span>
-              <span className={skipOpEd ? 'text-emerald-400/90' : 'text-zinc-500'}>
-                {skipOpEd ? 'OP/ED Skip On' : 'OP/ED Skip Off'}
-              </span>
-              {suppressSinging !== 'off' && (
-                <>
-                  <span>·</span>
-                  <span className="text-indigo-400">
-                    {suppressSinging === 'balanced' ? 'Music Filter: Balanced' : 'Music Filter: Strict'}
-                  </span>
-                </>
-              )}
             </div>
           </div>
         </div>
